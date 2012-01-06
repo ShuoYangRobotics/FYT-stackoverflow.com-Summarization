@@ -1,0 +1,134 @@
+Question (ID-88259): How do you configure Django for simple development and deployment? I tend to use SQLite when doing Django 
+development, but on a live server something more robust is
+often needed ( MySQL / PostgreSQL , for example).
+Invariably, there are other changes to make to the Django
+settings as well: different logging locations / intensities,
+media paths, etc. 
+
+ How do you manage all these changes to make deployment a
+simple, automated process? 
+ Answers (Total-10): #0 I have multiple settings files. 
+
+ 
+ settings_local.py - host-specific configuration, such as database name, file paths, etc. 
+ settings_development.py - configuration used for development, e.g. DEBUG = True . 
+ settings_production.py - configuration used for production, e.g. SERVER_EMAIL . 
+ 
+
+ I tie these all together with a settings.py file that firstly imports settings_local.py , and then one of the other two. It decides which to load by two settings inside settings_local.py - DEVELOPMENT_HOSTS and PRODUCTION_HOSTS . settings.py calls platform.node() to find the hostname of the machine it is running on, and then looks for that hostname in the lists, and loads the second settings file depending on which list it finds the hostname in. 
+
+ That way, the only thing you really need to worry about is keeping the settings_local.py file up to date with the host-specific configuration, and everything else is handled automatically. 
+
+ Check out an example here . 
+ #1 Personally, I use a single settings.py for the project, I just have it look up the hostname it's on (my development machines have hostnames that start with "gabriel" so I just have this: 
+
+ import socket
+if socket.gethostname().startswith('gabriel'):
+ LIVEHOST = False
+else: 
+ LIVEHOST = True
+ 
+
+ then in other parts I have things like: 
+
+ if LIVEHOST:
+ DEBUG = False
+ PREPEND_WWW = True
+ MEDIA_URL = 'http://static1.grsites.com/'
+else:
+ DEBUG = True
+ PREPEND_WWW = False
+ MEDIA_URL = 'http://localhost:8000/static/'
+ 
+
+ and so on. A little bit less readable, but it works fine and saves having to juggle multiple settings files. 
+ #2 At the end of settings.py I have the following: 
+
+ try:
+ from settings_local import *
+except ImportError:
+ pass
+ 
+
+ This way if I want to override default settings I need to just put settings_local.py right next to settings.py. 
+ #3 I have two files. settings_base.py which contains common/default settings, and which is checked into source control. Each deployment has a separate settings.py , which executes from settings_base import * at the beginning and then overrides as needed. 
+ #4 The most simplistic way I found was: 
+
+ 1) use the default settings.py for local development and 2)
+create a production-settings.py starting with: 
+
+ import os
+from settings import *
+ 
+
+ And then just override the settings that differ in production: 
+
+ DEBUG = False
+TEMPLATE_DEBUG = DEBUG
+
+
+DATABASES = {
+ 'default': {
+   ....
+ }
+}
+ 
+ #5 In addition to the multiple settings files mentioned by Jim, I also tend to place two settings into my settings.py file at the top BASE_DIR and BASE_URL set to the path of the code and the URL to the base of the site, all other settings are modified to append themselves to these. 
+
+ BASE_DIR = "/home/sean/myapp/"
+e.g. MEDIA_ROOT = "%smedia/" % BASEDIR 
+
+ So when moving the project I only have to edit these settings and not search the whole file. 
+
+ I would also recommend looking at fabric and Capistrano (Ruby tool, but it can be used to deploy Django applications) which facilitate automation of remote deployment. 
+ #6 Somewhat related, for the issue of deploying Django itself with multiple databases, you may want to take a look at Djangostack . You can download a completely free installer that allows you to install Apache, Python, Django, etc. As part of the installation process we allow you to select which database you want to use (MySQL, SQLite, PostgreSQL). We use the installers extensively when automating deployments internally (they can be run in unattended mode). 
+ #7 I think it depends on the size of the site as to whether you need to step up from using SQLite, I've successfully used SQLite on several smaller live sites and it runs great. 
+ #8 I have my settings.py file in an external directory. That way, it doesn't get checked into source control, or over-written by a deploy. I put this in the settings.py file under my Django project, along with any default settings: 
+
+ import sys
+import os.path
+
+def _load_settings(path): 
+ print "Loading configuration from %s" % (path)
+ if os.path.exists(path):
+	settings = {}
+	# execfile can't modify globals directly, so we will load them manually
+	execfile(path, globals(), settings)
+	for setting in settings:
+	 globals()[setting] = settings[setting]
+
+_load_settings("/usr/local/conf/local_settings.py")
+ 
+
+ *Note: This is very dangerous if you can't trust local_settings.py.* 
+ #9 Well i use this configuration 
+
+ at the end of settings.py 
+
+ #settings.py
+try:
+ from locale_settings import *
+except ImportError:
+ pass
+ 
+
+ and in locale_settings.py 
+
+ #locale_settings.py
+class Settings(object):
+
+ def __init__(self):
+  import settings
+  self.settings = settings
+
+ def __getattr__(self, name):
+  return getattr(self.settings, name)
+
+settings = Settings()
+
+INSTALLED_APPS = settings.INSTALLED_APPS + (
+ 'gunicorn',)
+
+# delete duplicate settings maybe not needed but i prefer to do it
+del settings
+del Settings

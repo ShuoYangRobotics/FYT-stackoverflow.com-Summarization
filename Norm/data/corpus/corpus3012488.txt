@@ -1,0 +1,189 @@
+Question (ID-3012488): What is the python "with" statement designed for? I came across the Python with statement for the first time today. I've been using Python lightly for several months and didn't even know of its existence! Given its somewhat obscure status, I thought it would be worth asking: 
+
+ 
+ What is the Python with statement
+designed to be used for? 
+ What do
+you use it for? 
+ Are their any
+gotchas I need to be aware of, or
+common anti-patterns associated with
+its use? Any cases where it is better use try..finally than with ? 
+ Why isn't it used more widely? 
+ Which standard library classes are compatible with it? 
+ 
+ Answers (Total-8): #0 I would suggest two interesting lectures: 
+
+ 
+ PEP 343 The "with" Statement 
+ Effbot Understanding Python's
+"with" statement 
+ 
+
+ 1. 
+The with statement is used to wrap the execution of a block with methods defined by a context manager. This allows common try...except...finally usage patterns to be encapsulated for convenient reuse. 
+
+ 2. 
+You could do something like: 
+
+ with open("foo.txt") as foo_file:
+ data = foo_file.read()
+ 
+
+ OR 
+
+ from contextlib import nested
+with nested(A(), B(), C()) as (X, Y, Z):
+ do_something()
+ 
+
+ OR (Python 3.1) 
+
+ with open('data') as input_file, open('result', 'w') as output_file:
+ for line in input_file:
+  output_file.write(parse(line))
+ 
+
+ OR 
+
+ lock = threading.Lock()
+with lock:
+ # Critical section of code
+ 
+
+ 3. 
+ I don't see any Antipattern here. 
+Quoting Dive into Python : 
+
+ 
+ try..finally is good. with is better. 
+ 
+
+ 4. 
+I guess it's related to programmers's habit to use try..catch..finally statement from other languages. 
+ #1 
+ I believe this has already been answered by other users before me, so I only add it for the sake of completeness: the with statement simplifies exception handling by encapsulating common preparation and cleanup tasks in so-called context managers . More details can be found in PEP 343 . For instance, the open statement is a context manager in itself, which lets you open a file, keep it open as long as the execution is in the context of the with statement where you used it, and close it as soon as you leave the context, no matter whether you have left it because of an exception or during regular control flow. The with statement can thus be used in ways similar to the RAII pattern in C++: some resource is acquired by the with statement and released when you leave the with context. 
+ Some examples are: opening files using with open(filename) as fp: , acquiring locks using with lock: (where lock is an instance of threading.Lock ). You can also construct your own context managers using the contextmanager decorator from contextlib . For instance, I often use this when I have to change the current directory temporarily and then return to where I was: 
+
+ from contextlib import contextmanager
+import os
+
+
+@contextmanager
+def working_directory(path):
+ current_dir = os.getcwd()
+ os.chdir(path)
+ try:
+  yield
+ finally:
+  os.chdir(current_dir)
+
+
+with working_directory("data/stuff"):
+ # do something within data/stuff
+# here I am back again in the original working directory
+ 
+
+ Here's another example that temporarily redirects sys.stdin , sys.stdout and sys.stderr to some other file handle and restores them later: 
+
+ from contextlib import contextmanager
+import sys
+
+
+@contextmanager
+def redirected(**kwds):
+ stream_names = ["stdin", "stdout", "stderr"]
+ old_streams = {}
+ try:
+  for sname in stream_names:
+   stream = kwds.get(sname, None)
+   if stream is not None and stream != getattr(sys, sname):
+    old_streams[sname] = getattr(sys, sname)
+    setattr(sys, sname, stream)
+  yield
+ finally:
+  for sname, stream in old_streams.iteritems():
+   setattr(sys, sname, stream)
+
+
+with redirected(stdout=open("/tmp/log.txt", "w")):
+  # these print statements will go to /tmp/log.txt
+  print "Test entry 1"
+  print "Test entry 2"
+# back to the normal stdout
+print "Back to normal stdout again"
+ 
+
+ And finally, another example that creates a temporary folder and cleans it up when leaving the context: 
+
+ from tempfile import mkdtemp
+from shutil import rmtree
+
+
+@contextmanager
+def temporary_dir(*args, **kwds):
+ name = mkdtemp(*args, **kwds)
+ try:
+  yield name
+ finally:
+  shutil.rmtree(name)
+
+
+with temporary_dir() as dirname:
+ # do whatever you want
+ 
+ 
+ #2 The Python with statement is built-in language support of the Resource Acquisition Is Initialization idiom commonly used in C++. It is intended to allow safe acquisition and release of operating system resources. 
+
+ The with statement creates resources within a scope/block. You write your code using the resources within the block. When the block exits the resources are cleanly released regardless of the outcome of the code in the block (that is whether the block exists normally or because of an exception). 
+
+ Many resources in the Python library that obey the protocol required by the with statement and so can used with it out-of-the-box. However anyone can make resources that can be used in a with statement by implementing the well documented protocol: PEP 0343 
+
+ Use it when ever you acquire resources in your application that must be explicitly relinquished such as files, network connections, locks and the like. 
+ #3 See PEP 343 - The 'with' statement , there is an example section at the end. 
+
+ 
+ ... new statement "with" to the Python
+ language to make
+  it possible to factor out standard uses of try/finally statements. 
+ 
+ #4 An example of an antipattern might be to use the with inside a loop when it would be more efficient to have the with outside the loop 
+
+ for example 
+
+ for row in lines:
+ with open("outfile","a") as f:
+  f.write(row)
+ 
+
+ vs 
+
+ with open("outfile","a") as f:
+ for row in lines:
+  f.write(row)
+ 
+
+ The first way is opening and closing the file for each row which may cause performance problems compared to the second way with opens and closes the file just once. 
+ #5 Again for completeness I'll add my most useful use-case for with statements. 
+
+ I do a lot of scientific computing and for some activities I need the Decimal library for arbitrary precision calculations. Some part of my code I need high precision and for most other parts I need less precision. 
+
+ I set my default precision to a low number and then use with to get a more precise answer for some sections: 
+
+ from decimal import localcontext
+
+with localcontext() as ctx:
+ ctx.prec = 42 # Perform a high precision calculation
+ s = calculate_something()
+s = +s # Round the final result back to the default precision
+ 
+
+ I use this a lot with the Hypergeometric Test which requires the division of large numbers resulting form factorials. When you do genomic scale calculations you have to be careful of round-off and overflow errors. 
+ #6 The with statement works with so-called context managers: 
+
+ http://docs.python.org/release/2.5.2/lib/typecontextmanager.html 
+
+ The idea is to simplify exception handling by doing the necessary cleanup after leaving the 'with' block. Some of the python built-ins already work as context managers. 
+ #7 points 1, 2, and 3 being reasonably well covered: 
+
+ 4: it is relatively new, only available in python2.6+ (or python2.5 using from __future__ import with_statement )

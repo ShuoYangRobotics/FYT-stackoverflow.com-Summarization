@@ -1,0 +1,561 @@
+Question (ID-788084): How can I optimize this Python code? Profiling shows this is the slowest segment of my code for a little word game I wrote: 
+
+ def distance(word1, word2):
+ difference = 0
+ for i in range(len(word1)):
+  if word1[i] != word2[i]:
+   difference += 1
+ return difference
+
+def getchildren(word, wordlist):
+ return [ w for w in wordlist if distance(word, w) == 1 ]
+ 
+
+ "distance" is called over 5 million times, majority of which is from getchildren, which is supposed to get all words in the wordlist that differ from "word" by exactly 1 letter. 
+
+ I'm fairly new to Python (started learning it 3 days ago) so comments on naming conventions or other style things also appreciated. 
+
+ Edit: Forgot to mention that wordlist is pre-filtered to only have words containing the same number of letters as "word" so it's guaranteed that "word1" and "word2" have the same number of chars. 
+
+ Results: 
+
+ Thanks everyone, with combinations of different suggestions I got the program running twice as fast now (on top of the optimizations I did on my own before asking, so 4 times speed increase approx from my initial implementation) 
+
+ I tested with 2 sets of inputs which I'll call A and B
+Optimization1:
+From 
+
+ for i in range(len(word1)):
+  if word1[i] != word2[i]:
+   difference += 1
+ return difference
+ 
+
+ to 
+
+ for x,y in zip (word1, word2):
+  if x != y:
+   difference += 1
+ return difference
+ 
+
+ Got execution time from 11.92 to 9.18 for input A, and 79.30 to 74.59 for input B 
+
+ Optimization2:
+Added a separate method for differs by one in addition to the distance method (which I still needed elsewhere for the A* heuristics) 
+
+ def is_neighbors(word1,word2):
+ different = False
+ for c1,c2 in zip(word1,word2):
+  if c1 != c2:
+   if different:
+    return False
+   different = True
+ return different
+ 
+
+ Got execution time from 9.18 to 8.83 for input A, and 74.59 to 70.14 for input B 
+
+ Optimization3:
+Big winner here was to use izip instead of zip 
+
+ Got execution time from 8.83 to 5.02 for input A, and 70.14 to 41.69 for input B 
+
+ I could probably do better writing it in a lower level language, but I'm happy with this for now. Thanks everyone! 
+
+ Edit again: More results
+Using Mark's method of checking the case where the first letter doesn't match got it down from 5.02 -> 3.59 and 41.69 -> 29.82 
+
+ Building on that and incorporating izip instead of range, I ended up with this: 
+
+ def is_neighbors(word1,word2):
+ if word1[0] != word2[0]:
+  return word1[1:] == word2[1:]
+ different = False
+ for x,y in izip(word1[1:],word2[1:]):
+  if x != y:
+   if different:
+    return False
+   different = True
+ return different
+ 
+
+ Which squeezed a little bit more, bringing the times down from 3.59 -> 3.38 and 29.82 -> 27.88 
+
+ Even more results! 
+
+ Trying Sumudu's suggestion that I generate a list of all strings that are 1 letter off from "word" and then checking to see which ones were in the wordlist, instead of the is_neighbor function I ended up with this: 
+
+ def one_letter_off_strings(word):
+ import string
+ dif_list = []
+ for i in xrange(len(word)):
+  dif_list.extend((word[:i] + l + word[i+1:] for l in string.ascii_lowercase if l != word[i]))
+ return dif_list
+
+def getchildren(word, wordlist):
+ oneoff = one_letter_off_strings(word)
+ return ( w for w in oneoff if w in wordlist )
+ 
+
+ Which ended up being slower (3.38 -> 3.74 and 27.88 -> 34.40) but it seemed promising. At first I thought the part I'd need to optimize was "one_letter_off_strings" but profiling showed otherwise and that the slow part was in fact 
+
+ ( w for w in oneoff if w in wordlist )
+ 
+
+ I thought if there'd be any difference if I switched "oneoff" and "wordlist" and did the comparison the other way when it hit me that I was looking for the intersection of the 2 lists. I replace that with: 
+
+ return set(oneoff) &amp; set(wordlist)
+ 
+
+ Bam! 3.74 -> 0.23 and 34.40 -> 2.25 
+
+ This is truely amazing, total speed difference from my original naive implementation:
+23.79 -> 0.23 and 180.07 -> 2.25, so approx 80 to 100 times faster than the original implementation. 
+
+ If anyone is interested, I made blog post describing the program and describing the optimizations made including one that isn't mentioned here (because it's in a different section of code). 
+
+ The Great Debate: 
+
+ Ok, me and Unknown are having a big debate which you can read in the comments of his answer . He claims that it would be faster using the original method (using is_neighbor instead of using the sets) if it was ported to C. I tried for 2 hours to get a C module I wrote to build and be linkable without much success after trying to follow this and this example, and it looks like the process is a little different in Windows? I don't know, but I gave up on that. Anyway, here's the full code of the program, and the text file come from the 12dict word list using the "2+2lemma.txt" file. Sorry if the code's a little messy, this was just something I hacked together. Also I forgot to strip out commas from the wordlist so that's actually a bug that you can leave in for the sake of the same comparison or fix it by adding a comma to the list of chars in cleanentries. 
+
+ from itertools import izip
+def unique(seq): 
+ seen = {} 
+ result = [] 
+ for item in seq: 
+  if item in seen:
+   continue 
+  seen[item] = 1 
+  result.append(item) 
+ return result
+def cleanentries(li):
+ pass
+ return unique( [w.strip('[]') for w in li if w != "-&gt;"] )
+def distance(word1, word2):
+ difference = 0
+ for x,y in izip (word1, word2):
+  if x != y:
+   difference += 1
+ return difference
+def is_neighbors(word1,word2):
+ if word1[0] != word2[0]:
+  return word1[1:] == word2[1:]
+ different = False
+ for x,y in izip(word1[1:],word2[1:]):
+  if x != y:
+   if different:
+    return False
+   different = True
+ return different
+def one_letter_off_strings(word):
+ import string
+ dif_list = []
+ for i in xrange(len(word)):
+  dif_list.extend((word[:i] + l + word[i+1:] for l in string.ascii_lowercase if l != word[i]))
+ return dif_list
+
+def getchildren(word, wordlist):
+ oneoff = one_letter_off_strings(word)
+ return set(oneoff) &amp; set(wordlist)
+def AStar(start, goal, wordlist):
+ import Queue
+ closedset = []
+ openset = [start]
+ pqueue = Queue.PriorityQueue(0)
+ g_score = {start:0}   #Distance from start along optimal path.
+ h_score = {start:distance(start, goal)}
+ f_score = {start:h_score[start]}
+ pqueue.put((f_score[start], start))
+ parent_dict = {}
+ while len(openset) &gt; 0:
+  x = pqueue.get(False)[1]
+  if x == goal:
+   return reconstruct_path(parent_dict,goal)
+  openset.remove(x)
+  closedset.append(x)
+  sortedOpen = [(f_score[w], w, g_score[w], h_score[w]) for w in openset]
+  sortedOpen.sort()
+  for y in getchildren(x, wordlist):
+   if y in closedset:
+    continue
+   temp_g_score = g_score[x] + 1
+   temp_is_better = False
+   appended = False
+   if (not y in openset): 
+    openset.append(y)
+    appended = True
+    h_score[y] = distance(y, goal)
+    temp_is_better = True
+   elif temp_g_score &lt; g_score[y] :
+    temp_is_better = True
+   else :
+    pass
+   if temp_is_better:
+    parent_dict[y] = x
+    g_score[y] = temp_g_score
+    f_score[y] = g_score[y] + h_score[y]
+    if appended :
+     pqueue.put((f_score[y], y))
+ return None
+
+
+def reconstruct_path(parent_dict,node):
+  if node in parent_dict.keys():
+   p = reconstruct_path(parent_dict,parent_dict[node])
+   p.append(node)
+   return p
+  else:
+   return []  
+
+wordfile = open("2+2lemma.txt")
+wordlist = cleanentries(wordfile.read().split())
+wordfile.close()
+words = []
+while True:
+ userentry = raw_input("Hello, enter the 2 words to play with separated by a space:\n ")
+ words = [w.lower() for w in userentry.split()]
+ if(len(words) == 2 and len(words[0]) == len(words[1])):
+  break
+print "You selected %s and %s as your words" % (words[0], words[1])
+wordlist = [ w for w in wordlist if len(words[0]) == len(w)]
+answer = AStar(words[0], words[1], wordlist)
+if answer != None:
+ print "Minimum number of steps is %s" % (len(answer))
+ reply = raw_input("Would you like the answer(y/n)? ")
+ if(reply.lower() == "y"):
+  answer.insert(0, words[0])
+  print "\n".join(answer)
+ else:
+  print "Good luck!"
+else:
+ print "Sorry, there's no answer to yours"
+reply = raw_input("Press enter to exit")
+ 
+
+ I left the is_neighbors method in even though it's not used. This is the method that is proposed to be ported to C. To use it, just replace getchildren with this: 
+
+ def getchildren(word, wordlist):
+ return ( w for w in wordlist if is_neighbors(word, w))
+ 
+
+ As for getting it to work as a C module I didn't get that far, but this is what I came up with: 
+
+ #include "Python.h"
+
+static PyObject *
+py_is_neighbor(PyObject *self, Pyobject *args)
+{
+ int length;
+ const char *word1, *word2;
+ if (!PyArg_ParseTuple(args, "ss", &amp;word1, &amp;word2, &amp;length))
+  return NULL;
+
+ int i;
+ int different = 0;
+ for (i =0; i &lt; length; i++)
+ {
+  if (*(word1 + i) != *(word2 + i))
+  {
+   if (different)
+   {
+    return Py_BuildValue("i", different);
+   }
+   different = 1;
+  }
+ }
+ return Py_BuildValue("i", different);
+}
+
+PyMethodDef methods[] = {
+ {"isneighbor", py_is_neighbor, METH_VARARGS, "Returns whether words are neighbors"},
+ {NULL, NULL, 0, NULL}
+};
+
+PyMODINIT_FUNC
+initIsNeighbor(void)
+{
+ Py_InitModule("isneighbor", methods);
+}
+ 
+
+ I profiled this using: 
+
+ 
+ python -m cProfile "Wordgame.py" 
+ 
+
+ And the time recorded was the total time of the AStar method call. The fast input set was "verse poets" and the long input set was "poets verse". Timings will obviously vary between different machines, so if anyone does end up trying this give result comparison of the program as is, as well as with the C module. 
+ Answers (Total-11): #0 If your wordlist is very long, might it be more efficient to generate all possible 1-letter-differences from 'word', then check which ones are in the list? I don't know any Python but there should be a suitable data structure for the wordlist allowing for log-time lookups. 
+
+ I suggest this because if your words are reasonable lengths (~10 letters), then you'll only be looking for 250 potential words, which is probably faster if your wordlist is larger than a few hundred words. 
+ #1 Your function distance is calculating the total distance, when you really only care about distance=1. The majority of cases you'll know it's >1 within a few characters, so you could return early and save a lot of time. 
+
+ Beyond that, there might be a better algorithm, but I can't think of it. 
+
+ Edit: Another idea. 
+
+ You can make 2 cases, depending on whether the first character matches. If it doesn't match, the rest of the word has to match exactly, and you can test for that in one shot. Otherwise, do it similarly to what you were doing. You could even do it recursively, but I don't think that would be faster. 
+
+ def DifferentByOne(word1, word2):
+ if word1[0] != word2[0]:
+  return word1[1:] == word2[1:]
+ same = True
+ for i in range(1, len(word1)):
+  if word1[i] != word2[i]:
+   if same:
+    same = False
+   else:
+    return False
+ return not same
+ 
+
+ Edit 2: I've deleted the check to see if the strings are the same length, since you say it's redundant. Running Ryan's tests on my own code and on the is_neighbors function provided by MizardX , I get the following: 
+
+ 
+ Original distance(): 3.7 seconds 
+ My DifferentByOne(): 1.1 seconds 
+ MizardX's is_neighbors(): 3.7 seconds 
+ 
+
+ Edit 3: (Probably getting into community wiki territory here, but...) 
+
+ Trying your final definition of is_neighbors() with izip instead of zip: 2.9 seconds. 
+
+ Here's my latest version, which still times at 1.1 seconds: 
+
+ def DifferentByOne(word1, word2):
+ if word1[0] != word2[0]:
+  return word1[1:] == word2[1:]
+ different = False
+ for i in range(1, len(word1)):
+  if word1[i] != word2[i]:
+   if different:
+    return False
+   different = True
+ return different
+ 
+ #2 from itertools import izip
+
+def is_neighbors(word1,word2):
+ different = False
+ for c1,c2 in izip(word1,word2):
+  if c1 != c2:
+   if different:
+    return False
+   different = True
+ return different
+ 
+
+ Or maybe in-lining the izip code: 
+
+ def is_neighbors(word1,word2):
+ different = False
+ next1 = iter(word1).next
+ next2 = iter(word2).next
+ try:
+  while 1:
+   if next1() != next2():
+    if different:
+     return False
+    different = True
+ except StopIteration:
+  pass
+ return different
+ 
+
+ And a rewritten getchildren : 
+
+ def iterchildren(word, wordlist):
+ return ( w for w in wordlist if is_neighbors(word, w) )
+ 
+
+ 
+ izip(a,b) returns an iterator over pairs of values from a and b . 
+ zip(a,b) returns a list of pairs from a and b . 
+ 
+ #3 People are mainly going about this by trying to write a quicker function, but there might be another way.. 
+
+ 
+ "distance" is called over 5 million times 
+ 
+
+ Why is this? Perhaps a better way to optimise is to try and reduce the number of calls to distance , rather than shaving milliseconds of distance's execution time. It's impossible to tell without seeing the full script, but optimising a specific function is generally unnecessary. 
+
+ If that is impossible, perhaps you could write it as a C module? 
+ #4 Well you can start by having your loop break if the difference is 2 or more. 
+
+ Also you can change 
+
+ for i in range(len(word1)):
+ 
+
+ to 
+
+ for i in xrange(len(word1)):
+ 
+
+ Because xrange generates sequences on demand instead of generating the whole range of numbers at once. 
+
+ You can also try comparing word lengths which would be quicker. Also note that your code doesn't work if word1 is greater than word2 
+
+ There's not much else you can do algorithmically after that, which is to say you'll probably find more of a speedup by porting that section to C. 
+
+ Edit 2 
+
+ Attempting to explain my analysis of Sumudu's algorithm compared to verifying differences char by char. 
+
+ When you have a word of length L, the number of "differs-by-one" words you will generate will be 25L. We know from implementations of sets on modern computers, that the search speed is approximately log(n) base 2 , where n is the number of elements to search for. 
+
+ Seeing that most of the 5 million words you test against is not in the set, most of the time, you will be traversing the entire set, which means that it really becomes log(25L) instead of only log(25L)/2. (and this is assuming best case scenario for sets that comparing string by string is equivalent to comparing char by char) 
+
+ Now we take a look at the time complexity for determining a "differs-by-one". If we assume that you have to check the entire word, then the number of operations per word becomes L . We know that most words differ by 2 very quickly. And knowing that most prefixes take up a small portion of the word, we can logically assume that you will break most of the time by L/2 , or half the word (and this is a conservative estimate). 
+
+ So now we plot the time complexities of the two searches, L/2 and log(25L), and keeping in mind that this is even considering string matching the same speed as char matching (highly in favor of sets). You have the equation log(25*L) > L/2, which can be simplified down to log(25) > L/2 - log(L). As you can see from the graph, it should be quicker to use the char matching algorithm until you reach very large numbers of L. 
+
+ 
+
+ 
+ Also, I don't know if you're counting breaking on difference of 2 or more in your optimization, but from Mark's answer I already break on a difference of 2 or more, and actually, if the difference in the first letter, it breaks after the first letter, and even in spite of all those optimizations, changing to using sets just blew them out of the water. I'm interested in trying your idea though 
+ 
+
+ I was the first person in this question to suggest breaking on a difference of 2 or more. The thing is, that Mark's idea of string slicing (if word1[0] != word2[0]: return word1[1:] == word2[1:]) is simply putting what we are doing into C. How do you think word1[1:] == word2[1:] is calculated? The same way that we are doing. 
+
+ 
+ I read your explanation a few times but I didn't quite follow it, would you mind explaining it a little more indepth? Also I'm not terribly familiar with C and I've been working in high-level languages for the past few years (closest has been learning C++ in high school 6 years ago 
+ 
+
+ As for producing the C code, I am a bit busy. I am sure you will be able to do it since you have written in C before. You could also try C#, which probably has similar performance characteristics. 
+
+ More Explanation 
+
+ Here is a more indepth explanation to Davy8 
+
+ def getchildren(word, wordlist):
+ oneoff = one_letter_off_strings(word)
+ return set(oneoff) &amp; set(wordlist)
+ 
+
+ Your one_letter_off_strings function will create a set of 25L strings(where L is the number of letters). 
+
+ Creating a set from the wordlist will create a set of D strings (where D is the length of your dictionary). By creating an intersection from this, you MUST iterate over each oneoff and see if it exists in wordlist . 
+
+ The time complexity for this operation is detailed above. This operation is less efficient than comparing the word you want with each word in wordlist . Sumudu's method is an optimization in C rather than in algorithm. 
+
+ More Explanation 2 
+
+ 
+ There's only 4500 total words (because the wordlist is pre-filtered for 5 letter words before even being passed to the algorithm), being intersected with 125 one-letter-off words. It seemed that you were saying intersection is log(smaller) or in otherwords log(125, 2). Compare this to again assuming what you said, where comparing a word breaks in L/2 letters, I'll round this down to 2, even though for a 5 letter word it's more likely to be 3. This comparison is done 4500 times, so 9000. log(125,2) is about 6.9, and log(4500,2) is about 12. Lemme know if I misinterpreted your numbers. 
+ 
+
+ To create the intersection of 125 one-letter-off words with a dictionary of 4500, you need to make 125 * 4500 comparisons. This is not log(125,2). It is at best 125 * log(4500, 2) assuming that the dictionary is presorted. There is no magic shortcut to sets. You are also doing a string by string instead of char by char comparison here. 
+ #5 How often is the distance function called with the same arguments? A simple to implement optimization would be to use memoization . 
+
+ You could probably also create some sort of dictionary with frozensets of letters and lists of words that differ by one and look up values in that. This datastructure could either be stored and loaded through pickle or generated from scratch at startup. 
+
+ Short circuiting the evaluation will only give you gains if the words you are using are very long, since the hamming distance algorithm you're using is basically O(n) where n is the word length. 
+
+ I did some experiments with timeit for some alternative approaches that may be illustrative. 
+
+ Timeit Results 
+
+ Your Solution 
+
+ d = """\
+def distance(word1, word2):
+ difference = 0
+ for i in range(len(word1)):
+  if word1[i] != word2[i]:
+   difference += 1
+ return difference
+"""
+t1 = timeit.Timer('distance("hello", "belko")', d)
+print t1.timeit() # prints 6.502113536776391
+ 
+
+ One Liner 
+
+ d = """\
+from itertools import izip
+def hamdist(s1, s2):
+ return sum(ch1 != ch2 for ch1, ch2 in izip(s1,s2))
+"""
+t2 = timeit.Timer('hamdist("hello", "belko")', d)
+print t2.timeit() # prints 10.985101179
+ 
+
+ Shortcut Evaluation 
+
+ d = """\
+def distance_is_one(word1, word2):
+ diff = 0
+ for i in xrange(len(word1)):
+  if word1[i] != word2[i]:
+   diff += 1
+  if diff &gt; 1:
+   return False
+ return diff == 1
+"""
+t3 = timeit.Timer('hamdist("hello", "belko")', d)
+print t2.timeit() # prints 6.63337
+ 
+ #6 For such a simple function that has such a large performance implication, I would probably make a C library and call it using ctypes . One of reddit's founders claims they made the website 2x as fast using this technique. 
+
+ You can also use psyco on this function, but beware that it can eat up a lot of memory. 
+ #7 I don't know if it will significantly affect your speed, but you could start by turning the list comprehension into a generator expression. It's still iterable so it shouldn't be much different in usage: 
+
+ def getchildren(word, wordlist):
+ return [ w for w in wordlist if distance(word, w) == 1 ]
+ 
+
+ to 
+
+ def getchildren(word, wordlist):
+ return ( w for w in wordlist if distance(word, w) == 1 )
+ 
+
+ The main problem would be that a list comprehension would construct itself in memory and take up quite a bit of space, whereas the generator will create your list on the fly so there is no need to store the whole thing. 
+
+ Also, following on unknown's answer, this may be a more "pythonic" way of writing distance(): 
+
+ def distance(word1, word2):
+ difference = 0
+ for x,y in zip (word1, word2):
+  if x == y:
+   difference += 1
+ return difference
+ 
+
+ But it's confusing what's intended when len (word1) != len (word2), in the case of zip it will only return as many characters as the shortest word. (Which could turn out to be an optimization...) 
+ #8 Try this: 
+
+ def distance(word1, word2):
+ return sum([not c1 == c2 for c1, c2 in zip(word1,word2)])
+ 
+
+ Also, do you have a link to your game? I like being destroyed by word games 
+ #9 First thing to occur to me: 
+
+ from operator import ne
+
+def distance(word1, word2):
+ return sum(map(ne, word1, word2))
+ 
+
+ which has a decent chance of going faster than other functions people have posted, because it has no interpreted loops, just calls to Python primitives. And it's short enough that you could reasonably inline it into the caller. 
+
+ For your higher-level problem, I'd look into the data structures developed for similarity search in metric spaces, e.g. this paper or this book , neither of which I've read (they came up in a search for a paper I have read but can't remember). 
+ #10 for this snippet: 
+
+ for x,y in zip (word1, word2):
+ if x != y:
+  difference += 1
+return difference
+ 
+
+ i'd use this one: 
+
+ return sum(1 for i in xrange(len(word1)) if word1[i] == word2[i])
+ 
+
+ the same pattern would follow all around the provided code...

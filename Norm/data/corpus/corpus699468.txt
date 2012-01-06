@@ -1,0 +1,245 @@
+Question (ID-699468): Python HTML sanitizer / scrubber / filter Does anyone have experience using a Python HTML sanitizer / scrubber / filter? 
+
+ I'm looking for a module that will remove any HTML tags from a string that are not found in a whitelist. Of course I've Googled it but haven't found anything definitive. 
+
+ Thanks,
+Everett 
+ Answers (Total-7): #0 Here's a simple solution using BeautifulSoup : 
+
+ from BeautifulSoup import BeautifulSoup
+
+VALID_TAGS = ['strong', 'em', 'p', 'ul', 'li', 'br']
+
+def sanitize_html(value):
+
+ soup = BeautifulSoup(value)
+
+ for tag in soup.findAll(True):
+  if tag.name not in VALID_TAGS:
+   tag.hidden = True
+
+ return soup.renderContents()
+ 
+
+ If you want to remove the contents of the invalid tags as well, substitute tag.extract() for tag.hidden . 
+
+ You might also look into using lxml and Tidy . 
+ #1 Use lxml.html.clean ! It's VERY easy! 
+
+ from lxml.html.clean import clean_html
+print clean_html(html)
+ 
+
+ Suppose the following html: 
+
+ html = '''\
+&lt;html&gt;
+ &lt;head&gt;
+ &lt;script type="text/javascript" src="evil-site"&gt;&lt;/script&gt;
+ &lt;link rel="alternate" type="text/rss" src="evil-rss"&gt;
+ &lt;style&gt;
+  body {background-image: url(javascript:do_evil)};
+  div {color: expression(evil)};
+ &lt;/style&gt;
+ &lt;/head&gt;
+ &lt;body onload="evil_function()"&gt;
+ &lt;!-- I am interpreted for EVIL! --&gt;
+ &lt;a href="javascript:evil_function()"&gt;a link&lt;/a&gt;
+ &lt;a href="#" onclick="evil_function()"&gt;another link&lt;/a&gt;
+ &lt;p onclick="evil_function()"&gt;a paragraph&lt;/p&gt;
+ &lt;div style="display: none"&gt;secret EVIL!&lt;/div&gt;
+ &lt;object&gt; of EVIL! &lt;/object&gt;
+ &lt;iframe src="evil-site"&gt;&lt;/iframe&gt;
+ &lt;form action="evil-site"&gt;
+  Password: &lt;input type="password" name="password"&gt;
+ &lt;/form&gt;
+ &lt;blink&gt;annoying EVIL!&lt;/blink&gt;
+ &lt;a href="evil-site"&gt;spam spam SPAM!&lt;/a&gt;
+ &lt;image src="evil!"&gt;
+ &lt;/body&gt;
+&lt;/html&gt;'''
+ 
+
+ The results... 
+
+ &lt;html&gt;
+ &lt;body&gt;
+ &lt;div&gt;
+  &lt;style&gt;/* deleted */&lt;/style&gt;
+  &lt;a href=""&gt;a link&lt;/a&gt;
+  &lt;a href="#"&gt;another link&lt;/a&gt;
+  &lt;p&gt;a paragraph&lt;/p&gt;
+  &lt;div&gt;secret EVIL!&lt;/div&gt;
+  of EVIL!
+  Password:
+  annoying EVIL!
+  &lt;a href="evil-site"&gt;spam spam SPAM!&lt;/a&gt;
+  &lt;img src="evil!"&gt;
+ &lt;/div&gt;
+ &lt;/body&gt;
+&lt;/html&gt;
+ 
+
+ You can customize the elements you want to clean and whatnot. 
+ #2 The above solutions via Beautiful Soup will not work. You might be able to hack something with Beautiful Soup above and beyond them, because Beautiful Soup provides access to the parse tree. In a while, I think I'll try to solve the problem properly, but it's a week-long project or so, and I don't have a free week soon. 
+
+ Just to be specific, not only will Beautiful Soup throw exceptions for some parsing errors which the above code doesn't catch; but also, there are plenty of very real XSS vulnerabilities that aren't caught, like: 
+
+ &lt;&lt;script&gt;script&gt; alert("Haha, I hacked your page."); &lt;/&lt;/script&gt;script&gt;
+ 
+
+ Probably the best thing that you can do is instead to strip out the &lt; element as &amp;lt; , to prohibit all HTML, and then use a restricted subset like Markdown to render formatting properly. In particular, you can also go back and re-introduce common bits of HTML with a regex. Here's what the process looks like, roughly: 
+
+ _lt_  = re.compile('&lt;')
+_tc_ = '~(lt)~' # or whatever, so long as markdown doesn't mangle it.  
+_ok_ = re.compile(_tc_ + '(/?(?:u|b|i|em|strong|sup|sub|p|br|q|blockquote|code))&gt;', re.I)
+_sqrt_ = re.compile(_tc_ + 'sqrt&gt;', re.I)  #just to give an example of extending
+_endsqrt_ = re.compile(_tc_ + '/sqrt&gt;', re.I) #html syntax with your own elements.
+_tcre_ = re.compile(_tc_)
+
+def sanitize(text):
+ text = _lt_.sub(_tc_, text)
+ text = markdown(text)
+ text = _ok_.sub(r'&lt;\1&gt;', text)
+ text = _sqrt_.sub(r'&amp;radic;&lt;span style="text-decoration:overline;"&gt;', text)
+ text = _endsqrt_.sub(r'&lt;/span&gt;', text)
+ return _tcre_.sub('&amp;lt;', text)
+ 
+
+ I haven't tested that code yet, so there may be bugs. But you see the general idea: you have to blacklist all HTML in general before you whitelist the ok stuff. 
+ #3 Here is what i use in my own project. The acceptable_elements/attributes come from feedparser and BeautifulSoup does the work. 
+
+ from BeautifulSoup import BeautifulSoup
+
+acceptable_elements = ['a', 'abbr', 'acronym', 'address', 'area', 'b', 'big',
+  'blockquote', 'br', 'button', 'caption', 'center', 'cite', 'code', 'col',
+  'colgroup', 'dd', 'del', 'dfn', 'dir', 'div', 'dl', 'dt', 'em',
+  'font', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 
+  'ins', 'kbd', 'label', 'legend', 'li', 'map', 'menu', 'ol', 
+  'p', 'pre', 'q', 's', 'samp', 'small', 'span', 'strike',
+  'strong', 'sub', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th',
+  'thead', 'tr', 'tt', 'u', 'ul', 'var']
+
+acceptable_attributes = ['abbr', 'accept', 'accept-charset', 'accesskey',
+ 'action', 'align', 'alt', 'axis', 'border', 'cellpadding', 'cellspacing',
+ 'char', 'charoff', 'charset', 'checked', 'cite', 'clear', 'cols',
+ 'colspan', 'color', 'compact', 'coords', 'datetime', 'dir', 
+ 'enctype', 'for', 'headers', 'height', 'href', 'hreflang', 'hspace',
+ 'id', 'ismap', 'label', 'lang', 'longdesc', 'maxlength', 'method',
+ 'multiple', 'name', 'nohref', 'noshade', 'nowrap', 'prompt', 
+ 'rel', 'rev', 'rows', 'rowspan', 'rules', 'scope', 'shape', 'size',
+ 'span', 'src', 'start', 'summary', 'tabindex', 'target', 'title', 'type',
+ 'usemap', 'valign', 'value', 'vspace', 'width']
+
+def clean_html( fragment ):
+ while True:
+  soup = BeautifulSoup( fragment )
+  removed = False  
+  for tag in soup.findAll(True): # find all tags
+   if tag.name not in acceptable_elements:
+    tag.extract() # remove the bad ones
+    removed = True
+   else: # it might have bad attributes
+    # a better way to get all attributes?
+    for attr in tag._getAttrMap().keys():
+     if attr not in acceptable_attributes:
+      del tag[attr]
+
+  # turn it back to html
+  fragment = unicode(soup)
+
+  if removed:
+   # we removed tags and tricky can could exploit that!
+   # we need to reparse the html until it stops changing
+   continue # next round
+
+  return fragment
+ 
+
+ Some small tests to make sure this behaves correctly: 
+
+ tests = [ #text should work
+   ('&lt;p&gt;this is text&lt;/p&gt;but this too', '&lt;p&gt;this is text&lt;/p&gt;but this too'),
+   # make sure we cant exploit removal of tags
+   ('&lt;&lt;script&gt;&lt;/script&gt;script&gt; alert("Haha, I hacked your page."); &lt;&lt;script&gt;&lt;/script&gt;/script&gt;', ''),
+   # try the same trick with attributes, gives an Exception
+   ('&lt;div on&lt;script&gt;&lt;/script&gt;load="alert("Haha, I hacked your page.");"&gt;1&lt;/div&gt;', Exception),
+    # no tags should be skipped
+   ('&lt;script&gt;bad&lt;/script&gt;&lt;script&gt;bad&lt;/script&gt;&lt;script&gt;bad&lt;/script&gt;', ''),
+   # leave valid tags but remove bad attributes
+   ('&lt;a href="good" onload="bad" onclick="bad" alt="good"&gt;1&lt;/div&gt;', '&lt;a href="good" alt="good"&gt;1&lt;/a&gt;'),
+]
+
+for text, out in tests:
+ try:
+  res = clean_html(text)
+  assert res == out, "%s =&gt; %s != %s" % (text, res, out)
+ except out, e:
+  assert isinstance(e, out), "Wrong exception %r" % e
+ 
+ #4 I modified Bryan 's solution with BeautifulSoup to address the problem raised by Chris Drost . A little crude, but does the job: 
+
+ from BeautifulSoup import BeautifulSoup, Comment
+
+VALID_TAGS = {'strong': [],
+    'em': [],
+    'p': [],
+    'ol': [],
+    'ul': [],
+    'li': [],
+    'br': [],
+    'a': ['href', 'title']
+    }
+
+def sanitize_html(value, valid_tags=VALID_TAGS):
+ soup = BeautifulSoup(value)
+ comments = soup.findAll(text=lambda text:isinstance(text, Comment))
+ [comment.extract() for comment in comments]
+ # Some markup can be crafted to slip through BeautifulSoup's parser, so
+ # we run this repeatedly until it generates the same output twice.
+ newoutput = soup.renderContents()
+ while 1:
+  oldoutput = newoutput
+  soup = BeautifulSoup(newoutput)
+  for tag in soup.findAll(True):
+   if tag.name not in valid_tags:
+    tag.hidden = True
+   else:
+    tag.attrs = [(attr, value) for attr, value in tag.attrs if attr in valid_tags[tag.name]]
+  newoutput = soup.renderContents()
+  if oldoutput == newoutput:
+   break
+ return newoutput
+ 
+
+ Edit: Updated to support valid attributes. 
+ #5 I prefer the lxml.html.clean solution, like nosklo points out . Here's to also remove some empty tags: 
+
+ from lxml import etree
+from lxml.html import clean, fromstring, tostring
+
+remove_attrs = ['class']
+remove_tags = ['table', 'tr', 'td']
+nonempty_tags = ['a', 'p', 'span', 'div']
+
+cleaner = clean.Cleaner(remove_tags=remove_tags)
+
+def squeaky_clean(html):
+ clean_html = cleaner.clean_html(html)
+ # now remove the useless empty tags
+ root = fromstring(clean_html)
+ context = etree.iterwalk(root) # just the end tag event
+ for action, elem in context:
+  clean_text = elem.text and elem.text.strip(' \t\r\n')
+  if elem.tag in nonempty_tags and \
+  not (len(elem) or clean_text): # no children nor text
+   elem.getparent().remove(elem)
+   continue
+  elem.text = clean_text # if you want
+  # and if you also wanna remove some attrs:
+  for badattr in remove_attrs:
+   if elem.attrib.has_key(badattr):
+    del elem.attrib[badattr]
+ return tostring(root)
+ 
+ #6 Have you tried with BeautifulSoup ?

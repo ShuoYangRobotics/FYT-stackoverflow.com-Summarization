@@ -1,0 +1,280 @@
+Question (ID-264154): Google AppEngine: How to fetch more than 1000? First: I'm a beginner in python. 
+
+ How can I fetch more than 1000 record from data store and put all in one single list to pass to django? 
+ Answers (Total-15): #0 Starting with Version 1.3.6 (released Aug-17-2010) you CAN 
+
+ From the changelog: 
+
+ 
+ Results of datastore count() queries and offsets for all datastore queries are no longer capped at 1000 . 
+ 
+ #1 Every time this comes up as a limitation, I always wonder " why do you need more than 1,000 results?" Did you know that Google themselves doesn't serve up more than 1,000 results? Try this search: http://www.google.ca/search?hl=en&amp;client=firefox-a&amp;rls=org.mozilla:en-US:official&amp;hs=qhu&amp;q=1000+results&amp;start=1000&amp;sa=N I didn't know that until recently, because I'd never taken the time to click into the 100th page of search results on a query. 
+
+ If you're actually returning more than 1,000 results back to the user, then I think there's a bigger problem at hand than the fact that the data store won't let you do it. 
+
+ One possible (legitimate) reason to need that many results is if you were doing a large operation on the data and presenting a summary (for example, what is the average of all this data). The solution to this problem (which is talked about in the Google I/O talk) is to calculate the summary data on-the-fly, as it comes in, and save it. 
+ #2 App Engine gives you a nice way of "paging" through the results by 1000 by ordering on Keys and using the last key as the next offset. They even provide some sample code here: 
+
+ http://code.google.com/appengine/docs/python/datastore/queriesandindexes.html#Queries_on_Keys 
+
+ Although their example spreads the queries out over many requests, you can change the page size from 20 to 1000 and query in a loop, combining the querysets. Additionally you might use itertools to link the queries without evaluating them before they're needed. 
+
+ For example, to count how many rows beyond 1000: 
+
+ class MyModel(db.Expando):
+ @classmethod
+ def count_all(cls):
+  """
+  Count *all* of the rows (without maxing out at 1000)
+  """
+  count = 0
+  query = cls.all().order('__key__')
+
+  while count % 1000 == 0:
+   current_count = query.count()
+   if current_count == 0:
+    break
+
+   count += current_count
+
+   if current_count == 1000:
+    last_key = query.fetch(1, 999)[0].key()
+    query = query.filter('__key__ &gt; ', last_key)
+
+  return count
+ 
+ #3 You can't. 
+
+ Part of the FAQ states that there is no way you can access beyond row 1000 of a query, increasing the "OFFSET" will just result in a shorter result set, 
+
+ ie: OFFSET 999 --> 1 result comes back. 
+
+ From Wikipedia: 
+
+ 
+ App Engine limits the maximum rows
+ returned from an entity get to 1000
+ rows per Datastore call. Most web
+ database applications use paging and
+ caching, and hence do not require this
+ much data at once, so this is a
+ non-issue in most scenarios.[citation
+ needed] If an application needs more
+ than 1,000 records per operation, it
+ can use its own client-side software
+ or an Ajax page to perform an
+ operation on an unlimited number of
+ rows. 
+ 
+
+ From http://code.google.com/appengine/docs/whatisgoogleappengine.html 
+
+ 
+ Another example of a service limit is
+ the number of results returned by a
+ query. A query can return at most
+ 1,000 results. Queries that would
+ return more results only return the
+ maximum. In this case, a request that
+ performs such a query isn't likely to
+ return a request before the timeout,
+ but the limit is in place to conserve
+ resources on the datastore. 
+ 
+
+ From http://code.google.com/appengine/docs/datastore/gqlreference.html 
+
+ 
+ Note: A LIMIT clause has a maximum of
+ 1000. If a limit larger than the maximum is specified, the maximum is
+ used. This same maximum applies to the
+ fetch() method of the GqlQuery class. 
+ 
+ Note: Like the offset parameter for
+ the fetch() method, an OFFSET in a GQL
+ query string does not reduce the
+ number of entities fetched from the
+ datastore. It only affects which
+ results are returned by the fetch()
+ method. A query with an offset has
+ performance characteristics that
+ correspond linearly with the offset
+ size. 
+ 
+
+ From http://code.google.com/appengine/docs/datastore/queryclass.html 
+
+ 
+ The limit and offset arguments control
+ how many results are fetched from the
+ datastore, and how many are returned
+ by the fetch() method: 
+ 
+ 
+ The datastore fetches offset + limit results to the application. The first offset results are not skipped by the datastore itself. 
+ The fetch() method skips the first offset results, then returns the rest (limit results). 
+ The query has performance characteristics that correspond
+ linearly with the offset amount plus the limit. 
+ 
+ 
+
+ What this means is 
+
+ If you have a singular query, there is no way to request anything outside the range 0-1000. 
+
+ Increasing offset will just raise the 0, so 
+
+ LIMIT 1000 OFFSET 0
+ 
+
+ Will return 1000 rows, 
+
+ and 
+
+ LIMIT 1000 OFFSET 1000
+ 
+
+ Will return 0 rows , thus, making it impossible to, with a single query syntax, fetch 2000 results either manually or using the API. 
+
+ The only plausible exception 
+
+ Is to create a numeric index on the table, ie: 
+
+ SELECT * FROM Foo WHERE ID &gt; 0 AND ID &lt; 1000 
+
+ SELECT * FROM Foo WHERE ID &gt;= 1000 AND ID &lt; 2000
+ 
+
+ If your data or query can't have this 'ID' hardcoded identifier, then you are out of luck 
+ #4 Just for the record - fetch limit of 1000 entries is now gone: 
+
+ http://googleappengine.blogspot.com/2010/02/app-engine-sdk-131-including-major.html 
+
+ Quotation: 
+
+ 
+ No more 1000 result limit - That's
+ right: with addition of Cursors and
+ the culmination of many smaller
+ Datastore stability and performance
+ improvements over the last few months,
+ we're now confident enough to remove
+ the maximum result limit altogether.
+ Whether you're doing a fetch,
+ iterating, or using a Cursor, there's
+ no limits on the number of results. 
+ 
+ #5 The 1000 record limit is a hard limit in Google AppEngine. 
+
+ This presentation http://sites.google.com/site/io/building-scalable-web-applications-with-google-app-engine explains how to efficiently page through data using AppEngine. 
+
+ (Basically by using a numeric id as key and specifying a WHERE clause on the id.) 
+ #6 This 1K limit issue is resolved. 
+
+ query = MyModel.all()
+for doc in query:
+ print doc.title 
+
+ By treating the Query object as an iterable: The iterator retrieves results from the datastore in small batches, allowing for the app to stop iterating on results to avoid fetching more than is needed. Iteration stops when all of the results that match the query have been retrieved. As with fetch(), the iterator interface does not cache results, so creating a new iterator from the Query object will re-execute the query. 
+
+ The max batch size is 1K. And you still have the auto Datastore quotas as well. 
+
+ But with the plan 1.3.1 SDK, they've introduced cursors that can be serialized and saved so that a future invocation can begin the query where it last left off at. 
+ #7 class Count(object):
+def getCount(self,cls):
+	class Count(object):
+def getCount(self,cls):
+	"""
+	Count *all* of the rows (without maxing out at 1000)
+	"""
+	count = 0
+	query = cls.all().order('__key__')
+
+
+	while 1:
+		current_count = query.count()
+		count += current_count
+		if current_count == 0:
+			break
+
+		last_key = query.fetch(1, current_count-1)[0].key()
+		query = query.filter('__key__ &gt; ', last_key)
+
+	return count
+ 
+ #8 we are using something in our ModelBase class that is: 
+
+ @classmethod
+def get_all(cls):
+ q = cls.all()
+ holder = q.fetch(1000)
+ result = holder
+ while len(holder) == 1000:
+ holder = q.with_cursor(q.cursor()).fetch(1000)
+ result += holder
+ return result
+ 
+
+ This gets around the 1000 query limit on every model without having to think about it. I suppose a keys version would be just as easy to implement. 
+ #9 JJG: your solution above is awesome, except that it causes an infinite loop if you have 0 records. (I found this out while testing some of my reports locally). 
+
+ I modified the start of the while loop to look like this: 
+
+ while count % 1000 == 0:
+ current_count = query.count()
+ if current_count == 0:
+  break
+ 
+ #10 To add the contents of the two queries together: 
+
+ list1 = first query
+list2 = second query
+list1 += list2
+ 
+
+ List 1 now contains all 2000 results. 
+ #11 The proposed solution only works if entries are sorted by key... If you are sorting by another column first, you still have to use a limit(offset, count) clause, then the 1000 entries limitation still apply. It is the same if you use two requests : one for retrieving indexes (with conditions and sort) and another using where index in () with a subset of indexes from the first result, as the first request cannot return more than 1000 keys ? (The Google Queries on Keys section does not state clearly if we have to sort by key to remove the 1000 results limitation) 
+ #12 I'm building an app that needs to report on events occurring. An event has a type and I also need to report by event type. 
+
+ The 1000 limit is throwing a wrench into how I would normally do it. I don't need to retrieve all of the entities and present them to the user, but I do need to show the total count for a specific date range. Any suggestions? 
+
+ Thanks! 
+ #13 This is close to the solution provided by Gabriel, but doesn't fetch the results it just counts them: 
+
+ count = 0
+q = YourEntityClass.all().filter('myval = ', 2)
+countBatch = q.count()
+while countBatch &gt; 0:
+ count += countBatch
+ countBatch = q.with_cursor(q.cursor()).count()
+
+logging.info('Count=%d' % count)
+ 
+
+ Works perfectly for my queries, and fast too (1.1 seconds to count 67,000 entities) 
+
+ Note that the query must not be an inequality filter or a set or the cursor will not work and you'll get this exception: 
+
+ 
+ AssertionError: No cursor available for a MultiQuery (queries using "IN" or "!=" operators) 
+ 
+ #14 entities = []
+for entity in Entity.all():
+ entities.append(entity)
+ 
+
+ Simple as that. Note that there is an RPC made for every entity which is much slower than fetching in chunks. So if you're concerned about performance, do the following: 
+
+ If you have less than 1M items: 
+
+ entities = Entity.all().fetch(999999)
+ 
+
+ Otherwise, use a cursor and make sure to order your entities to avoid dupes. 
+
+ It should also be noted that: 
+
+ Entity.all().fetch(Entity.all().count())
+ 
+
+ returns 1000 max and should not be used.

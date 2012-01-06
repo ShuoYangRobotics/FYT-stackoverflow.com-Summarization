@@ -1,0 +1,370 @@
+Question (ID-384076): How can I make the Python logging output to be colored? Some time ago I saw a Mono application with colored output, probably because of it's log system, because all the messages were standardized. 
+Now, Python has the logging module, and it let you specify a lot of options or customize it entirely, so I'm imagining that something like that would be possible too with Python, however I could not find it anywhere. Is there any way to make the Python logging module to output in color? What I want is for error messages to appear in red, for instance. Debug messages in blue or yellow, and so on. 
+Of course this would probably only work on Linux, with compatible terminals (most modern terminals are), but I could fallback to the original logging output if color is not supported. 
+
+ Any ideas? 
+ Answers (Total-9): #0 I already knew about the color escapes, I used them in my bash prompt a while ago. Thanks anyway. 
+What I wanted was to integrate it with the logging module, which I eventually did after a couple of tries and errors. 
+Here is what I end up with: 
+
+ BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
+
+#The background is set with 40 plus the number of the color, and the foreground with 30
+
+#These are the sequences need to get colored ouput
+RESET_SEQ = "\033[0m"
+COLOR_SEQ = "\033[1;%dm"
+BOLD_SEQ = "\033[1m"
+
+def formatter_message(message, use_color = True):
+ if use_color:
+  message = message.replace("$RESET", RESET_SEQ).replace("$BOLD", BOLD_SEQ)
+ else:
+  message = message.replace("$RESET", "").replace("$BOLD", "")
+ return message
+
+COLORS = {
+ 'WARNING': YELLOW,
+ 'INFO': WHITE,
+ 'DEBUG': BLUE,
+ 'CRITICAL': YELLOW,
+ 'ERROR': RED
+}
+
+class ColoredFormatter(logging.Formatter):
+ def __init__(self, msg, use_color = True):
+  logging.Formatter.__init__(self, msg)
+  self.use_color = use_color
+
+ def format(self, record):
+  levelname = record.levelname
+  if self.use_color and levelname in COLORS:
+   levelname_color = COLOR_SEQ % (30 + COLORS[levelname]) + levelname + RESET_SEQ
+   record.levelname = levelname_color
+  return logging.Formatter.format(self, record)
+ 
+
+ And to use it, create your own Logger: 
+
+ # Custom logger class with multiple destinations
+class ColoredLogger(logging.Logger):
+ FORMAT = "[$BOLD%(name)-20s$RESET][%(levelname)-18s] %(message)s ($BOLD%(filename)s$RESET:%(lineno)d)"
+ COLOR_FORMAT = formatter_message(FORMAT, True)
+ def __init__(self, name):
+  logging.Logger.__init__(self, name, logging.DEBUG)    
+
+  color_formatter = ColoredFormatter(self.COLOR_FORMAT)
+
+  console = logging.StreamHandler()
+  console.setFormatter(color_formatter)
+
+  self.addHandler(console)
+  return
+
+
+logging.setLoggerClass(ColoredLogger)
+ 
+
+ Just in case anyone else needs it. 
+ #1 Here is a solution that should work on any platform. If it doesn't just tell me and I will update it. 
+
+ How it works: on platform supporting ANSI escapes is using them (non-Windows) and on Windows it does use API calls to change the console colors. 
+
+ The script does hack the logging.StreamHandler.emit method from standard library adding a wrapper to it. 
+
+ TestColorer.py 
+
+ 
+# Usage: add Colorer.py near you script and import it.
+import logging
+import Colorer
+
+logging.warn("a warning")
+logging.error("some error")
+logging.info("some info")
+
+ 
+
+ Colorer.py 
+
+ 
+#!/usr/bin/env python
+# encoding: utf-8
+import logging
+# now we patch Python code to add color support to logging.StreamHandler
+def add_coloring_to_emit_windows(fn):
+  # add methods we need to the class
+ def _out_handle(self):
+  import ctypes
+  return ctypes.windll.kernel32.GetStdHandle(self.STD_OUTPUT_HANDLE)
+ out_handle = property(_out_handle)
+
+ def _set_color(self, code):
+  import ctypes
+  # Constants from the Windows API
+  self.STD_OUTPUT_HANDLE = -11
+  hdl = ctypes.windll.kernel32.GetStdHandle(self.STD_OUTPUT_HANDLE)
+  ctypes.windll.kernel32.SetConsoleTextAttribute(hdl, code)
+
+ setattr(logging.StreamHandler, '_set_color', _set_color)
+
+ def new(*args):
+  FOREGROUND_BLUE  = 0x0001 # text color contains blue.
+  FOREGROUND_GREEN  = 0x0002 # text color contains green.
+  FOREGROUND_RED  = 0x0004 # text color contains red.
+  FOREGROUND_INTENSITY = 0x0008 # text color is intensified.
+  FOREGROUND_WHITE  = FOREGROUND_BLUE|FOREGROUND_GREEN |FOREGROUND_RED
+  # winbase.h
+  STD_INPUT_HANDLE = -10
+  STD_OUTPUT_HANDLE = -11
+  STD_ERROR_HANDLE = -12
+
+  # wincon.h
+  FOREGROUND_BLACK  = 0x0000
+  FOREGROUND_BLUE  = 0x0001
+  FOREGROUND_GREEN  = 0x0002
+  FOREGROUND_CYAN  = 0x0003
+  FOREGROUND_RED  = 0x0004
+  FOREGROUND_MAGENTA = 0x0005
+  FOREGROUND_YELLOW = 0x0006
+  FOREGROUND_GREY  = 0x0007
+  FOREGROUND_INTENSITY = 0x0008 # foreground color is intensified.
+
+  BACKGROUND_BLACK  = 0x0000
+  BACKGROUND_BLUE  = 0x0010
+  BACKGROUND_GREEN  = 0x0020
+  BACKGROUND_CYAN  = 0x0030
+  BACKGROUND_RED  = 0x0040
+  BACKGROUND_MAGENTA = 0x0050
+  BACKGROUND_YELLOW = 0x0060
+  BACKGROUND_GREY  = 0x0070
+  BACKGROUND_INTENSITY = 0x0080 # background color is intensified.  
+
+  levelno = args[1].levelno
+  if(levelno>=50):
+   color = BACKGROUND_YELLOW | FOREGROUND_RED | FOREGROUND_INTENSITY | BACKGROUND_INTENSITY 
+  elif(levelno>=40):
+   color = FOREGROUND_RED | FOREGROUND_INTENSITY
+  elif(levelno>=30):
+   color = FOREGROUND_YELLOW | FOREGROUND_INTENSITY
+  elif(levelno>=20):
+   color = FOREGROUND_GREEN
+  elif(levelno>=10):
+   color = FOREGROUND_MAGENTA
+  else:
+   color = FOREGROUND_WHITE
+  args[0]._set_color(color)
+
+  ret = fn(*args)
+  args[0]._set_color( FOREGROUND_WHITE )
+  #print "after"
+  return ret
+ return new
+
+def add_coloring_to_emit_ansi(fn):
+ # add methods we need to the class
+ def new(*args):
+  levelno = args[1].levelno
+  if(levelno>=50):
+   color = '\x1b[31m' # red
+  elif(levelno>=40):
+   color = '\x1b[31m' # red
+  elif(levelno>=30):
+   color = '\x1b[33m' # yellow
+  elif(levelno>=20):
+   color = '\x1b[32m' # green 
+  elif(levelno>=10):
+   color = '\x1b[35m' # pink
+  else:
+   color = '\x1b[0m' # normal
+  args[1].msg = color + args[1].msg + '\x1b[0m' # normal
+  #print "after"
+  return fn(*args)
+ return new
+
+import platform
+if platform.system()=='Windows':
+ # Windows does not support ANSI escapes and we are using API calls to set the console color
+ logging.StreamHandler.emit = add_coloring_to_emit_windows(logging.StreamHandler.emit)
+else:
+ # all non-Windows platforms are supporting ANSI escapes so we use them
+ logging.StreamHandler.emit = add_coloring_to_emit_ansi(logging.StreamHandler.emit)
+ #log = logging.getLogger()
+ #log.addFilter(log_filter())
+ #//hdlr = logging.StreamHandler()
+ #//hdlr.setFormatter(formatter())
+ 
+ #2 I updated the example from airmind supporting tags for foreground and background.
+Just use the color variables $BLACK - $WHITE in your log formatter string. To set the background just use $BG-BLACK - $BG-WHITE. 
+
+ import logging
+
+BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
+
+COLORS = {
+ 'WARNING' : YELLOW,
+ 'INFO'  : WHITE,
+ 'DEBUG' : BLUE,
+ 'CRITICAL' : YELLOW,
+ 'ERROR' : RED,
+ 'RED'  : RED,
+ 'GREEN' : GREEN,
+ 'YELLOW' : YELLOW,
+ 'BLUE'  : BLUE,
+ 'MAGENTA' : MAGENTA,
+ 'CYAN'  : CYAN,
+ 'WHITE' : WHITE,
+}
+
+RESET_SEQ = "\033[0m"
+COLOR_SEQ = "\033[1;%dm"
+BOLD_SEQ = "\033[1m"
+
+class ColorFormatter(logging.Formatter):
+
+ def __init__(self, *args, **kwargs):
+  # can't do super(...) here because Formatter is an old school class
+  logging.Formatter.__init__(self, *args, **kwargs)
+
+ def format(self, record):
+  levelname = record.levelname
+  color  = COLOR_SEQ % (30 + COLORS[levelname])
+  message = logging.Formatter.format(self, record)
+  message = message.replace("$RESET", RESET_SEQ)\
+       .replace("$BOLD", BOLD_SEQ)\
+       .replace("$COLOR", color)
+  for k,v in COLORS.items():
+   message = message.replace("$" + k, COLOR_SEQ % (v+30))\
+        .replace("$BG" + k, COLOR_SEQ % (v+40))\
+        .replace("$BG-" + k, COLOR_SEQ % (v+40))
+  return message + RESET_SEQ
+
+logging.ColorFormatter = ColorFormatter
+ 
+
+ So now you can simple do the following in your config file: 
+
+ [formatter_colorFormatter]
+class=logging.ColorFormatter
+format= $COLOR%(levelname)s $RESET %(asctime)s $BOLD$COLOR%(name)s$RESET %(message)s
+ 
+ #3 I modified the original example provided by Sorin and subclassed StreamHandler to a ColorizedConsoleHandler. 
+
+ The downside of their solution is that it modifies the message, and because that is modifying the actual logmessage any other handlers will get the modified message as well. 
+
+ This resulted in logfiles with colorcodes in them in our case because we use multiple loggers. 
+
+ The class below only works on platforms that support ansi, but it should be trivial to add the windows colorcodes to it. 
+
+ import copy, logging
+class ColoredConsoleHandler( logging.StreamHandler ):
+def emit( self, record ):
+ # Need to make a actual copy of the record 
+ # to prevent altering the message for other loggers
+ myrecord = copy.copy( record )
+ levelno = myrecord.levelno
+ if( levelno &gt;= 50 ): # CRITICAL / FATAL
+  color = '\x1b[31m' # red
+ elif( levelno &gt;= 40 ): # ERROR
+  color = '\x1b[31m' # red
+ elif( levelno &gt;= 30 ): # WARNING
+  color = '\x1b[33m' # yellow
+ elif( levelno &gt;= 20 ): # INFO
+  color = '\x1b[32m' # green
+ elif( levelno &gt;= 10 ): # DEBUG
+  color = '\x1b[35m' # pink
+ else: # NOTSET and anything else
+  color = '\x1b[0m' # normal
+ myrecord.msg = color + str( myrecord.msg ) + '\x1b[0m' # normal
+ logging.StreamHandler.emit( self, myrecord )
+ 
+ #4 Another minor remix of airmind's approach that keeps everything in one class: 
+
+ class ColorFormatter(logging.Formatter):
+ FORMAT = ("[$BOLD%(name)-20s$RESET][%(levelname)-18s] "
+   "%(message)s "
+   "($BOLD%(filename)s$RESET:%(lineno)d)")
+
+ BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
+
+ RESET_SEQ = "\033[0m"
+ COLOR_SEQ = "\033[1;%dm"
+ BOLD_SEQ = "\033[1m"
+
+ COLORS = {
+ 'WARNING': YELLOW,
+ 'INFO': WHITE,
+ 'DEBUG': BLUE,
+ 'CRITICAL': YELLOW,
+ 'ERROR': RED
+ }
+
+ def formatter_msg(self, msg, use_color = True):
+ if use_color:
+  msg = msg.replace("$RESET", self.RESET_SEQ).replace("$BOLD", self.BOLD_SEQ)
+ else:
+  msg = msg.replace("$RESET", "").replace("$BOLD", "")
+ return msg
+
+ def __init__(self, use_color=True):
+ msg = self.formatter_msg(self.FORMAT, use_color)
+ logging.Formatter.__init__(self, msg)
+ self.use_color = use_color
+
+ def format(self, record):
+ levelname = record.levelname
+ if self.use_color and levelname in self.COLORS:
+  fore_color = 30 + self.COLORS[levelname]
+  levelname_color = self.COLOR_SEQ % fore_color + levelname + self.RESET_SEQ
+  record.levelname = levelname_color
+ return logging.Formatter.format(self, record)
+ 
+
+ To use attach the formatter to a handler, something like: 
+
+ handler.setFormatter(ColorFormatter())
+logger.addHandler(handler)
+ 
+ #5 Look at the following solution. The stream handler should be the thing doing the colouring, then you have the option of colouring words rather than just the whole line (with the Formatter). 
+
+ http://plumberjack.blogspot.com/2010/12/colorizing-logging-output-in-terminals.html 
+ #6 The bit I had trouble with was setting up the formatter properly: 
+
+ class ColouredFormatter(logging.Formatter): 
+ def __init__(self, msg):
+  logging.Formatter.__init__(self, msg)
+  self._init_colour = _get_colour()
+
+ def close(self):
+  # restore the colour information to what it was
+  _set_colour(self._init_colour)
+
+ def format(self, record):  
+  # Add your own colourer based on the other examples
+  _set_colour( LOG_LEVEL_COLOUR[record.levelno] )
+  return logging.Formatter.format(self, record)   
+
+def init():
+ # Set up the formatter. Needs to be first thing done.
+ rootLogger = logging.getLogger()
+ hdlr = logging.StreamHandler()
+ fmt = ColouredFormatter('%(message)s')
+ hdlr.setFormatter(fmt)
+ rootLogger.addHandler(hdlr)
+ 
+
+ And then to use: 
+
+ import coloured_log
+import logging
+
+coloured_log.init()
+logging.info("info") 
+logging.debug("debug") 
+
+coloured_log.close() # restore colours
+ 
+ #7 I believe (as David has alluded to) that you need to look into escape characters. There seems to be a pretty good tutorial here with an example (in C) but the concept should be the same. But a general google for terminal escape characters should point you in the right direction. 
+ #8 Here is my solution. I think that by splitting it up into modules you can get cleaner code 
+
+ http://paste.ofcode.org/33VBitj9AwyGCMzEDqLkdHa

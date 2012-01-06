@@ -1,0 +1,155 @@
+<h3>Question (ID-291945):</h3><h2>How do I filter ForeignKey choices in a Django ModelForm?</h2><p>Say I have the following in my <code>models.py</code>:</p>
+
+<pre><code>class Company(models.Model):
+   name = ...
+
+class Rate(models.Model):
+   company = models.ForeignKey(Company)
+   name = ...
+
+class Client(models.Model):
+   name = ...
+   company = models.ForeignKey(Company)
+   base_rate = models.ForeignKey(Rate)
+</code></pre>
+
+<p>I.e. there are multiple <code>Companies</code>, each having a range of <code>Rates</code> and <code>Clients</code>.  Each <code>Client</code> should have a base <code>Rate</code> that is chosen from it's parent <code>Company's Rates</code>, not another <code>Company's Rates</code>.</p>
+
+<p>When creating a form for adding a <code>Client</code>, I would like to remove the <code>Company</code> choices (as that has already been selected via an "Add Client" button on the <code>Company</code> page) and limit the <code>Rate</code> choices to that <code>Company</code> as well.</p>
+
+<p>How do I go about this in Django 1.0?  </p>
+
+<p>My current <code>forms.py</code> file is just boilerplate at the moment:</p>
+
+<pre><code>from models import *
+from django.forms import ModelForm
+
+class ClientForm(ModelForm):
+    class Meta:
+        model = Client
+</code></pre>
+
+<p>And the <code>views.py</code> is also basic:</p>
+
+<pre><code>from django.shortcuts import render_to_response, get_object_or_404
+from models import *
+from forms import *
+
+def addclient(request, company_id):
+    the_company = get_object_or_404(Company, id=company_id)
+
+    if request.POST:
+    	form = ClientForm(request.POST)
+    	if form.is_valid():
+    		form.save()
+    		return HttpResponseRedirect(the_company.get_clients_url())
+    else:
+    	form = ClientForm()
+
+    return render_to_response('addclient.html', {'form': form, 'the_company':the_company})
+</code></pre>
+
+<p>In Django 0.96 I was able to hack this in by doing something like the following before rendering the template:</p>
+
+<pre><code>manipulator.fields[0].choices = [(r.id,r.name) for r in Rate.objects.filter(company_id=the_company.id)]
+</code></pre>
+
+<p><a href="http://docs.djangoproject.com/en/dev/ref/models/fields/#django.db.models.ForeignKey.limit_choices_to" rel="nofollow"><code>ForeignKey.limit_choices_to</code></a> seems promising but I don't know how to pass in <code>the_company.id</code> and I'm not clear if that will work outside the Admin interface anyway.</p>
+
+<p>Thanks.  (This seems like a pretty basic request but if I should redesign something I'm open to suggestions.)</p>
+<br /><h3>Answers (Total-4):</h3><b>#0</b><br /><p>ForeignKey is represented by django.forms.ModelChoiceField, which is a ChoiceField whose choices are a model QuerySet.  See the reference for <a href="http://docs.djangoproject.com/en/dev/ref/forms/fields/#modelchoicefield" rel="nofollow">ModelChoiceField</a>.</p>
+
+<p>So, provide a QuerySet to the field's <code>queryset</code> attribute.  Depends on how your form is built.  If you build an explicit form, you'll have fields named directly. </p>
+
+<pre><code>form.rate.queryset = Rate.objects.filter(company_id=the_company.id)
+</code></pre>
+
+<p>If you take the default ModelForm object, <code>form.fields["rate"].queryset = ...</code></p>
+
+<p>This is done explicitly in the view.  No hacking around.</p>
+<br /><b>#1</b><br /><p>In addition to S.Lott's answer and as becomingGuru mentioned in comments, its possible to add the queryset filters by overriding the <code>ModelForm.__init__</code> function. (This could easily apply to regular forms) it can help with reuse and keeps the view function tidy. </p>
+
+<pre><code>class ClientForm(forms.ModelForm):
+    def __init__(self,company,*args,**kwargs):
+        super (ClientForm,self ).__init__(*args,**kwargs) # populates the post
+        self.fields['rate'].queryset = Rate.objects.filter(company=company)
+        self.fields['client'].queryset = Client.objects.filter(company=company)
+
+    class Meta:
+        model = Client
+
+def addclient(request, company_id):
+        the_company = get_object_or_404(Company, id=company_id)
+
+        if request.POST:
+            form = ClientForm(the_company,request.POST)  #&lt;-- Note the extra arg
+            if form.is_valid():
+                form.save()
+                return HttpResponseRedirect(the_company.get_clients_url())
+        else:
+            form = ClientForm(the_company)
+
+        return render_to_response('addclient.html', 
+                                  {'form': form, 'the_company':the_company})
+</code></pre>
+
+<p>This can be useful for reuse say if you have common filters needed on many models (normally I declare an abstract Form class). E.g.</p>
+
+<pre><code>class UberClientForm(ClientForm):
+    class Meta:
+        model = UberClient
+
+def view(request):
+    ...
+    form = UberClientForm(company)
+    ...
+
+#or even extend the existing custom init
+class PITAClient(ClientForm):
+    def __init__(company, *args, **args):
+        super (PITAClient,self ).__init__(company,*args,**kwargs)
+        self.fields['support_staff'].queryset = User.objects.exclude(user='michael')
+</code></pre>
+
+<p>Other than that I'm just restating Django blog material of which there are many good ones out there. </p>
+<br /><b>#2</b><br /><p>So, I've really tried to understand this, but it seems that Django still doesn't make this very straightforward.  I'm not all that dumb, but I just can't see any (somewhat) simple solution.</p>
+
+<p>I find it generally pretty ugly to have to override the Admin views for this sort of thing, and every example I find never fully applies to the Admin views.</p>
+
+<p>This is such a common circumstance with the models I make that I find it appalling that there's no obvious solution to this...</p>
+
+<p>I've got these classes:</p>
+
+<pre><code># models.py
+class Company(models.Model):
+    # ...
+class Contract(models.Model):
+    company = models.ForeignKey(Company)
+    locations = models.ManyToManyField('Location')
+class Location(models.Model):
+    company = models.ForeignKey(Company)
+</code></pre>
+
+<p>This creates a problem when setting up the Admin for Company, because it has inlines for both Contract and Location, and Contract's m2m options for Location are not properly filtered according to the Company that you're currently editing.</p>
+
+<p>In short, I would need some admin option to do something like this:</p>
+
+<pre><code># admin.py
+class LocationInline(admin.TabularInline):
+    model = Location
+class ContractInline(admin.TabularInline):
+    model = Contract
+class CompanyAdmin(admin.ModelAdmin):
+    inlines = (ContractInline, LocationInline)
+    inline_filter = dict(Location__company='self')
+</code></pre>
+
+<p>Ultimately I wouldn't care if the filtering process was placed on the base CompanyAdmin, or if it was placed on the ContractInline.  (Placing it on the inline makes more sense, but it makes it hard to reference the base Contract as 'self'.)</p>
+
+<p>Is there anyone out there who knows of something as straightforward as this badly needed shortcut?  Back when I made PHP admins for this sort of thing, this was considered basic functionality!  In fact, it was always automatic, and had to be disabled if you really didn't want it!</p>
+<br /><b>#3</b><br /><p>If you haven't created the form and want to change the queryset you can do:</p>
+
+<p>formmodel.base_fields['myfield'].queryset = MyModel.objects.filter(...)</p>
+
+<p>This is pretty useful when you are using generic views!</p>
+<br />

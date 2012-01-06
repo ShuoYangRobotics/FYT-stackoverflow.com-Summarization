@@ -1,0 +1,175 @@
+<h3>Question (ID-375427):</h3><h2>Non-blocking read on a subprocess.PIPE in python</h2><p>I'm using the <a href="http://docs.python.org/library/subprocess.html" rel="nofollow">subprocess module</a> to start a subprocess and connect to it's output stream (stdout). I want to be able to execute non-blocking reads on its stdout. Is there a way to make .readline non-bloking or to check if there is data on the stream before I invoke .readline? I'd like this to be portable or at least work under Windows and Linux.</p>
+
+<p>here is how I do it for now (It's blocking on the .readline if no data is avaible):</p>
+
+<pre><code>p = subprocess.Popen('myprogram.exe', stdout = subprocess.PIPE)
+str = p.stdout.readline()
+</code></pre>
+
+<p>Thanks for your help.</p>
+<br /><h3>Answers (Total-12):</h3><b>#0</b><br /><p><a href="http://stackoverflow.com/questions/375427/non-blocking-read-on-a-stream-in-python/4025909#4025909"><code>fcntl</code></a>, <a href="http://stackoverflow.com/questions/375427/non-blocking-read-on-a-stream-in-python/375511#375511"><code>select</code></a>, <a href="http://stackoverflow.com/questions/375427/non-blocking-read-on-a-stream-in-python/437888#437888"><code>asyncproc</code></a> won't help in this case.</p>
+
+<p>Reliable way to read a stream without blocking on both Windows and Linux is to use <a href="http://docs.python.org/library/queue.html#Queue.Queue.get" rel="nofollow"><code>Queue.get_nowait()</code></a>:</p>
+
+<pre><code>from __future__ import print_function
+import sys
+from subprocess import PIPE, Popen
+from threading  import Thread
+
+try:
+    from Queue import Queue, Empty
+except ImportError:
+    from queue import Queue, Empty  # python 3.x
+
+ON_POSIX = 'posix' in sys.builtin_module_names
+
+def enqueue_output(out, queue):
+    for line in iter(out.readline, ''):
+        queue.put(line)
+    out.close()
+
+p = Popen(['myprogram.exe'], stdout=PIPE, bufsize=1, close_fds=ON_POSIX)
+q = Queue()
+t = Thread(target=enqueue_output, args=(p.stdout, q))
+t.daemon = True # thread dies with the program
+t.start()
+
+# ... do other things here
+
+# read line without blocking
+try:  line = q.get_nowait() # or q.get(timeout=.1)
+except Empty:
+    print('no output yet')
+else: # got line
+    print(line, end='')
+</code></pre>
+<br /><b>#1</b><br /><p>I have often had a similar problem; Python programs I write frequently need to have the ability to execute some primary functionality while simultaneously accepting user input from the command line (stdin). Simply putting the user input handling functionality in another thread doesn't solve the problem because readline() blocks and has no timeout. If the primary functionality is complete and there is no longer any need to wait for further user input I typically want my program to exit, but it can't because readline() is still blocking in the other thread waiting for a line. A solution I have found to this problem is to make stdin a non-blocking file using the fcntl module:</p>
+
+<pre><code>import fcntl
+
+# make stdin a non-blocking file
+fd = sys.stdin.fileno()
+fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+# user input handling thread
+while mainThreadIsRunning:
+      try: input = sys.stdin.readline()
+      except: continue
+      handleInput(input)
+</code></pre>
+
+<p>In my opinion this is a bit cleaner than using the select or signal modules to solve this problem but then again it only works on UNIX...<br>
+Cheers,<br>
+Jesse</p>
+<br /><b>#2</b><br /><p>Try the <a href="http://www.lysator.liu.se/~bellman/download/asyncproc.py" rel="nofollow">asyncproc</a> module. For example:</p>
+
+<pre><code>import os
+from asyncproc import Process
+myProc = Process("myprogram.app")
+
+while True:
+    # check to see if process has ended
+    poll = myProc.wait(os.WNOHANG)
+    if poll != None:
+        break
+    # print any new output
+    out = myProc.read()
+    if out != "":
+        print out
+</code></pre>
+
+<p>The module takes care of all the threading as suggested by S.Lott.</p>
+<br /><b>#3</b><br /><p><a href="http://stackoverflow.com/questions/375427/non-blocking-read-on-a-stream-in-python/1810703#1810703">Jesse's answer</a> is not correct.  According to Guido, readline doesn't work correctly with non-blocking mode, and it won't before Python 3000.</p>
+
+<p><a href="http://bugs.python.org/issue1175#msg56041">http://bugs.python.org/issue1175#msg56041</a></p>
+
+<p>If you want to use fcntl to set the file to non-blocking mode, you have to use the lower-level os.read() and separate out the lines yourself.  Mixing fcntl with high-level calls that perform line buffering is asking for trouble.</p>
+<br /><b>#4</b><br /><p>One solution is to make another process to perform your read of the process, or make a thread of the process with a timeout.</p>
+
+<p>Here's the threaded version of a timeout function:</p>
+
+<p><a href="http://code.activestate.com/recipes/473878/" rel="nofollow">http://code.activestate.com/recipes/473878/</a></p>
+
+<p>However, do you need to read the stdout as it's coming in?
+Another solution may be to dump the output to a file and wait for the process to finish using <strong>p.wait()</strong>.</p>
+
+<pre><code>f = open('myprogram_output.txt','w')
+p = subprocess.Popen('myprogram.exe', stdout=f)
+p.wait()
+f.close()
+
+
+str = open('myprogram_output.txt','r').read()
+</code></pre>
+<br /><b>#5</b><br /><p>The <a href="http://www.python.org/doc/2.5.2/lib/module-select.html" rel="nofollow">select</a> module helps you determine where the next useful input is.</p>
+
+<p>However, you're almost always happier with separate threads.  One does a blocking read the stdin, another does wherever it is you don't want blocked.</p>
+<br /><b>#6</b><br /><p>You can do this really easily in <a href="http://twistedmatrix.com/trac/" rel="nofollow">Twisted</a>. Depending upon your existing code base, this might not be that easy to use, but if you are building a twisted application, than things like this become almost trivial. You create a <code>ProcessProtocol</code> class, and override the <code>outReceived()</code> method. Twisted (depending upon the reactor used) is usually just a big <code>select()</code> loop with callbacks installed to handle data from different file descriptors (often network sockets). So the <code>outReceived()</code> method is simply installing a callback for handling data coming from <code>STDOUT</code>.  A simple example demonstrating this behavior is as follows:</p>
+
+<pre><code>from twisted.internet import protocol, reactor
+
+class MyProcessProtocol(protocol.ProcessProtocol):
+
+    def outReceived(self, data):
+        print data
+
+proc = MyProcessProtocol()
+reactor.spawnProcess(proc, './myprogram', ['./myprogram', 'arg1', 'arg2', 'arg3'])
+reactor.run()
+</code></pre>
+
+<p>The <a href="http://twistedmatrix.com/documents/current/core/howto/process.html" rel="nofollow">Twisted documentation</a> has some good information on this.</p>
+
+<p>If you build your entire application around Twisted, it makes asynchronous communication with other processes, local or remote, really elegant like this. On the other hand, if your program isn't built on top of Twisted, this isn't really going to be that helpful. Hopefully this can be helpful to other readers, even if it isn't applicable for your particular application.</p>
+<br /><b>#7</b><br /><p>I have port <a href="http://code.google.com/p/subprocdev/" rel="nofollow">http://code.google.com/p/subprocdev/</a> to python 2.5, and it works in Windows</p>
+<br /><b>#8</b><br /><p>This allows you to pass a timeout to read()
+<a href="http://www.pixelbeat.org/libs/subProcess.py" rel="nofollow">http://www.pixelbeat.org/libs/subProcess.py</a></p>
+<br /><b>#9</b><br /><p>Use select &amp; read(1).  </p>
+
+<pre><code>import subprocess     #no new requirements
+def readAllSoFar(proc, retVal=''): 
+  while (select.select([proc.stdout],[],[],0)[0]!=[]):   
+    retVal+=proc.stdout.read(1)
+  return retVal
+p = subprocess.Popen(['/bin/ls'], stdout=subprocess.PIPE)
+while not p.poll():
+  print (readAllSoFar(p))
+</code></pre>
+
+<p>For readline()-like:</p>
+
+<pre><code>lines = ['']
+while not p.poll():
+  lines = readAllSoFar(p, lines[-1]).split('\n')
+  for a in range(len(lines)-1):
+    print a
+lines = readAllSoFar(p, lines[-1]).split('\n')
+for a in range(len(lines)-1):
+  print a
+</code></pre>
+<br /><b>#10</b><br /><p>I add this problem to read some subprocess.Popen stdout.
+Here is my non blocking read solution:</p>
+
+<pre><code>import fcntl
+
+def non_block_read(output):
+    fd = output.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+    try:
+        return output.read()
+    except:
+        return ""
+
+# Use example
+from subprocess import *
+sb = Popen("echo test &amp;&amp; sleep 1000", shell=True, stdout=PIPE)
+sb.kill()
+
+# sb.stdout.read() # &lt;-- This will block
+non_block_read(sb.stdout)
+'test\n'
+</code></pre>
+<br /><b>#11</b><br /><p>Looks like you want <code>p.communicate()</code> (see the <a href="http://docs.python.org/library/subprocess.html#subprocess.Popen.communicate" rel="nofollow">docs</a>)</p>
+<br />

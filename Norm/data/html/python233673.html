@@ -1,0 +1,218 @@
+<h3>Question (ID-233673):</h3><h2>Lexical closures in Python</h2><p>While I was investigating a problem I had with lexical closures in Javascript code, I came along this problem in Python:</p>
+
+<pre><code>flist = []
+
+for i in xrange(3):
+    def func(x): return x * i
+    flist.append(func)
+
+for f in flist:
+    print f(2)
+</code></pre>
+
+<p>Note that this example mindfully avoids <code>lambda</code>. It prints "4 4 4", which is surprising. I'd expect "0 2 4". </p>
+
+<p>This equivalent Perl code does it right:</p>
+
+<pre><code>my @flist = ();
+
+foreach my $i (0 .. 2)
+{
+    push(@flist, sub {$i * $_[0]});
+}
+
+foreach my $f (@flist)
+{
+    print $f-&gt;(2), "\n";
+}
+</code></pre>
+
+<p>"0 2 4" is printed.</p>
+
+<p>Can you please explain the difference ?</p>
+
+<p><hr /></p>
+
+<p>Update: </p>
+
+<p>The problem <strong>is not</strong> with <code>i</code> being global. This displays the same behavior:</p>
+
+<pre><code>flist = []
+
+def outer():
+    for i in xrange(3):
+        def inner(x): return x * i
+        flist.append(inner)
+
+outer()
+#~ print i   # commented because it causes an error
+
+for f in flist:
+    print f(2)
+</code></pre>
+
+<p>As the commented line shows, <code>i</code> is unknown at that point. Still, it prints "4 4 4".</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>The functions defined in the loop keep accessing the same variable <code>i</code> while its value changes. At the end of the loop, all the functions point to the same variable, which is holding the last value in the loop: the effect is what reported in the example.</p>
+
+<p>In order to evaluate <code>i</code> and use its value, a common pattern is to set it as a parameter default: parameter defaults are evaluated when the <code>def</code> statement is executed, and thus the value of the loop variable is frozen.</p>
+
+<p>The following works as expected:</p>
+
+<pre><code>flist = []
+
+for i in xrange(3):
+    def func(x, i=i): # the *value* of i is copied in func() environment
+        return x * i
+    flist.append(func)
+
+for f in flist:
+    print f(2)
+</code></pre>
+<br /><b>#1</b><br /><p>Python is actually behaving as defined. <b>Three separate functions</b> are created, but  they each have the <b>closure of the environment they're defined in</b> - in this case, the global environment (or the outer function's environment if the loop is placed inside another function). This is exactly the problem, though - in this environment, <b>i is mutated</b>, and the closures all <b>refer to the same i</b>.</p>
+
+<p>Here is the best solution I can come up with - create a function creater and invoke <i>that</i> instead. This will force <b>different environments</b> for each of the functions created, with a <b>different i</b> in each one.</p>
+
+<pre><code>flist = []
+
+for i in xrange(3):
+    def funcC(j):
+        def func(x): return x * j
+        return func
+    flist.append(funcC(i))
+
+for f in flist:
+    print f(2)
+</code></pre>
+
+<p>This is what happens when you mix side effects and functional programming. </p>
+<br /><b>#2</b><br /><p>What is happening is that the variable i is captured, and the functions are returning the value it is bound to at the time it is called.  In functional languages this kind of situation never arises, as i wouldn't be rebound.  However with python, and also as you've seen with lisp, this is no longer true.</p>
+
+<p>The difference with your scheme example is to do with the semantics of the do loop.  Scheme is effectively creating a new i variable each time through the loop, rather than reusing an existing i binding as with the other languages.  If you use a different variable created external to the loop and mutate it, you'll see the same behaviour in scheme.  Try replacing your loop with:</p>
+
+<pre><code>(let ((ii 1)) (
+  (do ((i 1 (+ 1 i)))
+      ((&gt;= i 4))
+    (set! flist 
+      (cons (lambda (x) (* ii x)) flist))
+    (set! ii i))
+))
+</code></pre>
+
+<p>Take a look <a href="http://lambda-the-ultimate.org/node/2648" rel="nofollow">here</a> for some further discussion of this.</p>
+
+<p>[Edit] Possibly a better way to describe it is to think of the do loop as a macro which performs the following steps:</p>
+
+<ol>
+<li>Define a lambda taking a single parameter (i), with a body defined by the body of the loop,</li>
+<li>An immediate call of that lambda with appropriate values of i as its parameter. </li>
+</ol>
+
+<p>ie. the equivalent to the below python:</p>
+
+<pre><code>flist = []
+
+def loop_body(i):      # extract body of the for loop to function
+    def func(x): return x*i
+    flist.append(func)
+
+map(loop_body, xrange(3))  # for i in xrange(3): body
+</code></pre>
+
+<p>The i is no longer the one from the parent scope but a brand new variable in its own scope (ie. the parameter to the lambda) and so you get the behaviour you observe.  Python doesn't have this implicit new scope, so the body of the for loop just shares the i variable.</p>
+<br /><b>#3</b><br /><p>look at this:</p>
+
+<pre><code>for f in flist:
+    print f.func_closure
+
+
+(&lt;cell at 0x00C980B0: int object at 0x009864B4&gt;,)
+(&lt;cell at 0x00C980B0: int object at 0x009864B4&gt;,)
+(&lt;cell at 0x00C980B0: int object at 0x009864B4&gt;,)
+</code></pre>
+
+<p>It means they all point to the same i variable instance, which will have a value of 2 once the loop is over.</p>
+
+<p>A readable solution:</p>
+
+<pre><code>for i in xrange(3):
+        def ffunc(i):
+            def func(x): return x * i
+            return func
+        flist.append(ffunc(i))
+</code></pre>
+<br /><b>#4</b><br /><p>The problem is that all of the local functions bind to the same environment and thus to the same <code>i</code> variable. The solution (workaround) is to create separate environments (stack frames) for each function (or lambda):</p>
+
+<pre><code>t = [ (lambda x: lambda y : x*y)(x) for x in range(5)]
+
+&gt;&gt;&gt; t[1](2)
+2
+&gt;&gt;&gt; t[2](2)
+4
+</code></pre>
+<br /><b>#5</b><br /><p>I'm still not entirely convinced why in some languages this works one way, and in some another way. In Common Lisp it's like Python:</p>
+
+<pre><code>(defvar *flist* '())
+
+(dotimes (i 3 t)
+  (setf *flist* 
+    (cons (lambda (x) (* x i)) *flist*)))
+
+(dolist (f *flist*)  
+  (format t "~a~%" (funcall f 2)))
+</code></pre>
+
+<p>Prints "6 6 6" (note that here the list is from 1 to 3, and built in reverse").
+While in Scheme it works like in Perl:</p>
+
+<pre><code>(define flist '())
+
+(do ((i 1 (+ 1 i)))
+    ((&gt;= i 4))
+  (set! flist 
+    (cons (lambda (x) (* i x)) flist)))
+
+(map 
+  (lambda (f)
+    (printf "~a~%" (f 2)))
+  flist)
+</code></pre>
+
+<p>Prints "6 4 2"</p>
+
+<p>And as I've mentioned already, Javascript is in the Python/CL camp. It appears there is an implementation decision here, which different languages approach in distinct ways. I would love to understand what is the decision, exactly.</p>
+<br /><b>#6</b><br /><p>The variable <code>i</code> is a global, whose value is 2 at each time the function <code>f</code> is called.</p>
+
+<p>I would be inclined to implement the behavior you're after as follows:</p>
+
+<pre><code>&gt;&gt;&gt; class f:
+...  def __init__(self, multiplier): self.multiplier = multiplier
+...  def __call__(self, multiplicand): return self.multiplier*multiplicand
+... 
+&gt;&gt;&gt; flist = [f(i) for i in range(3)]
+&gt;&gt;&gt; [g(2) for g in flist]
+[0, 2, 4]
+</code></pre>
+
+<p><strong>Response to your update</strong>:  It's not the globalness of <code>i</code> <em>per se</em> which is causing this behavior, it's the fact that it's a variable from an enclosing scope which has a fixed value over the times when f is called.  In your second example, the value of <code>i</code> is taken from the scope of the <code>kkk</code> function, and nothing is changing that when you call the functions on <code>flist</code>.</p>
+<br /><b>#7</b><br /><p>Here are two related questions that might help:</p>
+
+<p><a href="http://stackoverflow.com/questions/10580/what-are-early-and-late-binding">What are Early and Late Binding?</a></p>
+
+<p><a href="http://stackoverflow.com/questions/139819/why-results-of-map-and-list-comprehension-are-different">Why results of map() and list comprehension are different?</a></p>
+<br /><b>#8</b><br /><p>Here's how you do it using the <code>functools</code> library (whom I'm not sure was available at the time the question was posed).</p>
+
+<pre><code>from functools import partial
+
+flist = []
+
+def func(i, x): return x * i
+
+for i in xrange(3):
+    flist.append(partial(func, i))
+
+for f in flist:
+    print f(2)
+</code></pre>
+
+<p>Outputs 0 2 4, as expected.</p>
+<br />

@@ -1,0 +1,327 @@
+<h3>Question (ID-25665):</h3><h2>Python module for converting PDF to text</h2><p>Is there any python module to convert PDF files into text? I tried <a href="http://code.activestate.com/recipes/511465/" rel="nofollow">one piece of code</a> found in Activestate which uses pypdf but the text generated had no space between and was of no use. </p>
+<br /><h3>Answers (Total-12):</h3><b>#0</b><br /><p>The <a href="http://www.unixuser.org/~euske/python/pdfminer/index.html" rel="nofollow">PDFMiner</a> package has changed since <a href="http://stackoverflow.com/users/3571/codeape">codeape</a> posted.  </p>
+
+<p><strong>EDIT (again)</strong></p>
+
+<p>PDFMiner has been updated again in version <code>20100213</code></p>
+
+<p>You can check the version you have installed with the following:</p>
+
+<pre><code>&gt;&gt;&gt; import pdfminer
+&gt;&gt;&gt; pdfminer.__version__
+'20100213'
+</code></pre>
+
+<p>Here's the updated version (with comments on what I changed/added):</p>
+
+<pre><code>def pdf_to_csv(filename):
+    from cStringIO import StringIO  #&lt;-- added so you can copy/paste this to try it
+    from pdfminer.converter import LTTextItem, TextConverter
+    from pdfminer.pdfparser import PDFDocument, PDFParser
+    from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+
+    class CsvConverter(TextConverter):
+        def __init__(self, *args, **kwargs):
+            TextConverter.__init__(self, *args, **kwargs)
+
+        def end_page(self, i):
+            from collections import defaultdict
+            lines = defaultdict(lambda : {})
+            for child in self.cur_item.objs:
+                if isinstance(child, LTTextItem):
+                    (_,_,x,y) = child.bbox                   #&lt;-- changed
+                    line = lines[int(-y)]
+                    line[x] = child.text.encode(self.codec)  #&lt;-- changed
+
+            for y in sorted(lines.keys()):
+                line = lines[y]
+                self.outfp.write(";".join(line[x] for x in sorted(line.keys())))
+                self.outfp.write("\n")
+
+    # ... the following part of the code is a remix of the 
+    # convert() function in the pdfminer/tools/pdf2text module
+    rsrc = PDFResourceManager()
+    outfp = StringIO()
+    device = CsvConverter(rsrc, outfp, codec="utf-8")  #&lt;-- changed 
+        # becuase my test documents are utf-8 (note: utf-8 is the default codec)
+
+    doc = PDFDocument()
+    fp = open(filename, 'rb')
+    parser = PDFParser(fp)       #&lt;-- changed
+    parser.set_document(doc)     #&lt;-- added
+    doc.set_parser(parser)       #&lt;-- added
+    doc.initialize('')
+
+    interpreter = PDFPageInterpreter(rsrc, device)
+
+    for i, page in enumerate(doc.get_pages()):
+        outfp.write("START PAGE %d\n" % i)
+        interpreter.process_page(page)
+        outfp.write("END PAGE %d\n" % i)
+
+    device.close()
+    fp.close()
+
+    return outfp.getvalue()
+</code></pre>
+
+<p><strong>Edit (yet again):</strong></p>
+
+<p>Here is an update for the latest version in <a href="http://pypi.python.org/pypi/pdfminer/" rel="nofollow">pypi</a>, <code>20100619p1</code>.  In short I replaced <code>LTTextItem</code> with <code>LTChar</code> and passed an instance of LAParams to the CsvConverter constructor.</p>
+
+<pre><code>def pdf_to_csv(filename):
+    from cStringIO import StringIO  
+    from pdfminer.converter import LTChar, TextConverter    #&lt;-- changed
+    from pdfminer.layout import LAParams
+    from pdfminer.pdfparser import PDFDocument, PDFParser
+    from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+
+    class CsvConverter(TextConverter):
+        def __init__(self, *args, **kwargs):
+            TextConverter.__init__(self, *args, **kwargs)
+
+        def end_page(self, i):
+            from collections import defaultdict
+            lines = defaultdict(lambda : {})
+            for child in self.cur_item.objs:
+                if isinstance(child, LTChar):               #&lt;-- changed
+                    (_,_,x,y) = child.bbox                   
+                    line = lines[int(-y)]
+                    line[x] = child.text.encode(self.codec)
+
+            for y in sorted(lines.keys()):
+                line = lines[y]
+                self.outfp.write(";".join(line[x] for x in sorted(line.keys())))
+                self.outfp.write("\n")
+
+    # ... the following part of the code is a remix of the 
+    # convert() function in the pdfminer/tools/pdf2text module
+    rsrc = PDFResourceManager()
+    outfp = StringIO()
+    device = CsvConverter(rsrc, outfp, codec="utf-8", laparams=LAParams())  #&lt;-- changed
+        # becuase my test documents are utf-8 (note: utf-8 is the default codec)
+
+    doc = PDFDocument()
+    fp = open(filename, 'rb')
+    parser = PDFParser(fp)       
+    parser.set_document(doc)     
+    doc.set_parser(parser)       
+    doc.initialize('')
+
+    interpreter = PDFPageInterpreter(rsrc, device)
+
+    for i, page in enumerate(doc.get_pages()):
+        outfp.write("START PAGE %d\n" % i)
+        if page is not None:
+            interpreter.process_page(page)
+        outfp.write("END PAGE %d\n" % i)
+
+    device.close()
+    fp.close()
+
+    return outfp.getvalue()
+</code></pre>
+<br /><b>#1</b><br /><p>Try PDFMiner.  It can extract text from PDF files as HTML, SGML or "Tagged PDF" format.</p>
+
+<p><a href="http://www.unixuser.org/~euske/python/pdfminer/index.html" rel="nofollow">http://www.unixuser.org/~euske/python/pdfminer/index.html</a></p>
+
+<p>The Tagged PDF format seems to be the cleanest, and stripping out the XML tags leaves just the bare text.</p>
+<br /><b>#2</b><br /><p>You can also quite easily use pdfminer as a library. You have access to the pdf's content model, and can create your own text extraction. I did this to convert pdf contents to semi-colon separated text, using the code below.</p>
+
+<p>The function simply sorts the TextItem content objects according to their y and x coordinates, and outputs items with the same y coordinate as one text line, separating the objects on the same line with ';' characters.</p>
+
+<p>Using this approach, I was able to extract text from a pdf that no other tool was able to extract content suitable for further parsing from. Other tools I tried include pdftotext, ps2ascii and the online tool pdftextonline.com.</p>
+
+<p>pdfminer is an invaluable tool for pdf-scraping.</p>
+
+<pre><code>
+def pdf_to_csv(filename):
+    from pdflib.page import TextItem, TextConverter
+    from pdflib.pdfparser import PDFDocument, PDFParser
+    from pdflib.pdfinterp import PDFResourceManager, PDFPageInterpreter
+
+    class CsvConverter(TextConverter):
+        def __init__(self, *args, **kwargs):
+            TextConverter.__init__(self, *args, **kwargs)
+
+        def end_page(self, i):
+            from collections import defaultdict
+            lines = defaultdict(lambda : {})
+            for child in self.cur_item.objs:
+                if isinstance(child, TextItem):
+                    (_,_,x,y) = child.bbox
+                    line = lines[int(-y)]
+                    line[x] = child.text
+
+            for y in sorted(lines.keys()):
+                line = lines[y]
+                self.outfp.write(";".join(line[x] for x in sorted(line.keys())))
+                self.outfp.write("\n")
+
+    # ... the following part of the code is a remix of the 
+    # convert() function in the pdfminer/tools/pdf2text module
+    rsrc = PDFResourceManager()
+    outfp = StringIO()
+    device = CsvConverter(rsrc, outfp, "ascii")
+
+    doc = PDFDocument()
+    fp = open(filename, 'rb')
+    parser = PDFParser(doc, fp)
+    doc.initialize('')
+
+    interpreter = PDFPageInterpreter(rsrc, device)
+
+    for i, page in enumerate(doc.get_pages()):
+        outfp.write("START PAGE %d\n" % i)
+        interpreter.process_page(page)
+        outfp.write("END PAGE %d\n" % i)
+
+    device.close()
+    fp.close()
+
+    return outfp.getvalue()
+
+</code></pre>
+
+<p><strong>UPDATE</strong>:</p>
+
+<p>The code above is written against an old version of the API, see my comment below.</p>
+<br /><b>#3</b><br /><p><a href="http://pybrary.net/pyPdf/" rel="nofollow">pyPDF</a> works fine (assuming that you're working with well-formed PDFs).  If all you want is the text (with spaces), you can just do:</p>
+
+<pre><code>import pyPdf
+pdf = pyPdf.PdfFileReader(open(filename, "rb"))
+for page in pdf.pages:
+    print page.extractText()
+</code></pre>
+
+<p>You can also easily get access to the metadata, image data, and so forth.</p>
+
+<p>A comment in the extractText code notes:</p>
+
+<blockquote>
+  <p>Locate all text drawing commands, in
+  the order they are provided in the
+  content stream, and extract the text. 
+  This works well for some PDF files,
+  but poorly for others, depending on
+  the generator used.  This will be
+  refined in the future.  Do not rely on
+  the order of text coming out of this
+  function, as it will change if this
+  function is made more sophisticated.</p>
+</blockquote>
+
+<p>Whether or not this is a problem depends on what you're doing with the text (e.g. if the order doesn't matter, it's fine, or if the generator adds text to the stream in the order it will be displayed, it's fine).  I have pyPdf extraction code in daily use, without any problems.</p>
+<br /><b>#4</b><br /><p><a href="http://en.wikipedia.org/wiki/Pdftotext" rel="nofollow">Pdftotext</a> An open source program (part of Xpdf) which you could call from python (not what you asked for but might be useful). I've used it with no problems. I think google use it in google desktop.</p>
+<br /><b>#5</b><br /><p>Repurposing the pdf2txt.py code that comes with pdfminer; you can make a function that will take a path to the pdf; optionally, an outtype (txt|html|xml|tag) and opts like the commandline pdf2txt {'-o': '/path/to/outfile.txt' ...}.  By default, you can call:</p>
+
+<pre><code>convert_pdf(path)
+</code></pre>
+
+<p>A text file will be created, a sibling on the filesystem to the original pdf.</p>
+
+<pre><code>def convert_pdf(path, outtype='txt', opts={}):
+    import sys
+    from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter, process_pdf
+    from pdfminer.converter import XMLConverter, HTMLConverter, TextConverter, TagExtractor
+    from pdfminer.layout import LAParams
+    from pdfminer.pdfparser import PDFDocument, PDFParser
+    from pdfminer.pdfdevice import PDFDevice
+    from pdfminer.cmapdb import CMapDB
+
+    outfile = path[:-3] + outtype
+    outdir = '/'.join(path.split('/')[:-1])
+
+    debug = 0
+    # input option
+    password = ''
+    pagenos = set()
+    maxpages = 0
+    # output option
+    codec = 'utf-8'
+    pageno = 1
+    scale = 1
+    showpageno = True
+    laparams = LAParams()
+    for (k, v) in opts:
+        if k == '-d': debug += 1
+        elif k == '-p': pagenos.update( int(x)-1 for x in v.split(',') )
+        elif k == '-m': maxpages = int(v)
+        elif k == '-P': password = v
+        elif k == '-o': outfile = v
+        elif k == '-n': laparams = None
+        elif k == '-A': laparams.all_texts = True
+        elif k == '-D': laparams.writing_mode = v
+        elif k == '-M': laparams.char_margin = float(v)
+        elif k == '-L': laparams.line_margin = float(v)
+        elif k == '-W': laparams.word_margin = float(v)
+        elif k == '-O': outdir = v
+        elif k == '-t': outtype = v
+        elif k == '-c': codec = v
+        elif k == '-s': scale = float(v)
+    #
+    CMapDB.debug = debug
+    PDFResourceManager.debug = debug
+    PDFDocument.debug = debug
+    PDFParser.debug = debug
+    PDFPageInterpreter.debug = debug
+    PDFDevice.debug = debug
+    #
+    rsrcmgr = PDFResourceManager()
+    if not outtype:
+        outtype = 'txt'
+        if outfile:
+            if outfile.endswith('.htm') or outfile.endswith('.html'):
+                outtype = 'html'
+            elif outfile.endswith('.xml'):
+                outtype = 'xml'
+            elif outfile.endswith('.tag'):
+                outtype = 'tag'
+    if outfile:
+        outfp = file(outfile, 'w')
+    else:
+        outfp = sys.stdout
+    if outtype == 'txt':
+        device = TextConverter(rsrcmgr, outfp, codec=codec, laparams=laparams)
+    elif outtype == 'xml':
+        device = XMLConverter(rsrcmgr, outfp, codec=codec, laparams=laparams, outdir=outdir)
+    elif outtype == 'html':
+        device = HTMLConverter(rsrcmgr, outfp, codec=codec, scale=scale, laparams=laparams, outdir=outdir)
+    elif outtype == 'tag':
+        device = TagExtractor(rsrcmgr, outfp, codec=codec)
+    else:
+        return usage()
+
+    fp = file(path, 'rb')
+    process_pdf(rsrcmgr, device, fp, pagenos, maxpages=maxpages, password=password)
+    fp.close()
+    device.close()
+
+    outfp.close()
+    return
+</code></pre>
+<br /><b>#6</b><br /><p><a href="http://pypi.python.org/pypi/slate" rel="nofollow"><code>slate</code></a> is a project that makes it very simple to use PDFMiner from a library:</p>
+
+<pre><code>&gt;&gt;&gt; with open('example.pdf') as f:
+...    doc = slate.PDF(f)
+...
+&gt;&gt;&gt; doc
+[..., ..., ...]
+&gt;&gt;&gt; doc[1]
+'Text from page 2...'   
+</code></pre>
+<br /><b>#7</b><br /><p>Additionally there is <a href="http://snowtide.com/PDFTextStream" rel="nofollow">PDFTextStream</a> which is a commercial Java library that can also be used from Python.</p>
+<br /><b>#8</b><br /><p>I have used pdftohtml with the '-xml' argument, read the result with subprocess.Popen(), that will give you x coord, y coord, width, height, and font, of every 'snippet' of text in the pdf. I think this is what 'evince' probably uses too because the same error messages spew out. </p>
+
+<p>If you need to process columnar data, it gets slightly more complicated as you have to invent an algorithm that suits your pdf file. The problem is that the programs that make PDF files don't really necessarily lay out the text in any logical format. You can try simple sorting algorithms and it works sometimes, but there can be little 'stragglers' and 'strays', pieces of text that don't get put in the order you thought they would... so you have to get creative. </p>
+
+<p>It took me about 5 hours to figure out one for the pdf's i was working on. But it works pretty good now. Good luck. </p>
+<br /><b>#9</b><br /><p>PDFminer gave me perhaps one line [page 1 of 7...] on every page of a pdf file I tried with it.</p>
+
+<p>The best answer I have so far is pdftoipe, or the c++ code it's based on Xpdf.</p>
+
+<p>see <a href="http://stackoverflow.com/questions/25550/whats-the-best-way-to-importread-data-from-pdf-files" rel="nofollow">my question</a> for what the output of pdftoipe looks like.</p>
+<br /><b>#10</b><br /><p>In my pdf to text conversion projects, I had excellent result with pdftotext (open source) like Jamie mentioned in this forum.</p>
+<br /><b>#11</b><br /><p>Found that solution today. Works great for me. Even rendering PDF pages to PNG images.
+<a href="http://www.swftools.org/gfx_tutorial.html" rel="nofollow">http://www.swftools.org/gfx_tutorial.html</a></p>
+<br />

@@ -1,0 +1,142 @@
+Question (ID-607186): How does Python's "super" do the right thing? I'm running Python 2.5, so this question may not apply to Python 3. When you make a diamond class hierarchy using multiple inheritance and create an object of the derived-most class, Python does the Right Thing (TM). It calls the constructor for the derived-most class, then its parent classes as listed from left to right, then the grandparent. I'm familiar with Python's MRO ; that's not my question. I'm curious how the object returned from super actually manages to communicate to calls of super in the parent classes the correct order. Consider this example code: 
+
+ #!/usr/bin/python
+
+class A(object):
+ def __init__(self): print "A init"
+
+class B(A):
+ def __init__(self):
+ 	print "B init"
+ 	super(B, self).__init__()
+
+class C(A):
+ def __init__(self):
+ 	print "C init"
+ 	super(C, self).__init__()
+
+class D(B, C):
+ def __init__(self):
+ 	print "D init"
+ 	super(D, self).__init__()
+
+x = D()
+ 
+
+ The code does the intuitive thing, it prints: 
+
+ D init
+B init
+C init
+A init
+ 
+
+ However, if you comment out the call to super in B's init function, neither A nor C's init function is called. This means B's call to super is somehow aware of C's existence in the overall class hierarchy. I know that super returns a proxy object with an overloaded get operator, but how does the object returned by super in D's init definition communicate the existence of C to the object returned by super in B's init definition? Is the information that subsequent calls of super use stored on the object itself? If so, why isn't super instead self.super? 
+
+ Edit: Jekke quite rightly pointed out that it's not self.super because super is an attribute of the class, not an instance of the class. Conceptually this makes sense, but in practice super isn't an attribute of the class either! You can test this in the interpreter by making two classes A and B, where B inherits from A, and calling dir(B) . It has no super or __super__ attributes. 
+ Answers (Total-4): #0 Change your code to this and I think it'll explain things (presumably super is looking at where, say, B is in the __mro__ ?): 
+
+ class A(object):
+ def __init__(self):
+  print "A init"
+  print self.__class__.__mro__
+
+class B(A):
+ def __init__(self):
+  print "B init"
+  print self.__class__.__mro__
+  super(B, self).__init__()
+
+class C(A):
+ def __init__(self):
+  print "C init"
+  print self.__class__.__mro__
+  super(C, self).__init__()
+
+class D(B, C):
+ def __init__(self):
+  print "D init"
+  print self.__class__.__mro__
+  super(D, self).__init__()
+
+x = D()
+ 
+
+ If you run it you'll see: 
+
+ D init
+(&lt;class '__main__.D'&gt;, &lt;class '__main__.B'&gt;, &lt;class '__main__.C'&gt;, &lt;class '__main__.A'&gt;, &lt;type 'object'&gt;)
+B init
+(&lt;class '__main__.D'&gt;, &lt;class '__main__.B'&gt;, &lt;class '__main__.C'&gt;, &lt;class '__main__.A'&gt;, &lt;type 'object'&gt;)
+C init
+(&lt;class '__main__.D'&gt;, &lt;class '__main__.B'&gt;, &lt;class '__main__.C'&gt;, &lt;class '__main__.A'&gt;, &lt;type 'object'&gt;)
+A init
+(&lt;class '__main__.D'&gt;, &lt;class '__main__.B'&gt;, &lt;class '__main__.C'&gt;, &lt;class '__main__.A'&gt;, &lt;type 'object'&gt;)
+ 
+
+ Also it's worth checking out Python's Super is nifty, but you can't use it . 
+ #1 I have provided a bunch of links below, that answer your question in more detail and more precisely than I can ever hope to. I will however give an answer to your question in my own words as well, to save you some time. I'll put it in points - 
+
+ 
+ super is a builtin function, not an attribute. 
+ Every type (class) in Python has an __mro__ attribute, that stores the method resolution order of that particular instance. 
+ Each call to super is of the form super(type[, object-or-type]). Let us assume that the second attribute is an object for the moment. 
+ At the starting point of super calls, the object is of the type of the Derived class ( say DC ). 
+ super looks for methods that match (in your case __init__ ) in the classes in the MRO, after the class specified as the first argument (in this case classes after DC). 
+ When the matching method is found (say in class BC1 ), it is called. 
+(This method should use super, so I am assuming it does - See Python's super is nifty but can't be used - link below)
+That method then causes a search in the object's class' MRO for the next method, to the right of BC1 .  
+ Rinse wash repeat till all methods are found and called. 
+ 
+
+ Explanation for your example 
+
+ MRO: D,B,C,A,object
+ 
+
+ 
+ super(D, self).__init__() is called. isinstance(self, D) => True 
+ Search for next method in the MRO in classes to the right of D. 
+
+ B.__init__ found and called 
+ B.__init__ calls super(B, self).__init__() . 
+
+ isinstance(self, B) => False 
+isinstance(self, D) => True 
+ Thus, the MRO is the same, but the search continues to the right of B i.e. C,A,object are searched one by one. The next __init__ found is called. 
+ And so on and so forth. 
+ 
+
+ An explanation of super 
+ http://www.python.org/download/releases/2.2.3/descrintro/#cooperation 
+ Things to watch for when using super 
+ http://fuhm.net/super-harmful/ 
+ Pythons MRO Algorithm: 
+ http://www.python.org/download/releases/2.3/mro/ 
+ super's docs: 
+ http://docs.python.org/library/functions.html 
+ The bottom of this page has a nice section on super: 
+ http://docstore.mik.ua/orelly/other/python/0596001886_pythonian-chp-5-sect-2.html 
+
+ I hope this helps clear it up. 
+ #2 just guessing: 
+
+ self in all the four methods refer to the same object, that is, of class D .
+so, in B.__init__() , the call to to super(B,self) knows the whole diamond ancestry of self and it has to fetch the method from 'after' B . in this case, it's the C class. 
+ #3 EDIT: Reading Jacob Gabrielson's link to Super Harmful has exposed my Java background - super() definitely behaves differently in Python. I'll leave the rest of my answer for reference below: 
+
+ Posting as an answer, because it's too big for a comment: 
+
+ Now that I look at it again, and keep in mind I don't have an interpreter handy, wouldn't you expect to see: 
+
+ D init
+B init
+C init
+A init
+ 
+
+ anyway, because C will be calling super() regardless? 
+
+ At any rate, I believe the behaviour can probably be explained by the fact that everyone should be aware that D inherits from both B and C , in that order. 
+
+ This is a good question, and I hope someone can give you a definitive answer!

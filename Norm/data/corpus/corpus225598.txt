@@ -1,0 +1,160 @@
+Question (ID-225598): "Pretty" Continuous Integration for Python This is a slightly.. vain question, but BuildBot's output isn't particularly nice to look at.. 
+
+ For example, compared to.. 
+
+ 
+ phpUnderControl 
+ Hudson 
+ CruiseControl.rb 
+ 
+
+ ..and others, BuildBot looks rather.. archaic 
+
+ I'm currently playing with Hudson, but it is very Java-centric (although with this guide , I found it easier to setup than BuildBot, and produced more info) 
+
+ Basically: is there any Continuous Integration systems aimed at python, that produce lots of shiney graphs and the likes? 
+
+ 
+
+ Update: After trying a few alternatives, I think I'll stick with Hudson. Integrity was nice and simple, but quite limited. I think Buildbot is better suited to having numerous build-slaves, rather than everything running on a single machine like I was using it. 
+
+ Setting Hudson up for a Python project was pretty simple: 
+
+ 
+ Download Hudson from https://hudson.dev.java.net/ 
+ Run it with java -jar hudson.war 
+ Open the web interface on the default address of http://localhost:8080 
+ Go to Manage Hudson, Plugins, click "Update" or similar 
+ Install the Git plugin (I had to set the git path in the Hudson global preferences) 
+ Create a new project, enter the repository, SCM polling intervals and so on 
+ Install nosetests via easy_install if it's not already 
+ In the a build step, add nosetests --with-xunit --verbose 
+ Check "Publish JUnit test result report" and set "Test report XMLs" to **/nosetests.xml 
+ 
+
+ That's all that's required. You can setup email notifications, and the plugins are worth a look. A few I'm currently using for Python projects: 
+
+ 
+ SLOCCount plugin to count lines of code (and graph it!) - you need to install sloccount separately 
+ Violations to parse the PyLint output (you can setup warning thresholds, graph the number of violations over each build) 
+ Cobertura can parse the coverage.py output. Nosetest can gather coverage while running your tests, using nosetests --with-coverage (this writes the output to **/coverage.xml ) 
+ 
+ Answers (Total-8): #0 You might want to check out Nose and NoseXUnit . You can have it run pylint, your unit tests, and coverage checks with this command: 
+
+ nosetests --with-nosexunit --enable-audit --enable-cover
+ 
+
+ That'll be helpful if you want to go the Hudson route or if you want to use another CI server that has support for JUnit test reporting. 
+
+ (And yes, you realize how regrettable a name NoseXUnit is when you see it in all-lowercase :-/ ) 
+ #1 Don't know if it would do : Bitten is made by the guys who write Trac and is integrated with Trac. Apache Gump is the CI tool used by Apache. It is written in Python. 
+ #2 Buildbot's waterfall page can be considerably prettified. Here's a nice example http://build.chromium.org/buildbot/waterfall/waterfall 
+ #3 We've had great success with TeamCity as our CI server and using nose as our test runner. Teamcity plugin for nosetests gives you count pass/fail, readable display for failed test( that can be E-Mailed). You can even see details of the test failures while you stack is running. 
+
+ If of course supports things like running on multiple machines, and it's much simpler to setup and maintain than buildbot. 
+ #4 I guess this thread is quite old but here is my take on it with hudson: 
+
+ I decided to go with pip and set up a repo (the painful to get working but nice looking eggbasket), which hudson auto uploads to with a successful tests. Here is my rough and ready script for use with a hudson config execute script like: /var/lib/hudson/venv/main/bin/hudson_script.py -w $WORKSPACE -p my.package -v $BUILD_NUMBER, just put in **/coverage.xml, pylint.txt and nosetests.xml in the config bits: 
+
+ #!/usr/bin/python
+import subprocess
+import logging
+import optparse
+
+logging.basicConfig(level=logging.INFO,
+     format='%(asctime)s %(levelname)s %(message)s')
+
+REPO_URL = "http://my_repo"
+
+def call_command(command, cwd, ignore_error_code=False):
+ try:
+  logging.info("Running: %s" % command)
+  status = subprocess.call(command, cwd=cwd, shell=True)
+  if not ignore_error_code and status != 0:
+   raise Exception("Last command failed")
+
+  return status
+
+ except:
+  logging.exception("Could not run command %s" % command)
+  raise
+
+def main():
+ usage = "usage: %prog [options]"
+ parser = optparse.OptionParser(usage)
+ parser.add_option("-w", "--workspace", dest="workspace",
+      help="workspace folder for the job")
+ parser.add_option("-p", "--package", dest="package",
+      help="the package name i.e., company.package")
+ parser.add_option("-v", "--build_number", dest="build_number",
+      help="the build number, which will get put at the end of the package version")
+ options, args = parser.parse_args()
+
+ if not options.workspace or not options.package:
+  raise Exception("Need both args, do --help for info")
+
+ venvDir = options.package + "_venv/"
+
+ #install the venv/make sure its there plus install the local package
+ call_command("pip -E %s install -e ./ --extra-index %s" % (venvDir, REPO_URL),
+     options.workspace)
+
+ #make sure pylint, nose and coverage are installed
+ call_command("pip -E %s install nose pylint coverage" % venvDir,
+     options.workspace)
+
+ test_status = call_command("%sbin/nosetests %s --with-xunit --with-coverage --cover-package %s --cover-erase" % (venvDir,
+                      options.package.replace(".", "/"),
+                      options.package),
+     options.workspace, True)
+ #produce coverage report -i for ignore weird missing file errors
+ call_command("%sbin/coverage xml -i" % venvDir,
+     options.workspace)
+ #move it so that the code coverage plugin can find it
+ call_command("mv coverage.xml %s" % (options.package.replace(".", "/")),
+     options.workspace)
+ #run pylint
+ call_command("%sbin/pylint --rcfile ~/pylint.rc -f parseable %s &gt; pylint.txt" % (venvDir, 
+                      options.package),
+     options.workspace, True)
+
+ #remove old dists so we only have the newest at the end
+ call_command("rm -rfv %s" % (options.workspace + "/dist"),
+     options.workspace)
+
+ #if the build passes upload the result to the egg_basket
+ if test_status == 0:
+  logging.info("Success - uploading egg")
+  upload_bit = "upload -r %s/upload" % REPO_URL
+ else:
+  logging.info("Failure - not uploading egg")
+  upload_bit = ""
+
+ #create egg
+ call_command("%sbin/python setup.py egg_info --tag-build=.0.%s --tag-svn-revision --tag-date sdist %s" % (venvDir,
+                            options.build_number,
+                            upload_bit),
+     options.workspace)
+
+ logging.info("Complete")
+
+if __name__ == "__main__":
+ main()
+ 
+
+ When it comes to deploying stuff you can do something like: 
+
+ pip -E /location/of/my/venv/ install my_package==X.Y.Z --extra-index http://my_repo
+ 
+
+ And then people can develop stuff using: 
+
+ pip -E /location/of/my/venv/ install -e ./ --extra-index http://my_repo
+ 
+
+ This stuff assumes you have a repo structure per package with a setup.py and dependencies all set up then you can just check out the trunk and run this stuff on it. 
+
+ I hope this helps someone out. 
+ #5 Signal is another option. You can know more about it and watch a video also here . 
+ #6 We have used bitten quite a bit. It is pretty and integrates well with Trac, but it is a pain in the butt to customize if you have any nonstandard workflow. Also there just aren't as many plugins as there are for the more popular tools. Currently we are evaluating Hudson as a replacement. 
+ #7 Atlassian's Bamboo is also definitely worth checking out. The entire Atlassian suite (JIRA, Confluence, FishEye, etc) is pretty sweet.

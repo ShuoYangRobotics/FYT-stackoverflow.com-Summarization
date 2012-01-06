@@ -1,0 +1,176 @@
+Question (ID-201461): Shortest Sudoku Solver in Python - How does it work? I was playing around with my own Sudoku solver and was looking for some pointers to good and fast design when I came across this: 
+
+ def r(a):i=a.find('0');~i or exit(a);[m
+in[(i-j)%9*(i/9^j/9)*(i/27^j/27|i%9/3^j%9/3)or a[j]for
+j in range(81)]or r(a[:i]+m+a[i+1:])for m in'%d'%5**18]
+from sys import*;r(argv[1])
+ 
+
+ My own implementation solves Sudokus the same way I solve them in my head but how does this cryptic algorithm work? 
+
+ http://scottkirkwood.blogspot.com/2006/07/shortest-sudoku-solver-in-python.html 
+ Answers (Total-7): #0 Well, you can make things a little easier by fixing up the syntax: 
+
+ def r(a):
+ i = a.find('0')
+ ~i or exit(a)
+ [m in[(i-j)%9*(i/9^j/9)*(i/27^j/27|i%9/3^j%9/3)or a[j]for j in range(81)] or r(a[:i]+m+a[i+1:])for m in'%d'%5**18]
+from sys import *
+r(argv[1])
+ 
+
+ Cleaning up a little: 
+
+ from sys import exit, argv
+def r(a):
+ i = a.find('0')
+ if i == -1:
+ exit(a)
+ for m in '%d' % 5**18:
+ m in[(i-j)%9*(i/9^j/9)*(i/27^j/27|i%9/3^j%9/3) or a[j] for j in range(81)] or r(a[:i]+m+a[i+1:])
+
+r(argv[1])
+ 
+
+ Okay, so this script expects a command-line argument, and calls the function r on it. If there are no zeros in that string, r exits and prints out its argument. 
+
+ 
+ (If another type of object is passed,
+ None is equivalent to passing zero,
+ and any other object is printed to
+ sys.stderr and results in an exit
+ code of 1. In particular,
+ sys.exit("some error message") is a
+ quick way to exit a program when an
+ error occurs. See
+ http://www.python.org/doc/2.5.2/lib/module-sys.html ) 
+ 
+
+ I guess this means that zeros correspond to open spaces, and a puzzle with no zeros is solved. Then there's that nasty recursive expression. 
+
+ The loop is interesting: for m in'%d'%5**18 
+
+ Why 5**18? It turns out that '%d'%5**18 evaluates to '3814697265625' . This is a string that has each digit 1-9 at least once, so maybe it's trying to place each of them. In fact, it looks like this is what r(a[:i]+m+a[i+1:]) is doing: recursively calling r, with the first blank filled in by a digit from that string. But this only happens if the earlier expression is false. Let's look at that: 
+
+ m in [(i-j)%9*(i/9^j/9)*(i/27^j/27|i%9/3^j%9/3) or a[j] for j in range(81)] 
+
+ So the placement is done only if m is not in that monster list. Each element is either a number (if the first expression is nonzero) or a character (if the first expression is zero). m is ruled out as a possible substitution if it appears as a character, which can only happen if the first expression is zero. When is the expression zero? 
+
+ It has three parts that are multiplied: 
+
+ 
+ (i-j)%9 which is zero if i and j are a multiple of 9 apart, i.e. the same column. 
+ (i/9^j/9) which is zero if i/9 == j/9, i.e. the same row. 
+ (i/27^j/27|i%9/3^j%9/3) which is zero if both of these are zero: 
+ 
+ i/27^j^27 which is zero if i/27 == j/27, i.e. the same block of three rows 
+ 
+ 
+ i%9/3^j%9/3 which is zero if i%9/3 == j%9/3, i.e. the same block of three columns 
+ 
+ 
+
+ If any of these three parts is zero, the entire expression is zero. In other words, if i and j share a row, column, or 3x3 block, then the value of j can't be used as a candidate for the blank at i. Aha! 
+
+ from sys import exit, argv
+def r(a):
+ i = a.find('0')
+ if i == -1:
+ exit(a)
+ for m in '3814697265625':
+ okay = True
+ for j in range(81):
+  if (i-j)%9 == 0 or (i/9 == j/9) or (i/27 == j/27 and i%9/3 == j%9/3):
+  if a[j] == m:
+   okay = False
+   break
+ if okay:
+  # At this point, m is not excluded by any row, column, or block, so let's place it and recurse
+  r(a[:i]+m+a[i+1:])
+
+r(argv[1])
+ 
+
+ Note that if none of the placements work out, r will return and back up to the point where something else can be chosen, so it's a basic depth first algorithm. 
+
+ Not using any heuristics, it's not particularly efficient. I took this puzzle from Wikipedia ( http://en.wikipedia.org/wiki/Sudoku ): 
+
+ $ time python sudoku.py 530070000600195000098000060800060003400803001700020006060000280000419005000080079
+534678912672195348198342567859761423426853791713924856961537284287419635345286179
+
+real 0m47.881s
+user 0m47.223s
+sys 0m0.137s
+ 
+
+ Addendum: How I would rewrite it as a maintenance programmer (this version has about a 93x speedup :) 
+
+ import sys
+
+def same_row(i,j): return (i/9 == j/9)
+def same_col(i,j): return (i-j) % 9 == 0
+def same_block(i,j): return (i/27 == j/27 and i%9/3 == j%9/3)
+
+def r(a):
+ i = a.find('0')
+ if i == -1:
+ sys.exit(a)
+
+ excluded_numbers = set()
+ for j in range(81):
+ if same_row(i,j) or same_col(i,j) or same_block(i,j):
+  excluded_numbers.add(a[j])
+
+ for m in '123456789':
+ if m not in excluded_numbers:
+  # At this point, m is not excluded by any row, column, or block, so let's place it and recurse
+  r(a[:i]+m+a[i+1:])
+
+if __name__ == '__main__':
+ if len(sys.argv) == 2 and len(sys.argv[1]) == 81:
+ r(sys.argv[1])
+ else:
+ print 'Usage: python sudoku.py puzzle'
+ print ' where puzzle is an 81 character string representing the puzzle read left-to-right, top-to-bottom, and 0 is a blank'
+ 
+ #1 unobfuscating it: 
+
+ def r(a):
+ i = a.find('0') # returns -1 on fail, index otherwise
+ ~i or exit(a) # ~(-1) == 0, anthing else is not 0
+     # thus: if i == -1: exit(a)
+ inner_lexp = [ (i-j)%9*(i/9 ^ j/9)*(i/27 ^ j/27 | i%9/3 ^ j%9/3) or a[j] 
+     for j in range(81)] # r appears to be a string of 81 
+          # characters with 0 for empty and 1-9 
+          # otherwise
+ [m in inner_lexp or r(a[:i]+m+a[i+1:]) for m in'%d'%5**18] # recurse
+       # trying all possible digits for that empty field
+       # if m is not in the inner lexp
+
+from sys import *
+r(argv[1]) # thus, a is some string
+ 
+
+ So, we just need to work out the inner list expression. I know it collects the digits set in the line -- otherwise, the code around it makes no sense. However, I have no real clue how it does that (and Im too tired to work out that binary fancyness right now, sorry) 
+ #2 A lot of the short sudoku solvers just recursively try every possible legal number left until they have successfully filled the cells. I haven't taken this apart, but just skimming it, it looks like that's what it does. 
+ #3 r(a) is a recursive function which attempts to fill in a 0 in the board in each step. 
+
+ i=a.find('0');~i or exit(a) is the on-success termination. If no more 0 values exist in the board, we're done. 
+
+ m is the current value we will try to fill the 0 with. 
+
+ m
+in[(i-j)%9*(i/9^j/9)*(i/27^j/27|i%9/3^j%9/3)or a[j]for
+j in range(81)] evaluates to truthy if it is obivously incorrect to put m in the current 0 . Let's nickname it "is_bad". This is the most tricky bit. :) 
+
+ is_bad or r(a[:i]+m+a[i+1:] is a conditional recursive step. It will recursively try to evaluate the next 0 in the board iff the current solution candidate appears to be sane. 
+
+ for m in '%d'%5**18 enumerates all the numbers from 1 to 9 (inefficiently). 
+ #4 Good grief, y'all. I like coding, but cripes, it's sudoku.
+Solve it like it was intended to be. 
+ #5 So, basically this is a break down of how 4 great lines of code can be re-worded into 30 to serve the exact same purpose in a readable format for people too slow to comprehend the original 4 lines? 
+
+ I love the multiplied or (|) followed by another or! Using or operators is often computationally faster for your processor. Assembly teaches us that the fastest way to set a particular register to 0 is not to actually set it to 0 but to Xor the register with itself! 
+
+ If you're not wrapping your brain around this code, don't worry! It's not exactly easy, but it IS fast and I actually like the obfuscated and compact form much better than the several versions of different formatting which only serve to bloat the code. Good thing this is Python because any good compiler would remove all the junk anyway and pretty much make the code look like the original lines. 
+ #6 It looks a little like a brute-force solution, but my python is rudimentary.

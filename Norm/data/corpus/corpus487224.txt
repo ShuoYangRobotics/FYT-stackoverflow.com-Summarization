@@ -1,0 +1,129 @@
+Question (ID-487224): Reducing Django Memory Usage. Low hanging fruit? My memory usage increases over time and restarting Django is not kind to users. 
+
+ I am unsure how to go about profiling the memory usage but some tips on how to start measuring would be useful. 
+
+ I have a feeling that there are some simple steps that could produce big gains. Ensuring 'debug' is set to 'False' is an obvious biggie. 
+
+ Can anyone suggest others? How much improvement would caching on low-traffic sites? 
+
+ In this case I'm running under Apache 2.x with mod_python. I've heard mod_wsgi is a bit leaner but it would be tricky to switch at this stage unless I know the gains would be significant. 
+
+ Edit: Thanks for the tips so far. Any suggestions how to discover what's using up the memory? Are there any guides to Python memory profiling? 
+
+ Also as mentioned there's a few things that will make it tricky to switch to mod_wsgi so I'd like to have some idea of the gains I could expect before ploughing forwards in that direction. 
+
+ Edit: Carl posted a slightly more detailed reply here that is worth reading: http://stackoverflow.com/questions/488864/django-deployment-cutting-apaches-overhead 
+
+ Edit: Graham Dumpleton's article is the best I've found on the MPM and mod_wsgi related stuff. I am rather disappointed that no-one could provide any info on debugging the memory usage in the app itself though. 
+
+ Final Edit: Well I have been discussing this with Webfaction to see if they could assist with recompiling Apache and this is their word on the matter: 
+
+ "I really don't think that you will get much of a benefit by switching to an MPM Worker + mod_wsgi setup. I estimate that you might be able to save around 20MB, but probably not much more than that." 
+
+ So! This brings me back to my original question (which I am still none the wiser about). How does one go about identifying where the problems lies? It's a well known maxim that you don't optimize without testing to see where you need to optimize but there is very little in the way of tutorials on measuring Python memory usage and none at all specific to Django. 
+
+ Thanks for everyone's assistance but I think this question is still open! 
+
+ Another final edit ;-) 
+
+ I asked this on the django-users list and got some very helpful replies 
+
+ Honestly the last update ever! 
+
+ This was just released. Could be the best solution yet: Profiling Django object size and memory usage with Pympler 
+ Answers (Total-10): #0 Make sure you are not keeping global references to data. That prevents the python garbage collector from releasing the memory. 
+
+ Don't use mod_python . It loads an interpreter inside apache. If you need to use apache, use mod_wsgi instead. It is not tricky to switch. It is very easy. mod_wsgi is way easier to configure for django than brain-dead mod_python . 
+
+ If you can remove apache from your requirements, that would be even better to your memory. spawning seems to be the new fast scalable way to run python web applications. 
+
+ EDIT : I don't see how switching to mod_wsgi could be " tricky ". It should be a very easy task. Please elaborate on the problem you are having with the switch. 
+ #1 If you are running under mod_wsgi, and presumably spawning since it is WSGI compliant, you can use Dozer to look at your memory usage. 
+
+ Under mod_wsgi just add this at the bottom of your WSGI script: 
+
+ from dozer import Dozer
+application = Dozer(application)
+ 
+
+ Then point your browser at http://domain/_dozer/index to see a list of all your memory allocations. 
+
+ I'll also just add my voice of support for mod_wsgi. It makes a world of difference in terms of performance and memory usage over mod_python. Graham Dumpleton's support for mod_wsgi is outstanding, both in terms of active development and in helping people on the mailing list to optimize their installations. David Cramer at curse.com has posted some charts (which I can't seem to find now unfortunately) showing the drastic reduction in cpu and memory usage after they switched to mod_wsgi on that high traffic site. Several of the django devs have switched. Seriously, it's a no-brainer :) 
+ #2 These are the Python memory profiler solutions I'm aware of (not Django related): 
+
+ 
+ Heapy 
+ pysizer (discontinued) 
+ Python Memory Validator (commercial) 
+ Pympler 
+ 
+
+ Disclaimer: I have a stake in the latter. 
+
+ The individual project's documentation should give you an idea of how to use these tools to analyze memory behavior of Python applications. 
+
+ The following is a nice "war story" that also gives some helpful pointers: 
+
+ 
+ Reducing the footprint of python applications 
+ 
+ #3 In addition to not keeping around global references to large data objects, try to avoid loading large datasets into memory at all wherever possible. 
+
+ Switch to mod_wsgi in daemon mode, and use Apache's worker mpm instead of prefork. This latter step can allow you to serve many more concurrent users with much less memory overhead. 
+ #4 Additionally, check if you do not use any of known leakers. MySQLdb is known to leak enormous amounts of memory with Django due to bug in unicode handling. Other than that, Django Debug Toolbar might help you to track the hogs. 
+ #5 Another plus for mod_wsgi: set a maximum-requests parameter in your WSGIDaemonProcess directive and mod_wsgi will restart the daemon process every so often. There should be no visible effect for the user, other than a slow page load the first time a fresh process is hit, as it'll be loading Django and your application code into memory. 
+
+ But even if you do have memory leaks, that should keep the process size from getting too large, without having to interrupt service to your users. 
+ #6 Webfaction actually has some tips for keeping django memory usage down. 
+
+ The major points: 
+
+ 
+ Make sure debug is set to false (you already know that). 
+ Use "ServerLimit" in your apache config 
+ Check that no big objects are being loaded in memory 
+ Consider serving static content in a separate process or server. 
+ Use "MaxRequestsPerChild" in your apache config 
+ Find out and understand how much memory you're using 
+ 
+ #7 Here is the script I use for mod_wsgi (called wsgi.py, and put in the root off my django project): 
+
+ import os
+import sys
+import django.core.handlers.wsgi
+
+from os import path
+
+sys.stdout = open('/dev/null', 'a+')
+sys.stderr = open('/dev/null', 'a+')
+
+sys.path.append(path.join(path.dirname(__file__), '..'))
+
+os.environ['DJANGO_SETTINGS_MODULE'] = 'myproject.settings'
+application = django.core.handlers.wsgi.WSGIHandler()
+ 
+
+ Adjust myproject.settings and the path as needed. I redirect all output to /dev/null since mod_wsgi by default prevents printing. Use logging instead. 
+
+ For apache: 
+
+ &lt;VirtualHost *&gt;
+ ServerName myhost.com
+
+ ErrorLog /var/log/apache2/error-myhost.log
+ CustomLog /var/log/apache2/access-myhost.log common
+
+ DocumentRoot "/var/www"
+
+ WSGIScriptAlias / /path/to/my/wsgi.py
+
+&lt;/VirtualHost&gt;
+ 
+
+ Hopefully this should at least help you set up mod_wsgi so you can see if it makes a difference. 
+ #8 Caches: make sure they're being flushed. Its easy for something to land in a cache, but never be GC'd because of the cache reference. 
+
+ Swig'd code: Make sure any memory management is being done correctly, its really easy to miss these in python, especially with third party libraries 
+
+ Monitoring: If you can, get data about memory usage and hits. Usually you'll see a correlation between a certain type of request and memory usage. 
+ #9 We stumbled over a bug in Django with big sitemaps (10.000 items). Seems Django is trying to load them all in memory when generating the sitemap: http://code.djangoproject.com/ticket/11572 - effectively kills the apache process when Google pays a visit to the site.

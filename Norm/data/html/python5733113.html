@@ -1,0 +1,283 @@
+<h3>Question (ID-5733113):</h3><h2>SQLAlchemy versioning cares about class import order</h2><p>I was following the guide here:</p>
+
+<p><a href="http://www.sqlalchemy.org/docs/orm/examples.html?highlight=versioning#versioned-objects" rel="nofollow">http://www.sqlalchemy.org/docs/orm/examples.html?highlight=versioning#versioned-objects</a></p>
+
+<p>and have come across an issue. I have defined my relationships like:</p>
+
+<pre><code>generic_ticker = relation('MyClass', backref=backref("stuffs"))
+</code></pre>
+
+<p>with strings so it doesn't care about the import order of my model modules. This all works fine normally, but when I use the versioning meta I get the following error:</p>
+
+<blockquote>
+  <p>sqlalchemy.exc.InvalidRequestError: When initializing mapper Mapper|MyClass|stuffs, expression 'Trader' failed to locate a name ("name 'MyClass' is not defined"). If this is a class name, consider adding this relationship() to the  class after both dependent classes have been defined.</p>
+</blockquote>
+
+<p>I tracked down the error to:</p>
+
+<pre><code>  File "/home/nick/workspace/gm3/gm3/lib/history_meta.py", line 90, in __init__
+    mapper = class_mapper(cls)
+  File "/home/nick/venv/tg2env/lib/python2.6/site-packages/sqlalchemy/orm/util.py", line 622, in class_mapper
+    mapper = mapper.compile()
+</code></pre>
+
+<hr>
+
+<pre><code>class VersionedMeta(DeclarativeMeta):
+    def __init__(cls, classname, bases, dict_):
+        DeclarativeMeta.__init__(cls, classname, bases, dict_)
+
+        try:
+            mapper = class_mapper(cls)
+            _history_mapper(mapper)
+        except UnmappedClassError:
+            pass
+</code></pre>
+
+<p>I fixed the problem by putting the try: except stuff in a lambda and running them all after all the imports have happened. This works but seems a bit rubbish, any ideas of how to fix this is a better way?</p>
+
+<p>Thanks!</p>
+
+<p><strong>Update</strong></p>
+
+<p>The problem is not actually about import order. The versioning example is designed such that mapper requires compilation in costructor of each versioned class. And compilation fails when related classes are not yet defined. In case of circular relations there is no way to make it working by changing definition order of mapped classes.</p>
+
+<p><strong>Update 2</strong></p>
+
+<p>As the above update states (I didn't know you could edit other people's posts on here :)) this is likely due to circular references. In which case may be someone will find my hack useful (I'm using it with turbogears) (Replace VersionedMeta and add in create_mappers global in history_meta)</p>
+
+<pre><code>create_mappers = []
+class VersionedMeta(DeclarativeMeta):
+    def __init__(cls, classname, bases, dict_):
+        DeclarativeMeta.__init__(cls, classname, bases, dict_)
+        #I added this code in as it was crashing otherwise
+        def make_mapper():
+            try:
+                mapper = class_mapper(cls)
+                _history_mapper(mapper)
+            except UnmappedClassError:
+                pass
+
+        create_mappers.append(lambda: make_mapper())
+</code></pre>
+
+<p>Then you can do something like the following in your models __init__.py</p>
+
+<pre><code># Import your model modules here.
+from myproj.lib.history_meta import create_mappers
+
+from myproj.model.misc import *
+from myproj.model.actor import *
+from myproj.model.stuff1 import *
+from myproj.model.instrument import *
+from myproj.model.stuff import *
+
+#setup the history
+[func() for func in create_mappers]
+</code></pre>
+
+<p>That way it create the mappers only after all the classes have been defined.</p>
+
+<p><strong>Update 3</strong>
+Slightly unrelated but I came across a duplicate primary key error in some circumstances (committing 2 changes to the same object in one go). My workaround has been to add a new primary auto-incrementing key. Of course you can't have more than 1 with mysql so I had to de-primary key the existing stuff used to create the history table. Check out my overall code (including a hist_id and getting rid of the foreign key constraint):</p>
+
+<pre><code>"""Stolen from the offical sqlalchemy recpies
+"""
+from sqlalchemy.ext.declarative import DeclarativeMeta
+from sqlalchemy.orm import mapper, class_mapper, attributes, object_mapper
+from sqlalchemy.orm.exc import UnmappedClassError, UnmappedColumnError
+from sqlalchemy import Table, Column, ForeignKeyConstraint, Integer
+from sqlalchemy.orm.interfaces import SessionExtension
+from sqlalchemy.orm.properties import RelationshipProperty
+from sqlalchemy.types import DateTime
+import datetime
+from sqlalchemy.orm.session import Session
+
+def col_references_table(col, table):
+    for fk in col.foreign_keys:
+        if fk.references(table):
+            return True
+    return False
+
+def _history_mapper(local_mapper):
+    cls = local_mapper.class_
+
+    # set the "active_history" flag
+    # on on column-mapped attributes so that the old version
+    # of the info is always loaded (currently sets it on all attributes)
+    for prop in local_mapper.iterate_properties:
+        getattr(local_mapper.class_, prop.key).impl.active_history = True
+
+    super_mapper = local_mapper.inherits
+    super_history_mapper = getattr(cls, '__history_mapper__', None)
+
+    polymorphic_on = None
+    super_fks = []
+    if not super_mapper or local_mapper.local_table is not super_mapper.local_table:
+        cols = []
+        for column in local_mapper.local_table.c:
+            if column.name == 'version':
+                continue
+
+            col = column.copy()
+            col.unique = False
+
+            #don't auto increment stuff from the normal db
+            if col.autoincrement:
+                col.autoincrement = False
+            #sqllite falls over with auto incrementing keys if we have a composite key
+            if col.primary_key:
+                col.primary_key = False
+
+            if super_mapper and col_references_table(column, super_mapper.local_table):
+                super_fks.append((col.key, list(super_history_mapper.base_mapper.local_table.primary_key)[0]))
+
+            cols.append(col)
+
+            if column is local_mapper.polymorphic_on:
+                polymorphic_on = col
+
+        #if super_mapper:
+        #    super_fks.append(('version', super_history_mapper.base_mapper.local_table.c.version))
+
+        cols.append(Column('hist_id', Integer, primary_key=True, autoincrement=True))
+        cols.append(Column('version', Integer))
+        cols.append(Column('changed', DateTime, default=datetime.datetime.now))
+
+        if super_fks:
+            cols.append(ForeignKeyConstraint(*zip(*super_fks)))
+
+        table = Table(local_mapper.local_table.name + '_history', local_mapper.local_table.metadata,
+                      *cols, mysql_engine='InnoDB')
+    else:
+        # single table inheritance.  take any additional columns that may have
+        # been added and add them to the history table.
+        for column in local_mapper.local_table.c:
+            if column.key not in super_history_mapper.local_table.c:
+                col = column.copy()
+                super_history_mapper.local_table.append_column(col)
+        table = None
+
+    if super_history_mapper:
+        bases = (super_history_mapper.class_,)
+    else:
+        bases = local_mapper.base_mapper.class_.__bases__
+    versioned_cls = type.__new__(type, "%sHistory" % cls.__name__, bases, {})
+
+    m = mapper(
+            versioned_cls, 
+            table, 
+            inherits=super_history_mapper, 
+            polymorphic_on=polymorphic_on,
+            polymorphic_identity=local_mapper.polymorphic_identity
+            )
+    cls.__history_mapper__ = m
+
+    if not super_history_mapper:
+        cls.version = Column('version', Integer, default=1, nullable=False)
+
+create_mappers = []
+
+class VersionedMeta(DeclarativeMeta):
+    def __init__(cls, classname, bases, dict_):
+        DeclarativeMeta.__init__(cls, classname, bases, dict_)
+        #I added this code in as it was crashing otherwise
+        def make_mapper():
+            try:
+                mapper = class_mapper(cls)
+                _history_mapper(mapper)
+            except UnmappedClassError:
+                pass
+
+        create_mappers.append(lambda: make_mapper())
+
+def versioned_objects(iter):
+    for obj in iter:
+        if hasattr(obj, '__history_mapper__'):
+            yield obj
+
+def create_version(obj, session, deleted = False):
+    obj_mapper = object_mapper(obj)
+    history_mapper = obj.__history_mapper__
+    history_cls = history_mapper.class_
+
+    obj_state = attributes.instance_state(obj)
+
+    attr = {}
+
+    obj_changed = False
+
+    for om, hm in zip(obj_mapper.iterate_to_root(), history_mapper.iterate_to_root()):
+        if hm.single:
+            continue
+
+        for hist_col in hm.local_table.c:
+            if hist_col.key == 'version' or hist_col.key == 'changed' or hist_col.key == 'hist_id':
+                continue
+
+            obj_col = om.local_table.c[hist_col.key]
+
+            # get the value of the
+            # attribute based on the MapperProperty related to the
+            # mapped column.  this will allow usage of MapperProperties
+            # that have a different keyname than that of the mapped column.
+            try:
+                prop = obj_mapper.get_property_by_column(obj_col)
+            except UnmappedColumnError:
+                # in the case of single table inheritance, there may be 
+                # columns on the mapped table intended for the subclass only.
+                # the "unmapped" status of the subclass column on the 
+                # base class is a feature of the declarative module as of sqla 0.5.2.
+                continue
+
+            # expired object attributes and also deferred cols might not be in the
+            # dict.  force it to load no matter what by using getattr().
+            if prop.key not in obj_state.dict:
+                getattr(obj, prop.key)
+
+            a, u, d = attributes.get_history(obj, prop.key)
+
+            if d:
+                attr[hist_col.key] = d[0]
+                obj_changed = True
+            elif u:
+                attr[hist_col.key] = u[0]
+            else:
+                # if the attribute had no value.
+                attr[hist_col.key] = a[0]
+                obj_changed = True
+
+    if not obj_changed:
+        # not changed, but we have relationships.  OK
+        # check those too
+        for prop in obj_mapper.iterate_properties:
+            if isinstance(prop, RelationshipProperty) and \
+                attributes.get_history(obj, prop.key).has_changes():
+                obj_changed = True
+                break
+
+    if not obj_changed and not deleted:
+        return
+
+    attr['version'] = obj.version
+    hist = history_cls()
+    for key, value in attr.iteritems():
+        setattr(hist, key, value)
+
+    obj.version += 1
+    session.add(hist)
+
+class VersionedListener(SessionExtension):
+    def before_flush(self, session, flush_context, instances):
+        for obj in versioned_objects(session.dirty):
+            create_version(obj, session)
+        for obj in versioned_objects(session.deleted):
+            create_version(obj, session, deleted = True)
+</code></pre>
+<br /><h3>Answers (Total-1):</h3><b>#0</b><br /><blockquote>
+  <p>I fixed the problem by putting the try: except stuff in a lambda and
+  running them all after all the imports have happened. </p>
+</blockquote>
+
+<p>Great!</p>
+<br />

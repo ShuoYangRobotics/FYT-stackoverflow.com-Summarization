@@ -1,0 +1,167 @@
+<h3>Question (ID-6387631):</h3><h2>Why is foo(*arg, x) not allowed in Python?</h2><p>Look at the following example</p>
+
+<pre><code>point = (1, 2)
+size = (2, 3)
+color = 'red'
+
+class Rect(object):
+    def __init__(self, x, y, width, height, color):
+        pass
+</code></pre>
+
+<p>It would be very tempting to call:</p>
+
+<pre><code>Rect(*point, *size, color)
+</code></pre>
+
+<p>Possible workarounds would be:</p>
+
+<pre><code>Rect(point[0], point[1], size[0], size[1], color)
+
+Rect(*(point + size), color=color)
+
+Rect(*(point + size + (color,)))
+</code></pre>
+
+<p>But why is <code>Rect(*point, *size, color)</code> not allowed, is there any semantic ambiguity or general disadvantage you could think of?</p>
+
+<h3>EDIT: Specific Questions</h3>
+
+<p>Why are multiple *arg expansions not allowed in function calls?</p>
+
+<p>Why are positional arguments not allowed after *arg expansions?</p>
+<br /><h3>Answers (Total-5):</h3><b>#0</b><br /><p>I'm not going to speak to why multiple tuple unpacking isn't part of Python, but I will point out that you're not matching your class to your data in your example.</p>
+
+<p>You have the following code:</p>
+
+<pre><code>point = (1, 2)
+size = (2, 3)
+color = 'red'
+
+class Rect(object):
+    def __init__(self, x, y, width, height, color):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.color = color
+</code></pre>
+
+<p>but a better way to express your Rect object would be as follows:</p>
+
+<pre><code>class Rect:
+    def __init__(self, point, size, color):
+        self.point = point
+        self.size = size
+        self.color = color
+
+r = Rect(point, size, color)
+</code></pre>
+
+<p>In general, if your data is in tuples, have your constructor take tuples.  If your data is in a dict, have your constructor take a dict.  If your data is an object, have your constructor take an object, etc.</p>
+
+<p>In general, you want to work with the idioms of the language, rather than try to work around them.</p>
+
+<hr>
+
+<p>EDIT
+Seeing how popular this question is, I'll give you an decorator that allows you to call the constructor however you like.</p>
+
+<pre><code>class Pack(object):
+
+    def __init__(self, *template):
+        self.template = template
+
+    def __call__(self, f):
+        def pack(*args):
+            args = list(args)
+            for i, tup in enumerate(self.template):
+                if type(tup) != tuple:
+                    continue
+                for j, typ in enumerate(tup):
+                    if type(args[i+j]) != typ:
+                        break
+                else:
+                    args[i:i+j+1] = [tuple(args[i:i+j+1])]
+            f(*args)
+        return pack    
+
+
+class Rect:
+    @Pack(object, (int, int), (int, int), str)
+    def __init__(self, point, size, color):
+        self.point = point
+        self.size = size
+        self.color = color
+</code></pre>
+
+<p>Now you can initialize your object any way you like.</p>
+
+<pre><code>r1 = Rect(point, size, color)
+r2 = Rect((1,2), size, color)
+r3 = Rect(1, 2, size, color)
+r4 = Rect((1, 2), 2, 3, color)
+r5 = Rect(1, 2, 2, 3, color)
+</code></pre>
+
+<p>While I wouldn't recommend using this in practice (it violates the principle that you should have only one way to do it), it does serve to demonstrate that there's usually a way to do anything in Python.</p>
+<br /><b>#1</b><br /><p>As far as I know, it was a design choice, but there seems to be a logic behind it.</p>
+
+<p><strong>EDIT:</strong> the <code>*args</code> notation in a function call was designed so you could pass in a tuple of variables of an arbitrary length that could change between calls.  In that case, having something like f(*a, *b, c) doesn't make sense as a call, as if <code>a</code> changes length all the elements of b get assigned to the wrong variables, and c isn't in the right place either.</p>
+
+<p>Keeping the language simple, powerful, and standardized is a good thing.  Keeping it in sync with what actually goes on in processing the arguments is also a very good thing.  </p>
+
+<p>Think about how the language unpacks your function call.  If multiple <code>*arg</code> are allowed in any order like <code>Rect(*point, *size, color)</code>, note that all that matters to properly unpack is that point and size have a total of four elements.  So <code>point=()</code>, <code>size=(1,2,2,3)</code>, and<code>color='red')</code> would allow <code>Rect(*point, *size, color)</code> to work as a proper call.  Basically, the language when it parses the *point and *size is treating it as one combined <code>*arg</code> tuple, so <code>Rect(*(point + size), color=color)</code> is more faithful representation.  </p>
+
+<p>There never needs to be two tuples of arguments passed in the form  <code>*args</code>, you can always represent it as one.  Since assignment of parameters is only dependent on the order in this combined <code>*arg</code> list, it makes sense to define it as such.  </p>
+
+<p>If you can make function calls like f(*a, *b), the language almost begs to allow you to define functions with multiple *args in the parameter list, and those couldn't be processed.  E.g.,</p>
+
+<pre><code> def f(*a, *b): 
+     return (sum(a), 2*sum(b))
+</code></pre>
+
+<p>How would <code>f(1,2,3,4)</code> be processed?</p>
+
+<p>I think this is why for syntactical concreteness, the language forces function calls and definitions to be in the following specific form; like <code>f(a,b,x=1,y=2,*args,**kwargs)</code> which is order dependent.</p>
+
+<p>Everything there has a specific meaning in a function definition and function call.  <code>a</code> and <code>b</code> are parameters defined without default values, next <code>x</code> and <code>y</code> are parameters defined with default values (that could be skipped; so come after the no default parameters).  Next, <code>*args</code> is populated as a tuple with all the args filled with the rest of the parameters from a function call that weren't keyword parameters.  This comes after the others, as this could change length, and you don't want something that could change length between calls to affect assignment of variables.  At the end **kwargs takes all the keyword arguments that weren't defined elsewhere.  With these concrete definitions you never need to have multiple <code>*args</code> or <code>**kwargs</code>.</p>
+<br /><b>#2</b><br /><p><code>*point</code> says that you are passing in a whole sequence of items - something like all the elements in a list, but not as a list.</p>
+
+<p>In this case, you cannot limit how many elements are being passed in. Therefore, there is no way for the interpreter to know which elements of the sequence are part of <code>*points</code> and which are of <code>*size</code></p>
+
+<p>For example, if you passed the following as input: <code>2, 5, 3, 4, 17, 87, 4, 0</code>, can you tell me, which of those numbers are represented by <code>*points</code> and which by <code>*size</code>? This is the same problem that the interpreter would face as well</p>
+
+<p>Hope this helps</p>
+<br /><b>#3</b><br /><p>Python is full of these subtle glitches. For example you can do:</p>
+
+<pre><code>first, second, last = (1, 2, 3)
+</code></pre>
+
+<p>And you can't do:</p>
+
+<pre><code>first, *others = (1, 2, 3)
+</code></pre>
+
+<p>But in Python 3 you now can. </p>
+
+<p>Your suggestion probably is going to be suggested in a PEP and integrated or rejected one day.</p>
+<br /><b>#4</b><br /><p>Well, in Python 2, you can say:</p>
+
+<pre><code>point = 1, 2
+size = 2, 3
+color = 'red'
+
+class Rect(object):
+    def __init__(self, (x, y), (width, height), color):
+        pass
+</code></pre>
+
+<p>Then you can say:</p>
+
+<pre><code>a_rect= Rect(point, size, color)
+</code></pre>
+
+<p>taking care that the first two arguments are sequences of len == 2.<br>
+NB: This capability has been removed from Python 3.</p>
+<br />

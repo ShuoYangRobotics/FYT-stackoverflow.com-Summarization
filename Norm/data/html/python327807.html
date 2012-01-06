@@ -1,0 +1,79 @@
+<h3>Question (ID-327807):</h3><h2>Django equivalent for count and group by</h2><p>I have a model that looks like this:</p>
+
+<pre><code>class Category(models.Model):
+    name = models.CharField(max_length=60)
+
+class Item(models.Model):
+    name = models.CharField(max_length=60)
+    category = models.ForeignKey(Category)
+</code></pre>
+
+<p>I want select count (just the count) of items for each category, so in SQL it would be as simple as this:</p>
+
+<pre><code>select category_id, count(id) from item group by category_id
+</code></pre>
+
+<p>Is there an equivalent of doing this "the Django way"? Or is plain SQL the only option? I am familiar with the <em>count( )</em> method in Django, however I don't see how <em>group by</em> would fit there.</p>
+<br /><h3>Answers (Total-5):</h3><b>#0</b><br /><p>Here, as I just discovered, is how to do this with the Django 1.1 aggregation API:</p>
+
+<pre><code>from django.db.models import Count
+theanswer = Item.objects.values('category').annotate(Count('category'))
+</code></pre>
+<br /><b>#1</b><br /><p>(<strong>Update</strong>: Full ORM aggregation support is now included in <a href="http://docs.djangoproject.com/en/dev/releases/1.1/#aggregate-support" rel="nofollow">Django 1.1</a>. True to the below warning about using private APIs, the method documented here no longer works in post-1.1 versions of Django.  I haven't dug in to figure out why; if you're on 1.1 or later you should use the real <a href="http://docs.djangoproject.com/en/dev/topics/db/aggregation/" rel="nofollow">aggregation API</a> anyway.)</p>
+
+<p>The core aggregation support was already there in 1.0; it's just undocumented, unsupported, and doesn't have a friendly API on top of it yet.  But here's how you can use it anyway until 1.1 arrives (at your own risk, and in full knowledge that the query.group_by attribute is not part of a public API and could change):</p>
+
+<pre><code>query_set = Item.objects.extra(select={'count': 'count(1)'}, 
+                               order_by=['-count']).values('count', 'category')
+query_set.query.group_by = ['category_id']
+</code></pre>
+
+<p>If you then iterate over query_set, each returned value will be a dictionary with a "category" key and a "count" key.</p>
+
+<p>You don't have to order by -count here, that's just included to demonstrate how it's done (it has to be done in the .extra() call, not elsewhere in the queryset construction chain).  Also, you could just as well say count(id) instead of count(1), but the latter may be more efficient.</p>
+
+<p>Note also that when setting .query.group_by, the values must be actual DB column names ('category_id') not Django field names ('category').  This is because you're tweaking the query internals at a level where everything's in DB terms, not Django terms.</p>
+<br /><b>#2</b><br /><p>Since I was a little confused about how grouping in Django 1.1 works I thought I'd elaborate here on how exactly you go about using it. First, to repeat what Michael said:</p>
+
+<blockquote>
+  <p>Here, as I just discovered, is how to do this with the Django 1.1 aggregation API:</p>
+
+<pre><code>from django.db.models import Count
+theanswer = Item.objects.values('category').annotate(Count('category'))
+</code></pre>
+</blockquote>
+
+<p>Note also that you need to <code>from django.db.models import Count</code>!</p>
+
+<p>This will select only the categories and then add an annotation called <code>category__count</code>. Depending on the default ordering this may be all you need, <strong>but if the default ordering uses a field other than <code>category</code> this will not work</strong>. The reason for this is that the fields required for ordering are also selected and make each row unique, so you won't get stuff grouped how you want it. One quick way to fix this is to reset the ordering:</p>
+
+<pre><code>Item.objects.values('category').annotate(Count('category')).order_by()
+</code></pre>
+
+<p>This should produce exactly the results you want. To set the name of the annotation you can use:</p>
+
+<pre><code>...annotate(mycount = Count('category'))...
+</code></pre>
+
+<p>Then you will have an annotation called <code>mycount</code> in the results.</p>
+
+<p>Everything else about grouping was very straightforward to me. Be sure to check out the <a href="http://docs.djangoproject.com/en/dev/topics/db/aggregation" rel="nofollow">Django aggregation API</a> for more detailed info.</p>
+<br /><b>#3</b><br /><p>How's this?  (Other than slow.)</p>
+
+<pre><code>counts= [ (c, Item.filter( category=c.id ).count()) for c in Category.objects.all() ]
+</code></pre>
+
+<p>It has the advantage of being short, even if it does fetch a lot of rows.</p>
+
+<p><hr /></p>
+
+<p>Edit.</p>
+
+<p>The one query version.  BTW, this is often <em>faster</em> than SELECT COUNT(*) in the database.  Try it to see.</p>
+
+<pre><code>counts = defaultdict(int)
+for i in Item.objects.all():
+    counts[i.category] += 1
+</code></pre>
+<br /><b>#4</b><br /><p>According to a <a href="http://42topics.com/blog/2008/04/five-things-i-hate-about-django/#comment-19" rel="nofollow">blog post comment</a>, Django doesn't support GROUP BY, and nor do many other ORM's.  I guess you'll have to roll out your own SQL.</p>
+<br />

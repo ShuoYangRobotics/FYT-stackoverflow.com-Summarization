@@ -1,0 +1,345 @@
+Question (ID-108822): Delete all data for a kind in Google App Engine I would like to wipe out all data for a specific kind in Google App Engine. What is the
+best way to do this?
+I wrote a delete script (hack), but since there is so much data is
+timeout's out after a few hundred records. 
+ Answers (Total-15): #0 I am currently deleting the entities by their key, and it seems to be faster. 
+
+ from google.appengine.ext import db
+
+class bulkdelete(webapp.RequestHandler):
+ def get(self):
+  self.response.headers['Content-Type'] = 'text/plain'
+  try:
+   while True:
+    q = db.GqlQuery("SELECT __key__ FROM MyModel")
+    assert q.count()
+    db.delete(q.fetch(200))
+    time.sleep(0.5)
+  except Exception, e:
+   self.response.out.write(repr(e)+'\n')
+   pass
+ 
+
+ from the terminal, I run curl -N http://... 
+ #1 If I were a paranoid person, I would say Google App Engine (GAE) has not made it easy for us to remove data if we want to. I am going to skip discussion on index sizes and how they translate a 6 GB of data to 35 GB of storage (being billed for). That's another story, but they do have ways to work around that - limit number of properties to create index on (automatically generated indexes) et cetera. 
+
+ The reason I decided to write this post is that I need to "nuke" all my Kinds in a sandbox. I read about it and finally came up with this code: 
+
+ package com.intillium.formshnuker;
+
+import java.io.IOException;
+import java.util.ArrayList;
+
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import com.google.appengine.api.datastore.Key;
+import com.google.appengine.api.datastore.Query;
+import com.google.appengine.api.datastore.Entity;
+import com.google.appengine.api.datastore.FetchOptions;
+import com.google.appengine.api.datastore.DatastoreService;
+import com.google.appengine.api.datastore.DatastoreServiceFactory;
+
+import com.google.appengine.api.labs.taskqueue.QueueFactory;
+import com.google.appengine.api.labs.taskqueue.TaskOptions.Method;
+
+import static com.google.appengine.api.labs.taskqueue.TaskOptions.Builder.url;
+
+@SuppressWarnings("serial")
+public class FormsnukerServlet extends HttpServlet {
+
+ public void doGet(final HttpServletRequest request, final HttpServletResponse response) throws IOException {
+
+ response.setContentType("text/plain");
+
+ final String kind = request.getParameter("kind");
+ final String passcode = request.getParameter("passcode");
+
+ if (kind == null) {
+ throw new NullPointerException();
+ }
+
+ if (passcode == null) {
+ throw new NullPointerException();
+ }
+
+ if (!passcode.equals("LONGSECRETCODE")) {
+ response.getWriter().println("BAD PASSCODE!");
+ return;
+ }
+
+ System.err.println("*** deleting entities form " + kind);
+
+ final long start = System.currentTimeMillis();
+
+ int deleted_count = 0;
+ boolean is_finished = false;
+
+ final DatastoreService dss = DatastoreServiceFactory.getDatastoreService();
+
+ while (System.currentTimeMillis() - start &lt; 16384) {
+
+ final Query query = new Query(kind);
+
+ query.setKeysOnly();
+
+ final ArrayList&lt;Key&gt; keys = new ArrayList&lt;Key&gt;();
+
+ for (final Entity entity: dss.prepare(query).asIterable(FetchOptions.Builder.withLimit(128))) {
+ keys.add(entity.getKey());
+ }
+
+ keys.trimToSize();
+
+ if (keys.size() == 0) {
+ is_finished = true;
+ break;
+ }
+
+ while (System.currentTimeMillis() - start &lt; 16384) {
+
+ try {
+
+  dss.delete(keys);
+
+  deleted_count += keys.size();
+
+  break;
+
+ } catch (Throwable ignore) {
+
+  continue;
+
+ }
+
+ }
+
+ }
+
+ System.err.println("*** deleted " + deleted_count + " entities form " + kind);
+
+ if (is_finished) {
+
+ System.err.println("*** deletion job for " + kind + " is completed.");
+
+ } else {
+
+ final int taskcount;
+
+ final String tcs = request.getParameter("taskcount");
+
+ if (tcs == null) {
+ taskcount = 0;
+ } else {
+ taskcount = Integer.parseInt(tcs) + 1;
+ }
+
+ QueueFactory.getDefaultQueue().add(
+ url("/formsnuker?kind=" + kind + "&amp;passcode=LONGSECRETCODE&amp;taskcount=" + taskcount).method(Method.GET));
+
+ System.err.println("*** deletion task # " + taskcount + " for " + kind + " is queued.");
+
+ }
+
+ response.getWriter().println("OK");
+
+ }
+
+}
+ 
+
+ I have over 6 million records. That's a lot. I have no idea what the cost will be to delete the records (maybe more economical not to delete them). Another alternative would be to request a deletion for the entire application (sandbox). But that's not realistic in most cases. 
+
+ I decided to go with smaller groups of records (in easy query). I know I could go for 500 entities, but then I started receiving very high rates of failure (re delete function). 
+
+ My request from GAE team: please add a feature to delete all entities of a kind in a single transaction. 
+ #2 Try using App Engine Console then you dont even have to deploy any special code 
+ #3 The fastest and efficient way to handle bulk delete on Datastore is by using the new mapper API announced on the latest Google I/O . 
+
+ If your language of choice is Python , you just have to register your mapper in a mapreduce.yaml file and define a function like this: 
+
+ from mapreduce import operation as op
+def process(entity):
+ yield op.db.Delete(entity)
+ 
+
+ On Java you should have a look to this article that suggests a function like this: 
+
+ @Override
+public void map(Key key, Entity value, Context context) {
+ log.info("Adding key to deletion pool: " + key);
+ DatastoreMutationPool mutationPool = this.getAppEngineContext(context)
+   .getMutationPool();
+ mutationPool.delete(value.getKey());
+}
+ 
+ #4 Presumably your hack was something like this: 
+
+ q = db.GqlQuery("SELECT * FROM Message WHERE create_date &lt; :1", earliest_date)
+results = q.fetch(1000)
+
+while results:
+ db.delete(results)
+ results = fetch(1000, len(results))
+ 
+
+ As you say, if there's sufficient data, you're going to hit the request timeout before it gets through all the records. You'd have to re-invoke this request multiple times from outside to ensure all the data was erased; easy enough to do, but hardly ideal. 
+
+ The admin console doesn't seem to offer any help, as (from my own experience with it), it seems to only allow entities of a given type to be listed and then deleted on a page-by-page basis. 
+
+ When testing, I've had to purge my database on startup to get rid of existing data. 
+
+ I would infer from this that Google's operates on the principle that disk is cheap, and so data is typically orphaned (indexes to redundant data replaced), rather than deleted. Given there's a fixed amount of data available to each app at the moment (0.5 GB), that's not much help for non-Google App Engine users. 
+ #5 I've tried db.delete(results) and App Engine Console, and none of them seems to be working for me. Manually removing entries from Data Viewer (increased limit up to 200) didn't work either since I have uploaded more than 10000 entries. I ended writing this script 
+
+ from google.appengine.ext import db
+from google.appengine.ext import webapp
+from google.appengine.ext.webapp.util import run_wsgi_app
+import wsgiref.handlers
+from mainPage import YourData #replace this with your data
+class CleanTable(webapp.RequestHandler):
+ def get(self, param):
+  txt = self.request.get('table')
+  q = db.GqlQuery("SELECT * FROM "+txt)
+  results = q.fetch(10)
+  self.response.headers['Content-Type'] = 'text/plain'
+  #replace yourapp and YouData your app info below.
+  self.response.out.write("""
+   &lt;html&gt;
+   &lt;meta HTTP-EQUIV="REFRESH" content="5; url=http://yourapp.appspot.com/cleanTable?table=YourData"&gt;
+   &lt;body&gt;""")
+
+  try:
+   for i in range(10):
+    db.delete(results)
+    results = q.fetch(10, len(results))
+    self.response.out.write("&lt;p&gt;10 removed&lt;/p&gt;")
+    self.response.out.write("""
+    &lt;/body&gt;
+    &lt;/html&gt;""")
+
+  except Exception, ints:
+   self.response.out.write(str(inst))
+
+def main():
+ application = webapp.WSGIApplication([
+ ('/cleanTable(.*)', CleanTable),
+ ])
+
+ wsgiref.handlers.CGIHandler().run(application)
+ 
+
+ The trick was to include redirect in html instead of using self.redirect. I'm ready to wait overnight to get rid of all the data in my table. Hopefully, GAE team will make it easier to drop tables in the future. 
+ #6 Unfortunately, there's no way to easily do a bulk delete. Your best bet is to write a script that deletes a reasonable number of entries per invocation, and then call it repeatedly - for example, by having your delete script return a 302 redirect whenever there's more data to delete, then fetching it with "wget --max-redirect=10000" (or some other large number). 
+ #7 One tip. I suggest you get to know the remote_api for these types of uses (bulk deleting, modifying, etc.). But, even with the remote api, batch size can be limited to a few hundred at a time. 
+ #8 The official answer from Google is that you have to delete in chunks spread over multiple requests. You can use AJAX, meta refresh , or request your URL from a script until there are no entities left. 
+ #9 You can now use the Datastore Admin for that: http://code.google.com/appengine/docs/adminconsole/datastoreadmin.html 
+ #10 If you are using Java/JPA you can do something like this: 
+
+  em = EntityManagerFactoryUtils.getTransactionalEntityManager(entityManagerFactory)
+ Query q = em.createQuery("delete from Table t");
+ int number = q.executeUpdate();
+ 
+
+ Java/JDO info can be found here: http://code.google.com/appengine/docs/java/datastore/queriesandindexes.html#Delete_By_Query 
+ #11 You can use the task queues to delete chunks of say 100 objects.
+Deleting objects in GAE shows how limited the Admin capabilities are in GAE. You have to work with batches on 1000 entities or less. You can use the bulkloader tool that works with csv's but the documentation does not cover java.
+I am using GAE Java and my strategy for deletions involves having 2 servlets, one for doing the actually delete and another to load the task queues. When i want to do a delete, I run the queue loading servlet, it loads the queues and then GAE goes to work executing all the tasks in the queue. 
+
+ How to do it:
+Create a servlet that deletes a small number of objects.
+Add the servlet to your task queues.
+Go home or work on something else ;)
+Check the datastore every so often ... 
+
+ I have a datastore with about 5000 objects that i purge every week and it takes about 6 hours to clean out, so i run the task on Friday night.
+I use the same technique to bulk load my data which happens to be about 5000 objects, with about a dozen properties. 
+ #12 With django, setup url: 
+
+ url(r'^Model/bdelete/$', v.bulk_delete_models, {'model':'ModelKind'}),
+ 
+
+ Setup view 
+
+ def bulk_delete_models(request, model):
+ import time
+ limit = request.GET['limit'] or 200
+ start = time.clock()
+ set = db.GqlQuery("SELECT __key__ FROM %s" % model).fetch(int(limit))
+ count = len(set)
+ db.delete(set)
+ return HttpResponse("Deleted %s %s in %s" % (count,model,(time.clock() - start)))
+ 
+
+ Then run in powershell: 
+
+ $client = new-object System.Net.WebClient
+$client.DownloadString("http://your-app.com/Model/bdelete/?limit=400")
+ 
+ #13 This worked for me: 
+
+ class ClearHandler(webapp.RequestHandler): 
+ def get(self): 
+  self.response.headers['Content-Type'] = 'text/plain' 
+  q = db.GqlQuery("SELECT * FROM SomeModel") 
+  self.response.out.write("deleting...") 
+  db.delete(q)
+ 
+ #14 Thank you all guys, I got what I need. :D 
+This may be useful if you have lots db models to delete, you can dispatch it in your terminal. And also, you can manage the delete list in DB_MODEL_LIST yourself. 
+Delete DB_1: 
+
+ python bulkdel.py 10 DB_1
+ 
+
+ Delete All DB: 
+
+ python bulkdel.py 11
+ 
+
+ Here is the bulkdel.py file: 
+
+ import sys, os
+
+URL = 'http://localhost:8080'
+DB_MODEL_LIST = ['DB_1', 'DB_2', 'DB_3']
+
+# Delete Model
+if sys.argv[1] == '10' :
+ command = 'curl %s/clear_db?model=%s' % ( URL, sys.argv[2] )
+ os.system( command )
+
+# Delete All DB Models
+if sys.argv[1] == '11' :
+ for model in DB_MODEL_LIST :
+  command = 'curl %s/clear_db?model=%s' % ( URL, model )
+  os.system( command )
+ 
+
+ And here is the modified version of alexandre fiori's code. 
+
+ from google.appengine.ext import db
+class DBDelete( webapp.RequestHandler ):
+ def get( self ):
+  self.response.headers['Content-Type'] = 'text/plain'
+  db_model = self.request.get('model')
+  sql = 'SELECT __key__ FROM %s' % db_model
+
+  try:
+   while True:
+    q = db.GqlQuery( sql )
+    assert q.count()
+    db.delete( q.fetch(200) )
+    time.sleep(0.5)
+  except Exception, e:
+   self.response.out.write( repr(e)+'\n' )
+   pass
+ 
+
+ And of course, you should map the link to model in a file(like main.py in GAE), ;) 
+In case some guys like me need it in detail, here is part of main.py: 
+
+ from google.appengine.ext import webapp
+import utility # DBDelete was defined in utility.py
+application = webapp.WSGIApplication([('/clear_db',utility.DBDelete ),('/',views.MainPage )],debug = True)

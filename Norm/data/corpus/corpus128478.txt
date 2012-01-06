@@ -1,0 +1,142 @@
+Question (ID-128478): Should Python import statements always be at the top of a module? PEP 08 states: 
+
+ 
+ Imports are always put at the top of the file, just after any module comments and docstrings, and before module globals and constants. 
+ 
+
+ However if the class/method/function that I am importing is only used in rare cases, surely it is more efficient to do the import when it is needed? 
+
+ Isn't this: 
+
+ class SomeClass(object):
+
+ def not_often_called(self)
+  from datetime import datetime
+  self.datetime = datetime.now()
+ 
+
+ more efficient than this? 
+
+ from datetime import datetime
+
+class SomeClass(object):
+
+ def not_often_called(self)
+  self.datetime = datetime.now()
+ 
+ Answers (Total-11): #0 Module importing is quite fast, but not instant. This means that: 
+
+ 
+ Putting the imports at the top of the module is fine, because it's a trivial cost that's only paid once. 
+ Putting the imports within a function will cause calls to that function to take longer. 
+ 
+
+ So if you care about efficiency, put the imports at the top. Only move them into a function if your profiling shows that would help (you did profile to see where best to improve performance, right??) 
+
+ 
+
+ The best reasons I've seen to perform lazy imports are: 
+
+ 
+ Optional library support. If your code has multiple paths that use different libraries, don't break if an optional library is not installed. 
+ In the __init__.py of a plugin, which might be imported but not actually used. Examples are Bazaar plugins, which use bzrlib 's lazy-loading framework. 
+ 
+ #1 Putting the import statement inside of a function can prevent circular dependencies. 
+ #2 It's a tradeoff, that only the programmer can decide to make. 
+
+ Case 1 saves some memory and startup time by not importing the datetime module (and doing whatever initialization it might require) until needed. Note that doing the import 'only when called' also means doing it 'every time when called', so each call after the first one is still incurring the additional overhead of doing the import. 
+
+ Case 2 save some execution time and latency by importing datetime beforehand so that not_often_called() will return more quickly when it is called, and also by not incurring the overhead of an import on every call. 
+
+ Besides efficiency, it's easier to see module dependencies up front if the import statements are ... up front. Hiding them down in the code can make it more difficult to easily find what modules something depends on. 
+
+ Personally I generally follow the PEP except for things like unit tests and such that I don't want always loaded because I know they aren't going to be used except for test code. 
+ #3 I have adopted the practice of putting all imports in the functions that use them, rather than at the top of the module. 
+
+ The benefit I get is the ability to refactor more reliably. When I move a function from one module to another, I know that the function will continue to work with all of its legacy of testing intact. If I have my imports at the top of the module, when I move a function, I find that I end up spending a lot of time getting the new module's imports complete and minimal. A refactoring IDE might make this irrelevant. 
+
+ There is a speed penalty as mentioned elsewhere. I have measured this in my application and found it to be insignificant for my purposes. 
+
+ It is also nice to be able to see all module dependencies up front without resorting to search (e.g. grep). However, the reason I care about module dependencies is generally because I'm installing, refactoring, or moving an entire system comprising multiple files, not just a single module. In that case, I'm going to perform a global search anyway to make sure I have the system-level dependencies. So I have not found global imports to aid my understanding of a system in practice. 
+
+ I usually put the import of sys inside the if __name__=='__main__' check and then pass arguments (like sys.argv[1:] ) to a main() function. This allows me to use main in a context where sys has not been imported. 
+ #4 The first variant is indeed more efficient than the second when the function is called either zero or one times. With the second and subsequent invocations, however, the "import every call" approach is actually less efficient. See this link for a lazy-loading technique that combines the best of both approaches by doing a "lazy import". 
+
+ But there are reasons other than efficiency why you might prefer one over the other. One approach is makes it much more clear to someone reading the code as to the dependencies that this module has. They also have very different failure characteristics -- the first will fail at load time if there's no "datetime" module while the second won't fail until the method is called. 
+
+ Added Note: In IronPython, imports can be quite a bit more expensive than in CPython because the code is basically being compiled as it's being imported. 
+ #5 Most of the time this would be useful for clarity and sensible to do but it's not always the case. Below are a couple of examples of circumstances where module imports might live elsewhere. 
+
+ Firstly, you could have a module with a unit test of the form: 
+
+ if __name__ == '__main__':
+ import foo
+ aa = foo.xyz()   # initiate something for the test
+ 
+
+ Secondly, you might have a requirement to conditionally import some different module at runtime. 
+
+ if [condition]:
+ import foo as plugin_api
+else:
+ import bar as plugin_api
+xx = plugin_api.Plugin()
+[...]
+ 
+
+ There are probably other situations where you might place imports in other parts in the code. 
+ #6 Curt makes a good point: the second version is clearer and will fail at load time rather than later, and unexpectedly. 
+
+ Normally I don't worry about the efficiency of loading modules, since it's (a) pretty fast, and (b) mostly only happens at startup. 
+
+ If you have to load heavyweight modules at unexpected times, it probably makes more sense to load them dynamically with the __import__ function, and be sure to catch ImportError exceptions, and handle them in a reasonable manner. 
+ #7 Here's an example where all the imports are at the very top (this is the only time I've needed to do this). I want to be able to terminate a subprocess on both Un*x and Windows. 
+
+ import os
+# ...
+try:
+ kill = os.kill # will raise AttributeError on Windows
+ from signal import SIGTERM
+ def terminate(process):
+  kill(process.pid, SIGTERM)
+except (AttributeError, ImportError):
+ try:
+  from win32api import TerminateProcess # use win32api if available
+  def terminate(process):
+   TerminateProcess(int(process._handle), -1)
+ except ImportError:
+  def terminate(process):
+   raise NotImplementedError # define a dummy function
+ 
+
+ (On review: what John Millikin said.) 
+ #8 This is like many other optimizations - you sacrifice some readability for speed. As John mentioned, if you've done your profiling homework and found this to be a significantly useful enough change and you need the extra speed, then go for it. It'd probably be good to put a note up with all the other imports: 
+
+ from foo import bar
+from baz import qux
+# Note: datetime is imported in SomeClass below
+ 
+ #9 I wouldn't worry about the efficiency of loading the module up front too much. The memory taken up by the module won't be very big (assuming it's modular enough) and the startup cost will be negligible. 
+
+ In most cases you want to load the modules at the top of the source file. For somebody reading your code, it makes it much easier to tell what function or object came from what module. 
+
+ One good reason to import a module elsewhere in the code is if it's used in a debugging statement. 
+
+ For example: 
+
+ do_something_with_x(x0
+ 
+
+ I could debug this with: 
+
+ from pprint import pprint
+pprint(x)
+do_something_with_x(x)
+ 
+
+ Of course, the other reason to import modules elsewhere in the code is if you need to dynamically import them. This is because you pretty much don't have any choice. 
+
+ I wouldn't worry about the efficiency of loading the module up front too much. The memory taken up by the module won't be very big (assuming it's modular enough) and the startup cost will be negligible. 
+ #10 Module initialization only occurs once - on the first import. If the module in question is from the standard library, then you will likely import it from other modules in your program as well. For a module as prevalent as datetime, it is also likely a dependency for a slew of other standard libraries. The import statement would cost very little then since the module intialization would have happened already. All it is doing at this point is binding the existing module object to the local scope. 
+
+ Couple that information with the argument for readability and I would say that it is best to have the import statement at module scope.

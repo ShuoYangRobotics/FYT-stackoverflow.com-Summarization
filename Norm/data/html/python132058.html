@@ -1,0 +1,163 @@
+<h3>Question (ID-132058):</h3><h2>Getting stack trace from a running Python application</h2><p>I have this Python application that gets stuck from time to time and I can't find out where.</p>
+
+<p>Is there any way to signal Python interpreter to show you the exact code that he's running (somekind of stacktrace on-the-fly)?</p>
+<br /><h3>Answers (Total-13):</h3><b>#0</b><br /><p>I have module I use for situations like this - where a process will be running for a long time but gets stuck sometimes for unknown and irreproducable reasons.  Its a bit hacky, and only works on unix (requires signals):</p>
+
+<pre><code>import code, traceback, signal
+
+def debug(sig, frame):
+    """Interrupt running process, and provide a python prompt for
+    interactive debugging."""
+    d={'_frame':frame}         # Allow access to frame object.
+    d.update(frame.f_globals)  # Unless shadowed by global
+    d.update(frame.f_locals)
+
+    i = code.InteractiveConsole(d)
+    message  = "Signal recieved : entering python shell.\nTraceback:\n"
+    message += ''.join(traceback.format_stack(frame))
+    i.interact(message)
+
+def listen():
+    signal.signal(signal.SIGUSR1, debug)  # Register handler
+</code></pre>
+
+<p>To use, just call the listen() function at some point when your program starts up (You could even stick it in site.py to have all python programs use it), and let it run.  At any point, send the process a SIGUSR1 signal, using kill, or in python:</p>
+
+<pre><code>    os.kill(pid, signal.SIGUSR1)
+</code></pre>
+
+<p>This will cause the program to break to a python console at the point it is currently at, showing you the stack trace, and letting you manipulate the variables.  Use control-d (EOF) to continue running (though note that you will probably interrupt any I/O etc at the point you signal, so it isn't fully non-intrusive.</p>
+
+<p>I've another script that does the same thing, except it communicates with the running process through a pipe (to allow for debugging backgrounded processes etc).  Its a bit large to post here, but I've added it as a python cookbook recipe <a href="http://code.activestate.com/recipes/576515/" rel="nofollow">here</a></p>
+
+<p>[Edit] added remote debug <a href="http://code.activestate.com/recipes/576515/" rel="nofollow">recipe</a></p>
+<br /><b>#1</b><br /><p>The suggestion to install a signal handler is a good one, and I use it a lot.  For example, <a href="http://bazaar-vcs.org/" rel="nofollow">bzr</a> by default installs a SIGQUIT handler that invokes <code>pdb.set_trace()</code> to immediately drop you into a <a href="http://docs.python.org/lib/module-pdb.html" rel="nofollow">pdb</a> prompt.  (See the <a href="http://bazaar.launchpad.net/~bzr/bzr/trunk/annotate/head:/bzrlib/breakin.py" rel="nofollow">bzrlib.breakin</a> module's source for the exact details.)  With pdb you can not only get the current stack trace but also inspect variables, etc.  </p>
+
+<p>However, sometimes I need to debug a process that I didn't have the foresight to install the signal handler in.  On linux, you can attach gdb to the process and get a python stack trace with some gdb macros.  Put <a href="http://svn.python.org/projects/python/trunk/Misc/gdbinit" rel="nofollow">http://svn.python.org/projects/python/trunk/Misc/gdbinit</a> in <code>~/.gdbinit</code>, then:</p>
+
+<ul>
+<li>Attach gdb: <code>gdb -p</code> <em><code>PID</code></em></li>
+<li>Get the python stack trace: <code>pystack</code></li>
+</ul>
+
+<p>It's not totally reliable unfortunately, but it works most of the time.</p>
+
+<p>Finally, attaching <code>strace</code> can often give you a good idea what a process is doing.</p>
+<br /><b>#2</b><br /><pre><code>&gt;&gt;&gt; import traceback
+&gt;&gt;&gt; def x():
+&gt;&gt;&gt;    print traceback.extract_stack()
+
+&gt;&gt;&gt; x()
+[('&lt;stdin&gt;', 1, '&lt;module&gt;', None), ('&lt;stdin&gt;', 2, 'x', None)]
+</code></pre>
+
+<p>You can also nicely format the stack trace, see the <a href="http://docs.python.org/lib/module-traceback.html" rel="nofollow">docs</a>.</p>
+
+<p><strong>Edit</strong>: To simulate Java's behavior, as suggested by @<a href="#132260" rel="nofollow">Douglas Leeder</a>, add this:</p>
+
+<pre><code>import signal
+import traceback
+
+signal.signal(signal.SIGUSR1, lambda sig, stack: traceback.print_stack(stack))
+</code></pre>
+
+<p>to the startup code in your application. Then you can print the stack by sending <code>SIGUSR1</code> to the running Python process.</p>
+<br /><b>#3</b><br /><p>I am almost always dealing with multiple threads and main thread is generally not doing much, so what is most interesting is to dump all the stacks (which is more like the Java's dump). Here is an implementation based on <a href="http://bzimmer.ziclix.com/2008/12/17/python-thread-dumps/" rel="nofollow">this blog</a>:</p>
+
+<pre><code>def dumpstacks(signal, frame):
+    id2name = dict([(th.ident, th.name) for th in threading.enumerate()])
+    code = []
+    for threadId, stack in sys._current_frames().items():
+        code.append("\n# Thread: %s(%d)" % (id2name[threadId], threadId))
+        for filename, lineno, name, line in traceback.extract_stack(stack):
+            code.append('File: "%s", line %d, in %s' % (filename, lineno, name))
+            if line:
+                code.append("  %s" % (line.strip()))
+    print "\n".join(code)
+
+import signal
+signal.signal(signal.SIGQUIT, dumpstacks)
+</code></pre>
+<br /><b>#4</b><br /><p>The <a href="http://www.python.org/doc/2.5.2/lib/module-traceback.html" rel="nofollow"><strong>traceback</strong></a> module has some nice functions, among them: print_stack:</p>
+
+<pre><code>import traceback
+
+traceback.print_stack()
+</code></pre>
+<br /><b>#5</b><br /><p>What really helped me here is <a href="http://stackoverflow.com/questions/132058/getting-stack-trace-from-a-running-python-application/147114#147114">spiv's tip</a> (which I would vote up and comment on if I had the reputation points) for getting a stack trace out of an <em>unprepared</em> Python process. Except it didn't work until I <a href="http://lists.osafoundation.org/pipermail/chandler-dev/2007-January/007519.html" rel="nofollow">modified the gdbinit script</a>. So:</p>
+
+<ul>
+<li><p>download <a href="http://svn.python.org/projects/python/trunk/Misc/gdbinit" rel="nofollow">http://svn.python.org/projects/python/trunk/Misc/gdbinit</a> and put it in <code>~/.gdbinit</code></p></li>
+<li><p><del>edit it, changing <code>PyEval_EvalFrame</code> to <code>PyEval_EvalFrameEx</code></del> [edit: no longer needed; the linked file already has this change as of 2010-01-14]</p></li>
+<li><p>Attach gdb: <code>gdb -p PID</code></p></li>
+<li><p>Get the python stack trace: <code>pystack</code></p></li>
+</ul>
+<br /><b>#6</b><br /><p><em>python -dv yourscript.py</em></p>
+
+<p>That will make the interpreter to run in debug mode and to give you a trace of what the interpreter is doing.</p>
+
+<p>If you want to interactively debug the code you should run it like this:</p>
+
+<p><em>python -m pdb yourscript.py</em></p>
+
+<p>That tells the python interpreter to run your script with the module "pdb" which is the python debugger, if you run it like that the interpreter will be executed in interactive mode, much like GDB</p>
+<br /><b>#7</b><br /><p>It's worth looking at <a href="http://bashdb.sourceforge.net/pydb/" rel="nofollow">Pydb</a>, "an expanded version of the Python debugger loosely based on the gdb command set". It includes signal managers which can take care of starting the debugger when a specified signal is sent.</p>
+
+<p>A 2006 Summer of Code project looked at adding remote-debugging features to pydb in a module called <a href="http://svn.python.org/projects/sandbox/trunk/pdb/" rel="nofollow">mpdb</a>. </p>
+<br /><b>#8</b><br /><p>I would add this as a comment to <a href="http://stackoverflow.com/questions/132058/getting-stack-trace-from-a-running-python-application/2569696#2569696">haridsv's response</a>, but I lack the reputation to do so:</p>
+
+<p>Some of us are still stuck on a version of Python older than 2.6 (required for Thread.ident), so I got the code working in Python 2.5 (though without the thread name being displayed) as such:</p>
+
+<pre><code>import traceback
+import sys
+def dumpstacks(signal, frame):
+    code = []
+    for threadId, stack in sys._current_frames().items():
+            code.append("\n# Thread: %d" % (threadId))
+        for filename, lineno, name, line in traceback.extract_stack(stack):
+            code.append('File: "%s", line %d, in %s' % (filename, lineno, name))
+            if line:
+                code.append("  %s" % (line.strip()))
+    print "\n".join(code)
+
+import signal
+signal.signal(signal.SIGQUIT, dumpstacks)
+</code></pre>
+<br /><b>#9</b><br /><p>I don't know of anything similar to <a href="http://java.sun.com/developer/onlineTraining/Programming/JDCBook/stack.html" rel="nofollow">java's response to SIGQUIT</a>, so you might have to build it in to your application. Maybe you could make a server in another thread that can get a stacktrace on response to a message of some kind?</p>
+<br /><b>#10</b><br /><p>There is no way to hook into a running python process and get reasonable results.  What I do if processes lock up is hooking strace in and trying to figure out what exactly is happening.</p>
+
+<p>Unfortunately often strace is the observer that "fixes" race conditions so that the output is useless there too.</p>
+<br /><b>#11</b><br /><p>On Solaris, you can use pstack(1) No changes to the python code are necessary. eg.</p>
+
+<pre><code># pstack 16000 | grep : | head
+16000: /usr/bin/python2.6 /usr/lib/pkg.depotd --cfg svc:/application/pkg/serv
+[ /usr/lib/python2.6/vendor-packages/cherrypy/process/wspbus.py:282 (_wait) ]
+[ /usr/lib/python2.6/vendor-packages/cherrypy/process/wspbus.py:295 (wait) ]
+[ /usr/lib/python2.6/vendor-packages/cherrypy/process/wspbus.py:242 (block) ]
+[ /usr/lib/python2.6/vendor-packages/cherrypy/_init_.py:249 (quickstart) ]
+[ /usr/lib/pkg.depotd:890 (&lt;module&gt;) ]
+[ /usr/lib/python2.6/threading.py:256 (wait) ]
+[ /usr/lib/python2.6/Queue.py:177 (get) ]
+[ /usr/lib/python2.6/vendor-packages/pkg/server/depot.py:2142 (run) ]
+[ /usr/lib/python2.6/threading.py:477 (run)
+etc.
+</code></pre>
+<br /><b>#12</b><br /><p>use the inspect module.</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>import inspect
+      help(inspect.stack)
+      Help on function stack in module inspect:</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+
+<p>stack(context=1)
+    Return a list of records for the stack above the caller's frame.</p>
+
+<p>I find it very helpful indeed.</p>
+
+<p>--Anonymous fool.</p>
+<br />

@@ -1,0 +1,245 @@
+<h3>Question (ID-1191374):</h3><h2>subprocess with timeout</h2><p>In Python, I have a program snippet similar to the following that has the effect of running a custom command and returning the stdout data (or raise exception when exit code is non-zero):</p>
+
+<pre><code>proc = subprocess.Popen(
+    cmd,
+    # keep stderr separate; or merge it with stdout (default).
+    stderr=(subprocess.PIPE if ignore_stderr else subprocess.STDOUT),
+    stdout=subprocess.PIPE,
+    shell=True)
+</code></pre>
+
+<p>And then I use <code>communicate</code> (not <code>wait</code> which could deadlock) to wait for the complete stdout data:</p>
+
+<pre><code>stdoutdata, stderrdata = proc.communicate()
+</code></pre>
+
+<p>My question is - how do I set a timeout for any command? For example, I don't want the program to wait indefinitely because a particular programs takes more than, say, 5 minutes to run.</p>
+
+<p>Simpler, unsophisticated solutions would be nice.</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>If you're on Unix,</p>
+
+<pre><code>import signal
+  ...
+class Alarm(Exception):
+    pass
+
+def alarm_handler(signum, frame):
+    raise Alarm
+
+signal.signal(signal.SIGALRM, alarm_handler)
+signal.alarm(5*60)  # 5 minutes
+try:
+    stdoutdata, stderrdata = proc.communicate()
+    signal.alarm(0)  # reset the alarm
+except Alarm:
+    print "Oops, taking too long!"
+    # whatever else
+</code></pre>
+<br /><b>#1</b><br /><p>Here is Alex Martelli's solution as a module with proper process killing. The other approaches do not work because they do not use proc.communicate(). So if you have a process that produces lots of output, it will fill its output buffer and then block until you read something from it.</p>
+
+<pre><code>from os import kill
+from signal import alarm, signal, SIGALRM, SIGKILL
+from subprocess import PIPE, Popen
+
+def run(args, cwd = None, shell = False, kill_tree = True, timeout = -1, env = None):
+    '''
+    Run a command with a timeout after which it will be forcibly
+    killed.
+    '''
+    class Alarm(Exception):
+        pass
+    def alarm_handler(signum, frame):
+        raise Alarm
+    p = Popen(args, shell = shell, cwd = cwd, stdout = PIPE, stderr = PIPE, env = env)
+    if timeout != -1:
+        signal(SIGALRM, alarm_handler)
+        alarm(timeout)
+    try:
+        stdout, stderr = p.communicate()
+        if timeout != -1:
+            alarm(0)
+    except Alarm:
+        pids = [p.pid]
+        if kill_tree:
+            pids.extend(get_process_children(p.pid))
+        for pid in pids:
+            # process might have died before getting to this line
+            # so wrap to avoid OSError: no such process
+            try: 
+                kill(pid, SIGKILL)
+            except OSError:
+                pass
+        return -9, '', ''
+    return p.returncode, stdout, stderr
+
+def get_process_children(pid):
+    p = Popen('ps --no-headers -o pid --ppid %d' % pid, shell = True,
+              stdout = PIPE, stderr = PIPE)
+    stdout, stderr = p.communicate()
+    return [int(p) for p in stdout.split()]
+
+if __name__ == '__main__':
+    print run('find /', shell = True, timeout = 3)
+    print run('find', shell = True)
+</code></pre>
+<br /><b>#2</b><br /><p>I don't know much about the low level details; but, given that in
+python 2.6 the API offers the ability to wait for threads and
+terminate processes, what about running the process in a separate
+thread?</p>
+
+<pre><code>import subprocess, threading
+
+class Command(object):
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.process = None
+
+    def run(self, timeout):
+        def target():
+            print 'Thread started'
+            self.process = subprocess.Popen(self.cmd, shell=True)
+            self.process.communicate()
+            print 'Thread finished'
+
+        thread = threading.Thread(target=target)
+        thread.start()
+
+        thread.join(timeout)
+        if thread.is_alive():
+            print 'Terminating process'
+            self.process.terminate()
+            thread.join()
+        print self.process.returncode
+
+command = Command("echo 'Process started'; sleep 2; echo 'Process finished'")
+command.run(timeout=3)
+command.run(timeout=1)
+</code></pre>
+
+<p>The output of this snippet in my machine is:</p>
+
+<pre><code>Thread started
+Process started
+Process finished
+Thread finished
+0
+Thread started
+Process started
+Terminating process
+Thread finished
+-15
+</code></pre>
+
+<p>where it can be seen that, in the first execution, the process
+finished correctly (return code 0), while the in the second one the
+process was terminated (return code -15).</p>
+
+<p>I haven't tested in windows; but, aside from updating the example
+command, I think it should work since I haven't found in the
+documentation anything that says that thread.join or process.terminate
+is not supported.</p>
+<br /><b>#3</b><br /><p>This is the best I could come up with (extracted from my private program):</p>
+
+<pre><code>        # poll for terminated status till timeout is reached
+        t_beginning = time.time()
+        seconds_passed = 0
+        while True:
+            if p.poll() is not None:
+                break
+            seconds_passed = time.time() - t_beginning
+            if timeout and seconds_passed &gt; timeout:
+                p.terminate()
+                raise TimeoutError(cmd, timeout)
+            time.sleep(0.1)
+</code></pre>
+
+<p>(inspired by some other SO comment elsewhere)</p>
+<br /><b>#4</b><br /><p>Another option is to write to a temporary file to prevent the stdout blocking instead of needing to poll with communicate(). This worked for me where the other answers did not; for example on windows.</p>
+
+<pre><code>    outFile =  tempfile.SpooledTemporaryFile() 
+    errFile =   tempfile.SpooledTemporaryFile() 
+    proc = subprocess.Popen(args, stderr=errFile, stdout=outFile, universal_newlines=False)
+    wait_remaining_sec = timeout
+
+    while proc.poll() is None and wait_remaining_sec &gt; 0:
+        time.sleep(1)
+        wait_remaining_sec -= 1
+
+    if wait_remaining_sec &lt;= 0:
+        killProc(proc.pid)
+        raise ProcessIncompleteError(proc, timeout)
+
+    # read temp streams from start
+    outFile.seek(0);
+    errFile.seek(0);
+    out = outFile.read()
+    err = errFile.read()
+    outFile.close()
+    errFile.close()
+</code></pre>
+<br /><b>#5</b><br /><p>I've used <a href="http://benjamin.smedbergs.us/blog/2006-12-11/killableprocesspy/" rel="nofollow">killableprocess</a> successfully on Windows, Linux and Mac. If you are using Cygwin Python, you'll need <a href="http://svn.osafoundation.org/chandler/trunk/chandler/tools/killableprocess.py" rel="nofollow">OSAF's version of killableprocess</a> because otherwise native Windows processes won't get killed.</p>
+<br /><b>#6</b><br /><p>I've implemented what I could gather from a few of these. This works in Windows, and since this is a community wiki, I figure I would share my code as well:</p>
+
+<pre><code>class Command(threading.Thread):
+    def __init__(self, cmd, outFile, errFile, timeout):
+        threading.Thread.__init__(self)
+        self.cmd = cmd
+        self.process = None
+        self.outFile = outFile
+        self.errFile = errFile
+        self.timed_out = False
+        self.timeout = timeout
+
+    def run(self):
+        self.process = subprocess.Popen(self.cmd, stdout = self.outFile, \
+            stderr = self.errFile)
+
+        while (self.process.poll() is None and self.timeout &gt; 0):
+            time.sleep(1)
+            self.timeout -= 1
+
+        if not self.timeout &gt; 0:
+            self.process.terminate()
+            self.timed_out = True
+        else:
+            self.timed_out = False
+</code></pre>
+
+<p>Then from another class or file:</p>
+
+<pre><code>        outFile =  tempfile.SpooledTemporaryFile()
+        errFile =   tempfile.SpooledTemporaryFile()
+
+        executor = command.Command(c, outFile, errFile, timeout)
+        executor.daemon = True
+        executor.start()
+
+        executor.join()
+        if executor.timed_out:
+            out = 'timed out'
+        else:
+            outFile.seek(0)
+            errFile.seek(0)
+            out = outFile.read()
+            err = errFile.read()
+
+        outFile.close()
+        errFile.close()
+</code></pre>
+<br /><b>#7</b><br /><p>Although I haven't looked at it extensively, this <a href="http://code.activestate.com/recipes/307871-timing-out-function/" rel="nofollow">decorator</a> I found at ActiveState seems to be quite useful for this sort of thing. Along with <code>subprocess.Popen(..., close_fds=True)</code>, at least I'm ready for shell-scripting in Python.</p>
+<br /><b>#8</b><br /><p>I added the solution with threading from jcollado to my project.</p>
+
+<p>Install:</p>
+
+<pre><code>easy_install easyprocess
+</code></pre>
+
+<p>Example:</p>
+
+<pre><code>from easyprocess import Proc
+
+# shell is not supported!
+stdout=Proc('ping localhost').call(timeout=1.5).stdout
+print stdout
+</code></pre>
+<br />

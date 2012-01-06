@@ -1,0 +1,265 @@
+Question (ID-845058): How to get line count cheaply in Python? I need to get a line count of a large file (hundreds of thousands of lines) in python. What is the most efficient way both memory- and time-wise? 
+
+ At the moment I do: 
+
+ def file_len(fname):
+ with open(fname) as f:
+  for i, l in enumerate(f):
+   pass
+ return i + 1
+ 
+
+ is it possible to do any better? 
+ Answers (Total-15): #0 I believe that a memory mapped file will be the fastest solution. I tried four functions: the function posted by the OP ( opcount ); a simple iteration over the lines in the file ( simplecount ); readline with a memory-mapped filed (mmap) ( mapcount ); and the buffer read solution offered by Mykola Kharechko ( bufcount ). 
+
+ I ran each function five times, and calculated the average run-time for a 1.2 million-line text file. 
+
+ Windows XP, Python 2.5, 2GB RAM, 2 GHz AMD processor 
+
+ Here are my results: 
+
+ mapcount : 0.465599966049
+simplecount : 0.756399965286
+bufcount : 0.546800041199
+opcount : 0.718600034714
+ 
+
+ Edit : numbers for Python 2.6: 
+
+ mapcount : 0.471799945831
+simplecount : 0.634400033951
+bufcount : 0.468800067902
+opcount : 0.602999973297
+ 
+
+ So the buffer read strategy seems to be the fastest for Windows/Python 2.6 
+
+ Here is the code: 
+
+ from __future__ import with_statement
+import time
+import mmap
+import random
+from collections import defaultdict
+
+def mapcount(filename):
+ f = open(filename, "r+")
+ buf = mmap.mmap(f.fileno(), 0)
+ lines = 0
+ readline = buf.readline
+ while readline():
+  lines += 1
+ return lines
+
+def simplecount(filename):
+ lines = 0
+ for line in open(filename):
+  lines += 1
+ return lines
+
+def bufcount(filename):
+ f = open(filename)     
+ lines = 0
+ buf_size = 1024 * 1024
+ read_f = f.read # loop optimization
+
+ buf = read_f(buf_size)
+ while buf:
+  lines += buf.count('\n')
+  buf = read_f(buf_size)
+
+ return lines
+
+def opcount(fname):
+ with open(fname) as f:
+  for i, l in enumerate(f):
+   pass
+ return i + 1
+
+
+counts = defaultdict(list)
+
+for i in range(5):
+ for func in [mapcount, simplecount, bufcount, opcount]:
+  start_time = time.time()
+  assert func("big_file.txt") == 1209138
+  counts[func].append(time.time() - start_time)
+
+for key, vals in counts.items():
+ print key.__name__, ":", sum(vals) / float(len(vals))
+ 
+ #1 You can't get any better than that. 
+
+ After all, any solution will have to read the entire file, figure out how many \n you have, and return that result. 
+
+ Do you have a better way of doing that without reading the entire file? Not sure... The best solution will always be I/O-bound, best you can do is make sure you don't use unnecessary memory, but it looks like you have that covered. 
+ #2 You could execute a subprocess and run wc -l filename 
+
+ import subprocess
+
+def file_len(fname):
+ p = subprocess.Popen(['wc', '-l', fname], stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE)
+ result, err = p.communicate()
+ if p.returncode != 0:
+  raise IOError(err)
+ return int(result.strip().split()[0])
+ 
+ #3 One line, probably pretty fast: 
+
+ num_lines = sum(1 for line in open('myfile.txt'))
+ 
+ #4 def file_len(full_path):
+ """ Count number of lines in a file."""
+ f = open(full_path)
+ nr_of_lines = sum(1 for line in f)
+ f.close()
+ return nr_of_lines
+ 
+ #5 As for me this variant will be the fastest: 
+
+ #!/usr/bin/env python
+
+def main():
+ f = open('filename')     
+ lines = 0
+ buf_size = 1024 * 1024
+ read_f = f.read # loop optimization
+
+ buf = read_f(buf_size)
+ while buf:
+  lines += buf.count('\n')
+  buf = read_f(buf_size)
+
+ print lines
+
+if __name__ == '__main__':
+ main()
+ 
+
+ reasons: buffering faster than reading line by line and string.count is also very fast 
+ #6 What about this 
+
+ def file_len(fname):
+ counts = itertools.count()
+ with open(fname) as f: 
+ for _ in f: counts.next()
+ return counts.next()
+ 
+ #7 Just to complete the above methods I tried a variant with the fileinput module: 
+
+ import fileinput as fi 
+def filecount(fname):
+  for line in fi.input(fname):
+   pass
+  return fi.lineno()
+ 
+
+ And passed a 60mil lines file to all the above stated methods: 
+
+ mapcount : 6.1331050396
+simplecount : 4.588793993
+opcount : 4.42918205261
+filecount : 43.2780818939
+bufcount : 0.170812129974
+ 
+
+ It's a little surprise to me that fileinput is that bad and scales far worse than all the other methods... 
+ #8 Why not read the first 100 and the last 100 lines and estimate the average line length, then divide the total file size through that numbers? If you don't need a exact value this could work. 
+ #9 what about this? 
+
+ &gt;&gt;&gt; import sys
+&gt;&gt;&gt; sys.stdin=open('fname','r')
+&gt;&gt;&gt; data=sys.stdin.readlines()
+&gt;&gt;&gt; print "counted",len(data),"lines"
+ 
+ #10 Why wouldn't the following work? 
+
+ import sys
+
+# input comes from STDIN
+file = sys.stdin
+data = file.readlines()
+
+# get total number of lines in file
+lines = len(data)
+
+print lines
+ 
+
+ In this case, the len function uses the input lines as a means of determining the length. 
+ #11 count = max(enumerate(open(filename)))[0] 
+ #12 How about this? 
+
+ import fileinput
+import sys
+
+counter=0
+for line in fileinput.input([sys.argv[1]]):
+ counter+=1
+
+fileinput.close()
+print counter
+ 
+ #13 Here is a python function to use mpi (pypar) to distribute the line counting across machines/cores. My test improves counting a 20mil line file from 26 seconds to 7 seconds using an 8 core windows 64 server. 
+
+ import pypar, os, logging, sys
+
+def getFileLineCount( file1 ):
+ m1 = open(file1, "r")
+
+ #work out file size
+ #divide up to farm out line counting
+
+ fSize = os.stat(file1).st_size 
+ chunk = (fSize / pypar.size()) + 1
+
+ lines = 0
+
+ #first get max width of each field and the names
+ seekStart = chunk * (pypar.rank())
+ seekEnd = chunk * (pypar.rank()+1)
+ if seekEnd &gt; fSize:
+  seekEnd = fSize
+
+ #find where to start
+ if pypar.rank() &gt; 0:
+  m1.seek( seekStart )
+  #read next line
+  l1 = m1.readline()
+  seekStart = m1.tell()
+
+ #tell previous rank my seek start to make their seek end
+ if pypar.rank() &gt; 0:
+  pypar.send( seekStart, pypar.rank()-1 )
+ if pypar.rank() &lt; pypar.size()-1:
+  seekEnd = pypar.receive( pypar.rank()+1 )
+
+ m1.seek( seekStart ) 
+ l1 = m1.readline()
+ while len(l1) &gt; 0:
+  lines += 1
+  l1 = m1.readline()
+  if m1.tell() &gt; seekEnd or len(l1) == 0:
+   break
+
+ if pypar.rank() == 0:
+  for p in range(1,pypar.size()):
+   lines += pypar.receive( p )
+
+  for p in range(1,pypar.size()):
+   pypar.send( lines, p )
+ else:
+  pypar.send( lines,0 )
+  lines = pypar.receive(0)
+
+ m1.close()
+ return lines
+ 
+ #14 the result of opening a file is an iterator, which can be converted to a sequence, which has a length: 
+
+ with open(filename) as f:
+ return len(list(f))
+ 
+
+ this is more concise than your explicit loop, and avoids the enumerate .

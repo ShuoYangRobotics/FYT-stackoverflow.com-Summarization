@@ -1,0 +1,129 @@
+Question (ID-622982): Django Passing Custom Form Parameters to Formset I have a Django Form that looks like this: 
+
+ class ServiceForm(forms.Form):
+ option = forms.ModelChoiceField(queryset=ServiceOption.objects.none())
+ rate = forms.DecimalField(widget=custom_widgets.SmallField())
+ units = forms.IntegerField(min_value=1, widget=custom_widgets.SmallField())
+
+ def __init__(self, *args, **kwargs):
+  affiliate = kwargs.pop('affiliate')
+  super(ServiceForm, self).__init__(*args, **kwargs)
+  self.fields["option"].queryset = ServiceOption.objects.filter(affiliate=affiliate)
+ 
+
+ I call this form with something like this: 
+
+ form = ServiceForm(affiliate=request.affiliate)
+ 
+
+ Where request.affiliate is the logged in user. This works as intended. 
+
+ My problem is that I now want to turn this single form into a formset. What I can't figure out is how I can pass the affiliate information to the individual forms when creating the formset. According to the docs to make a formset out of this I need to do something like this: 
+
+ ServiceFormSet = forms.formsets.formset_factory(ServiceForm, extra=3)
+ 
+
+ And then I need to create it like this: 
+
+ formset = ServiceFormSet()
+ 
+
+ Now how can I pass affiliate=request.affiliate to the individual forms this way? 
+ Answers (Total-6): #0 I would use the curry function from django.utils.functional : 
+
+ from django.utils.functional import curry
+
+formset = formset_factory(curry(ServiceForm, affiliate=request.affiliate), extra=3)
+ 
+
+ I think this is the cleanest approach, and doesn't affect ServiceForm in any way (i.e. by making it difficult to subclass). You'll get some strange naming (i.e. the formset will be called '_curriedFormSet' instead of 'ServiceFormFormSet'; if that bothers you, you can try this slightly longer version: 
+
+ from django.utils.functional import curry, wraps
+
+formset = formset_factory(wraps(ServiceForm)(curry(ServiceForm, affiliate=request.affiliate)), extra=3)
+ 
+
+ EDIT : The above doesn't actually work, for somewhat obscure reasons (explained below). The following workaround does work: 
+
+ formset = formset_factory(ServiceForm, extra=3)
+formset.form = staticmethod(curry(ServiceForm, affiliate=request.affiliate))
+ 
+
+ Requires two lines of code instead of one, but still arguably cleaner than the other available options. 
+
+ Why doesn't the simple version work? The form passed into formset_factory is set as the "form" class attribute on the newly-created formset class, and is later called ("self.form()") to create instances of the form. But the return value of curry() is a function, and when a function object is assigned as a class attribute and then called, Python magically adds "self" as the first parameter of the call; so each form instance is incorrectly passed the formset object as its first parameter. But the form class is expecting a data dictionary as its first parameter, and when it tried to access the formset object as a dictionary, you get the confusing error "ServiceFormFormSet has no attribute 'get'". 
+ #1 I would build the form class dynamically in a function, so that it has access to the affiliate via closure: 
+
+ def make_service_form(affiliate):
+ class ServiceForm(forms.Form):
+  option = forms.ModelChoiceField(
+    queryset=ServiceOption.objects.filter(affiliate=affiliate))
+  rate = forms.DecimalField(widget=custom_widgets.SmallField())
+  units = forms.IntegerField(min_value=1, 
+    widget=custom_widgets.SmallField())
+ return ServiceForm
+ 
+
+ As a bonus, you don't have to rewrite the queryset in the option field. The downside is that subclassing is a little funky. (Any subclass has to be made in a similar way.) 
+
+ edit: 
+
+ In response to a comment, you can call this function about any place you would use the class name: 
+
+ def view(request):
+ affiliate = get_object_or_404(id=request.GET.get('id'))
+ formset_cls = formset_factory(make_service_form(affiliate))
+ formset = formset_cls(request.POST)
+ ...
+ 
+ #2 I like the closure solution for being "cleaner" and more Pythonic (so +1 to mmarshall answer) but Django forms also have a callback mechanism you can use for filtering querysets in formsets. 
+
+ It's also not documented, which I think is an indicator the Django devs might not like it as much. 
+
+ So you basically create your formset the same but add the callback: 
+
+ ServiceFormSet = forms.formsets.formset_factory(
+ ServiceForm, extra=3, formfield_callback=Callback('option', affiliate).cb)
+ 
+
+ This is creating an instance of a class that looks like this: 
+
+ class Callback(object):
+ def __init__(self, field_name, aff):
+  self._field_name = field_name
+  self._aff = aff
+ def cb(self, field, **kwargs):
+  nf = field.formfield(**kwargs)
+  if field.name == self._field_name: # this is 'options' field
+   nf.queryset = ServiceOption.objects.filter(affiliate=self._aff)
+  return nf
+ 
+
+ This should give you the general idea. It's a little more complex making the callback an object method like this, but gives you a little more flexibility as opposed to doing a simple function callback. 
+ #3 I wanted to place this as a comment to Carl Meyers answer, but since that requires points I just placed it here. This took me 2 hours to figure out so I hope it will help someone. 
+
+ A note about using the inlineformset_factory. 
+
+ I used that solution my self and it worked perfect, until I tried it with the inlineformset_factory. I was running Django 1.0.2 and got some strange KeyError exception. I upgraded to latest trunk and it worked direct. 
+
+ I can now use it similar to this: 
+
+ BookFormSet = inlineformset_factory(Author, Book, form=BookForm)
+BookFormSet.form = staticmethod(curry(BookForm, user=request.user))
+ 
+ #4 I spent some time trying to figure out this problem before I saw this posting. 
+
+ The solution I came up with was the closure solution (and it is a solution I've used before with Django model forms). 
+
+ I tried the curry() method as described above, but I just couldn't get it to work with Django 1.0 so in the end I reverted to the closure method. 
+
+ The closure method is very neat and the only slight oddness is that the class definition is nested inside the view or another function. I think the fact that this looks odd to me is a hangup from my previous programming experience and I think someone with a background in more dynamic languages wouldn't bat an eyelid! 
+ #5 I had to do a similar thing. This is similar to the curry solution: 
+
+ def form_with_my_variable(myvar):
+ class MyForm(ServiceForm):
+  def __init__(self, myvar=myvar, *args, **kwargs):
+  super(SeriveForm, self).__init__(myvar=myvar, *args, **kwargs)
+ return MyForm
+
+factory = inlineformset_factory(..., form=form_with_my_variable(myvar), ... )

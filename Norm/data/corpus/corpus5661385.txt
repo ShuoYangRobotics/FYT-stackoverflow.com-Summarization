@@ -1,0 +1,124 @@
+Question (ID-5661385): Packaging and shipping a python library and scripts, the professional way I have the task of packaging and shipping a commercial application bundle, which will include: 
+
+ 
+ a python library (developed by us) 
+ some python programs depending on the library above 
+ additional libraries not developed by us, but which are dependencies of our library. 
+ a complete python installation (python 2.6) 
+ additional stuff, libs and programs in other languages. Not a concern here, as they are not hooked into the above machinery, and the current shipping process works already. 
+ 
+
+ The bundle is shipped to Linux, OSX and Windows. On Linux, it's distributed as a simple tar.gz. The user just unpacks the tar.gz and source a provided bash script in .bashrc , so that the environment is correctly set. On mac, it's a dmg. On windows, I have no idea. The windows guy is not here today, but what I see is that an exe is created somehow. 
+
+ I will now explain in more detail the above points. 
+
+ Our Python Library 
+
+ We don't want to give out sources, so we want to provide only compiled python files. A better strategy to make them even more tamper-proof is welcome, even if it involves some deep hacking (e.g. I once saw magic done importing stuff from a .zip which was "corrupted" ad-hoc). The library at the moment does not have C level code or similar platform dependent code, but this is going to change soon. We will therefore have to provide platform-specific compiled .so together with the pyc. 
+
+ Clearly, this library will be shipped in the package, together with the rest of our application. It will therefore be installed on the downloaded bundle. For this reason, it must be fully relocatable, and the user must in some way (either manually or via our env script) add the location of the untarred package to PYTHONPATH, so that the interpreter can find it. 
+
+ Our Python Programs 
+
+ We will ship applications in our bundle, and these applications will depend on our library. The code of these applications must be either visible by the user (so that he can learn how to use the library interface), or not visible (for those utilities we want to keep closed-source), so a double approach is called for. 
+
+ Additional Libraries 
+
+ Our library depends on 3rd party libraries we will have to ship, so that the user is up and running without any dependency hunting. Clearly, these libraries will be installed by us in the bundle, but we must hope these don't store the install path somewhere during the build, because that would make them non relocatable. 
+
+ Our python 
+
+ We will ship our version of python, which we assume the user will run in order to access our script. This is because we want to be sure of the python version running. Also, we may tinker a bit the executable or the standard library. We may have a concern about the interaction of this python with the standard python, and if the user wants a specific library on our python it will have to install it within our bundled package, and not on the standard place for libraries. 
+
+ Request 
+
+ I need to make my mind around this task. I've seen it done, but never done it personally, so I need your point of view. What I presented above is how I think things should work, according to how things are working right now, but it may be wrong. Any hint, quirk, suggestion, or strategy for a successful deployment is welcome. Given the complexity of the question, I already announce a high bounty on it, according to the best answer I can get. 
+ Answers (Total-8): #0 This is not a complete answer but just a bunch of ideas. I wrote an installer for a client that incorporated some ideas that might be useful to you. 
+
+ It was Linux only so I focussed on just that. We needed to ship specific custom versions of mySQL, lighttpd, python, memcached, a few 3rd party Python modules and some custom scripts. We needed to launch all these services without any problems and let the user control them using regular initscripts. It should work fine on a bunch of popular distros and therefore shouldn't rely on distro specific stuff. 
+
+ What I did was as follows. 
+
+ 
+ Created a 500MB (I'm don't recollect the size) file and formatted it as an ext3fs file system. 
+ Mounted it at a point using a loopback device. 
+ Ran deb-bootstrap on the mountpoint to create a custom Debian install. 
+ Chrooted inside the partition and then ran a bunch of scripts which did an apt-get install on all our dependencies, installed all the eggs and other packages which were necessary for the app, installed the app itself in /opt (inside the chroot), installed supervisord (to do process management) and set things up. Now, this partition was a completely self contained Linux filesystem that contained the application and everything needed to run it. You could dump it anywhere, chroot inside it and launch the app. The only dependency it had with the outside world were the ports it would use for its services and the supervisord control socket. This was the main point. We were able to include exactly what we needed (compiled files, .pycs only etc.) for a few of the applications and didn't have to bother with any limitations in standard installation tools. 
+ After this, we packaged a few extra scripts that would go into the external operating system. These were custom made for each distro that we would have to support. This part was distro specific. There were scripts that would go into /etc/init.d and some scripts that would setup the database and stuff at the beginning. 
+ We then created an archive of the entire filesystem using makeself. It would checksum stuff and all that and provide a self extracting archive which if run would untar the whole thing into /opt on the host machine, chroot inside the directory and run a setup script that would ask the user a few questions like db username/password etc. and set things up. After that, it would fetch the scripts I mentioned in step 5 and put them on the host OS. 
+ 
+
+ The initscripts would simply chroot into the partition and start supervisord. It would then take care of launching all the services we cared about. Shutting down the application was simply a matter of connecting to running supervisord and running a command. We wrapped this in the initscript so that the user experience was UNIX like. 
+
+ Now, we'd give clients the self extracting . run file. They'd run it, get asked a few questions and it would create a directory under /opt which contained our app and all it's dependencies. The init scripts would be modified to start our app on bootup and things would work as expected. 
+
+ I think step 4 gives you the freedom to install whatever you want, however you want so that things would work fine. 
+ #1 You could use Makeself which is just like a tar.gz, but produces a .sh which self-extracts and allows for execution of a custom install script (don't ask me about Windows). This avoids bundling an installed Python which almost certainly won't work - you can include an installer instead. 
+
+ Your code and the dependencies developed by you should be included as packages created by sdist, which can be installed by PIP and easyinstall into a virtualenv based on your python. In your Manifest.in you can easily include only pyc files and everything else that is necessary and exclude py files so nobody sees your sources. Dependencies will be installed automatically by downloading them, but you can avoid that by including them in your archive, like your dependencies. Just put them into a directory and add "-f file:path_to_your_directory" to you PIP call. 
+ #2 I don't quite understand how your users end up using the program, so apologies if this isn't useful. 
+
+ Have you looked at py2exe and py2app ? They'll let you create a much more obfuscated executable on Windows and OS X that might be even easier. Fewer dependencies and things to go wrong. 
+
+ We deployed an internal, company wide app with py2exe, and it was trivial. Regardless of what other pythons the user had or didn't have our script was an easy wizard installer, and worked reliably. It included a number of Python and C libraries we had to bundle up, along with a python interpreter. However we weren't trying to hide the contents, just make it easy. 
+ #3 I am having the same issue, however most information i could find was only about python packages. I do not have a complete solution yet but, I have a few suggestions. 
+
+ 
+ Keep potential dependencies for the python interpreter in mind, eg. on Linux python depends on the glibc. Try either to compile it statically or use a very common glibc version. You might want to have a look at Activestate’s python distribution ; the issue is they want a LOT of money for it. 
+ Consider using a package format like DEB or RPM instead of tar.gz for linux. This would allow you to resolve dependencies, if there are any and would make an update process easier. 
+ Even as you, want to distribute you application as a tar.gz I would recommend building a package for this application. Not necessarily for the user, but for you when you are building the environment, which should run on a customer site. It would allow to test and build and update the environment more easily. 
+ 
+ #4 This will vary depending on your target market. In specialized niche industries there is more variety in how stuff is distributed. In heavily commoditized areas I would expect native OS package (at least if I were a customer). I tend to take the quality of the deployment package as indicative of the quality of the software in general. I associate native OS packages as higher quality than other formats largely because the dependency information can be complete. This makes it easier to do some compliance testing and change management. 
+
+ Native OS Packages 
+
+ 
+ For Unices consider creating native OS packages. They provide better integration and visibility with processes like compliance, change management, dependency management, etc. 
+ For OSX others have already suggested py2app. You may also be able to leverage MacPorts package format or the Fink package format. 
+ For Windows others have already suggested py2exe. 
+ 
+
+ Relocation and Config Requirements 
+
+ 
+ Put your Python executable under .../libexec . This prevents it from accidentally being called. 
+ Change the name of the Python executable to prevent confusion. ie. /usr/local/libexec/&lt;pkg&gt;_python 
+ Distribute the .py for the bins to make them easily relocatable. You can change the Magic Cookie at install time to whatever the location your Python was installed in via an install script. The only code you need in the bin is a line that calls into your lib which is a pyc. 
+ Install your libs in the correct location under /usr/local/lib/app_python/site_package/... and you won't need to use PYTHONPATH . 
+ 
+
+ Shared Libraries 
+
+ 
+ If I remember correctly you'll want to make sure you strip any rpath entries from the libs as this can mess with their ability to be relocated. 
+ The native OS packaging should help with any dependencies the shared libs require. 
+ 
+ #5 The proper way to do this (w/o shipping own Python) is to create Python Eggs , which then can be installed by Python package manager like easy_install or pip . The setup and install is performed by setup.py , which is just a Python script, so you can include all kinds of non-standard setup procedures if needed. 
+
+ When using pip , it's easy to install eggs in virtualenv , which would make it isolated from user's Python installation (apart of the interpreter binary itself). 
+ #6 For windows I am doing this: 
+
+ 
+ Use cx_freeze like this: 
+
+ c:\Python27\Scripts\cxfreeze.bat source.py --target-dir=Bin 
+--base-name=Win32GUI --icon=icon.ico --target-name=Executable.exe
+ 
+
+ This creates directory with runnable program. 
+You can use another packing application such as PyInstaller (Windows, Linux), Py2Exe (Windows), or Py2App (Mac), but I got the best results with Cx_freeze (probably all platforms you mentioned). It has also very good support and is still actively maintained. 
+ Pack everything using Inno Setup (Windows). 
+You can use any method to create installer you like. I am not familiar with other platforms. 
+ Test it in VMware virtual machine on clean OS installation just to be sure. 
+ 
+
+ Actually, it is very easy to do, I am not sure what to add. 
+
+ 
+
+ Edit: You can also use Portable Python for your bundled environment on Windows. 
+ #7 As far as I can see Python is distributed via a msi file. It seems natural to me that you create a msi installer as well. To create msi files you can use e.g. the Windows Installer Extensions toolkit. If you create your own msi and include the other msi into yours then you will get into trouble to install the pyhthon package during your own msi installation routine since Windows does only allow one installation at a time. 
+The easiest way would be to repackage the python msi into your own msi and distribute this one. You can decompile a msi into a xml file which can be used to create a new msi with dark which is part of the Windows Installer Extensions toolkit. 
+
+ If you did manage it to deploy the your whole suite via a tar file it should be possible to use a zip file on Windows as well if the pyhthon and your other stuff is xcopy deployable. When you must do some actions like setting registry keys, environment variables, creating shortcuts you should use msi since it was designed for this task. But be warned: Msi is a difficult topic. If you need to get something quick you should check how far you can get with a zip file and some scripts. 
+A msi based installation will make servicing and patching much easier but to appreciate these advanced features you will need to invest some weeks to learn it.

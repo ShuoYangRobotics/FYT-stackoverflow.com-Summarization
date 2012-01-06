@@ -1,0 +1,175 @@
+<h3>Question (ID-1531501):</h3><h2>JSON serialization of Google App Engine models</h2><p>I've been search for quite a while with no success. My project isn't using Django, is there a simple way to serialize App Engine models (google.appengine.ext.db.Model) into JSON or do I need to write my own serializer?  My model class is fairly simple. For instance:</p>
+
+<pre><code>class Photo(db.Model):
+    filename = db.StringProperty()
+    title = db.StringProperty()
+    description = db.StringProperty(multiline=True)
+    date_taken = db.DateTimeProperty()
+    date_uploaded = db.DateTimeProperty(auto_now_add=True)
+    album = db.ReferenceProperty(Album, collection_name='photo')
+</code></pre>
+
+<p>Thanks in advance.</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>A simple recursive function can be used to convert an entity (and any referents) to a nested dictionary that can be passed to <code>simplejson</code>:</p>
+
+<pre><code>import datetime
+import time
+
+SIMPLE_TYPES = (int, long, float, bool, dict, basestring, list)
+
+def to_dict(model):
+    output = {}
+
+    for key, prop in model.properties().iteritems():
+        value = getattr(model, key)
+
+        if value is None or isinstance(value, SIMPLE_TYPES):
+            output[key] = value
+        elif isinstance(value, datetime.date):
+            # Convert date/datetime to ms-since-epoch ("new Date()").
+            ms = time.mktime(value.utctimetuple()) * 1000
+            ms += getattr(value, 'microseconds', 0) / 1000
+            output[key] = int(ms)
+        elif isinstance(value, db.GeoPt):
+            output[key] = {'lat': value.lat, 'lon': value.lon}
+        elif isinstance(value, db.Model):
+            output[key] = to_dict(value)
+        else:
+            raise ValueError('cannot encode ' + repr(prop))
+
+    return output
+</code></pre>
+<br /><b>#1</b><br /><p>This is the simplest solution I found. It requires only 3 lines of codes.</p>
+
+<p>Simply add a method to your model to return a dictionary:</p>
+
+<pre><code>class DictModel(db.Model):
+    def to_dict(self):
+       return dict([(p, unicode(getattr(self, p))) for p in self.properties()])
+</code></pre>
+
+<p>SimpleJSON now works properly:</p>
+
+<pre><code>class Photo(DictModel):
+   filename = db.StringProperty()
+   title = db.StringProperty()
+   description = db.StringProperty(multiline=True)
+   date_taken = db.DateTimeProperty()
+   date_uploaded = db.DateTimeProperty(auto_now_add=True)
+   album = db.ReferenceProperty(Album, collection_name='photo')
+
+from django.utils import simplejson
+from google.appengine.ext import webapp
+
+class PhotoHandler(webapp.RequestHandler):
+   def get(self):
+      photos = Photo.all()
+      self.response.out.write(simplejson.dumps([p.to_dict() for p in photos]))
+</code></pre>
+<br /><b>#2</b><br /><p>Even if you are not using django as a framework, those libraries are still available for you to use.  </p>
+
+<pre><code>from django.core import serializers
+data = serializers.serialize("xml", Photo.objects.all())
+</code></pre>
+<br /><b>#3</b><br /><p>For simple cases, I like the approach advocated <a href="http://skonieczny.pl/blog/it-should-just-work/post/2009/04/30/json-serialization-of-google-app-engine-models/" rel="nofollow">here</a> at the end of the article:</p>
+
+<pre><code>  # after obtaining a list of entities in some way, e.g.:
+  user = users.get_current_user().email().lower();
+  col = models.Entity.gql('WHERE user=:1',user).fetch(300, 0)
+
+  # ...you can make a json serialization of name/key pairs as follows:
+  json = simplejson.dumps(col, default=lambda o: {o.name :str(o.key())})
+</code></pre>
+
+<p>The article also contains, at the other end of the spectrum, a complex serializer class that enriches django's (and does require <code>_meta</code> -- not sure why you're getting errors about _meta missing, perhaps the bug described <a href="http://code.google.com/p/google-app-engine-django/issues/detail?id=52" rel="nofollow">here</a>) with the ability to serialize computed properties / methods.  Most of the time you serialization needs lay somewhere in between, and for those an introspective approach such as @David Wilson's may be preferable.</p>
+<br /><b>#4</b><br /><p>To serialize models, add a custom json encoder as in the following python:</p>
+
+<pre><code>import datetime
+from google.appengine.api import users
+from google.appengine.ext import db
+from django.utils import simplejson
+
+class jsonEncoder(simplejson.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime.datetime):
+            return obj.isoformat()
+
+        elif isinstance(obj, db.Model):
+            return dict((p, getattr(obj, p)) 
+                        for p in obj.properties())
+
+        elif isinstance(obj, users.User):
+            return obj.email()
+
+        else:
+            return simplejson.JSONEncoder.default(self, obj)
+
+
+# use the encoder as: 
+simplejson.dumps(model, cls=jsonEncoder)
+</code></pre>
+
+<p>This will encode:</p>
+
+<ul>
+<li>a date as as isoformat string (<a href="http://stackoverflow.com/questions/455580/json-datetime-between-python-and-javascript/456032#456032">per this suggestion</a>),</li>
+<li>a model as a dict of its properties, </li>
+<li>a user as his email.</li>
+</ul>
+
+<p>To decode the date you can use this javascript:</p>
+
+<pre><code>function decodeJsonDate(s){
+  return new Date( s.slice(0,19).replace('T',' ') + ' GMT' );
+} // Note that this function truncates milliseconds.
+</code></pre>
+
+<p>Note: Thanks to user <a href="http://stackoverflow.com/users/79125/pydave">pydave</a> who edited this code to make it more readable. I had originally had used python's if/else expressions to express <code>jsonEncoder</code> in fewer lines as follows: (I've added some comments and used <code>google.appengine.ext.db.to_dict</code>, to make it clearer than the original.)</p>
+
+<pre><code>class jsonEncoder(simplejson.JSONEncoder):
+  def default(self, obj):
+    isa=lambda x: isinstance(obj, x) # isa(&lt;type&gt;)==True if obj is of type &lt;type&gt;
+    return obj.isoformat() if isa(datetime.datetime) else \
+           db.to_dict(obj) if isa(db.Model) else \
+           obj.email()     if isa(users.User) else \
+           simplejson.JSONEncoder.default(self, obj)
+</code></pre>
+<br /><b>#5</b><br /><p>You don't need to write your own "parser" (a parser would presumably turn JSON into a Python object), but you can still serialize your Python object yourself.</p>
+
+<p>Using <a href="http://simplejson.googlecode.com/svn/tags/simplejson-2.0.9/docs/index.html" rel="nofollow">simplejson</a>:</p>
+
+<pre><code>import simplejson as json
+serialized = json.dumps({
+    'filename': self.filename,
+    'title': self.title,
+    'date_taken': date_taken.isoformat(),
+    # etc.
+})
+</code></pre>
+<br /><b>#6</b><br /><p>If you use <a href="http://code.google.com/p/app-engine-patch/" rel="nofollow">app-engine-patch</a> it will automatically declare the <code>_meta</code> attribute for you, and then you can use <code>django.core.serializers</code> as you would normally do on django models (as in sledge's code).</p>
+
+<p>App-engine-patch has some other cool features such has an hybrid authentication (django + google accounts), and the admin part of django works.</p>
+<br /><b>#7</b><br /><p>There's a method, "Model.properties()", defined for all Model classes.  It returns the dict you seek.</p>
+
+<pre><code>from django.utils import simplejson
+class Photo(db.Model):
+  # ...
+
+my_photo = Photo(...)
+simplejson.dumps(my_photo.properties())
+</code></pre>
+
+<p>See <a href="http://code.google.com/appengine/docs/python/datastore/modelclass.html#Model_properties" rel="nofollow">Model properties</a> in the docs.</p>
+<br /><b>#8</b><br /><p>Mtgred's answer above worked wonderfully for me -- I slightly modified it so I could also get the key for the entry.  Not as few lines of code, but it gives me the unique key:</p>
+
+<pre><code>class DictModel(db.Model):
+def to_dict(self):
+    tempdict1 = dict([(p, unicode(getattr(self, p))) for p in self.properties()])
+    tempdict2 = {'key':unicode(self.key())}
+    tempdict1.update(tempdict2)
+    return tempdict1
+</code></pre>
+<br /><b>#9</b><br /><p>In the latest (1.5.2) release of the App Engine SDK, a <code>to_dict()</code> function that converts model instances to dictionaries was introduced in <code>db.py</code>.  See the <a href="http://code.google.com/p/googleappengine/wiki/SdkReleaseNotes#Version_1.5.2_-_July_21,_2011" rel="nofollow">release notes</a>. </p>
+
+<p>There is no reference to this function in the documentation as of yet, but I have tried it myself and it works as expected. </p>
+<br />

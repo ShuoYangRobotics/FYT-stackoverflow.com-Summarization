@@ -1,0 +1,129 @@
+<h3>Question (ID-2858603):</h3><h2>Why "is" keyword has different behavior when there is dot in the string?</h2><pre><code>&gt;&gt;&gt; x = "google"
+&gt;&gt;&gt; x is "google"
+True
+&gt;&gt;&gt; x = "google.com"
+&gt;&gt;&gt; x is "google.com"
+False
+&gt;&gt;&gt;
+</code></pre>
+
+<p>Can someone give me some hints why its like that?</p>
+
+<p><strong>Edit</strong>: to make sure above, I have just tested on python 2.5.4, 2.6.5, 2.7b2, python 3.1 on windows and python 2.7b1 on linux</p>
+
+<p>Looks its consistence across all, so its by design and Am I missing something? </p>
+
+<p>I just find it out that from some of my personal domain filtering script failing with that.</p>
+<br /><h3>Answers (Total-2):</h3><b>#0</b><br /><p><code>is</code> verifies object identity, and any implementation of Python, when it meets literal of immutable types, is perfectly free to <em>either</em> make a new object of that immutable type, <em>or</em> seek through existing objects of that type to see if some of them could be reused (by adding a new reference to the same underlying object).  This is a pragmatic choice of optimization and <strong>not</strong> subject to semantic constraints, so your code should never rely on which path a give implementation may take (or it could break with a bugfix/optimization release of Python!).</p>
+
+<p>Consider for example:</p>
+
+<pre><code>&gt;&gt;&gt; import dis
+&gt;&gt;&gt; def f():
+...   x = 'google.com'
+...   return x is 'google.com'
+... 
+&gt;&gt;&gt; dis.dis(f)
+  2           0 LOAD_CONST               1 ('google.com')
+              3 STORE_FAST               0 (x)
+
+  3           6 LOAD_FAST                0 (x)
+              9 LOAD_CONST               1 ('google.com')
+             12 COMPARE_OP               8 (is)
+             15 RETURN_VALUE    
+</code></pre>
+
+<p>so in this particular implementation, <strong>within a function</strong>, your observation does not apply and only one object is made for the literal (any literal), and, indeed:</p>
+
+<pre><code>&gt;&gt;&gt; f()
+True
+</code></pre>
+
+<p>Pragmatically that's because within a function making a pass through the local table of constants (to save some memory by not making multiple constant immutable objects where one suffices) is pretty cheap and fast, and may offer good performance returns since the function may be called repeatedly afterwards.</p>
+
+<p>But, the very same implementation, <em>at the interactive prompt</em> (<strong>Edit</strong>: I originally thought this would also happen at a module's top level, but a comment by @Thomas set me right, see later):</p>
+
+<pre><code>&gt;&gt;&gt; x = 'google.com'
+&gt;&gt;&gt; y = 'google.com'
+&gt;&gt;&gt; id(x), id(y)
+(4213000, 4290864)
+</code></pre>
+
+<p>does NOT bother trying to save memory that way -- the <code>id</code>s are different, i.e., distinct objects.  There are potentially higher costs and lower returns and so the heuristics of this implementation's optimizer tell it to not bother searching and just go ahead.</p>
+
+<p><strong>Edit</strong>: at module top level, per @Thomas' observation, given e.g.:</p>
+
+<pre><code>$ cat aaa.py
+x = 'google.com'
+y = 'google.com'
+print id(x), id(y)
+</code></pre>
+
+<p>again we see the table-of-constants-based memory-optimization in this implementation:</p>
+
+<pre><code>&gt;&gt;&gt; import aaa
+4291104 4291104
+</code></pre>
+
+<p>(end of Edit per @Thomas' observation).</p>
+
+<p>Lastly, again on the same implementation:</p>
+
+<pre><code>&gt;&gt;&gt; x = 'google'
+&gt;&gt;&gt; y = 'google'
+&gt;&gt;&gt; id(x), id(y)
+(2484672, 2484672)
+</code></pre>
+
+<p>the heuristics are different here because the literal string "looks like it might be an identifier" -- so it might be used in operation requiring interning... so the optimizer interns it anyway (and once interned, looking for it becomes very fast of course). And indeed, surprise surprise...:</p>
+
+<pre><code>&gt;&gt;&gt; z = intern(x)
+&gt;&gt;&gt; id(z)
+2484672
+</code></pre>
+
+<p>...<code>x</code> <strong>has</strong> been <code>intern</code>ed the very first time (as you see, the return value of <code>intern</code> is <em>the same</em> object as <code>x</code> and <code>y</code>, as it has the same <code>id()</code>).  Of course, you shouldn't rely on this either -- the optimizer doesn't <strong>have</strong> to intern anything automatically, it's just an optimization heuristic; if you need <code>intern</code>ed string, <code>intern</code> them explicitly, just to be safe.  When you <strong>do</strong> intern strings explicitly...:</p>
+
+<pre><code>&gt;&gt;&gt; x = intern('google.com')
+&gt;&gt;&gt; y = intern('google.com')
+&gt;&gt;&gt; id(x), id(y)
+(4213000, 4213000)
+</code></pre>
+
+<p>...then you <strong>do</strong> ensure exactly the same object (i.e., same <code>id()</code>) results each and every time -- so you can apply micro-optimizations such as checking with <code>is</code> rather than <code>==</code> (I've hardly ever found the miniscule performance gain to be worth the bother;-).</p>
+
+<p><strong>Edit</strong>: just to clarify, here are the kind of performance differences I'm talking about, on a slow Macbook Air...:</p>
+
+<pre><code>$ python -mtimeit -s"a='google';b='google'" 'a==b'
+10000000 loops, best of 3: 0.132 usec per loop
+$ python -mtimeit -s"a='google';b='google'" 'a is b'
+10000000 loops, best of 3: 0.107 usec per loop
+$ python -mtimeit -s"a='goo.gle';b='goo.gle'" 'a==b'
+10000000 loops, best of 3: 0.132 usec per loop
+$ python -mtimeit -s"a='google';b='google'" 'a is b'
+10000000 loops, best of 3: 0.106 usec per loop
+$ python -mtimeit -s"a=intern('goo.gle');b=intern('goo.gle')" 'a is b'
+10000000 loops, best of 3: 0.0966 usec per loop
+$ python -mtimeit -s"a=intern('goo.gle');b=intern('goo.gle')" 'a == b'
+10000000 loops, best of 3: 0.126 usec per loop
+</code></pre>
+
+<p>...a few tens of nanoseconds either way, at most.  So, worth even <em>thinking</em> about only in the most extreme "optimize the [expletive deleted] out of this [expletive deleted] performance bottleneck" situations!-)</p>
+<br /><b>#1</b><br /><p>"is" is an identity test.  Python has some caching behavior for small integers and (apparently) strings.  "is" is best used for singleton testing (ex. <code>None</code>).</p>
+
+<pre><code>&gt;&gt;&gt; x = "google"
+&gt;&gt;&gt; x is "google"
+True
+&gt;&gt;&gt; id(x)
+32553984L
+&gt;&gt;&gt; id("google")
+32553984L
+&gt;&gt;&gt; x = "google.com"
+&gt;&gt;&gt; x is "google.com"
+False
+&gt;&gt;&gt; id(x)
+32649320L
+&gt;&gt;&gt; id("google.com")
+37787888L
+</code></pre>
+<br />

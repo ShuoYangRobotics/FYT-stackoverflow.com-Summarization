@@ -1,0 +1,109 @@
+Question (ID-437589): How do I unload (reload) a Python module? I have a long-running python server and would like to be able to upgrade a service without restarting the server. What's the best way do do this? 
+
+ if foo.py has changed:
+ unimport foo &lt;-- how do I do this?
+ import foo
+ myfoo=foo.Foo()
+ 
+ Answers (Total-7): #0 You can reload a module when it has already been imported by using the reload builtin function: 
+
+ import foo
+
+while True:
+ # Do some things.
+ if is_changed(foo):
+  foo = reload(foo)
+ 
+
+ I think that this is what you want. Web servers like Django's development server use this so that you can see the effects of your code changes without restarting the server process itself. 
+
+ To quote from the docs: 
+
+ 
+ Python modules’ code is recompiled and
+ the module-level code reexecuted,
+ defining a new set of objects which
+ are bound to names in the module’s
+ dictionary. The init function of
+ extension modules is not called a
+ second time. As with all other objects
+ in Python the old objects are only
+ reclaimed after their reference counts
+ drop to zero. The names in the module
+ namespace are updated to point to any
+ new or changed objects. Other
+ references to the old objects (such as
+ names external to the module) are not
+ rebound to refer to the new objects
+ and must be updated in each namespace
+ where they occur if that is desired. 
+ 
+
+ As you noted in your question, you'll have to reconstruct Foo objects if the Foo class resides in the foo module. 
+ #1 In Python 3, you want: 
+
+ import imp
+imp.reload(foo)
+ 
+
+ As per the BDFL . 
+ #2 To cover my shame, here is a Python list thread that discusses how to delete a module. 
+
+ The summary: it can be especially difficult if the module is not pure python. 
+
+ How do I really delete an imported module | former (dead) link 
+
+ In particular: 
+
+ 
+ You can use sys.getrefcount() to find out the actual number of
+ references. 
+ 
+
+ &gt; &gt;&gt;&gt; import sys, empty, os
+&gt; &gt;&gt;&gt; sys.getrefcount(sys) 9
+&gt; &gt;&gt;&gt; sys.getrefcount(os) 6
+&gt; &gt;&gt;&gt; sys.getrefcount(empty) 3
+ 
+
+ 
+ Numbers greater than 3 indicate that
+ it will be hard to get rid of the
+ module. The homegrown "empty"
+ (containing nothing) module should be
+ garbage collected after 
+ 
+
+ &gt; &gt;&gt;&gt; del sys.modules["empty"]
+&gt; &gt;&gt;&gt; del empty
+ 
+
+ 
+ as the third reference is an artifact
+ of the getrefcount() function. 
+ 
+ #3 reload(module), but only if it's completely stand-alone. If anything else has a reference to the module (or any object belonging to the module), then you'll get subtle and curious errors caused by the old code hanging around longer than you expected, and things like isinstance not working across different versions of the same code. 
+
+ If you have one-way dependencies, you must also reload all modules that depend on the the reloaded module to get rid of all the references to the old code. And then reload modules that depend on the reloaded modules, recursively. 
+
+ If you have circular dependencies, which is very common for example when you are dealing with reloading a package, you must unload all the modules in the group in one go. You can't do this with reload() because it will re-import each module before its dependencies have been refreshed, allowing old references to creep into new modules. 
+
+ The only way to do it in this case is to hack sys.modules, which is kind of unsupported. You'd have to go through and delete each sys.modules entry you wanted to be reloaded on next import, and also delete entries whose values are None to deal with an implementation issue to do with cacheing failed relative imports. It's not terribly nice but as long as you have a fully self-contained set of dependencies that doesn't leave references outside its codebase, it's workable. 
+
+ It's probably best to restart the server. :-) 
+ #4 if 'myModule' in sys.modules: 
+ del(sys.modules["myModule"]) 
+ 
+ #5 For those like me who want to unload all modules (when running in Python interpreter under emacs): 
+
+  for mod in sys.modules.values():
+  reload(mod)
+ 
+
+ More information here: http://pyunit.sourceforge.net/notes/reloading.html 
+ #6 If you want things out of the namespace, just do: 
+
+ del foo
+ 
+
+ and it's gone. In some environments (like IPython) this doesn't always remove everything.

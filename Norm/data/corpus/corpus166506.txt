@@ -1,0 +1,207 @@
+Question (ID-166506): Finding local IP addresses using Python's stdlib How can I find the local IP address (i.e. 192.168.x.x or 10.0.x.x) in Python platform independently and using only the standard library? 
+ Answers (Total-11): #0 import socket
+socket.gethostbyname(socket.gethostname())
+ 
+
+ This won't work always (returns 127.0.0.1 on machines having the hostname in /etc/hosts as 127.0.0.1), a paliative would be what gimel shows, use socket.getfqdn() instead. Of course your machine needs a resolvable hostname. 
+ #1 I just found this but it seems a bit hackish, however they say tried it on *nix and I did on windows and it worked. 
+
+ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("gmail.com",80))
+print s.getsockname()
+ 
+
+ This assumes you have an internet access, and that there is no local proxy. 
+ #2 import socket
+print([ip for ip in socket.gethostbyname_ex(socket.gethostname())[2] if not ip.startswith("127.")][0])
+ 
+
+ I'm using this, because one of the computers I was on had an /etc/hosts with duplicate entries and references to itself. socket.gethostbyname() only returns the last entry in /etc/hosts. This solution weeds out the ones starting with "127.". 
+Works with Python 3 and 2.5, possibly other versions too. Does not deal with several network devices or IPv6. Works on Linux and Windows. 
+ #3 You can use the netifaces module. Just type: 
+
+ easy_install netifaces
+ 
+
+ in your command shell and it will install itself on default Python installation. 
+
+ Then you can use it like this: 
+
+ from netifaces import interfaces, ifaddresses, AF_INET
+for ifaceName in interfaces():
+ addresses = [i['addr'] for i in ifaddresses(ifaceName).setdefault(AF_INET, [{'addr':'No IP addr'}] )]
+ print '%s: %s' % (ifaceName, ', '.join(addresses))
+ 
+
+ On my computer it printed: 
+
+ {45639BDC-1050-46E0-9BE9-075C30DE1FBC}: 192.168.0.100
+{D43A468B-F3AE-4BF9-9391-4863A4500583}: 10.5.9.207 
+
+ Author of this module claims it should work on Windows, UNIX and Mac OS X. 
+ #4 If you don't want to use external packages and don't want to rely on outside Internet servers, this might help. It's a code sample that I found on Google Code Search and modified to return required information: 
+
+ def getIPAddresses():
+ from ctypes import Structure, windll, sizeof
+ from ctypes import POINTER, byref
+ from ctypes import c_ulong, c_uint, c_ubyte, c_char
+ MAX_ADAPTER_DESCRIPTION_LENGTH = 128
+ MAX_ADAPTER_NAME_LENGTH = 256
+ MAX_ADAPTER_ADDRESS_LENGTH = 8
+ class IP_ADDR_STRING(Structure):
+  pass
+ LP_IP_ADDR_STRING = POINTER(IP_ADDR_STRING)
+ IP_ADDR_STRING._fields_ = [
+  ("next", LP_IP_ADDR_STRING),
+  ("ipAddress", c_char * 16),
+  ("ipMask", c_char * 16),
+  ("context", c_ulong)]
+ class IP_ADAPTER_INFO (Structure):
+  pass
+ LP_IP_ADAPTER_INFO = POINTER(IP_ADAPTER_INFO)
+ IP_ADAPTER_INFO._fields_ = [
+  ("next", LP_IP_ADAPTER_INFO),
+  ("comboIndex", c_ulong),
+  ("adapterName", c_char * (MAX_ADAPTER_NAME_LENGTH + 4)),
+  ("description", c_char * (MAX_ADAPTER_DESCRIPTION_LENGTH + 4)),
+  ("addressLength", c_uint),
+  ("address", c_ubyte * MAX_ADAPTER_ADDRESS_LENGTH),
+  ("index", c_ulong),
+  ("type", c_uint),
+  ("dhcpEnabled", c_uint),
+  ("currentIpAddress", LP_IP_ADDR_STRING),
+  ("ipAddressList", IP_ADDR_STRING),
+  ("gatewayList", IP_ADDR_STRING),
+  ("dhcpServer", IP_ADDR_STRING),
+  ("haveWins", c_uint),
+  ("primaryWinsServer", IP_ADDR_STRING),
+  ("secondaryWinsServer", IP_ADDR_STRING),
+  ("leaseObtained", c_ulong),
+  ("leaseExpires", c_ulong)]
+ GetAdaptersInfo = windll.iphlpapi.GetAdaptersInfo
+ GetAdaptersInfo.restype = c_ulong
+ GetAdaptersInfo.argtypes = [LP_IP_ADAPTER_INFO, POINTER(c_ulong)]
+ adapterList = (IP_ADAPTER_INFO * 10)()
+ buflen = c_ulong(sizeof(adapterList))
+ rc = GetAdaptersInfo(byref(adapterList[0]), byref(buflen))
+ if rc == 0:
+  for a in adapterList:
+   adNode = a.ipAddressList
+   while True:
+    ipAddr = adNode.ipAddress
+    if ipAddr:
+     yield ipAddr
+    adNode = adNode.next
+    if not adNode:
+     break
+ 
+
+ Usage: 
+
+ &gt;&gt;&gt; for addr in getIPAddresses():
+&gt;&gt;&gt; print addr
+192.168.0.100
+10.5.9.207
+ 
+
+ As it relies on windll , this will work only on Windows. 
+ #5 I'm afraid there aren't any good platform independent ways to do this other than connecting to another computer and having it send you your IP address. For example: findmyipaddress . Note that this won't work if you need an IP address that's behind NAT unless the computer you're connecting to is behind NAT as well. 
+
+ Here's one solution that works in Linux: get the IP address associated with a network interface . 
+ #6 I use this on my ubuntu machines: 
+
+ import commands
+commands.getoutput("ifconfig").split("\n")[1].split()[1][5:]
+ 
+ #7 im using following module: 
+
+ #!/usr/bin/python
+
+# module for getting the lan ip address of the computer
+
+import os
+
+import socket
+
+if os.name != "nt":
+
+ import fcntl
+
+ import struct
+
+ def get_interface_ip(ifname):
+
+ 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+ 	return socket.inet_ntoa(fcntl.ioctl(
+
+ 			s.fileno(),
+
+ 			0x8915, # SIOCGIFADDR
+
+ 			struct.pack('256s', ifname[:15])
+
+ 		)[20:24])
+
+
+
+def get_lan_ip():
+
+ ip = socket.gethostbyname(socket.gethostname())
+
+ if ip.startswith("127.") and os.name != "nt":
+
+ 	interfaces = ["eth0","eth1","eth2","wlan0","wlan1","wifi0","ath0","ath1","ppp0"]
+
+ 	for ifname in interfaces:
+
+ 		try:
+
+ 			ip = get_interface_ip(ifname)
+
+ 			break;
+
+ 		except IOError:
+
+ 			pass
+
+ return ip
+ 
+
+ Tested with windows and linux (and doesnt require additional modules for those)
+intended for use on systems which are in a single LAN. 
+ #8 FYI I can verify that the method: 
+
+ import socket
+addr = socket.gethostbyname(socket.gethostname())
+ 
+
+ Works in OS X (10.6,10.5), Windows XP, and on a well administered RHEL department server. It did not work on a very minimal CentOS VM that I just do some kernel hacking on. So for that instance you can just check for a 127.0.0.1 address and in that case do the following: 
+
+ if addr == "127.0.0.1":
+  import commands
+  output = commands.getoutput("/sbin/ifconfig")
+  addr = parseaddress(output)
+ 
+
+ And then parse the ip address from the output. It should be noted that ifconfig is not in a normal user's PATH by default and that is why I give the full path in the command. I hope this helps. 
+ #9 one simple way to produce "clean" output via command line utils 
+
+ import commands 
+
+ ips = commands.getoutput("/sbin/ifconfig | grep -i \"inet\" | grep -iv \"inet6\" | awk {'print $2'} | sed -ne 's/adr\:/ /p'")
+print ips 
+
+ it will show all ipv4 address on system ;) 
+ #10 For a list of IP addresses on *nix systems, 
+
+ import subprocess
+co = subprocess.Popen(['ifconfig'], stdout = subprocess.PIPE)
+ifconfig = co.stdout.read()
+ip_regex = re.compile('((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-4]|2[0-5][0-9]|[01]?[0-9][0-9]?))')
+[match[0] for match in ip_regex.findall(ifconfig, re.MULTILINE)]
+ 
+
+ Though it's a bit late for this answer, I thought someone else may find it useful :-) 
+
+ PS : It'll return Broadcast addresses and Netmask as well.

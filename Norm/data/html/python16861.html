@@ -1,0 +1,81 @@
+<h3>Question (ID-16861):</h3><h2>Sanitising user input using Python</h2><p>What's the best way to sanitise user input for a Python-based web application? Is there a single function to remove HTML characters and any other necessary characters combinations to ensure that an <a href="http://en.wikipedia.org/wiki/Cross-site_scripting" rel="nofollow">XSS</a> or SQL injection attack isn't possible?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Here is a snippet that will remove all tags not on the white list, and all tag attributes not on the attribues whitelist (so you can't use <code>onclick</code>).</p>
+
+<p>It is a modified version of <a href="http://www.djangosnippets.org/snippets/205/" rel="nofollow">http://www.djangosnippets.org/snippets/205/</a>, with the regex on the attribute values to prevent people from using <code>href="javascript:..."</code>, and other cases described at <a href="http://ha.ckers.org/xss.html" rel="nofollow">http://ha.ckers.org/xss.html</a>.<br>
+(e.g. <code>&lt;a href="ja&amp;#x09;vascript:alert('hi')"&gt;</code> or <code>&lt;a href="ja  vascript:alert('hi')"&gt;</code>, etc.)</p>
+
+<p>As you can see, it uses the (awesome) <a href="http://www.crummy.com/software/BeautifulSoup/" rel="nofollow">BeautifulSoup</a> library.</p>
+
+<pre><code>import re
+from urlparse import urljoin
+from BeautifulSoup import BeautifulSoup, Comment
+
+def sanitizeHtml(value, base_url=None):
+    rjs = r'[\s]*(&amp;#x.{1,7})?'.join(list('javascript:'))
+    rvb = r'[\s]*(&amp;#x.{1,7})?'.join(list('vbscript:'))
+    re_scripts = re.compile('(%s)|(%s)' % (rjs, rvb), re.IGNORECASE)
+    validTags = 'p i strong b u a h1 h2 h3 pre br img'.split()
+    validAttrs = 'href src width height'.split()
+    urlAttrs = 'href src'.split() # Attributes which should have a URL
+    soup = BeautifulSoup(value)
+    for comment in soup.findAll(text=lambda text: isinstance(text, Comment)):
+        # Get rid of comments
+        comment.extract()
+    for tag in soup.findAll(True):
+        if tag.name not in validTags:
+            tag.hidden = True
+        attrs = tag.attrs
+        tag.attrs = []
+        for attr, val in attrs:
+            if attr in validAttrs:
+                val = re_scripts.sub('', val) # Remove scripts (vbs &amp; js)
+                if attr in urlAttrs:
+                    val = urljoin(base_url, val) # Calculate the absolute url
+                tag.attrs.append((attr, val))
+
+    return soup.renderContents().decode('utf8')
+</code></pre>
+
+<p>As the other posters have said, pretty much all Python db libraries take care of SQL injection, so this should pretty much cover you.</p>
+<br /><b>#1</b><br /><p><strong>Edit</strong>: <a href="https://github.com/jsocol/bleach" rel="nofollow">bleach</a> is a wrapper around html5lib which makes it even easier to use as a whitelist-based sanitiser.</p>
+
+<p><a href="http://code.google.com/p/html5lib/" rel="nofollow"><code>html5lib</code></a> comes with a whitelist-based HTML sanitiser - it's easy to subclass it to restrict the tags and attributes users are allowed to use on your site, and it even attempts to sanitise CSS if you're allowing use of the <code>style</code> attribute.</p>
+
+<p>Here's now I'm using it in my Stack Overflow clone's <code>sanitize_html</code> utility function:</p>
+
+<p><a href="http://code.google.com/p/soclone/source/browse/trunk/soclone/utils/html.py" rel="nofollow">http://code.google.com/p/soclone/source/browse/trunk/soclone/utils/html.py</a></p>
+
+<p>I've thrown all the attacks listed in <a href="http://ha.ckers.org/xss.html" rel="nofollow">ha.ckers.org's XSS Cheatsheet</a> (which are handily <a href="http://ha.ckers.org/xssAttacks.xml" rel="nofollow">available in XML format</a> at it after performing Markdown to HTML conversion using <a href="http://code.google.com/p/python-markdown2/" rel="nofollow">python-markdown2</a> and it seems to have held up ok.</p>
+
+<p>The WMD editor component which Stackoverflow currently uses is a problem, though - I actually had to disable JavaScript in order to test the XSS Cheatsheet attacks, as pasting them all into WMD ended up giving me alert boxes and blanking out the page.</p>
+<br /><b>#2</b><br /><p>The best way to prevent XSS is not to try and filter everything, but rather to simply do HTML Entity encoding.  For example, automatically turn &lt; into &amp;lt;.  This is the ideal solution assuming you don't need to accept any html input (outside of forum/comment areas where it is used as markup, it should be pretty rare to need to accept HTML); there are so many permutations via alternate encodings that anything but an ultra-restrictive whitelist (a-z,A-Z,0-9 for example) is going to let something through.</p>
+
+<p>SQL Injection, contrary to other opinion, is still possible, if you are just building out a query string.  For example, if you are just concatenating an incoming parameter onto a query string, you will have SQL Injection.  The best way to protect against this is also not filtering, but rather to religiously use parameterized queries and NEVER concatenate user input.</p>
+
+<p>This is not to say that filtering isn't still a best practice, but in terms of SQL Injection and XSS, you will be far more protected if you religiously use Parameterize Queries and HTML Entity Encoding.</p>
+<br /><b>#3</b><br /><p>Jeff Atwood himself described how StackOverflow.com sanitizes user input (in non-language-specific terms) on the Stack Overflow blog: <a href="http://blog.stackoverflow.com/2008/06/safe-html-and-xss/" rel="nofollow">http://blog.stackoverflow.com/2008/06/safe-html-and-xss/</a></p>
+
+<p>However, as Justin points out, if you use Django templates or something similar then they probably sanitize your HTML output anyway.</p>
+
+<p>SQL injection also shouldn't be a concern.  All of Python's database libraries (MySQLdb, cx_Oracle, etc) always sanitize the parameters you pass.  These libraries are used by all of Python's object-relational mappers (such as Django models), so you don't need to worry about sanitation there either.</p>
+<br /><b>#4</b><br /><p>I don't do web development much any longer, but when I did, I did something like so:</p>
+
+<p>When no parsing is supposed to happen, I usually just escape the data to not interfere with the database when I store it, and escape everything I read up from the database to not interfere with html when I display it (cgi.escape() in python).</p>
+
+<p>Chances are, if someone tried to input html characters or stuff, they actually wanted that to be displayed as text anyway. If they didn't, well tough :)</p>
+
+<p>In short always escape what can affect the current target for the data.</p>
+
+<p>When I did need some parsing (markup or whatever) I usually tried to keep that language in a non-intersecting set with html so I could still just store it suitably escaped (after validating for syntax errors) and parse it to html when displaying without having to worry about the data the user put in there interfering with your html.</p>
+
+<p>See also <a href="http://wiki.python.org/moin/EscapingHtml" rel="nofollow">Escaping HTML</a></p>
+<br /><b>#5</b><br /><p>If you are using a framework like <a href="http://www.djangoproject.com/" rel="nofollow">django</a>, the framework can easily do this for you using standard filters.  In fact, I'm pretty sure django automatically does it unless you tell it not to.</p>
+
+<p>Otherwise, I would recommend using some sort of regex validation before accepting inputs from forms.  I don't think there's a silver bullet for your problem, but using the re module, you should be able to construct what you need.</p>
+<br /><b>#6</b><br /><p>To sanitize a string input which you want to store to the database (for example a customer name) you need either to escape it or plainly remove any quotes (', ") from it. This effectively prevents classical SQL injection which can happen if you are assembling an SQL query from strings passed by the user.</p>
+
+<p>For example (if it is acceptable to remove quotes completely):</p>
+
+<pre><code>datasetName = datasetName.replace("'","").replace('"',"")
+</code></pre>
+<br />

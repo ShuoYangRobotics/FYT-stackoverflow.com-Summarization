@@ -1,0 +1,378 @@
+Question (ID-1132941): "Least Astonishment" in Python: The Mutable Default Argument Anyone tinkering with python long enough has been bit (or torn to pieces) by the following issue: 
+
+ def foo(a=[]):
+ a.append(5)
+ return a
+ 
+
+ Python novices would expect this function to always return a list with only one element: [5]. The result is instead very different, and very astonishing (for a novice): 
+
+ &gt;&gt;&gt; foo()
+[5]
+&gt;&gt;&gt; foo()
+[5, 5]
+&gt;&gt;&gt; foo()
+[5, 5, 5]
+&gt;&gt;&gt; foo()
+[5, 5, 5, 5]
+&gt;&gt;&gt; foo()
+ 
+
+ A manager of mine once had his first encountered with this feature, and called it "a dramatic design flaw" of the language. I replied that the behavior had an underlying explanation, and it is indeed very puzzling and unexpected if you don't understand the internals. However, I was not able to answer (to myself) the following question: what is the reason for binding the default argument at function definition, and not at function execution? I doubt the experienced behavior has a practical use (who really used static variables in C, without breeding bugs ?) 
+
+ Edit : 
+
+ Baczek made an interesting example. Together with most of your comments and Utaal's in particular, I elaborated further: 
+
+ &gt;&gt;&gt; def a():
+...  print "a executed"
+...  return []
+... 
+&gt;&gt;&gt;   
+&gt;&gt;&gt; def b(x=a()):
+...  x.append(5)
+...  print x
+... 
+a executed
+&gt;&gt;&gt; b()
+[5]
+&gt;&gt;&gt; b()
+[5, 5]
+ 
+
+ To me, it seems that the design decision was relative to where to put the scope of parameters: inside the function or "together" with it? 
+Doing the binding inside the function would mean that x is effectively bound to the specified default when the function is called, not defined, something that would present a deep flaw: the def line would be "hybrid" in the sense that part of the binding (of the function object) would happen at definition, and part (assignment of default parameters) at function invocation time. 
+
+ The actual behavior is more consistent: everything of that line gets evaluated when that line is executed, meaning at function definition. 
+
+ Guido is a fantastic designer. 
+
+ Edit 
+
+ I reread all the very interesting and good answers you provided, and it was hard to assign a "correct tickmark", as everyone had good points in the answer. I marked Roberto's answer as correct because it was simpler and revealing, so that newcomers browsing this question can start from his answer and then delve into remaning more complex (but very insightful) answers. 
+ Answers (Total-14): #0 Actually, this is not a design flaw, and it is not because of internals, or performance. 
+It comes simply from the fact that functions in Python are first-class objects, and not only a piece of code. 
+
+ As soon as you get to think into this way, then it completely makes sense: a function is an object being evaluated on its definition; default parameters are kind of "member data" and therefore their state may change from one call to the other - exactly as in any other object. 
+
+ In any case, Effbot has a very nice explanation of the reasons for this behavior in Default Parameter Values in Python . 
+I found it very clear, and I really suggest reading it for a better knowledge of how function objects work. 
+ #1 Suppose you have the following code 
+
+ fruits = ("apples", "bannanas", "loganberries")
+
+def eat(food=fruits):
+ ...
+ 
+
+ When I see the declaration of eat, the least astonishing thing is to think that if the first parameter is not given, that it will be equal to the tuple ("apples", "bannanas", "loganberries") 
+
+ However, supposed later on in the code, I do something like 
+
+ def some_random_function():
+ global fruits
+ fruits = ("blueberries", "mangos")
+ 
+
+ then if default parameters were bound at function execution rather than function declaration then I would be astonished (in a very bad way) to discover that fruits had been changed. This would be more astonishing IMO than discovering that your foo function above was mutating the list. 
+
+ The real problem lies with mutable variables, and all languages have this problem to some extent. Here's a question: suppose in Java I have the following code: 
+
+ StringBuffer s = "Hello World!";
+Map&lt;StringBuffer,Integer&gt; counts = new HashMap&lt;StringBuffer,Integer&gt;();
+counts.put(s, 5);
+s.append("!!!!");
+System.out.println( counts.get(s) ); // does this work?
+ 
+
+ Now, does my map use the value of the StringBuffer key when it was placed into the map, or does it store the key by reference? Either way, someone is astonished; either the person who tried to get the object out of the Map using a value identical to the one they put it in with, or the person who can't seem to retrieve their ovject even though the key they're using is literally the same object that was used to put it into the map. (This is actually why Python doesn't allow its mutable builtin data types to be used as dictionary keys.) 
+
+ Your example is a good one of a case where Python newcomers will be surprised and bitten. But I'd argue that if we fixed this, then that would only create a different situation where they'd be bitten instead, and that one would be even less intuitive. Moreover, this is always the case when dealing with mutable variables; you always run into cases where someone could intuitively expect one or the opposite behavior depending on what code they're writing. 
+
+ I personally like Python's current approach: default function arguments are evaluated when the function is defined and that object is always the default. I suppose they could special-case using an empty list, but that kind of special casing would cause even more astonishment, not to mention be backwards incompatible. 
+ #2 I know nothing about the python interpreter inner workings (and I'm not an expert in compilers and interpreters either) so don't blame me if I propose anything unsensible or impossible. 
+
+ Provided that python objects are mutable I think that this should be taken into account when designing the default arguments stuff.
+When you instantiate a list: 
+
+ a = []
+ 
+
+ you expect to get a new list referenced by a . 
+
+ Why should the a=[] in 
+
+ def x(a=[]):
+ 
+
+ instantiate a new list on function definition and not on invocation?
+It's just like you're asking "if the user doesn't provide the argument than instantiate a new list and use it as if it was produced by the caller".
+I think this is ambiguous instead: 
+
+ def x(a=datetime.datetime.now()):
+ 
+
+ user, do you want a to default to the datetime corresponding to when you're defining or executing x ?
+In this case, as in the previous one, I'll keep the same behaviour as if the default argument "assignment" was the first instruction of the function (datetime.now() called on function invocation).
+On the other hand, if the user wanted the defintion-time mapping he could write: 
+
+ b = datetime.datetime.now()
+def x(a=b):
+ 
+
+ I know, I know: that's a closure. Alternatively python might provide a keyword to force definition-time binding: 
+
+ def x(static a=b):
+ 
+ #3 Well, the reason is quite simply that bindings are done when code is executed, and the function definition is executed, well... when the functions is defined. 
+
+ Compare this: 
+
+ class BananaBunch:
+ bananas = []
+
+ def addBanana(self, banana):
+  self.bananas.append(banana)
+ 
+
+ This code suffers from the exact same unexpected happenstance. bananas is a class attribute, and hence, when you add things to it, it's added to all classes. The reason is exactly the same. 
+
+ It's just "How It Works", and making it work differently in the function case would probably be complicated, and in the class case likely impossible, or at least slow down object instantiation a lot, as you would have to keep the class code around and execute it when objects are created. 
+
+ Yes, it is unexpected. But once the penny drops, it fits in perfectly with how Python works in general. In fact, it's a good teaching aid, and once you understand why this happens, you'll grok python much better. 
+
+ That said it should feature prominently in any good Python tutorial. Because as you mention, everyone runs into this problem sooner or later. 
+ #4 What you're asking is why this: 
+
+ def func(a=[], b = 2):
+ pass
+ 
+
+ isn't internally equivalent to this: 
+
+ def func(a=None, b = None):
+ a_default = lambda: []
+ b_default = lambda: 2
+ def actual_func(a=None, b=None):
+  if a is None: a = a_default()
+  if b is None: b = b_default()
+ return actual_func
+func = func()
+ 
+
+ except for the case of explicitly calling func(None, None), which we'll ignore. 
+
+ In other words, instead of evaluating default parameters, why not store each of them, and evaluate them when the function is called? 
+
+ One answer is probably right there--it would effectively turn every function with default parameters into a closure. Even if it's all hidden away in the interpreter and not a full-blown closure, the data's got to be stored somewhere. It'd be slower and use more memory. 
+ #5 It's a performance optimization. As a result of this functionality, which of these two function calls do you think is faster? 
+
+ def print_tuple(some_tuple=(1,2,3)):
+ print some_list
+
+print_tuple()  #1
+print_tuple((1,2,3)) #2
+ 
+
+ I'll give you a hint. Here's the disassembly: 
+
+ # 1 
+
+ 0 LOAD_GLOBAL    0 (print_tuple)
+3 CALL_FUNCTION   0
+6 POP_TOP
+7 LOAD_CONST    0 (None)
+10 RETURN_VALUE
+ 
+
+ # 2 
+
+ 0 LOAD_GLOBAL    0 (print_tuple)
+ 3 LOAD_CONST    4 ((1, 2, 3))
+ 6 CALL_FUNCTION   1
+ 9 POP_TOP
+10 LOAD_CONST    0 (None)
+13 RETURN_VALUE
+ 
+
+ 
+ I doubt the experienced behavior has a practical use (who really used static variables in C, without breeding bugs ?) 
+ 
+
+ As you can see, there is a performance benefit when using immutable default arguments. This can make a difference if it's a frequently called function. Also, bear in mind that Python isn't C. In C you have constants that are pretty much free. In Python you don't have this benefit. 
+ #6 I used to think that creating the objects at runtime would be the better approach. I'm less certain now, since you do lose some useful features, though it may be worth it regardless simply to prevent newbie confusion. The disadvantages of doing so are: 
+
+ 1. Performance 
+
+ def foo(arg=something_expensive_to_compute())):
+ ...
+ 
+
+ If call-time evaluation is used, then the expensive function is called every time your function is used without an argument. You'd either pay an expensive price on each call, or need to manually cache the value externally, polluting your namespace and adding verbosity. 
+
+ 2. Forcing bound parameters 
+
+ A useful trick is to bind parameters of a lambda to the current binding of a variable when the lambda is created. For example: 
+
+ funcs = [ lambda i=i: i for i in range(10)]
+ 
+
+ This returns a list of functions that return 0,1,2,3... respectively. If the behaviour is changed, they will instead bind i to the call-time value of i, so you would get a list of functions that all returned 9 . 
+
+ The only way to implement this otherwise would be to create a further closure with the i bound, ie: 
+
+ def make_func(i): return lambda: i
+funcs = [make_func(i) for i in range(10)]
+ 
+
+ 3. Introspection 
+
+ Consider the code: 
+
+ def foo(a='test', b=100, c=[]):
+ print a,b,c
+ 
+
+ We can get information about the arguments and defaults using the inspect module, which 
+
+ &gt;&gt;&gt; inspect.getargspec(foo)
+(['a', 'b', 'c'], None, None, ('test', 100, []))
+ 
+
+ This information is very useful for things like document generation, metaprogramming, decorators etc. 
+
+ Now, suppose the behaviour of defaults could be changed so that this is the equivalent of: 
+
+ _undefined = object() # sentinel value
+
+def foo(a=_undefined, b=_undefined, c=_undefined)
+ if a is _undefined: a='test'
+ if b is _undefined: b=100
+ if c is _undefined: c=[]
+ 
+
+ However, we've lost the ability to introspect, and see what the default arguments are . Because the objects haven't been constructed, we can't ever get hold of them without actually calling the function. The best we could do is to store off the source code and return that as a string. 
+ #7 This behavior is easy explained by: 
+
+ 
+ function (class etc.) declaration is executed only once, creating all default value objects 
+ everything is passed by reference 
+ 
+
+ So: 
+
+ def x(a=0, b=[], c=[], d=0):
+ a = a + 1
+ b = b + [1]
+ c.append(1)
+ print a, b, c
+ 
+
+ 
+ a doesn't change - every assignment call creates new int object - new object is printed 
+ b doesn't change - new array is build from default value and printed 
+ c changes - operation is performed on same object - and it is printed 
+ 
+ #8 the shortest answer would probably be "definition is execution", therefore the whole argument makes no strict sense. as a more contrived example, you may cite this: 
+
+ def a(): return []
+
+def b(x=a()):
+ print x
+ 
+
+ hopefully it's enough to show that not executing the default argument expressions at the execution time of the def statement isn't easy or doesn't make sense, or both. 
+
+ i agree it's a gotcha when you try to use default constructors, though. 
+ #9 This actually has nothing to do with default values, other than that it often comes up as an unexpected behaviour when you write functions with mutable default values. 
+
+ &gt;&gt;&gt; def foo(a):
+ a.append(5)
+ print a
+
+&gt;&gt;&gt; a = [5]
+&gt;&gt;&gt; foo(a)
+[5, 5]
+&gt;&gt;&gt; foo(a)
+[5, 5, 5]
+&gt;&gt;&gt; foo(a)
+[5, 5, 5, 5]
+&gt;&gt;&gt; foo(a)
+[5, 5, 5, 5, 5]
+ 
+
+ No default values in sight in this code, but you get exactly the same problem. 
+
+ The problem is that foo is modifying a mutable variable passed in from the caller, when the caller doesn't expect this. Code like this would be fine if the function was called something like append_5 ; then the caller would be calling the function in order to modify the value they pass in, and the behaviour would be expected. But such a function would be very unlikely to take a default argument, and probably wouldn't return the list (since the caller already has a reference to that list; the one it just passed in). 
+
+ Your original foo , with a default argument, shouldn't be modifying a whether it was explicitly passed in or got the default value. Your code should leave mutable arguments alone unless it is clear from the context/name/documentation that the arguments are supposed to be modified. Using mutable values passed in as arguments as local temporaries is an extremely bad idea, whether we're in Python or not and whether there are default arguments involved or not. 
+
+ If you need to destructively manipulate a local temporary in the course of computing something, and you need to start your manipulation from an argument value, you need to make a copy. 
+ #10 It may be true that: 
+
+ 
+ Someone is using every language/library feature, and 
+ Switching the behavior here would be ill-advised, but 
+ 
+
+ it is entirely consistent to hold to both of the features above and still make another point: 
+
+ 
+ It is a confusing feature and it is unfortunate in Python. 
+ 
+
+ The other answers, or at least some of them either make points 1 and 2 but not 3, or make point 3 and downplay points 1 and 2. But all three are true. 
+
+ It may be true that switching horses in midstream here would be asking for significant breakage, and that there could be more problems created by changing Python to intuitively handle Stefano's opening snippet. And it may be true that someone who knew Python internals well could explain a minefield of consequences. However, 
+
+ The existing behavior is not Pythonic, and Python is successful because very little about the language violates the principle of least astonishment anywhere near this badly. It is a real problem, whether or not it would be wise to uproot it. It is a design flaw. If you understand the language much better by trying to trace out the behavior, I can say that C++ does all of this and more; you learn a lot by navigating, for instance, subtle pointer errors. But this is not Pythonic: people who care about Python enough to persevere in the face of this behavior are people who are drawn to the language because Python has far fewer surprises than other language. Dabblers and the curious become Pythonistas when they are astonished at how little time it takes to get something working--not because of a design fl--I mean, hidden logic puzzle--that cuts against the intuitions of programmers who are drawn to Python because it Just Works . 
+ #11 You should not be using mutable objects for default argument values, it is far safer to do 
+
+ def foo(a=None):
+ if a == None:
+  a = []
+ a.append(5)
+ return a
+ 
+ #12 
+ what is the reason for binding the default argument at function definition, and not at function execution? 
+ 
+
+ Well, the default argument is getting bound at runtime (not definition). 
+
+ My understanding is that the behavior stems from the following facts: 
+
+ 
+ For arguments, Python handles basic types by value (lifetime: function call) and non-basic types by reference (lifetime: reference counting). 
+ It seems to assign a static lifetime to default arguments of non-basic types. 
+ 
+
+ So when needs to use the default argument (non-basic type), it finds the one already allocated. 
+
+ Following demonstrates the difference in handling of basic and non-basic types. 
+
+ def foo(a=[]):
+ a.append(5)
+ print "foo:",a
+
+def bar(a=0):
+ a += 1
+ print "bar:",a
+
+foo()
+foo()
+bar()
+bar()
+ 
+
+ Results: 
+
+ foo: [5]
+foo: [5, 5]
+bar: 1
+bar: 1
+ 
+ #13 This would be a good time for you to google for "python gotchas" and learn to avoid the others :-) 
+
+ 
+ Paddy.

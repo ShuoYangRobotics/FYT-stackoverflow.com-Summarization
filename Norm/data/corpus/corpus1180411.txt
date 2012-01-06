@@ -1,0 +1,96 @@
+Question (ID-1180411): Activate a virtualenv via fabric as deploy user I want to run my fabric script locally, which will in turn, log into my server, switch user to deploy, activate the projects .virtualenv, which will change dir to the project and issue a git pull. 
+
+ def git_pull():
+ sudo('su deploy')
+ # here i need to switch to the virtualenv
+ run('git pull')
+ 
+
+ I typically use the workon command from virtualenvwrapper which sources the activate file and the postactivate file will put me in the project folder. In this case, it seems that because fabric runs from within shell, control is give over to fabric, so I can't use bash's source built-in to '$source ~/.virtualenv/myvenv/bin/activate' 
+
+ Anybody have an example and explanation of how they have done this? 
+
+ # # # response # # # 
+
+ Thanks bitprophet, that led down the right track.
+Using fabric 1.0 we ended up going with the following fabfile recipe which includes a call to pip requirements file: 
+
+ def production():
+ env.hosts = ['servername']
+ env.directory = '/path/to/virtualenvs/project'
+ env.activate = 'source /home/deploy/.virtualenvs/project/bin/activate'
+ env.deploy_user = 'deploy'
+
+def virtualenv(command):
+ with cd(env.directory):
+  sudo(env.activate + '&amp;&amp;' + command, user=env.deploy_user)
+
+def git_pull():
+ 'Updates the repository.'
+ with cd(env.directory): 
+  sudo('git pull', user=env.deploy_user)
+
+def pip_install_req():
+ virtualenv('pip install -U -r ../../../requirements/external_apps.txt') 
+
+def reload():
+ sudo('/etc/init.d/apache2 reload')
+
+def deploy_pip():
+ local('git push')
+ git_pull()
+ pip_install_req()
+ reload()
+ 
+ Answers (Total-3): #0 Right now, you can do what I do, which is kludgy but works perfectly well* (this usage assumes you're using virtualenvwrapper -- which you should be -- but you can easily substitute in the rather longer 'source' call you mentioned, if not): 
+
+ def task():
+ workon = 'workon myvenv &amp;&amp; '
+ run(workon + 'git pull')
+ run(workon + 'do other stuff, etc')
+ 
+
+ Since version 1.0, Fabric has a prefix context manager which uses this technique so you can for example: 
+
+ def task():
+ with prefix('workon myvenv'):
+  run('git pull')
+  run('do other stuff, etc')
+ 
+
+ 
+
+ * There are bound to be cases where using the command1 &amp;&amp; command2 approach may blow up on you, such as when command1 fails ( command2 will never run) or if command1 isn't properly escaped and contains special shell characters, and so forth. 
+ #1 As an update to bitprophet's forecast: With Fabric 1.0 you can make use of prefix() and your own context managers. 
+
+ from __future__ import with_statement
+from fabric.api import *
+from contextlib import contextmanager as _contextmanager
+
+env.hosts = ['servername']
+env.user = 'deploy'
+env.keyfile = ['$HOME/.ssh/deploy_rsa']
+env.directory = '/path/to/virtualenvs/project'
+env.activate = 'source /path/to/virtualenvs/project/bin/activate'
+
+@_contextmanager
+def virtualenv():
+ with cd(env.directory):
+  with prefix(env.activate):
+   yield
+
+def deploy():
+ with virtualenv():
+  run('pip freeze')
+ 
+ #2 I'm just using a simple wrapper function virtualenv() that can be called instead of run(). It doesn't use the cd context manager, so relative paths can be used. 
+
+ def virtualenv(command):
+ """
+ Run a command in the virtualenv. This prefixes the command with the source
+ command.
+ Usage:
+  virtualenv('pip install django')
+ """
+ source = 'source %(project_directory)s/bin/activate &amp;&amp; ' % env
+ run(source + command)

@@ -1,0 +1,211 @@
+<h3>Question (ID-182197):</h3><h2>How do I watch a file for changes using Python?</h2><p>I have a log file being written by another process which I want to watch for changes. Each time a change occurrs I'd like to read the new data in to do some processing on it.</p>
+
+<p>What's the best way to do this? I was hoping there'd be some sort of hook from the PyWin32 library. I've found the win32file.FindNextChangeNotification function but have no idea how to ask it to watch a specific file.</p>
+
+<p>If anyone's done anything like this I'd be really grateful to hear how...</p>
+
+<p><strong>[Edit]</strong> I should have mentioned that I was after a solution that doesn't require polling.</p>
+
+<p><strong>[Edit]</strong> Curses! It seems this doesn't work over a mapped network drive. I'm guessing windows doesn't 'hear' any updates to the file the way it does on a local disk.</p>
+<br /><h3>Answers (Total-13):</h3><b>#0</b><br /><p>Have you already looked at the documentation available on <a href="http://timgolden.me.uk/python/win32_how_do_i/watch_directory_for_changes.html" rel="nofollow">http://timgolden.me.uk/python/win32_how_do_i/watch_directory_for_changes.html</a>? If you only need it to work under Windows the 2nd example seems to be exactly what you want (if you exchange the path of the directory with the one of the file you want to watch). </p>
+
+<p>Otherwise, polling will probably be the only really platform-independent option.</p>
+
+<p><strong>Note:</strong> I haven't tried any of these solutions.</p>
+<br /><b>#1</b><br /><p>If polling is good enough for you, I'd just watch if the "modified time" file stat changes.  To read it:</p>
+
+<pre><code>os.stat(filename).st_mtime
+</code></pre>
+
+<p>(Also note that the Windows native change event solution does not work in all circumstances, e.g. on network drives.)</p>
+<br /><b>#2</b><br /><p>It should not work on windows (maybe with cygwin ?), but for unix user, you should use the "fcntl" system call. Here is an example in Python. It's mostly the same code if you need to write it in C (same function names)</p>
+
+<pre><code>import time
+import fcntl
+import os
+import signal
+
+FNAME = "/HOME/TOTO/FILETOWATCH"
+
+def handler(signum, frame):
+    print "File %s modified" % (FNAME,)
+
+signal.signal(signal.SIGIO, handler)
+fd = os.open(FNAME,  os.O_RDONLY)
+fcntl.fcntl(fd, fcntl.F_SETSIG, 0)
+fcntl.fcntl(fd, fcntl.F_NOTIFY,
+            fcntl.DN_MODIFY | fcntl.DN_CREATE | fcntl.DN_MULTISHOT)
+
+while True:
+    time.sleep(10000)
+</code></pre>
+<br /><b>#3</b><br /><p>Did you try using Watchdog? <a href="http://packages.python.org/watchdog/" rel="nofollow">http://packages.python.org/watchdog/</a></p>
+<br /><b>#4</b><br /><p>Well after a bit of hacking of Tim Golden's script, I have the following which seems to work quite well:</p>
+
+<pre><code>import os
+
+import win32file
+import win32con
+
+path_to_watch = "." # look at the current directory
+file_to_watch = "test.txt" # look for changes to a file called test.txt
+
+def ProcessNewData( newData ):
+    print "Text added: %s"%newData
+
+# Set up the bits we'll need for output
+ACTIONS = {
+  1 : "Created",
+  2 : "Deleted",
+  3 : "Updated",
+  4 : "Renamed from something",
+  5 : "Renamed to something"
+}
+FILE_LIST_DIRECTORY = 0x0001
+hDir = win32file.CreateFile (
+  path_to_watch,
+  FILE_LIST_DIRECTORY,
+  win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
+  None,
+  win32con.OPEN_EXISTING,
+  win32con.FILE_FLAG_BACKUP_SEMANTICS,
+  None
+)
+
+# Open the file we're interested in
+a = open(file_to_watch, "r")
+
+# Throw away any exising log data
+a.read()
+
+# Wait for new data and call ProcessNewData for each new chunk that's written
+while 1:
+  # Wait for a change to occur
+  results = win32file.ReadDirectoryChangesW (
+    hDir,
+    1024,
+    False,
+    win32con.FILE_NOTIFY_CHANGE_LAST_WRITE,
+    None,
+    None
+  )
+
+  # For each change, check to see if it's updating the file we're interested in
+  for action, file in results:
+    full_filename = os.path.join (path_to_watch, file)
+    #print file, ACTIONS.get (action, "Unknown")
+    if file == file_to_watch:
+        newText = a.read()
+        if newText != "":
+            ProcessNewData( newText )
+</code></pre>
+
+<p>It could probably do with a load more error checking, but for simply watching a log file and doing some processing on it before spitting it out to the screen, this works well.</p>
+
+<p>Thanks everyone for your input - great stuff!</p>
+<br /><b>#5</b><br /><p>Check out pyinotify.</p>
+
+<p>inotify replaces dnotify (from an earlier answer) in newer linuxes and allows file-level rather than directory-level monitoring.</p>
+
+<p><a href="http://trac.dbzteam.org/pyinotify" rel="nofollow">http://trac.dbzteam.org/pyinotify</a></p>
+<br /><b>#6</b><br /><p>Check <a href="http://stackoverflow.com/questions/62832/reading-data-from-a-log-file-as-a-separate-application-is-writing-to-it#63446">my answer</a> to a <a href="http://stackoverflow.com/questions/62832/">similar question</a>. You could try the same loop in Python. <a href="http://code.activestate.com/recipes/157035/" rel="nofollow">This page</a> suggests:</p>
+
+<pre><code>import time
+
+while 1:
+    where = file.tell()
+    line = file.readline()
+    if not line:
+        time.sleep(1)
+        file.seek(where)
+    else:
+        print line, # already has newline
+</code></pre>
+
+<p>Also see the question <a href="http://stackoverflow.com/questions/136168/tail-a-file-with-python">tail() a file with Python</a>.</p>
+<br /><b>#7</b><br /><p>As you can see in <a href="http://timgolden.me.uk/python/win32_how_do_i/watch_directory_for_changes.html" rel="nofollow">Tim Golden's article</a>, pointed by <a href="http://stackoverflow.com/users/22312/horst-gutmann">Horst Gutmann</a>, WIN32 is relatively complex and watches directories, not a single file.</p>
+
+<p>I'd like to suggest you look into <a href="http://www.codeplex.com/IronPython" rel="nofollow">IronPython</a>, which is a <em>.NET</em> python implementation.
+With IronPython you can use all the <em>.NET</em> functionality - including</p>
+
+<pre><code>System.IO.FileSystemWatcher
+</code></pre>
+
+<p>Which handles single files with a simple <em>Event</em> interface.</p>
+<br /><b>#8</b><br /><p>If you want a multiplataform solution, then check <a href="http://doc.qt.nokia.com/latest/qfilesystemwatcher.html" rel="nofollow">QFileSystemWatcher</a>.
+Here an example code (not saniticed):</p>
+
+<pre><code>from PyQt4 import QtCore
+
+@QtCore.pyqtSlot(str)
+def directory_changed(path):
+    print('Directory Changed!!!')
+
+@QtCore.pyqtSlot(str)
+def file_changed(path):
+    print('File Changed!!!')
+
+fs_watcher = QtCore.QFileSystemWatcher(['/path/to/files_1', '/path/to/files_2', '/path/to/files_3'])
+
+fs_watcher.connect(fs_watcher, QtCore.SIGNAL('directoryChanged(QString)'), directory_changed)
+fs_watcher.connect(fs_watcher, QtCore.SIGNAL('fileChanged(QString)'), file_changed)
+</code></pre>
+<br /><b>#9</b><br /><p>Well, since you are using Python, you can just open a file and keep reading lines from it.</p>
+
+<pre><code>f = open('file.log')
+</code></pre>
+
+<p>If the line read is <strong>not empty</strong>, you process it.</p>
+
+<pre><code>line = f.readline()
+if line:
+    // Do what you want with the line
+</code></pre>
+
+<p>You may be missing that it is ok to keep calling <code>readline</code> at the EOF. It will just keep returning an empty string in this case. And when something is appended to the log file, the reading will continue from where it stopped, as you need.</p>
+
+<p>If you are looking for a solution that uses events, or a particular library, please specify this in your question. Otherwise, I think this solution is just fine.</p>
+<br /><b>#10</b><br /><p>Here is a simplified version of Kender's code that appears to do the same trick and does not import the entire file:</p>
+
+<pre><code># Check file for new data.
+
+import time
+
+f = open(r'c:\temp\test.txt', 'r')
+
+while True:
+
+    line = f.readline()
+    if not line:
+        time.sleep(1)
+        print 'Nothing New'
+    else:
+        print 'Call Function: ', line
+</code></pre>
+<br /><b>#11</b><br /><p>I don't know any Windows specific function. You could try getting the MD5 hash of the file every second/minute/hour (depends on how fast you need it) and compare it to the last hash. When it differs you know the file has been changed and you read out the newest lines.</p>
+<br /><b>#12</b><br /><p>I'd try something like this.</p>
+
+<pre><code>    try:
+            f = open(filePath)
+    except IOError:
+            print "No such file: %s" % filePath
+            raw_input("Press Enter to close window")
+    try:
+            lines = f.readlines()
+            while True:
+                    line = f.readline()
+                    try:
+                            if not line:
+                                    time.sleep(1)
+                            else:
+                                    functionThatAnalisesTheLine(line)
+                    except Exception, e:
+                            # handle the exception somehow (for example, log the trace) and raise the same exception again
+                            raw_input("Press Enter to close window")
+                            raise e
+    finally:
+            f.close()
+</code></pre>
+
+<p>The loop checks if there is a new line(s) since last time file was read - if there is, it's read and passed to the <code>functionThatAnalisesTheLine</code> function. If not, script waits 1 second and retries the process. </p>
+<br />

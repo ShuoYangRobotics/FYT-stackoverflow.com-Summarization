@@ -1,0 +1,138 @@
+Question (ID-4962606): Fast tensor rotation with NumPy At the heart of an application (written in Python and using NumPy ) I need to rotate a 4th order tensor. Actually, I need to rotate a lot of tensors many times and this is my bottleneck. My naive implementation (below) involving eight nested loops seems to be quite slow, but I cannot see a way to leverage NumPy's matrix operations and, hopefully, speed things up. I've a feeling I should be using np.tensordot , but I don't see how. 
+
+ Mathematically, elements of the rotated tensor, T', are given by: T' ijkl = &Sigma; g ia g jb g kc g ld T abcd with the sum being over the repeated indices on the right hand side. T and Tprime are 3*3*3*3 NumPy arrays and the rotation matrix g is a 3*3 NumPy array. My slow implementation (taking ~0.04 seconds per call) is below. 
+
+ #!/usr/bin/env python
+
+import numpy as np
+
+def rotT(T, g):
+ Tprime = np.zeros((3,3,3,3))
+ for i in range(3):
+  for j in range(3):
+   for k in range(3):
+    for l in range(3):
+     for ii in range(3):
+      for jj in range(3):
+       for kk in range(3):
+        for ll in range(3):
+         gg = g[ii,i]*g[jj,j]*g[kk,k]*g[ll,l]
+         Tprime[i,j,k,l] = Tprime[i,j,k,l] + \
+           gg*T[ii,jj,kk,ll]
+ return Tprime
+
+if __name__ == "__main__":
+
+ T = np.array([[[[ 4.66533067e+01, 5.84985000e-02, -5.37671310e-01],
+     [ 5.84985000e-02, 1.56722231e+01, 2.32831900e-02],
+     [ -5.37671310e-01, 2.32831900e-02, 1.33399259e+01]],
+     [[ 4.60051700e-02, 1.54658176e+01, 2.19568200e-02],
+     [ 1.54658176e+01, -5.18223500e-02, -1.52814920e-01],
+     [ 2.19568200e-02, -1.52814920e-01, -2.43874100e-02]],
+     [[ -5.35577630e-01, 1.95558600e-02, 1.31108757e+01],
+     [ 1.95558600e-02, -1.51342210e-01, -6.67615000e-03],
+     [ 1.31108757e+01, -6.67615000e-03, 6.90486240e-01]]],
+     [[[ 4.60051700e-02, 1.54658176e+01, 2.19568200e-02],
+     [ 1.54658176e+01, -5.18223500e-02, -1.52814920e-01],
+     [ 2.19568200e-02, -1.52814920e-01, -2.43874100e-02]],
+     [[ 1.57414726e+01, -3.86167500e-02, -1.55971950e-01],
+     [ -3.86167500e-02, 4.65601977e+01, -3.57741000e-02],
+     [ -1.55971950e-01, -3.57741000e-02, 1.34215636e+01]],
+     [[ 2.58256300e-02, -1.49072770e-01, -7.38843000e-03],
+     [ -1.49072770e-01, -3.63410500e-02, 1.32039847e+01],
+     [ -7.38843000e-03, 1.32039847e+01, 1.38172700e-02]]],
+     [[[ -5.35577630e-01, 1.95558600e-02, 1.31108757e+01],
+     [ 1.95558600e-02, -1.51342210e-01, -6.67615000e-03],
+     [ 1.31108757e+01, -6.67615000e-03, 6.90486240e-01]],
+     [[ 2.58256300e-02, -1.49072770e-01, -7.38843000e-03],
+     [ -1.49072770e-01, -3.63410500e-02, 1.32039847e+01],
+     [ -7.38843000e-03, 1.32039847e+01, 1.38172700e-02]],
+     [[ 1.33639532e+01, -1.26331100e-02, 6.84650400e-01],
+     [ -1.26331100e-02, 1.34222177e+01, 1.67851800e-02],
+     [ 6.84650400e-01, 1.67851800e-02, 4.89151396e+01]]]])
+
+ g = np.array([[ 0.79389393, 0.54184237, 0.27593346],
+     [-0.59925749, 0.62028664, 0.50609776],
+     [ 0.10306737, -0.56714313, 0.8171449 ]])
+
+ for i in range(100):
+  Tprime = rotT(T,g)
+ 
+
+ Is there a way to make this go faster? Making the code generalise to other ranks of tensor would be useful, but is less important. 
+ Answers (Total-4): #0 Here is how to do it with a single Python loop: 
+
+ def rotT(T, g):
+ Tprime = T
+ for i in range(4):
+  slices = [None] * 4
+  slices[i] = slice(None)
+  slices *= 2
+  Tprime = g[slices].T * Tprime
+ return Tprime.sum(-1).sum(-1).sum(-1).sum(-1)
+ 
+
+ Admittedly, this is a bit hard to grasp at first glance, but it's quite a bit faster :) 
+ #1 To use tensordot , compute the outer product of the g tensors: 
+
+ def rotT(T, g):
+ gg = np.outer(g, g)
+ gggg = np.outer(gg, gg).reshape(4 * g.shape)
+ axes = ((0, 2, 4, 6), (0, 1, 2, 3))
+ return np.tensordot(gggg, T, axes)
+ 
+
+ On my system, this is around seven times faster than Sven's solution. If the g tensor doesn't change often, you can also cache the gggg tensor. If you do this and turn on some micro-optimizations (inlining the tensordot code, no checks, no generic shapes), you can still make it two times faster: 
+
+ def rotT(T, gggg):
+ return np.dot(gggg.transpose((1, 3, 5, 7, 0, 2, 4, 6)).reshape((81, 81)),
+     T.reshape(81, 1)).reshape((3, 3, 3, 3))
+ 
+
+ Results of timeit on my home laptop (500 iterations): 
+
+ Your original code: 19.471129179
+Sven's code: 0.718412876129
+My first code: 0.118047952652
+My second code: 0.0690279006958
+ 
+
+ The numbers on my work machine are: 
+
+ Your original code: 9.77922987938
+Sven's code: 0.137110948563
+My first code: 0.0569641590118
+My second code: 0.0308079719543
+ 
+ #2 Out of curiosity I've compared Cython implementation of a naive code from the question with the numpy code from @Philipp's answer . Cython code is four times faster on my machine: 
+
+ #cython: boundscheck=False, wraparound=False
+import numpy as np
+cimport numpy as np
+
+def rotT(np.ndarray[np.float64_t, ndim=4] T,
+   np.ndarray[np.float64_t, ndim=2] g):
+ cdef np.ndarray[np.float64_t, ndim=4] Tprime
+ cdef Py_ssize_t i, j, k, l, ii, jj, kk, ll
+ cdef np.float64_t gg
+
+ Tprime = np.zeros((3,3,3,3), dtype=T.dtype)
+ for i in range(3):
+  for j in range(3):
+   for k in range(3):
+    for l in range(3):
+     for ii in range(3):
+      for jj in range(3):
+       for kk in range(3):
+        for ll in range(3):
+         gg = g[ii,i]*g[jj,j]*g[kk,k]*g[ll,l]
+         Tprime[i,j,k,l] = Tprime[i,j,k,l] + \
+           gg*T[ii,jj,kk,ll]
+ return Tprime
+ 
+ #3 Thanks to hard work by M. Wiebe, the next version of Numpy (which will probably be 1.6) is going to make this even easier: 
+
+ &gt;&gt;&gt; Trot = np.einsum('ai,bj,ck,dl,abcd-&gt;ijkl', g, g, g, g, T)
+ 
+
+ Philipp's approach is at the moment 3x faster, though, but perhaps there is some room for improvement. The speed difference is probably mostly due to tensordot being able to unroll the whole operation as a single matrix product that can be passed on to BLAS, and so avoiding much of the overhead associated with small arrays --- this is not possible for general Einstein summation, as not all operations that can be expressed in this form resolve to a single matrix product.

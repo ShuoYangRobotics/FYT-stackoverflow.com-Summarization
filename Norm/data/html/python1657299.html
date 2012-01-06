@@ -1,0 +1,455 @@
+<h3>Question (ID-1657299):</h3><h2>How do I read two lines from a file at a time using python</h2><p>I am coding a python script that parses a text file. The format of this text file is such that each element in the file uses two lines and for convenience I would like to read both lines before parsing. Can this be done in python?</p>
+
+<p>I would like to some something like:</p>
+
+<pre><code>f = open(filename, "r")
+for line in f:
+    line1 = line
+    line2 = f.readline()
+
+f.close
+</code></pre>
+
+<p>But this breaks saying that </p>
+
+<pre><code>ValueError: Mixing iteration and read methods would lose data
+</code></pre>
+
+<p>Does anyone have any ideas?</p>
+
+<p>Greatful for any help,</p>
+
+<p>/Daniel</p>
+
+<h3>Related:</h3>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/434287/what-is-the-most-pythonic-way-to-iterate-over-a-list-in-chunks">What is the most “pythonic” way to iterate over a list in chunks?</a></li>
+</ul>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>Similar question <a href="http://stackoverflow.com/questions/826493/python-mixing-files-and-loops">here</a>. You can't mix iteration and readline so you need to use one or the other.</p>
+
+<pre><code>while True:
+    line1 = f.readline()
+    line2 = f.readline()
+    if not line2: break  # EOF
+    ...
+</code></pre>
+<br /><b>#1</b><br /><pre><code>import itertools
+with open('a') as f:
+    for line1,line2 in itertools.izip_longest(*[f]*2):
+        print(line1,line2)
+</code></pre>
+
+<p>izip_longest returns an iterator, so it should work well even if the file is very large.</p>
+
+<p>If there are an odd number of lines, then line2 gets the value None on the last iteration.</p>
+
+<p>izip_longest is in itertools if you have python 2.6 or later. If you use a prior version, you can pick up a python implementation of izip_longest <a href="http://docs.python.org/library/itertools.html#itertools.izip_longest" rel="nofollow">here</a>: </p>
+
+<p>In the comments, it has been asked if this solution reads the whole file first, and then iterates over the file a second time.
+I believe that it does not. The <code>with open('a') as f</code> line opens a file handle, but does not read the file. <code>f</code> is an iterator, so its contents are not read until requested. izip_longest takes iterators as arguments, and returns an iterator. </p>
+
+<p>izip_longest is indeed fed the same iterator, f, twice. But what ends up happening is that f.next() (or next(f) in Python3) is called on the first argument and then on the second argument. Since next() is being called on the same underlying iterator, successive lines are yielded. This is very different than reading in the whole file. Indeed the purpose of using iterators is precisely to avoid reading in the whole file.</p>
+
+<p>I therefore believe the solution works as desired -- the file is only read once by the for-loop.</p>
+
+<p>To corroborate this, I ran the izip_longest solution versus a solution using <code>f.readlines()</code>. I put a raw_input() at the end to pause the scripts, and ran <code>ps axuw</code> on each:</p>
+
+<pre><code>% ps axuw | grep izip_longest_method.py
+</code></pre>
+
+<p><code>unutbu   11119  2.2  0.2</code>   <strong>4520  2712</strong> <code>pts/0    S+   21:14   0:00 python /home/unutbu/pybin/izip_longest_method.py bigfile</code></p>
+
+<pre><code>% ps axuw | grep readlines_method.py
+</code></pre>
+
+<p><code>unutbu   11317  6.5  8.8</code>  <strong>93908 91680</strong> <code>pts/0    S+   21:16   0:00 python /home/unutbu/pybin/readlines_method.py bigfile</code></p>
+
+<p>The <code>readlines</code> clearly reads in the whole file at once. Since the <code>izip_longest_method</code> uses much less memory, I think it is safe to conclude it is not reading in the whole file at once.</p>
+<br /><b>#2</b><br /><p>use line.next(), eg</p>
+
+<pre><code>f=open("file")
+for line in f:
+    print line
+    nextline=f.next()
+    print "next line", nextline
+    ....
+f.close()
+</code></pre>
+<br /><b>#3</b><br /><p>I would proceed in a similar way as <a href="http://stackoverflow.com/questions/1657299/how-do-i-read-two-lines-from-a-file-at-a-time-using-python/1657337#1657337">ghostdog74</a>, only with the try outside and a few modifications:</p>
+
+<pre><code>try:
+    with open(filename) as f:
+        for line1 in f:
+            line2 = f.next()
+            # process line1 and line2 here
+except StopIteration:
+    print "(End)" # do whatever you need to do with line1 alone
+</code></pre>
+
+<p>This keeps the code simple and yet robust. Using the <code>with</code> closes the file if something else happens, or just closes the resources once you have exhausted it and exit the loop.</p>
+
+<p>Note that <code>with</code> needs 2.6, or 2.5 with the <code>with_statement</code> feature enabled.</p>
+<br /><b>#4</b><br /><p>Works for even and odd-length files. It just ignores the unmatched last line.</p>
+
+<pre><code>f=file("file")
+
+lines = f.readlines()
+for even, odd in zip(lines[0::2], lines[1::2]):
+    print "even : ", even
+    print "odd : ", odd
+    print "end cycle"
+f.close()
+</code></pre>
+
+<p>If you have large files, this is not the correct approach. You are loading all the file in memory with readlines(). I once wrote a class that read the file saving the fseek position of each start of line. This allows you to get specific lines without having all the file in memory, and you can also go forward and backward.</p>
+
+<p>I paste it here. License is Public domain, meaning, do what you want with it. Please note that this class has been written 6 years ago and I haven't touched or checked it since. I think it's not even file compliant. <em>Caveat emptor</em>. Also, note that this is overkill for your problem. I'm not claiming you should definitely go this way, but I had this code and I enjoy sharing it if you need more complex access.</p>
+
+<pre><code>import string
+import re
+
+class FileReader:
+    """ 
+    Similar to file class, but allows to access smoothly the lines 
+    as when using readlines(), with no memory payload, going back and forth,
+    finding regexps and so on.
+    """
+    def __init__(self,filename): # fold&gt;&gt;
+        self.__file=file(filename,"r")
+        self.__currentPos=-1
+        # get file length
+        self.__file.seek(0,0)
+        counter=0
+        line=self.__file.readline()
+        while line != '':
+            counter = counter + 1
+            line=self.__file.readline()
+        self.__length = counter
+        # collect an index of filedescriptor positions against
+        # the line number, to enhance search
+        self.__file.seek(0,0)
+        self.__lineToFseek = []
+
+        while True:
+            cur=self.__file.tell()
+            line=self.__file.readline()
+            # if it's not null the cur is valid for
+            # identifying a line, so store
+            self.__lineToFseek.append(cur)
+            if line == '':
+                break
+    # &lt;&lt;fold
+    def __len__(self): # fold&gt;&gt;
+        """
+        member function for the operator len()
+        returns the file length
+        FIXME: better get it once when opening file
+        """
+        return self.__length
+        # &lt;&lt;fold
+    def __getitem__(self,key): # fold&gt;&gt;
+        """ 
+        gives the "key" line. The syntax is
+
+        import FileReader
+        f=FileReader.FileReader("a_file")
+        line=f[2]
+
+        to get the second line from the file. The internal
+        pointer is set to the key line
+        """
+
+        mylen = self.__len__()
+        if key &lt; 0:
+            self.__currentPos = -1
+            return ''
+        elif key &gt; mylen:
+            self.__currentPos = mylen
+            return ''
+
+        self.__file.seek(self.__lineToFseek[key],0)
+        counter=0
+        line = self.__file.readline()
+        self.__currentPos = key
+        return line
+        # &lt;&lt;fold
+    def next(self): # fold&gt;&gt;
+        if self.isAtEOF():
+            raise StopIteration
+        return self.readline()
+    # &lt;&lt;fold
+    def __iter__(self): # fold&gt;&gt;
+        return self
+    # &lt;&lt;fold
+    def readline(self): # fold&gt;&gt;
+        """
+        read a line forward from the current cursor position.
+        returns the line or an empty string when at EOF
+        """
+        return self.__getitem__(self.__currentPos+1)
+        # &lt;&lt;fold
+    def readbackline(self): # fold&gt;&gt;
+        """
+        read a line backward from the current cursor position.
+        returns the line or an empty string when at Beginning of
+        file.
+        """
+        return self.__getitem__(self.__currentPos-1)
+        # &lt;&lt;fold
+    def currentLine(self): # fold&gt;&gt;
+        """
+        gives the line at the current cursor position
+        """
+        return self.__getitem__(self.__currentPos)
+        # &lt;&lt;fold
+    def currentPos(self): # fold&gt;&gt;
+        """ 
+        return the current position (line) in the file
+        or -1 if the cursor is at the beginning of the file
+        or len(self) if it's at the end of file
+        """
+        return self.__currentPos
+        # &lt;&lt;fold
+    def toBOF(self): # fold&gt;&gt;
+        """
+        go to beginning of file
+        """
+        self.__getitem__(-1)
+        # &lt;&lt;fold
+    def toEOF(self): # fold&gt;&gt;
+        """
+        go to end of file
+        """
+        self.__getitem__(self.__len__())
+        # &lt;&lt;fold
+    def toPos(self,key): # fold&gt;&gt;
+        """
+        go to the specified line
+        """
+        self.__getitem__(key)
+        # &lt;&lt;fold
+    def isAtEOF(self): # fold&gt;&gt;
+        return self.__currentPos == self.__len__()
+        # &lt;&lt;fold
+    def isAtBOF(self): # fold&gt;&gt;
+        return self.__currentPos == -1
+        # &lt;&lt;fold
+    def isAtPos(self,key): # fold&gt;&gt;
+        return self.__currentPos == key
+        # &lt;&lt;fold
+
+    def findString(self, thestring, count=1, backward=0): # fold&gt;&gt;
+        """
+        find the count occurrence of the string str in the file
+        and return the line catched. The internal cursor is placed
+        at the same line.
+        backward is the searching flow.
+        For example, to search for the first occurrence of "hello
+        starting from the beginning of the file do:
+
+        import FileReader
+        f=FileReader.FileReader("a_file")
+        f.toBOF()
+        f.findString("hello",1,0)
+
+        To search the second occurrence string from the end of the
+        file in backward movement do:
+
+        f.toEOF()
+        f.findString("hello",2,1)
+
+        to search the first occurrence from a given (or current) position
+        say line 150, going forward in the file 
+
+        f.toPos(150)
+        f.findString("hello",1,0)
+
+        return the string where the occurrence is found, or an empty string
+        if nothing is found. The internal counter is placed at the corresponding
+        line number, if the string was found. In other case, it's set at BOF
+        if the search was backward, and at EOF if the search was forward.
+
+        NB: the current line is never evaluated. This is a feature, since
+        we can so traverse occurrences with a
+
+        line=f.findString("hello")
+        while line == '':
+            line.findString("hello")
+
+        instead of playing with a readline every time to skip the current
+        line.
+        """
+        internalcounter=1
+        if count &lt; 1:
+            count = 1
+        while 1:
+            if backward == 0:
+                line=self.readline()
+            else:
+                line=self.readbackline()
+
+            if line == '':
+                return ''
+            if string.find(line,thestring) != -1 :
+                if count == internalcounter:
+                    return line
+                else:
+                    internalcounter = internalcounter + 1
+                    # &lt;&lt;fold
+    def findRegexp(self, theregexp, count=1, backward=0): # fold&gt;&gt;
+        """
+        find the count occurrence of the regexp in the file
+        and return the line catched. The internal cursor is placed
+        at the same line.
+        backward is the searching flow.
+        You need to pass a regexp string as theregexp.
+        returns a tuple. The fist element is the matched line. The subsequent elements
+        contains the matched groups, if any.
+        If no match returns None
+        """
+        rx=re.compile(theregexp)
+        internalcounter=1
+        if count &lt; 1:
+            count = 1
+        while 1:
+            if backward == 0:
+                line=self.readline()
+            else:
+                line=self.readbackline()
+
+            if line == '':
+                return None
+            m=rx.search(line)
+            if m != None :
+                if count == internalcounter:
+                    return (line,)+m.groups()
+                else:
+                    internalcounter = internalcounter + 1
+    # &lt;&lt;fold
+    def skipLines(self,key): # fold&gt;&gt;
+        """
+        skip a given number of lines. Key can be negative to skip
+        backward. Return the last line read.
+        Please note that skipLines(1) is equivalent to readline()
+        skipLines(-1) is equivalent to readbackline() and skipLines(0)
+        is equivalent to currentLine()
+        """
+        return self.__getitem__(self.__currentPos+key)
+    # &lt;&lt;fold
+    def occurrences(self,thestring,backward=0): # fold&gt;&gt;
+        """
+        count how many occurrences of str are found from the current
+        position (current line excluded... see skipLines()) to the
+        begin (or end) of file.
+        returns a list of positions where each occurrence is found,
+        in the same order found reading the file.
+        Leaves unaltered the cursor position.
+        """
+        curpos=self.currentPos()
+        list = []
+        line = self.findString(thestring,1,backward)
+        while line != '':
+            list.append(self.currentPos())
+            line = self.findString(thestring,1,backward)
+        self.toPos(curpos)
+        return list
+        # &lt;&lt;fold
+    def close(self): # fold&gt;&gt;
+        self.__file.close()
+    # &lt;&lt;fold
+</code></pre>
+<br /><b>#5</b><br /><pre>
+file_name = 'your_file_name'
+file_open = open(file_name, 'r')
+
+def handler(line_one, line_two):
+    print(line_one, line_two)
+
+while file_open:
+    try:
+        one = file_open.next()
+        two = file_open.next() 
+        handler(one, two)
+    except(StopIteration):
+        file_open.close()
+        break
+</pre>
+<br /><b>#6</b><br /><pre><code>def readnumlines(file, num=2):
+    f = iter(file)
+    while True:
+        lines = [None] * num
+        for i in range(num):
+            try:
+                lines[i] = f.next()
+            except StopIteration: # EOF or not enough lines available
+                return
+        yield lines
+
+# use like this
+f = open("thefile.txt", "r")
+for line1, line2 in readnumlines(f):
+    # do something with line1 and line2
+
+# or
+for line1, line2, line3, ..., lineN in readnumlines(f, N):
+    # do something with N lines
+</code></pre>
+<br /><b>#7</b><br /><p>My idea is to create a generator that reads two lines from the file at a time, and returns this as a 2-tuple, This means you can then iterate over the results.</p>
+
+<pre><code>from cStringIO import StringIO
+
+def read_2_lines(src):   
+    while True:
+        line1 = src.readline()
+        if not line1: break
+        line2 = src.readline()
+        if not line2: break
+        yield (line1, line2)
+
+
+data = StringIO("line1\nline2\nline3\nline4\n")
+for read in read_2_lines(data):
+    print read
+</code></pre>
+
+<p>If you have an odd number of lines, it won't work perfectly, but this should give you a good outline.</p>
+<br /><b>#8</b><br /><p>I have worked on a similar problem last month. I tried a while loop with f.readline() as well as f.readlines().
+My data file is not huge, so I finally chose f.readlines(), which gives me more control of the index, otherwise
+I have to use f.seek() to move back and forth the file pointer.</p>
+
+<p>My case is more complicated than OP. Because my data file is more flexible on how many lines to be parsed each time, so
+I have to check a few conditions before I can parse the data.</p>
+
+<p>Another problem I found out about f.seek() is that it doesn't handle utf-8 very well when I use codecs.open('', 'r', 'utf-8'), (not exactly sure about the culprit, eventually I gave up this approach.)</p>
+<br /><b>#9</b><br /><p>Simple little reader. It will pull lines in pairs of two and return them as a tuple as you iterate over the object. You can close it manually or it will close itself when it falls out of scope.</p>
+
+<pre><code>class doublereader:
+    def __init__(self,filename):
+        self.f = open(filename, 'r')
+    def __iter__(self):
+        return self
+    def next(self):
+        return self.f.next(), self.f.next()
+    def close(self):
+        if not self.f.closed:
+            self.f.close()
+    def __del__(self):
+        self.close()
+
+#example usage one
+r = doublereader(r"C:\file.txt")
+for a, h in r:
+    print "x:%s\ny:%s" % (a,h)
+r.close()
+
+#example usage two
+for x,y in doublereader(r"C:\file.txt"):
+    print "x:%s\ny:%s" % (x,y)
+#closes itself as soon as the loop goes out of scope
+</code></pre>
+<br /><b>#10</b><br /><pre><code>import linecache  
+filename = "ooxx.txt"  
+print(linecache.getline(filename,2))
+</code></pre>
+<br />

@@ -1,0 +1,133 @@
+<h3>Question (ID-105095):</h3><h2>Are locks unnecessary in multi-threaded Python code because of the GIL?</h2><p>If you are relying on an implementation of Python that has a Global Interpreter Lock (i.e. CPython) and writing multithreaded code, do you really need locks at all?</p>
+
+<p>If the GIL doesn't allow multiple instructions to be executed in parallel, wouldn't shared data be unnecessary to protect?</p>
+
+<p>sorry if this is a dumb question, but it is something I have always wondered about Python on multi-processor/core machines.  </p>
+
+<p>same thing would apply to any other language implementation that has a GIL.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>You will still need locks if you share state between threads. The GIL only protects the interpreter internally. You can still have inconsistent updates in your own code.</p>
+
+<p>For example:</p>
+
+<pre><code>#!/usr/bin/env python
+import threading
+
+shared_balance = 0
+
+class Deposit(threading.Thread):
+    def run(self):
+        for _ in xrange(1000000):
+            global shared_balance
+            balance = shared_balance
+            balance += 100
+            shared_balance = balance
+
+class Withdraw(threading.Thread):
+    def run(self):
+        for _ in xrange(1000000):
+            global shared_balance
+            balance = shared_balance
+            balance -= 100
+            shared_balance = balance
+
+threads = [Deposit(), Withdraw()]
+
+for thread in threads:
+    thread.start()
+
+for thread in threads:
+    thread.join()
+
+print shared_balance
+</code></pre>
+
+<p>Here, your code can be interrupted between reading the shared state (<code>balance = shared_balance</code>) and writing the changed result back (<code>shared_balance = balance</code>), causing a lost update. The result is a random value for the shared state.</p>
+
+<p>To make the updates consistent, run methods would need to lock the shared state around the read-modify-write sections (inside the loops) or have <a href="http://en.wikipedia.org/wiki/Software_transactional_memory" rel="nofollow">some way to detect when the shared state had changed since it was read</a>.</p>
+<br /><b>#1</b><br /><p>No - the GIL just protects python internals from multiple threads altering their state.  This is a very low-level of locking, sufficient only to keep python's own structures in a consistent state.  It doesn't cover the <em>application</em> level locking you'll need to do to cover thread safety in your own code.</p>
+
+<p>The essence of locking is to ensure that a particular <em>block</em> of code is only executed by one thread.  The GIL enforces this for blocks the size of a single bytecode, but usually you want the lock to span a larger block of code than this.</p>
+<br /><b>#2</b><br /><p>The Global Interpreter Lock prevents threads from accessing the <em>interpreter</em> simultaneously (thus CPython only ever uses one core). However, as I understand it, the threads are still interrupted and scheduled <em>preemptively</em>, which means you still need locks on shared data structures, lest your threads stomp on each other's toes.</p>
+
+<p>The answer I've encountered time and time again is that multithreading in Python is rarely worth the overhead, because of this. I've heard good things about the <a href="http://pyprocessing.berlios.de/" rel="nofollow">PyProcessing</a> project, which makes running multiple processes as "simple" as multithreading, with shared data structures, queues, etc. (PyProcessing will be introduced into the standard library of the upcoming Python 2.6 as the <a href="http://www.python.org/dev/peps/pep-0371/" rel="nofollow">multiprocessing</a> module.) This gets you around the GIL, as each process has its own interpreter.</p>
+<br /><b>#3</b><br /><p>This post describes the GIL at a fairly high-level:</p>
+
+<ul>
+<li><a href="http://www.pyzine.com/Issue001/Section_Articles/article_ThreadingGlobalInterpreter.html" rel="nofollow">http://www.pyzine.com/Issue001/Section_Articles/article_ThreadingGlobalInterpreter.html</a></li>
+</ul>
+
+<p>Of particular interest are these quotes:</p>
+
+<blockquote>
+  <p>Every ten instructions (this default
+  can be changed), the core releases the
+  GIL for the current thread. At that
+  point, the OS chooses a thread from
+  all the threads competing for the lock
+  (possibly choosing the same thread
+  that just released the GIL – you don't
+  have any control over which thread
+  gets chosen); that thread acquires the
+  GIL and then runs for another ten
+  bytecodes.</p>
+</blockquote>
+
+<p>and </p>
+
+<blockquote>
+  <p>Note carefully that the GIL only
+  restricts pure Python code. Extensions
+  (external Python libraries usually
+  written in C) can be written that
+  release the lock, which then allows
+  the Python interpreter to run
+  separately from the extension until
+  the extension reacquires the lock.</p>
+</blockquote>
+
+<p>It sounds like the GIL just provides fewer possible instances for a context switch, and makes multi-core/processor systems behave as a single core, with respect to each python interpreter instance, so yes, you still need to use synchronization mechanisms.</p>
+<br /><b>#4</b><br /><p>Adding to the discussion:</p>
+
+<p>Because the GIL exists, some operations are atomic in Python and do not need a lock. </p>
+
+<p><a href="http://www.python.org/doc/faq/library/#what-kinds-of-global-value-mutation-are-thread-safe" rel="nofollow">http://www.python.org/doc/faq/library/#what-kinds-of-global-value-mutation-are-thread-safe</a></p>
+
+<p>As stated by the other answers, however, you <em>still</em> need to use locks whenever the application logic requires them (such as in a Producer/Consumer problem).</p>
+<br /><b>#5</b><br /><p>You still need to use locks (your code could be interrupted at any time to execute another thread and this can cause data inconsistencies). The problem with GIL is that it prevents Python code from using more cores at the same time (or multiple processors if they are available).</p>
+<br /><b>#6</b><br /><p>A little bit of update from Will Harris's example:</p>
+
+<pre><code>class Withdraw(threading.Thread):  
+def run(self):            
+    for _ in xrange(1000000):  
+        global shared_balance  
+        if shared_balance &gt;= 100:
+          balance = shared_balance
+          balance -= 100  
+          shared_balance = balance
+</code></pre>
+
+<p>Put a value check statement in the withdraw and I don't see negative anymore and updates seems consistent. My question is:</p>
+
+<p>If GIL prevents only one thread can be executed at any atomic time, then where would be the stale value? If no stale value, why we need lock? (Assuming we only talk about pure python code)</p>
+
+<p>If I understand correctly, the above condition check wouldn't work in a <em>real</em> threading environment. When more than one threads are executing concurrently, stale value can be created hence the inconsistency of the share state, then you really need a lock. But if python really only allows just one thread at any time (time slicing threading), then there shouldn't be possible for stale value to exist, right?</p>
+<br /><b>#7</b><br /><p>Think of it this way:</p>
+
+<p>On a single processor computer, multithreading happens by suspending one thread and starting another fast enough to make it appear to be running at the same time. This is like Python with the GIL: only one thread is ever actually running.</p>
+
+<p>The problem is that the thread can be suspended anywhere, for example, if I want to compute b = (a + b) * 3, this might produce instructions something like this:</p>
+
+<pre><code>1    a += b
+2    a *= 3
+3    b = a
+</code></pre>
+
+<p>Now, lets say that is running in a thread and that thread is suspended after either line 1 or 2 and then another thread kicks in and runs:</p>
+
+<pre><code>b = 5
+</code></pre>
+
+<p>Then when the other thread resumes, b is overwritten by the old computed values, which is probably not what was expected.</p>
+
+<p>So you can see that even though they're not ACTUALLY running at the same time, you still need locking.</p>
+<br />

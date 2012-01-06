@@ -1,0 +1,320 @@
+Question (ID-128573): Using property() on classmethods I have a class with two class methods (using the classmethod() function) for getting and setting what is essentially a static variable. I tried to use the property() function with these, but it results in an error. I was able to reproduce the error with the following in the interpreter: 
+
+ &gt;&gt;&gt; class foo(object):
+...  _var=5
+...  def getvar(cls):
+...    return cls._var
+...  getvar=classmethod(getvar)
+...  def setvar(cls,value):
+...    cls._var=value
+...  setvar=classmethod(setvar)
+...  var=property(getvar,setvar)
+...
+&gt;&gt;&gt; f.getvar()
+5
+&gt;&gt;&gt; f.setvar(4)
+&gt;&gt;&gt; f.getvar()
+4
+&gt;&gt;&gt; f.var
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in ?
+TypeError: 'classmethod' object is not callable
+&gt;&gt;&gt; f.var=5
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in ?
+TypeError: 'classmethod' object is not callable
+ 
+
+ Is it possible to use the property() function with classmethod decorated functions? 
+ Answers (Total-8): #0 Reading the Python 2.2 release notes, I find the following. 
+
+ 
+ The get method [of a property] won't be called when
+ the property is accessed as a class
+ attribute (C.x) instead of as an
+ instance attribute (C().x). If you
+ want to override the __get__ operation
+ for properties when used as a class
+ attribute, you can subclass property -
+ it is a new-style type itself - to
+ extend its __get__ method, or you can
+ define a descriptor type from scratch
+ by creating a new-style class that
+ defines __get__, __set__ and
+ __delete__ methods. 
+ 
+
+ NOTE: The below method doesn't actually work for setters, only getters. 
+
+ Therefore, I believe the prescribed solution is to create a ClassProperty as a subclass of property. 
+
+ class ClassProperty(property):
+ def __get__(self, cls, owner):
+  return self.fget.__get__(None, owner)()
+
+class foo(object):
+ _var=5
+ def getvar(cls):
+  return cls._var
+ getvar=classmethod(getvar)
+ def setvar(cls,value):
+  cls._var=value
+ setvar=classmethod(setvar)
+ var=ClassProperty(getvar,setvar)
+
+assert foo.getvar() == 5
+foo.setvar(4)
+assert foo.getvar() == 4
+assert foo.var == 4
+foo.var = 3
+assert foo.var == 3
+ 
+
+ However, the setters don't actually work: 
+
+ foo.var = 4
+assert foo.var == foo._var # raises AssertionError
+ 
+
+ foo._var is unchanged, you've simply overwritten the property with a new value. 
+
+ You can also use ClassProperty as a decorator: 
+
+ class Foo(object):
+ _var = 5
+
+ @ClassProperty
+ @classmethod
+ def var(cls):
+  return cls._var
+
+ @var.setter
+ @classmethod
+ def var(cls, value):
+  cls._var = value
+
+assert foo.var == 5
+ 
+ #1 There is no reasonable way to make this "class property" system to work in Python. 
+
+ Here is one unreasonable way to make it work. You can certainly make it more seamless with increasing amounts of metaclass magic. 
+
+ class ClassProperty(object):
+ def __init__(self, getter, setter):
+  self.getter = getter
+  self.setter = setter
+ def __get__(self, cls, owner):
+  return getattr(cls, self.getter)()
+ def __set__(self, cls, value):
+  getattr(cls, self.setter)(value)
+
+class MetaFoo(type):
+ var = ClassProperty('getvar', 'setvar')
+
+class Foo(object):
+ __metaclass__ = MetaFoo
+ _var = 5
+ @classmethod
+ def getvar(cls):
+  print "Getting var =", cls._var
+  return cls._var
+ @classmethod
+ def setvar(cls, value):
+  print "Setting var =", value
+  cls._var = value
+
+x = Foo.var
+print "Foo.var = ", x
+Foo.var = 42
+x = Foo.var
+print "Foo.var = ", x
+ 
+
+ The knot of the issue is that properties are what Python calls "descriptors". There is no short and easy way to explain how this sort of metaprogramming works, so I must point you to the descriptor howto . 
+
+ You only ever need to understand this sort of things if you are implementing a fairly advanced framework. Like a transparent object persistence or RPC system, or a kind of domain-specific language. 
+
+ However, in a comment to a previous answer, you say that you 
+
+ 
+ need to modify an attribute that in such a way that is seen by all instances of a class, and in the scope from which these class methods are called does not have references to all instances of the class. 
+ 
+
+ It seems to me, what you really want is an Observer design pattern. 
+ #2 
+ Because I need to modify an attribute that in such a way that is seen by all instances of a class, and in the scope from which these class methods are called does not have references to all instances of the class. 
+ 
+
+ Do you have access to at least one instance of the class? I can think of a way to do it then: 
+
+ class MyClass (object):
+ __var = None
+
+ def _set_var (self, value):
+  type (self).__var = value
+
+ def _get_var (self):
+  return self.__var
+
+ var = property (_get_var, _set_var)
+
+a = MyClass ()
+b = MyClass ()
+a.var = "foo"
+print b.var
+ 
+ #3 Setting it only on the meta class doesn't help if you want to access the class property via an instantiated object, in this case you need to install a normal property on the object as well (which dispatches to the class property). I think the following is a bit more clear: 
+
+ #!/usr/bin/python
+
+class classproperty(property):
+ def __get__(self, obj, type_):
+  return self.fget.__get__(None, type_)()
+
+ def __set__(self, obj, value):
+  cls = type(obj)
+  return self.fset.__get__(None, cls)(value)
+
+class A (object):
+
+ _foo = 1
+
+ @classproperty
+ @classmethod
+ def foo(cls):
+  return cls._foo
+
+ @foo.setter
+ @classmethod
+ def foo(cls, value):
+  cls.foo = value
+
+a = A()
+
+print a.foo
+
+b = A()
+
+print b.foo
+
+b.foo = 5
+
+print a.foo
+
+A.foo = 10
+
+print b.foo
+
+print A.foo
+ 
+ #4 Here's my suggestion. Don't use class methods. 
+
+ Seriously. 
+
+ What's the reason for using class methods in this case? Why not have an ordinary object of an ordinary class? 
+
+ 
+
+ If you simply want to change the value, a property isn't really very helpful is it? Just set the attribute value and be done with it. 
+
+ A property should only be used if there's something to conceal -- something that might change in a future implementation. 
+
+ Maybe your example is way stripped down, and there is some hellish calculation you've left off. But it doesn't look like the property adds significant value. 
+
+ The Java-influenced "privacy" techniques (in Python, attribute names that begin with _) aren't really very helpful. Private from whom? The point of private is a little nebulous when you have the source (as you do in Python.) 
+
+ The Java-influenced EJB-style getters and setters (often done as properties in Python) are there to facilitate Java's primitive introspection as well as to pass muster with the static language compiler. All those getters and setters aren't as helpful in Python. 
+ #5 Half a solution, __set__ on the class does not work, still. The solution is a custom property class implementing both a property and a staticmethod 
+
+ class ClassProperty(object):
+ def __init__(self, fget, fset):
+  self.fget = fget
+  self.fset = fset
+
+ def __get__(self, instance, owner):
+  return self.fget()
+
+ def __set__(self, instance, value):
+  self.fset(value)
+
+class Foo(object):
+ _bar = 1
+ def get_bar():
+  print 'getting'
+  return Foo._bar
+
+ def set_bar(value):
+  print 'setting'
+  Foo._bar = value
+
+ bar = ClassProperty(get_bar, set_bar)
+
+f = Foo()
+#__get__ works
+f.bar
+Foo.bar
+
+f.bar = 2
+Foo.bar = 3 #__set__ does not
+ 
+ #6 Give this a try, it gets the job done without having to change/add a lot of existing code. 
+
+ &gt;&gt;&gt; class foo(object):
+...  _var = 5
+...  def getvar(cls):
+...   return cls._var
+...  getvar = classmethod(getvar)
+...  def setvar(cls, value):
+...   cls._var = value
+...  setvar = classmethod(setvar)
+...  var = property(lambda self: self.getvar(), lambda self, val: self.setvar(val))
+...
+&gt;&gt;&gt; f = foo()
+&gt;&gt;&gt; f.var
+5
+&gt;&gt;&gt; f.var = 3
+&gt;&gt;&gt; f.var
+3
+ 
+
+ The property function needs two callable arguments. give them lambda wrappers (which it passes the instance as its first argument) and all is well. 
+ #7 A property is created on a class but affects an instance. So if you want a classmethod property, create the property on the metaclass. 
+
+ &gt;&gt;&gt; class foo(object):
+ _var = 5
+ class __metaclass__(type):
+ 	pass
+ @classmethod
+ def getvar(cls):
+ 	return cls._var
+ @classmethod
+ def setvar(cls, value):
+ 	cls._var = value
+
+
+&gt;&gt;&gt; foo.__metaclass__.var = property(foo.getvar.im_func, foo.setvar.im_func)
+&gt;&gt;&gt; foo.var
+5
+&gt;&gt;&gt; foo.var = 3
+&gt;&gt;&gt; foo.var
+3
+ 
+
+ But since you're using a metaclass anyway, it will read better if you just move the classmethods in there. 
+
+ &gt;&gt;&gt; class foo(object):
+ _var = 5
+ class __metaclass__(type):
+ 	@property
+ 	def var(cls):
+ 		return cls._var
+ 	@var.setter
+ 	def var(cls, value):
+ 		cls._var = value
+
+
+&gt;&gt;&gt; foo.var
+5
+&gt;&gt;&gt; foo.var = 3
+&gt;&gt;&gt; foo.var
+3

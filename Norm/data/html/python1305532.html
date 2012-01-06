@@ -1,0 +1,292 @@
+<h3>Question (ID-1305532):</h3><h2>Convert Python dict to object</h2><p>I'm searching for an elegant way to convert a normal Python dict with some nested dicts to an object.</p>
+
+<p>For example:</p>
+
+<pre><code>&gt;&gt;&gt; d = {'a': 1, 'b': {'c': 2}, 'd': ["hi", {'foo': "bar"}]}
+</code></pre>
+
+<p>Should be accessible in this way:</p>
+
+<pre><code>&gt;&gt;&gt; x = dict2obj(d)
+&gt;&gt;&gt; x.a
+1
+&gt;&gt;&gt; x.b.c
+2
+&gt;&gt;&gt; x.d[1].foo
+bar
+</code></pre>
+
+<p>I think, this is not possible without recursion, but what would be a nice way to get an objectstyle for dicts?</p>
+
+<p>Thank you in advance,
+cheers Marc</p>
+<br /><h3>Answers (Total-14):</h3><b>#0</b><br /><pre><code>class Struct:
+    def __init__(self, **entries): 
+        self.__dict__.update(entries)
+</code></pre>
+
+<p>Then, you can use:</p>
+
+<pre><code>&gt;&gt;&gt; args = {'a': 1, 'b': 2}
+&gt;&gt;&gt; s = Struct(**args)
+&gt;&gt;&gt; s
+&lt;__main__.Struct instance at 0x01D6A738&gt;
+&gt;&gt;&gt; s.a
+1
+&gt;&gt;&gt; s.b
+2
+</code></pre>
+<br /><b>#1</b><br /><pre><code>class obj(object):
+    def __init__(self, d):
+        for a, b in d.items():
+            if isinstance(b, (list, tuple)):
+               setattr(self, a, [obj(x) if isinstance(x, dict) else x for x in b])
+            else:
+               setattr(self, a, obj(b) if isinstance(b, dict) else b)
+
+
+&gt;&gt;&gt; x = obj(d)
+&gt;&gt;&gt; x.b.c
+2
+&gt;&gt;&gt; x.d[1].foo
+'bar'
+</code></pre>
+<br /><b>#2</b><br /><pre><code>x = type('new_dict', (object,), d)
+</code></pre>
+
+<p>then add recursion to this and you're done.</p>
+
+<p><strong>edit</strong> this is how I'd implement it:</p>
+
+<pre><code>&gt;&gt;&gt; d
+{'a': 1, 'b': {'c': 2}, 'd': ['hi', {'foo': 'bar'}]}
+&gt;&gt;&gt; def obj_dic(d):
+    top = type('new', (object,), d)
+    seqs = tuple, list, set, frozenset
+    for i, j in d.items():
+    	if isinstance(j, dict):
+    	    setattr(top, i, obj_dic(j))
+    	elif isinstance(j, seqs):
+    	    setattr(top, i, 
+    		    type(j)(obj_dic(sj) if isinstance(sj, dict) else sj for sj in j))
+    	else:
+    	    setattr(top, i, j)
+    return top
+
+&gt;&gt;&gt; x = obj_dic(d)
+&gt;&gt;&gt; x.a
+1
+&gt;&gt;&gt; x.b.c
+2
+&gt;&gt;&gt; x.d[1].foo
+'bar'
+</code></pre>
+<br /><b>#3</b><br /><pre><code>&gt;&gt;&gt; def dict2obj(d):
+        if isinstance(d, list):
+    	    d = [dict2obj(x) for x in d]
+        if not isinstance(d, dict):
+            return d
+        class C(object):
+    	    pass
+        o = C()
+        for k in d:
+            o.__dict__[k] = dict2obj(d[k])
+        return o
+
+
+&gt;&gt;&gt; d = {'a': 1, 'b': {'c': 2}, 'd': ["hi", {'foo': "bar"}]}
+&gt;&gt;&gt; x = dict2obj(d)
+&gt;&gt;&gt; x.a
+1
+&gt;&gt;&gt; x.b.c
+2
+&gt;&gt;&gt; x.d[1].foo
+'bar'
+</code></pre>
+<br /><b>#4</b><br /><p>This should get your started:</p>
+
+<pre><code>class dict2obj(object):
+    def __init__(self, d):
+        self.__dict__['d'] = d
+
+    def __getattr__(self, key):
+        value = self.__dict__['d'][key]
+        if type(value) == type({}):
+            return dict2obj(value)
+
+        return value
+
+d = {'a': 1, 'b': {'c': 2}, 'd': ["hi", {'foo': "bar"}]}
+
+x = dict2obj(d)
+print x.a
+print x.b.c
+print x.d[1].foo
+</code></pre>
+
+<p>It doesn't work for lists, yet. You'll have to wrap the lists in a UserList and overload <code>__getitem__</code> to wrap dicts.</p>
+<br /><b>#5</b><br /><p>Taking what I feel are the best aspects of the previous examples, here's what I came up with:</p>
+
+<pre><code>class Struct:
+  '''The recursive class for building and representing objects with.'''
+  def __init__(self, obj):
+    for k, v in obj.iteritems():
+      if isinstance(v, dict):
+        setattr(self, k, Struct(v))
+      else:
+        setattr(self, k, v)
+  def __getitem__(self, val):
+    return self.__dict__[val]
+  def __repr__(self):
+    return '{%s}' % str(', '.join('%s : %s' % (k, repr(v)) for
+      (k, v) in self.__dict__.iteritems()))
+</code></pre>
+<br /><b>#6</b><br /><p><code>x.__dict__.update(d)</code> should do fine.</p>
+<br /><b>#7</b><br /><p>Here is another way to implement SilentGhost's original suggestion:</p>
+
+<pre><code>def dict2obj(d):
+  if isinstance(d, dict):
+    n = {}
+    for item in d:
+      if isinstance(d[item], dict):
+        n[item] = dict2obj(d[item])
+      elif isinstance(d[item], (list, tuple)):
+        n[item] = [dict2obj(elem) for elem in d[item]]
+      else:
+        n[item] = d[item]
+    return type('obj_from_dict', (object,), n)
+  else:
+    return d
+</code></pre>
+<br /><b>#8</b><br /><p>Here's another implementation:</p>
+
+<pre><code>class DictObj(object):
+    def __init__(self, d):
+        self.__dict__ = d
+
+def dict_to_obj(d):
+    if isinstance(d, (list, tuple)): return map(dict_to_obj, d)
+    elif not isinstance(d, dict): return d
+    return DictObj(dict((k, dict_to_obj(v)) for (k,v) in d.iteritems()))
+</code></pre>
+
+<p>[Edit] Missed bit about also handling dicts within lists, not just other dicts.  Added fix.</p>
+<br /><b>#9</b><br /><p>Building off <a href="http://stackoverflow.com/questions/1325673/python-how-to-add-property-to-a-class-dynamically/1333275#1333275" title="python-how-to-add-property-to-a-class-dynamically">what i did for this question</a>:</p>
+
+<pre><code>class data(object):
+    def __init__(self,*args,**argd):
+        self.__dict__.update(dict(*args,**argd))
+
+def makedata(d):
+    d2 = {}
+    for n in d:
+        d2[n] = trydata(d[n])
+    return data(d2)
+
+def trydata(o):
+    if isinstance(o,dict):
+        return makedata(o)
+    elif isinstance(o,list):
+        return [trydata(i) for i in o]
+    else:
+        return o
+</code></pre>
+
+<p>You call makedata on the dictionary you want converted (or maybe trydata depending on what you expect as input) and it spits out a data object.</p>
+
+<p>Notes:</p>
+
+<ul>
+<li>You can add elifs to trydata if you need more funtionality</li>
+<li>Obviously this won't work if you want x.a = {} or similar</li>
+<li>If you want a readonly version, use the class data from <a href="http://stackoverflow.com/questions/1325673/python-how-to-add-property-to-a-class-dynamically/1333275#1333275" title="python-how-to-add-property-to-a-class-dynamically">the original answer</a></li>
+</ul>
+<br /><b>#10</b><br /><pre><code>class Struct(object):
+    """Comment removed"""
+    def __init__(self, data):
+        for name, value in data.iteritems():
+            setattr(self, name, self._wrap(value))
+
+    def _wrap(self, value):
+        if isinstance(value, (tuple, list, set, frozenset)): 
+            return type(value)([self._wrap(v) for v in value])
+        else:
+            return Struct(value) if isinstance(value, dict) else value
+</code></pre>
+
+<p>Can be used with any sequence/dict/value structure of any depth.</p>
+<br /><b>#11</b><br /><p>Let me explain a solution I <strong>almost</strong> used some time ago. But first, the reason I did not is illustrated by the fact that the following code:</p>
+
+<pre><code>d = {'from': 1}
+x = dict2obj(d)
+
+print x.from
+</code></pre>
+
+<p>gives this error:</p>
+
+<pre><code>  File "test.py", line 20
+    print x.from == 1
+                ^
+SyntaxError: invalid syntax
+</code></pre>
+
+<p>Because "from" is a Python keyword there are certain dictionary keys you cannot allow.</p>
+
+<p><hr /></p>
+
+<p>Now my solution allows access to the dictionary items by using their names directly. But it also allows you to use "dictionary semantics". Here is the code with example usage:</p>
+
+<pre><code>class dict2obj(dict):
+    def __init__(self, dict_):
+        super(dict2obj, self).__init__(dict_)
+        for key in self:
+            item = self[key]
+            if isinstance(item, list):
+                for idx, it in enumerate(item):
+                    if isinstance(it, dict):
+                        item[idx] = dict2obj(it)
+            elif isinstance(item, dict):
+                self[key] = dict2obj(item)
+
+    def __getattr__(self, key):
+        return self[key]
+
+d = {'a': 1, 'b': {'c': 2}, 'd': ["hi", {'foo': "bar"}]}
+
+x = dict2obj(d)
+
+assert x.a == x['a'] == 1
+assert x.b.c == x['b']['c'] == 2
+assert x.d[1].foo == x['d'][1]['foo'] == "bar"
+</code></pre>
+<br /><b>#12</b><br /><p>thank you for all your suggestions.
+i've put the together for comparison and benchmarked them. you can find the results here:</p>
+
+<p><a href="http://pastebin.org/10514" rel="nofollow">http://pastebin.org/10514</a></p>
+<br /><b>#13</b><br /><p>I stumbled upon the case I needed to recursively convert a list of dicts to list of objects, so based on Roberto's snippet here what did the work for me:</p>
+
+<pre><code>def dict2obj(d):
+    if isinstance(d, dict):
+        n = {}
+        for item in d:
+            if isinstance(d[item], dict):
+                n[item] = dict2obj(d[item])
+            elif isinstance(d[item], (list, tuple)):
+                n[item] = [dict2obj(elem) for elem in d[item]]
+            else:
+                n[item] = d[item]
+        return type('obj_from_dict', (object,), n)
+    elif isinstance(d, (list, tuple,)):
+        l = []
+        for item in d:
+            l.append(dict2obj(item))
+        return l
+    else:
+        return d
+</code></pre>
+
+<p>Note that any tuple will be converted to its list equivalent, for obvious reasons. </p>
+
+<p>Hope this helps someone as much as all your answers did for me, guys.</p>
+<br />

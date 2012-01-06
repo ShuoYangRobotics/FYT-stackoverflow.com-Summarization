@@ -1,0 +1,203 @@
+<h3>Question (ID-38601):</h3><h2>Using Django time/date widgets in custom form</h2><p>How can I use the nifty JavaScript date and time widgets that the default admin uses with my custom view?</p>
+
+<p>I have looked through <a href="http://www.djangoproject.com/documentation/forms/" rel="nofollow">http://www.djangoproject.com/documentation/forms/</a>, and it brefly mentions django.contrib.admin.widgets, but I don't know how to use it?</p>
+
+<p>Here is my template that I want it applied on.</p>
+
+<pre><code>    &lt;form action="." method="POST"&gt;
+        &lt;table&gt;
+            {% for f in form %}
+               &lt;tr&gt; &lt;td&gt; {{ f.name }}&lt;/td&gt; &lt;td&gt;{{ f }}&lt;/td&gt; &lt;/tr&gt;
+            {% endfor %}
+        &lt;/table&gt;
+        &lt;input type="submit" name="submit" value="Add Product"&gt;
+    &lt;/form&gt;
+</code></pre>
+
+<p>Also, I think it should be noted that I haven't really written a view up myself for this form, I am using a generic view. Here is the entry from the url.py:</p>
+
+<pre><code>    (r'^admin/products/add/$', create_object, {'model': Product, 'post_save_redirect': ''}),
+</code></pre>
+
+<p>And I am relevantly new to the whole Django/MVC/MTV thing, so please go easy...</p>
+<br /><h3>Answers (Total-12):</h3><b>#0</b><br /><p>What you have to do to make this work:</p>
+
+<ol>
+<li><p>Define your own ModelForm subclass for your model (best to put it in forms.py in your app), and tell it to use the AdminDateWidget / AdminTimeWidget / AdminSplitDateTime (replace 'mydate' etc with the proper field names from your model):</p>
+
+<pre><code>from django import forms
+from my_app.models import Product
+from django.contrib.admin import widgets                                       
+
+
+class ProductForm(forms.ModelForm):
+    class Meta:
+        model = Product
+    def __init__(self, *args, **kwargs):
+        super(ProductForm, self).__init__(*args, **kwargs)
+        self.fields['mydate'].widget = widgets.AdminDateWidget()
+        self.fields['mytime'].widget = widgets.AdminTimeWidget()
+        self.fields['mydatetime'].widget = widgets.AdminSplitDateTime()
+</code></pre></li>
+<li><p>Change your URLconf to pass 'form_class': ProductForm instead of 'model': Product to the generic create_object view (that'll mean "from my_app.forms import ProductForm" instead of "from my_app.models import Product", of course).</p></li>
+<li><p>In the head of your template, include {{ form.media }} to output the links to the Javascript files.</p></li>
+<li><p>And the hacky part: the admin date/time widgets presume that the i18n JS stuff has been loaded, and also require core.js, but don't provide either one automatically.  So in your template above {{ form.media }} you'll need:</p>
+
+<pre><code>&lt;script type="text/javascript" src="/my_admin/jsi18n/"&gt;&lt;/script&gt;
+&lt;script type="text/javascript" src="/media/admin/js/core.js"&gt;&lt;/script&gt;
+</code></pre>
+
+<p>You may also wish to use the following admin CSS (thanks <a href="http://stackoverflow.com/questions/38601/using-django-time-date-widgets-in-custom-form/719583#719583">Alex</a> for mentioning this):</p>
+
+<pre><code>&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/forms.css"/&gt;
+&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/base.css"/&gt;
+&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/global.css"/&gt;
+&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/widgets.css"/&gt;
+</code></pre></li>
+</ol>
+
+<p>This implies that Django's admin media (ADMIN_MEDIA_PREFIX) is at /media/admin/ - you can change that for your setup.  Ideally you'd use a context processor to pass this values to your template instead of hardcoding it, but that's beyond the scope of this question.</p>
+
+<p>This also requires that the URL /my_admin/jsi18n/ be manually wired up to the django.views.i18n.javascript_catalog view (or null_javascript_catalog if you aren't using I18N).  You have to do this yourself instead of going through the admin application so it's accessible regardless of whether you're logged into the admin (thanks <a href="http://stackoverflow.com/questions/38601/using-django-time-date-widgets-in-custom-form/408230#408230">Jeremy</a> for pointing this out).  Sample code for your URLconf:</p>
+
+<pre><code>(r'^my_admin/jsi18n', 'django.views.i18n.javascript_catalog'),
+</code></pre>
+
+<p>Lastly, if you are using Django 1.2 or later, you need some additional code in your template to help the widgets find their media:</p>
+
+<pre><code>{% load adminmedia %} /* At the top of the template. */
+
+/* In the head section of the template. */
+&lt;script type="text/javascript"&gt;
+window.__admin_media_prefix__ = "{% filter escapejs %}{% admin_media_prefix %}{% endfilter %}";
+&lt;/script&gt;
+</code></pre>
+
+<p>Thanks <a href="http://stackoverflow.com/questions/38601/using-django-time-date-widgets-in-custom-form/2818128#2818128">lupefiasco</a> for this addition.</p>
+
+<p>The growing complexity of this answer over time, and the many hacks required, probably ought to caution you against doing this at all. It's relying on undocumented internal implementation details of the admin, is likely to break again in future versions of Django, and is no easier to implement than just finding another JS calendar widget and using that.</p>
+<br /><b>#1</b><br /><p>As the solution is hackish, I think using your own date/time widget with some JavaScript is more feasible.</p>
+<br /><b>#2</b><br /><p>Yep, I ended up overriding the /admin/jsi18n/ url.</p>
+
+<p>Here's what I added in my urls.py.  Make sure it's above the /admin/ url</p>
+
+<pre><code>    (r'^admin/jsi18n', i18n_javascript),
+</code></pre>
+
+<p>And here is the i18n_javascript function I created.</p>
+
+<pre><code>from django.contrib import admin
+def i18n_javascript(request):
+  return admin.site.i18n_javascript(request)
+</code></pre>
+<br /><b>#3</b><br /><p>Complementing the answer by Carl Meyer, I would like to comment that you need to put that header in some valid block (inside the header) within your template.</p>
+
+<pre><code>{% block extra_head %}
+
+&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/forms.css"/&gt;
+&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/base.css"/&gt;
+&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/global.css"/&gt;
+&lt;link rel="stylesheet" type="text/css" href="/media/admin/css/widgets.css"/&gt;
+
+&lt;script type="text/javascript" src="/admin/jsi18n/"&gt;&lt;/script&gt;
+&lt;script type="text/javascript" src="/media/admin/js/core.js"&gt;&lt;/script&gt;
+&lt;script type="text/javascript" src="/media/admin/js/admin/RelatedObjectLookups.js"&gt;&lt;/script&gt;
+
+{{ form.media }}
+
+{% endblock %}
+</code></pre>
+<br /><b>#4</b><br /><p>Starting in Django 1.2 RC1, if you're using the Django admin date picker widge trick, the following has to be added to your template, or you'll see the calendar icon url being referenced through "/missing-admin-media-prefix/".</p>
+
+<pre><code>{% load adminmedia %} /* At the top of the template. */
+
+/* In the head section of the template. */
+&lt;script type="text/javascript"&gt;
+window.__admin_media_prefix__ = "{% filter escapejs %}{% admin_media_prefix %}{% endfilter %}";
+&lt;/script&gt;
+</code></pre>
+<br /><b>#5</b><br /><p>I find myself referencing this post a lot, and found that the <a href="http://docs.djangoproject.com/en/dev/topics/forms/modelforms/#overriding-the-default-field-types" rel="nofollow">documentation</a> defines a <em>slightly</em> less hacky way to override default widgets. </p>
+
+<p>(<em>No need to override the ModelForm's __init__ method</em>)</p>
+
+<p>However, you still need to wire your js and css appropriatly as Carl mentions.</p>
+
+<p><strong>forms.py</strong></p>
+
+<pre><code>from django import forms
+from my_app.models import Product
+from django.contrib.admin import widgets                                       
+
+
+class ProductForm(forms.ModelForm):
+    mydate = forms.DateField(widget=widgets.AdminDateWidget)
+    mytime = forms.TimeField(widget=widgets.AdminTimeWidget)
+    mydatetime = forms.DateTimeField(widget=widgets.AdminSplitDateTime)
+
+    class Meta:
+        model = Product
+</code></pre>
+
+<p>Reference <a href="http://docs.djangoproject.com/en/dev/topics/forms/modelforms/#field-types" rel="nofollow">Field Types</a> to find the default form fields.</p>
+<br /><b>#6</b><br /><p>I finally managed to get this widget working on the dev server, only to have it break on deployment.  I finally decided it wasn't worth shoehorning into my site, and wrote my own widget.  It's not as flexible, but it will probably work well for many: <a href="http://www.copiesofcopies.org/webl/?p=81" rel="nofollow">http://www.copiesofcopies.org/webl/?p=81</a></p>
+<br /><b>#7</b><br /><p>You missed step 4, you need to add the javascript files.</p>
+<br /><b>#8</b><br /><p>Good help!</p>
+
+<p>BUT: the link to /media/admin/js/core.js does not work!
+Changing to /media/js/core.js helped me very well.</p>
+
+<p>Could you please change it in your post?!</p>
+<br /><b>#9</b><br /><p>Updated solution and workaround for <strong>SplitDateTime</strong> with <strong>required=False</strong>:</p>
+
+<p><em>forms.py</em></p>
+
+<pre><code>from django import forms
+
+class SplitDateTimeJSField(forms.SplitDateTimeField):
+    def __init__(self, *args, **kwargs):
+        super(SplitDateTimeJSField, self).__init__(*args, **kwargs)
+        self.widget.widgets[0].attrs = {'class': 'vDateField'}
+        self.widget.widgets[1].attrs = {'class': 'vTimeField'}  
+
+
+class AnyFormOrModelForm(forms.Form):
+    date = forms.DateField(widget=forms.TextInput(attrs={'class':'vDateField'}))
+    time = forms.TimeField(widget=forms.TextInput(attrs={'class':'vTimeField'}))
+    timestamp = SplitDateTimeJSField(required=False,)
+</code></pre>
+
+<p><em>form.html</em></p>
+
+<pre><code>&lt;script type="text/javascript" src="/admin/jsi18n/"&gt;&lt;/script&gt;
+&lt;script type="text/javascript" src="/admin_media/js/core.js"&gt;&lt;/script&gt;
+&lt;script type="text/javascript" src="/admin_media/js/calendar.js"&gt;&lt;/script&gt;
+&lt;script type="text/javascript" src="/admin_media/js/admin/DateTimeShortcuts.js"&gt;&lt;/script&gt;
+</code></pre>
+
+<p><em>urls.py</em></p>
+
+<pre><code>(r'^admin/jsi18n/', 'django.views.i18n.javascript_catalog'),
+</code></pre>
+<br /><b>#10</b><br /><p>The below will also work as a last resort if the above failed</p>
+
+<pre><code>class PaymentsForm(forms.ModelForm):
+   class Meta:
+      model = Payments
+   def __init__(self, *args, **kwargs):
+   super(PaymentsForm, self).__init__(*args, **kwargs)
+   self.fields['date'].widget = SelectDateWidget()
+</code></pre>
+
+<p>Same as </p>
+
+<pre><code> class PaymentsForm(forms.ModelForm):
+   date = forms.DateField(widget=SelectDateWidget())
+   class Meta:
+      model = Payments
+</code></pre>
+
+<p>put this in your forms.py <code>from django.forms.extras.widgets import SelectDateWidget</code></p>
+<br /><b>#11</b><br /><p>(I'm trying to comment on people suggesting to roll their own Calendar widget, but either I don't see the comment button, or I don't have enough rep.)</p>
+
+<p>What happened to <a href="http://en.wikipedia.org/wiki/Don%27t_repeat_yourself" rel="nofollow">DRY</a>? I think it would be best to re-use the admin widget, but perhaps it should be separated from admin, and easier to use. Thanks for this information anyways.</p>
+<br />

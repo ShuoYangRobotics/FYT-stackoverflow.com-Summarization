@@ -1,0 +1,558 @@
+<h3>Question (ID-4900747):</h3><h2>Optimising Python dictionary access code</h2><p><strong>Question:</strong></p>
+
+<p>I've profiled my Python program to death, and there is one function that is slowing everything down. It uses Python dictionaries heavily, so I may not have used them in the best way. If I can't get it running faster, I will have to re-write it in C++, so is there anyone who can help me optimise it in Python?</p>
+
+<p>I hope I've given the right sort of explanation, and that you can make some sense of my code! Thanks in advance for any help.</p>
+
+<p><strong>My code:</strong></p>
+
+<p>This is the offending function, profiled using <a href="http://packages.python.org/line_profiler/" rel="nofollow">line_profiler and kernprof</a>. I'm running Python 2.7</p>
+
+<p>I'm particularly puzzled by things like lines 363, 389 and 405, where an <code>if</code> statement with a comparison of two variables seems to take an inordinate amount of time. </p>
+
+<p>I've considered using <a href="http://numpy.scipy.org/" rel="nofollow">NumPy</a> (as it does sparse matrices) but I don't think it's appropriate because: (1) I'm not indexing my matrix using integers (I'm using object instances); and (2) I'm not storing simple data types in the matrix (I'm storing tuples of a float and an object instance).
+But I'm willing to be persuaded about NumPy.
+If anyone knows about NumPy's sparse matrix performance vs. Python's hash tables, I'd be interested.</p>
+
+<p>Sorry I haven't given a simple example that you can run, but this function is tied up in a much larger project and I couldn't work out how to set up a simple example to test it, without giving you half of my code base!</p>
+
+<pre><code>Timer unit: 3.33366e-10 s
+File: routing_distances.py
+Function: propagate_distances_node at line 328
+Total time: 807.234 s
+
+Line #   Hits         Time  Per Hit   % Time  Line Contents
+328                                               @profile
+329                                               def propagate_distances_node(self, node_a, cutoff_distance=200):
+330                                                       
+331                                                   # a makes sure its immediate neighbours are correctly in its distance table
+332                                                   # because its immediate neighbours may change as binds/folding change
+333    737753   3733642341   5060.8      0.2          for (node_b, neighbour_distance_b_a) in self.neighbours[node_a].iteritems():
+334    512120   2077788924   4057.2      0.1              use_neighbour_link = False
+335                                                       
+336    512120   2465798454   4814.9      0.1              if(node_b not in self.node_distances[node_a]): # a doesn't know distance to b
+337     15857     66075687   4167.0      0.0                  use_neighbour_link = True
+338                                                       else: # a does know distance to b
+339    496263   2390534838   4817.1      0.1                  (node_distance_b_a, next_node) = self.node_distances[node_a][node_b]
+340    496263   2058112872   4147.2      0.1                  if(node_distance_b_a &gt; neighbour_distance_b_a): # neighbour distance is shorter
+341        81       331794   4096.2      0.0                      use_neighbour_link = True
+342    496182   2665644192   5372.3      0.1                  elif((None == next_node) and (float('+inf') == neighbour_distance_b_a)): # direct route that has just broken
+343        75       313623   4181.6      0.0                      use_neighbour_link = True
+344                                                               
+345    512120   1992514932   3890.7      0.1              if(use_neighbour_link):
+346     16013     78149007   4880.3      0.0                  self.node_distances[node_a][node_b] = (neighbour_distance_b_a, None)
+347     16013     83489949   5213.9      0.0                  self.nodes_changed.add(node_a)
+348                                                           
+349                                                           ## Affinity distances update
+350     16013     86020794   5371.9      0.0                  if((node_a.type == Atom.BINDING_SITE) and (node_b.type == Atom.BINDING_SITE)):
+351       164      3950487  24088.3      0.0                      self.add_affinityDistance(node_a, node_b, self.chemistry.affinity(node_a.data, node_b.data))     
+352                                                   
+353                                                   # a sends its table to all its immediate neighbours
+354    737753   3549685140   4811.5      0.1          for (node_b, neighbour_distance_b_a) in self.neighbours[node_a].iteritems():
+355    512120   2129343210   4157.9      0.1              node_b_changed = False
+356                                               
+357                                                       # b integrates a's distance table with its own
+358    512120   2203821081   4303.3      0.1              node_b_chemical = node_b.chemical
+359    512120   2409257898   4704.5      0.1              node_b_distances = node_b_chemical.node_distances[node_b]
+360                                                       
+361                                                       # For all b's routes (to c) that go to a first, update their distances
+362  41756882 183992040153   4406.3      7.6              for node_c, (distance_b_c, node_after_b) in node_b_distances.iteritems(): # Think it's ok to modify items while iterating over them (just not insert/delete) (seems to work ok)
+363  41244762 172425596985   4180.5      7.1                  if(node_after_b == node_a):
+364                                                               
+365  16673654  64255631616   3853.7      2.7                      try:
+366  16673654  88781802534   5324.7      3.7                          distance_b_a_c = neighbour_distance_b_a + self.node_distances[node_a][node_c][0]
+367    187083    929898684   4970.5      0.0                      except KeyError:
+368    187083   1056787479   5648.8      0.0                          distance_b_a_c = float('+inf')
+369                                                                   
+370  16673654  69374705256   4160.7      2.9                      if(distance_b_c != distance_b_a_c): # a's distance to c has changed
+371    710083   3136751361   4417.4      0.1                          node_b_distances[node_c] = (distance_b_a_c, node_a)
+372    710083   2848845276   4012.0      0.1                          node_b_changed = True
+373                                                                   
+374                                                                   ## Affinity distances update
+375    710083   3484577241   4907.3      0.1                          if((node_b.type == Atom.BINDING_SITE) and (node_c.type == Atom.BINDING_SITE)):
+376     99592   1591029009  15975.5      0.1                              node_b_chemical.add_affinityDistance(node_b, node_c, self.chemistry.affinity(node_b.data, node_c.data))
+377                                                                   
+378                                                               # If distance got longer, then ask b's neighbours to update
+379                                                               ## TODO: document this!
+380  16673654  70998570837   4258.1      2.9                      if(distance_b_a_c &gt; distance_b_c):
+381                                                                   #for (node, neighbour_distance) in node_b_chemical.neighbours[node_b].iteritems():
+382   1702852   7413182064   4353.4      0.3                          for node in node_b_chemical.neighbours[node_b]:
+383   1204903   5912053272   4906.7      0.2                              node.chemical.nodes_changed.add(node)
+384                                                       
+385                                                       # Look for routes from a to c that are quicker than ones b knows already
+386  42076729 184216680432   4378.1      7.6              for node_c, (distance_a_c, node_after_a) in self.node_distances[node_a].iteritems():
+387                                                           
+388  41564609 171150289218   4117.7      7.1                  node_b_update = False
+389  41564609 172040284089   4139.1      7.1                  if(node_c == node_b): # a-b path
+390    512120   2040112548   3983.7      0.1                      pass
+391  41052489 169406668962   4126.6      7.0                  elif(node_after_a == node_b): # a-b-a-b path
+392  16251407  63918804600   3933.1      2.6                      pass
+393  24801082 101577038778   4095.7      4.2                  elif(node_c in node_b_distances): # b can already get to c
+394  24004846 103404357180   4307.6      4.3                      (distance_b_c, node_after_b) = node_b_distances[node_c]
+395  24004846 102717271836   4279.0      4.2                      if(node_after_b != node_a): # b doesn't already go to a first
+396   7518275  31858204500   4237.4      1.3                          distance_b_a_c = neighbour_distance_b_a + distance_a_c
+397   7518275  33470022717   4451.8      1.4                          if(distance_b_a_c &lt; distance_b_c): # quicker to go via a
+398    225357    956440656   4244.1      0.0                              node_b_update = True
+399                                                           else: # b can't already get to c
+400    796236   3415455549   4289.5      0.1                      distance_b_a_c = neighbour_distance_b_a + distance_a_c
+401    796236   3412145520   4285.3      0.1                      if(distance_b_a_c &lt; cutoff_distance): # not too for to go
+402    593352   2514800052   4238.3      0.1                          node_b_update = True
+403                                                                   
+404                                                           ## Affinity distances update
+405  41564609 164585250189   3959.7      6.8                  if node_b_update:
+406    818709   3933555120   4804.6      0.2                      node_b_distances[node_c] = (distance_b_a_c, node_a)
+407    818709   4151464335   5070.7      0.2                      if((node_b.type == Atom.BINDING_SITE) and (node_c.type == Atom.BINDING_SITE)):
+408    104293   1704446289  16342.9      0.1                          node_b_chemical.add_affinityDistance(node_b, node_c, self.chemistry.affinity(node_b.data, node_c.data))
+409    818709   3557529531   4345.3      0.1                      node_b_changed = True
+410                                                       
+411                                                       # If any of node b's rows have exceeded the cutoff distance, then remove them
+412  42350234 197075504439   4653.5      8.1              for node_c, (distance_b_c, node_after_b) in node_b_distances.items(): # Can't use iteritems() here, as deleting from the dictionary
+413  41838114 180297579789   4309.4      7.4                  if(distance_b_c &gt; cutoff_distance):
+414    206296    894881754   4337.9      0.0                      del node_b_distances[node_c]
+415    206296    860508045   4171.2      0.0                      node_b_changed = True
+416                                                               
+417                                                               ## Affinity distances update
+418    206296   4698692217  22776.5      0.2                      node_b_chemical.del_affinityDistance(node_b, node_c)
+419                                                       
+420                                                       # If we've modified node_b's distance table, tell its chemical to update accordingly
+421    512120   2130466347   4160.1      0.1              if(node_b_changed):
+422    217858   1201064454   5513.1      0.0                  node_b_chemical.nodes_changed.add(node_b)
+423                                                   
+424                                                   # Remove any neighbours that have infinite distance (have just unbound)
+425                                                   ## TODO: not sure what difference it makes to do this here rather than above (after updating self.node_distances for neighbours)
+426                                                   ##       but doing it above seems to break the walker's movement
+427    737753   3830386968   5192.0      0.2          for (node_b, neighbour_distance_b_a) in self.neighbours[node_a].items(): # Can't use iteritems() here, as deleting from the dictionary
+428    512120   2249770068   4393.1      0.1              if(neighbour_distance_b_a &gt; cutoff_distance):
+429       150       747747   4985.0      0.0                  del self.neighbours[node_a][node_b]
+430                                                           
+431                                                           ## Affinity distances update
+432       150      2148813  14325.4      0.0                  self.del_affinityDistance(node_a, node_b)
+</code></pre>
+
+<p><strong>Explanation of my code:</strong></p>
+
+<p>This function maintains a sparse distance matrix representing the network distance (sum of edge weights on the shortest path) between nodes in a (very big) network. To work with the complete table and use the <a href="http://en.wikipedia.org/wiki/Floyd%E2%80%93Warshall_algorithm" rel="nofollow">Floyd-Warshall algorithm</a> would be very slow. (I tried this first, and it was orders of magnitude slower than the current version.) So my code uses a sparse matrix to represent a thresholded version of the full distance matrix (any paths with a distance greater than 200 units are ignored). The network topolgy changes over time, so this distance matrix needs updating over time. To do this, I am using a rough implementation of a <a href="http://en.wikipedia.org/wiki/Distance-vector_routing_protocol" rel="nofollow">distance-vector routing protocol</a>: each node in the network knows the distance to each other node and the next node on the path. When a topology change happens, the node(s) associated with this change update their distance table(s) accordingly, and tell their immediate neighbours. The information spreads through the network by nodes sending their distance tables to their neighbours, who update their distance tables and spread them to their neighbours.</p>
+
+<p>There is an object representing the distance matrix: <code>self.node_distances</code>. This is a dictionary mapping nodes to routing tables. A node is an object that I've defined. A routing table is a dictionary mapping nodes to tuples of (distance, next_node). Distance is the graph distance from node_a to node_b, and next_node is the neighbour of node_a that you must go to first, on the path between node_a and node_b. A next_node of None indicates that node_a and node_b are graph neighbours. For example, a sample of a distance matrix could be:</p>
+
+<pre><code>self.node_distances = { node_1 : { node_2 : (2.0, None),
+                                   node_3 : (5.7, node_2),
+                                   node_5 : (22.9, node_2) },
+                        node_2 : { node_1 : (2.0, None),
+                                   node_3 : (3.7, None),
+                                   node_5 : (20.9, node_7)},
+                        ...etc...
+</code></pre>
+
+<p>Because of topology changes, two nodes that were far apart (or not connected at all) can become close. When this happens, entries are added to this matrix. Because of the thresholding, two nodes can become too far apart to care about. When this happens, entries are deleted from this matrix.</p>
+
+<p>The <code>self.neighbours</code> matrix is similar to <code>self.node_distances</code>, but contains information about the direct links (edges) in the network. <code>self.neighbours</code> is continually being modified externally to this function, by the chemical reaction. This is where the network topology changes come from.</p>
+
+<p>The actual function that I'm having problems with: <code>propagate_distances_node()</code> performs one step of the <a href="http://en.wikipedia.org/wiki/Distance-vector_routing_protocol" rel="nofollow">distance-vector routing protocol</a>. Given a node, <code>node_a</code>, the function makes sure that <code>node_a</code>'s neighbours are correctly in the distance matrix (topology changes). The function then sends <code>node_a</code>'s routing table to all of <code>node_a</code>'s immediate neighbours in the network. It integrates <code>node_a</code>'s routing table with each neighbour's own routing table. </p>
+
+<p>In the rest of my program, the <code>propagate_distances_node()</code> function is called repeatedly, until the distance matrix converges. A set, <code>self.nodes_changed</code>, is maintained, of the nodes that have changed their routing table since they were last updated. On every iteration of my algorithm, a random subset of these nodes are chosen and <code>propagate_distances_node()</code> is called on them. This means the nodes spread their routing tables asynchronously and stochastically. This algorithm converges on the true distance matrix when the set <code>self.nodes_changed</code> becomes empty. </p>
+
+<p>The "affinity distances" parts (<code>add_affinityDistance</code> and <code>del_affinityDistance</code>) are a cache of a (small) sub-matrix of the distance matrix, that is used by a different part of the program.</p>
+
+<p>The reason I'm doing this is that I'm simulating computational analogues of chemicals participating in reactions, as part of my PhD. A "chemical" is a graph of "atoms" (nodes in the graph). Two chemicals binding together is simulated as their two graphs being joined by new edges. A chemical reaction happens (by a complicated process that isn't relevant here), changing the topology of the graph. But what happens in the reaction depends on how far apart the different atoms are that make up the chemicals. So for each atom in the simulation, I want to know which other atoms it is close to. A sparse, thresholded distance matrix is the most efficient way to store this information. Since the topology of the network changes as the reaction happens, I need to update the matrix. A <a href="http://en.wikipedia.org/wiki/Distance-vector_routing_protocol" rel="nofollow">distance-vector routing protocol</a> is the fastest way I could come up with of doing this. I don't need a more compliacted routing protocol, because things like routing loops don't happen in my particular application (because of how my chemicals are structured). The reason I'm doing it stochastically is so that I can interleve the chemical reaction processes with the distance spreading, and simulate a chemical gradually changing shape over time as the reaction happens (rather than changing shape instantly).</p>
+
+<p>The <code>self</code> in this function is an object representing a chemical. The nodes in <code>self.node_distances.keys()</code> are the atoms that make up the chemical. The nodes in <code>self.node_distances[node_x].keys()</code> are nodes from the chemical and potentially nodes from any chemicals that the chemical is bound to (and reacting with).</p>
+
+<p><strong>Update:</strong></p>
+
+<p>I tried replacing every instance of <code>node_x == node_y</code> with <code>node_x is node_y</code> (as per @Sven Marnach's comment), <del>but it slowed things down! (I wasn't expecting that!)
+My original profile took 807.234s to run, but with this modification it increased to 895.895s.</del> Sorry, I was doing the profiling wrong! I was using line_by_line, which (on my code) had far too much variance (that difference of ~90 seconds was all in the noise). When profiling it properly, <code>is</code> is detinitely faster than <code>==</code>. Using <a href="http://docs.python.org/library/profile.html" rel="nofollow">CProfile</a>, my code with <code>==</code> took 34.394s, but with <code>is</code>, it took 33.535s (which I can confirm is out of the noise).</p>
+
+<p><strong>Update:</strong>
+Existing libraries</p>
+
+<p>I'm unsure as to whether there will be an existing library that can do what I want, since my requirements are unusual:
+I need to compute the shortest-path lengths between all pairs of nodes in a weighted, undirected graph. I only care about path lengths that are lower than a threshold value. After computing the path lengths, I make a small change to the network topology (adding or removing an edge), and then I want to re-compute the path lengths. My graphs are huge compared to the threshold value (from a given node, most of the graph is further away than the threshold), and so the topology changes don't affect most of the shortest-path lengths. This is why I am using the routing algorithm: because this spreads topology-change information through the graph structure, so I can stop spreading it when it's gone further than the threshold. i.e., I don't need to re-compute all the paths each time. I can use the previous path information (from before the topology change) to speed up the calculation. This is why I think my algorithm will be faster than any library implementations of shortest-path algorithms.
+I've never seen routing algorithms used outside of actually routing packets through physical networks (but if anyone has, then I'd be interested).</p>
+
+<p><a href="http://networkx.lanl.gov/" rel="nofollow">NetworkX</a> was suggested by @Thomas K. 
+It has <a href="http://networkx.lanl.gov/reference/algorithms.shortest_paths.html" rel="nofollow">lots of algorithms</a> for calculating shortest paths.
+It has an algorithm for computing the <a href="http://networkx.lanl.gov/reference/generated/networkx.algorithms.shortest_paths.unweighted.all_pairs_shortest_path_length.html" rel="nofollow">all-pairs shortest path lengths</a> with a cutoff (which is what I want), but it only works on unweighted graphs (mine are weighted).
+Unfortunately, its <a href="http://networkx.lanl.gov/reference/generated/networkx.algorithms.shortest_paths.weighted.bellman_ford.html" rel="nofollow">algorithms for weighted graphs</a> don't allow the use of a cutoff (which might make them slow for my graphs). And none of its algorithms appear to support the use of pre-calculated paths on a very similar network (i.e. the routing stuff).</p>
+
+<p><a href="http://cneurocvs.rmki.kfki.hu/igraph/" rel="nofollow">igraph</a> is another graph library that I know of, but looking at <a href="http://cneurocvs.rmki.kfki.hu/igraph/doc/python/index.html" rel="nofollow">its documentation</a>, I can't find anything about shortest-paths. But I might have missed it - its documentation doesn't seem very comprehensive.</p>
+
+<p><a href="http://numpy.scipy.org/" rel="nofollow">NumPy</a> might be possible, thanks to @9000's comment. I can store my sparse matrix in a NumPy array if I assign a unique integer to each instance of my nodes. I can then index a NumPy array with integers instead of node instances. I will also need two NumPy arrays: one for the distances and one for the "next_node" references. This might be faster than using Python dictionaries (I don't know yet).</p>
+
+<p>Does anyone know of any other libraries that might be useful?</p>
+
+<p><strong>Update:</strong> Memory usage</p>
+
+<p>I'm running Windows (XP), so here is some info about memory usage, from <a href="http://technet.microsoft.com/en-us/sysinternals/bb896653" rel="nofollow">Process Explorer</a>. The CPU usage is at 50% because I have a dual-core machine.</p>
+
+<p><img src="http://i.stack.imgur.com/69K0X.png" alt="global memory usage">
+<img src="http://i.stack.imgur.com/KlkdY.png" alt="my program's memory usage"></p>
+
+<p>My program doesn't run out of RAM and start hitting the swap. You can see that from the numbers, and from the IO graph not having any activity. The spikes on the IO graph are where the program prints to the screen to say how it's doing.</p>
+
+<p>However, my program does keep using up more and more RAM over time, which is probably not a good thing (but it's not using up much RAM overall, which is why I didn't notice the increase until now). </p>
+
+<p>And the distance between the spikes on the IO graph increases over time. This is bad - my program prints to the screen every 100,000 iterations, so that means that each iteration is taking longer to execute as time goes on... I've confirmed this by doing a long run of my program and measuring the time between print statements (the time between each 10,000 iterations of the program). This should be constant, but as you can see from the graph, it increases linearly... so something's up there. (The noise on this graph is because my program uses lots of random numbers, so the time for each iteration varies.)</p>
+
+<p><img src="http://i.stack.imgur.com/icTyF.png" alt="lag between print statements increasing over time"></p>
+
+<p>After my program's been running for a long time, the memory usage looks like this (so it's definitely not running out of RAM):</p>
+
+<p><img src="http://i.stack.imgur.com/Et3us.png" alt="global memory usage - after a long run">
+<img src="http://i.stack.imgur.com/8Rv1O.png" alt="my program's memory usage - after a long run"></p>
+<br /><h3>Answers (Total-5):</h3><b>#0</b><br /><p><code>node_after_b == node_a</code> will try to call <code>node_after_b.__eq__(node_a)</code>:</p>
+
+<pre><code>&gt;&gt;&gt; class B(object):
+...     def __eq__(self, other):
+...         print "B.__eq__()"
+...         return False
+... 
+&gt;&gt;&gt; class A(object):
+...     def __eq__(self, other):
+...         print "A.__eq__()"
+...         return False
+... 
+&gt;&gt;&gt; a = A()
+&gt;&gt;&gt; b = B()
+&gt;&gt;&gt; a == b
+A.__eq__()
+False
+&gt;&gt;&gt; b == a
+B.__eq__()
+False
+&gt;&gt;&gt; 
+</code></pre>
+
+<p>Try to override <code>Node.__eq__()</code> with an optimized version before resorting to C.</p>
+
+<p>UPDATE</p>
+
+<p>I made this little experiment (python 2.6.6):</p>
+
+<pre><code>#!/usr/bin/env python
+# test.py
+class A(object):
+    def __init__(self, id):
+        self.id = id
+
+class B(A):
+    def __eq__(self, other):
+        return self.id == other.id
+
+@profile
+def main():
+    list_a = []
+    list_b = []
+    for x in range(100000):
+        list_a.append(A(x))
+        list_b.append(B(x))
+
+    ob_a = A(1)
+    ob_b = B(1)
+    for ob in list_a:
+        if ob == ob_a:
+            x = True
+        if ob is ob_a:
+            x = True
+        if ob.id == ob_a.id:
+            x = True
+        if ob.id == 1:
+            x = True
+    for ob in list_b:
+        if ob == ob_b:
+            x = True
+        if ob is ob_b:
+            x = True
+        if ob.id == ob_b.id:
+            x = True
+        if ob.id == 1:
+            x = True
+
+if __name__ == '__main__':
+    main()
+</code></pre>
+
+<p>Results:</p>
+
+<pre><code>Timer unit: 1e-06 s
+
+File: test.py Function: main at line 10 Total time: 5.52964 s
+
+Line #      Hits         Time  Per Hit % Time  Line Contents
+==============================================================
+    10                                           @profile
+    11                                           def main():
+    12         1            5      5.0      0.0      list_a = []
+    13         1            3      3.0      0.0      list_b = []
+    14    100001       360677      3.6      6.5      for x in range(100000):
+    15    100000       763593      7.6     13.8          list_a.append(A(x))
+    16    100000       924822      9.2     16.7          list_b.append(B(x))
+    17
+    18         1           14     14.0      0.0      ob_a = A(1)
+    19         1            5      5.0      0.0      ob_b = B(1)
+    20    100001       500454      5.0      9.1      for ob in list_a:
+    21    100000       267252      2.7      4.8          if ob == ob_a:
+    22                                                       x = True
+    23    100000       259075      2.6      4.7          if ob is ob_a:
+    24                                                       x = True
+    25    100000       539683      5.4      9.8          if ob.id == ob_a.id:
+    26         1            3      3.0      0.0              x = True
+    27    100000       271519      2.7      4.9          if ob.id == 1:
+    28         1            3      3.0      0.0              x = True
+    29    100001       296736      3.0      5.4      for ob in list_b:
+    30    100000       472204      4.7      8.5          if ob == ob_b:
+    31         1            4      4.0      0.0              x = True
+    32    100000       283165      2.8      5.1          if ob is ob_b:
+    33                                                       x = True
+    34    100000       298839      3.0      5.4          if ob.id == ob_b.id:
+    35         1            3      3.0      0.0              x = True
+    36    100000       291576      2.9      5.3          if ob.id == 1:
+    37         1            3      3.0      0.0              x = True
+</code></pre>
+
+<p>I was very surprised:</p>
+
+<ul>
+<li>"dot" access (ob.property) seems to be very expensive (line 25 versus line 27).</li>
+<li>there was not much difference between is and '==', at least for simple objects</li>
+</ul>
+
+<p>Then I tried with more complex objects and results are consistent with the first experiment. </p>
+
+<p>Are you swapping a lot? If your dataset is so large that it does not fit available RAM, I guess you may experience some kind of I/O contention related to virtual memory fetches. </p>
+
+<p>Are you running Linux? If so, could you post a vmstat of your machine while running your program? Send us the output of something like:</p>
+
+<pre><code>vmstat 10 100
+</code></pre>
+
+<p>Good luck!</p>
+
+<p>UPDATE (from comments by OP)</p>
+
+<p>I sugested playing with sys.setcheckinterval and enable/disable the GC. The rationale is that for this particular case (huge number of instances) the default GC reference count check is somewhat expensive and its default interval is away too often.</p>
+
+<blockquote>
+  <p>Yes, I had previously played with
+  sys.setcheckinterval. I changed it to
+  1000 (from its default of 100), but it
+  didn't do any measurable difference.
+  Disabling Garbage Collection has
+  helped - thanks. This has been the
+  biggest speedup so far - saving about
+  20% (171 minutes for the whole run,
+  down to 135 minutes) - I'm not sure
+  what the error bars are on that, but
+  it must be a statistically significant
+  increase. – Adam Nellis Feb 9 at 15:10</p>
+</blockquote>
+
+<p>My guess:</p>
+
+<blockquote>
+  <p>I think the Python GC is based on
+  reference count. From time to time it
+  will check the reference count for
+  every instance; since you are
+  traversing these huge in-memory
+  structures, in your particular case
+  the GC default frequency (1000
+  cycles?) is away too often - a huge
+  waste. – Yours Truly Feb 10 at 2:06</p>
+</blockquote>
+<br /><b>#1</b><br /><p>Have you considered <a href="http://www.cosc.canterbury.ac.nz/greg.ewing/python/Pyrex/" rel="nofollow">Pyrex</a> / <a href="http://cython.org/" rel="nofollow">Cython</a>? </p>
+
+<p>It compiles python to C and then to .pyd automatically, so it might speed things up a fair bit without much work. </p>
+<br /><b>#2</b><br /><p>This would require a fair amount of work, but...you might consider using Floyd-Warshall running on a GPU. There has been a lot of work done on making Floyd-Warshall run very efficiently on a GPU. A quick google search yields:</p>
+
+<p><a href="http://cvit.iiit.ac.in/papers/Pawan07accelerating.pdf" rel="nofollow">http://cvit.iiit.ac.in/papers/Pawan07accelerating.pdf</a></p>
+
+<p><a href="http://my.safaribooksonline.com/book/programming/graphics/9780321545411/gpu-computing-for-protein-structure-prediction/ch43lev1sec2#X2ludGVybmFsX0ZsYXNoUmVhZGVyP3htbGlkPTk3ODAzMjE1NDU0MTEvNDg3" rel="nofollow">http://my.safaribooksonline.com/book/programming/graphics/9780321545411/gpu-computing-for-protein-structure-prediction/ch43lev1sec2#X2ludGVybmFsX0ZsYXNoUmVhZGVyP3htbGlkPTk3ODAzMjE1NDU0MTEvNDg3</a></p>
+
+<p><a href="http://www.gpucomputing.net/?q=node/1203" rel="nofollow">http://www.gpucomputing.net/?q=node/1203</a></p>
+
+<p><a href="http://http.developer.nvidia.com/GPUGems2/gpugems2_chapter43.html" rel="nofollow">http://http.developer.nvidia.com/GPUGems2/gpugems2_chapter43.html</a></p>
+
+<p>Even though, as implemented in Python, Floyd-Warshall was slower by an order of magnitude, a good GPU version on a powerful GPU might still significantly outperform your new Python code.</p>
+
+<p>Here's an anecdote. I had a short, simple, compute-intensive piece of code that did something similar to a hough accumulation. In Python, optimized as I could get it, it took ~7s on a speedy i7. I then wrote a completely non-optimized GPU version; it took ~0.002s on an Nvidia GTX 480. YMMV, but for anything significantly parallel, the GPU is likely to be a long term winner, and since it's a well-studied algorithm, you should be able to utilize existing highly-tuned code.</p>
+
+<p>For the Python / GPU bridge, I'd recommend PyCUDA or PyOpenCL.</p>
+<br /><b>#3</b><br /><p>I don't see anything wrong with your code regarding performance (without trying to grok the algorithm), you are just getting hit by the big number of iterations. Parts of your code get executed 40 <strong>million</strong> times! </p>
+
+<p>Notice how 80% of the time is spent in 20% of your code - and those are the 13 lines that get executed 24+ million times. By the way with this code you provide great illustration to the <a href="http://en.wikipedia.org/wiki/Pareto_principle" rel="nofollow">Pareto principle</a> (or "20% of beer drinkers drink 80% of the beer").</p>
+
+<p><strong>First things first</strong>: have you tried <a href="http://psyco.sourceforge.net/introduction.html" rel="nofollow">Psycho</a>? It's a JIT compiler that can greatly speed up your code - considering the big number of iterations - say by a factor of 4x-5x - and all you have to do (after downloading and installing, of course) is to insert this snippet in the beginning:</p>
+
+<pre><code>import psyco
+psyco.full()
+</code></pre>
+
+<p>This is why i liked Psycho and used it in GCJ too, where time is of essence - nothing to code, nothing to get wrong and sudden boost from 2 lines added.</p>
+
+<p>Back to nit-picking (which changes like replacing <code>==</code> with <code>is</code> etc is, because of the small % time improvement).  Here they are the 13 lines "at fault":</p>
+
+<pre><code>Line    #   Hits    Time    Per Hit % Time  Line Contents
+412 42350234    197075504439    4653.5  8.1 for node_c, (distance_b_c, node_after_b) in node_b_distances.items(): # Can't use iteritems() here, as deleting from the dictionary
+386 42076729    184216680432    4378.1  7.6 for node_c, (distance_a_c, node_after_a) in self.node_distances[node_a].iteritems():
+362 41756882    183992040153    4406.3  7.6 for node_c, (distance_b_c, node_after_b) in node_b_distances.iteritems(): # Think it's ok to modify items while iterating over them (just not insert/delete) (seems to work ok)
+413 41838114    180297579789    4309.4  7.4 if(distance_b_c &gt; cutoff_distance):
+363 41244762    172425596985    4180.5  7.1 if(node_after_b == node_a):
+389 41564609    172040284089    4139.1  7.1 if(node_c == node_b): # a-b path
+388 41564609    171150289218    4117.7  7.1 node_b_update = False
+391 41052489    169406668962    4126.6  7   elif(node_after_a == node_b): # a-b-a-b path
+405 41564609    164585250189    3959.7  6.8 if node_b_update:
+394 24004846    103404357180    4307.6  4.3 (distance_b_c, node_after_b) = node_b_distances[node_c]
+395 24004846    102717271836    4279    4.2 if(node_after_b != node_a): # b doesn't already go to a first
+393 24801082    101577038778    4095.7  4.2 elif(node_c in node_b_distances): # b can already get to c
+</code></pre>
+
+<p>A) Besides the lines you mention, i notice that #388 has relatively high time when it is trivial, all it does it <code>node_b_update = False</code>. Oh but wait - each time it gets executed, <code>False</code> gets looked up in the global scope! To avoid that, assign <code>F, T = False, True</code> in th e beginning of the method and replace later uses of <code>False</code> and <code>True</code> with locals <code>F</code> and <code>T</code>. This should decrease overall time, although by little (3%?).</p>
+
+<p>B) I notice that the condition in #389 occurred "only" 512,120 times (based on number of executions of #390) vs the condition in #391 with 16,251,407. Since there is no dependency, it makes sense to reverse the order of those checks - because of the early "cut" that should give little boost (2%?). I am not sure if avoiding <code>pass</code> statements altogether will help but if it does not hurt readability:</p>
+
+<pre><code>if (node_after_a is not node_b) and (node_c is not node_b):
+   # neither a-b-a-b nor a-b path
+   if (node_c in node_b_distances): # b can already get to c
+       (distance_b_c, node_after_b) = node_b_distances[node_c]
+       if (node_after_b is not node_a): # b doesn't already go to a first
+           distance_b_a_c = neighbour_distance_b_a + distance_a_c
+           if (distance_b_a_c &lt; distance_b_c): # quicker to go via a
+               node_b_update = T
+   else: # b can't already get to c
+       distance_b_a_c = neighbour_distance_b_a + distance_a_c
+       if (distance_b_a_c &lt; cutoff_distance): # not too for to go
+           node_b_update = T
+</code></pre>
+
+<p>C) I just noticed you are using <code>try-except</code> in a case (#365-367) you just need default value from a dictionary - try using instead <code>.get(key, defaultVal)</code> or create your dictionaries with <code>collections.defaultdict(itertools.repeat(float('+inf')))</code>. Using try-except has it's price - see #365 reports 3.5% of the time, that's setting up stack frames and whatnot.</p>
+
+<p>D) Avoid indexed access (be it with obj<code>.</code>field or obj<code>[</code>idx<code>]</code>) when possible. For example i see you use <code>self.node_distances[node_a]</code> in multiple places (#336, 339, 346, 366, 386), which means for every use indexing is used twice (once for <code>.</code> and once for <code>[]</code>) - and that gets expensive when executed tens of millions of times. Seems to me you can just do at the method beginning <code>node_a_distances = self.node_distances[node_a]</code> and then use that further.</p>
+<br /><b>#4</b><br /><p>I would have posted this as an update to my question, but Stack Overflow only allows 30000 characters in questions, so I'm posting this as an answer.</p>
+
+<p><strong>Update:</strong> My best optimisations so far</p>
+
+<p>I've taken on board people's suggestions, and now my code runs about 21% faster than before, which is good - thanks everyone!</p>
+
+<p>This is the best I've managed to do so far. I've replaced all the <code>==</code> tests with <code>is</code> for nodes, disabled garbage collection and re-written the big <code>if</code> statement part at Line 388, in line with @Nas Banov's suggestions. I added in the well-known <code>try/except</code> trick for avoiding tests (line 390 - to remove the test <code>node_c in node_b_distances</code>), which helped loads, since it hardly ever throws the exception. I tried switching lines 391 and 392 around, and assigning <code>node_b_distances[node_c]</code> to a variable, but this way was the quickest.</p>
+
+<p>However, I still haven't tracked down the memory leak yet (see graph in my question). But I think this might be in a different part of my code (that I haven't posted here). If I can fix the memory leak, then this program will run quickly enough for me to use :)</p>
+
+<pre><code>Timer unit: 3.33366e-10 s
+File: routing_distances.py
+Function: propagate_distances_node at line 328
+Total time: 760.74 s
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+328                                               @profile
+329                                               def propagate_distances_node(self, node_a, cutoff_distance=200):
+330                                                       
+331                                                   # a makes sure its immediate neighbours are correctly in its distance table
+332                                                   # because its immediate neighbours may change as binds/folding change
+333    791349   4158169713   5254.5      0.2          for (node_b, neighbour_distance_b_a) in self.neighbours[node_a].iteritems():
+334    550522   2331886050   4235.8      0.1              use_neighbour_link = False
+335                                                       
+336    550522   2935995237   5333.1      0.1              if(node_b not in self.node_distances[node_a]): # a doesn't know distance to b
+337     15931     68829156   4320.5      0.0                  use_neighbour_link = True
+338                                                       else: # a does know distance to b
+339    534591   2728134153   5103.2      0.1                  (node_distance_b_a, next_node) = self.node_distances[node_a][node_b]
+340    534591   2376374859   4445.2      0.1                  if(node_distance_b_a &gt; neighbour_distance_b_a): # neighbour distance is shorter
+341        78       347355   4453.3      0.0                      use_neighbour_link = True
+342    534513   3145889079   5885.5      0.1                  elif((None is next_node) and (float('+inf') == neighbour_distance_b_a)): # direct route that has just broken
+343        74       327600   4427.0      0.0                      use_neighbour_link = True
+344                                                               
+345    550522   2414669022   4386.1      0.1              if(use_neighbour_link):
+346     16083     81850626   5089.3      0.0                  self.node_distances[node_a][node_b] = (neighbour_distance_b_a, None)
+347     16083     87064200   5413.4      0.0                  self.nodes_changed.add(node_a)
+348                                                           
+349                                                           ## Affinity distances update
+350     16083     86580603   5383.4      0.0                  if((node_a.type == Atom.BINDING_SITE) and (node_b.type == Atom.BINDING_SITE)):
+351       234      6656868  28448.2      0.0                      self.add_affinityDistance(node_a, node_b, self.chemistry.affinity(node_a.data, node_b.data))     
+352                                                   
+353                                                   # a sends its table to all its immediate neighbours
+354    791349   4034651958   5098.4      0.2          for (node_b, neighbour_distance_b_a) in self.neighbours[node_a].iteritems():
+355    550522   2392248546   4345.4      0.1              node_b_changed = False
+356                                               
+357                                                       # b integrates a's distance table with its own
+358    550522   2520330696   4578.1      0.1              node_b_chemical = node_b.chemical
+359    550522   2734341975   4966.8      0.1              node_b_distances = node_b_chemical.node_distances[node_b]
+360                                                       
+361                                                       # For all b's routes (to c) that go to a first, update their distances
+362  46679347 222161837193   4759.3      9.7              for node_c, (distance_b_c, node_after_b) in node_b_distances.iteritems(): # Think it's ok to modify items while iterating over them (just not insert/delete) (seems to work ok)
+363  46128825 211963639122   4595.0      9.3                  if(node_after_b is node_a):
+364                                                               
+365  18677439  79225517916   4241.8      3.5                      try:
+366  18677439 101527287264   5435.8      4.4                          distance_b_a_c = neighbour_distance_b_a + self.node_distances[node_a][node_c][0]
+367    181510    985441680   5429.1      0.0                      except KeyError:
+368    181510   1166118921   6424.5      0.1                          distance_b_a_c = float('+inf')
+369                                                                   
+370  18677439  89626381965   4798.6      3.9                      if(distance_b_c != distance_b_a_c): # a's distance to c has changed
+371    692131   3352970709   4844.4      0.1                          node_b_distances[node_c] = (distance_b_a_c, node_a)
+372    692131   3066946866   4431.2      0.1                          node_b_changed = True
+373                                                                   
+374                                                                   ## Affinity distances update
+375    692131   3808548270   5502.6      0.2                          if((node_b.type == Atom.BINDING_SITE) and (node_c.type == Atom.BINDING_SITE)):
+376     96794   1655818011  17106.6      0.1                              node_b_chemical.add_affinityDistance(node_b, node_c, self.chemistry.affinity(node_b.data, node_c.data))
+377                                                                   
+378                                                               # If distance got longer, then ask b's neighbours to update
+379                                                               ## TODO: document this!
+380  18677439  88838493705   4756.5      3.9                      if(distance_b_a_c &gt; distance_b_c):
+381                                                                   #for (node, neighbour_distance) in node_b_chemical.neighbours[node_b].iteritems():
+382   1656796   7949850642   4798.3      0.3                          for node in node_b_chemical.neighbours[node_b]:
+383   1172486   6307264854   5379.4      0.3                              node.chemical.nodes_changed.add(node)
+384                                                       
+385                                                       # Look for routes from a to c that are quicker than ones b knows already
+386  46999631 227198060532   4834.0     10.0              for node_c, (distance_a_c, node_after_a) in self.node_distances[node_a].iteritems():
+387                                                           
+388  46449109 218024862372   4693.8      9.6                  if((node_after_a is not node_b) and # not a-b-a-b path
+389  28049321 126269403795   4501.7      5.5                     (node_c is not node_b)):         # not a-b path
+390  27768341 121588366824   4378.7      5.3                      try: # Assume node_c in node_b_distances ('try' block will raise KeyError if not)
+391  27768341 159413637753   5740.8      7.0                          if((node_b_distances[node_c][1] is not node_a) and # b doesn't already go to a first
+392   8462467  51890478453   6131.8      2.3                             ((neighbour_distance_b_a + distance_a_c) &lt; node_b_distances[node_c][0])):
+393                                                               
+394                                                                       # Found a route
+395    224593   1168129548   5201.1      0.1                              node_b_distances[node_c] = (neighbour_distance_b_a + distance_a_c, node_a)
+396                                                                       ## Affinity distances update
+397    224593   1274631354   5675.3      0.1                              if((node_b.type == Atom.BINDING_SITE) and (node_c.type == Atom.BINDING_SITE)):
+398     32108    551523249  17177.1      0.0                                  node_b_chemical.add_affinityDistance(node_b, node_c, self.chemistry.affinity(node_b.data, node_c.data))
+399    224593   1165878108   5191.1      0.1                              node_b_changed = True
+400                                                                       
+401    809945   4449080808   5493.1      0.2                      except KeyError:
+402                                                                   # b can't already get to c (node_c not in node_b_distances)
+403    809945   4208032422   5195.5      0.2                          if((neighbour_distance_b_a + distance_a_c) &lt; cutoff_distance): # not too for to go
+404                                                                       
+405                                                                       # These lines of code copied, for efficiency 
+406                                                                       #  (most of the time, the 'try' block succeeds, so don't bother testing for (node_c in node_b_distances))
+407                                                                       # Found a route
+408    587726   3162939543   5381.7      0.1                              node_b_distances[node_c] = (neighbour_distance_b_a + distance_a_c, node_a)
+409                                                                       ## Affinity distances update
+410    587726   3363869061   5723.5      0.1                              if((node_b.type == Atom.BINDING_SITE) and (node_c.type == Atom.BINDING_SITE)):
+411     71659   1258910784  17568.1      0.1                                  node_b_chemical.add_affinityDistance(node_b, node_c, self.chemistry.affinity(node_b.data, node_c.data))
+412    587726   2706161481   4604.5      0.1                              node_b_changed = True
+413                                                                   
+414                                                               
+415                                                       
+416                                                       # If any of node b's rows have exceeded the cutoff distance, then remove them
+417  47267073 239847142446   5074.3     10.5              for node_c, (distance_b_c, node_after_b) in node_b_distances.items(): # Can't use iteritems() here, as deleting from the dictionary
+418  46716551 242694352980   5195.0     10.6                  if(distance_b_c &gt; cutoff_distance):
+419    200755    967443975   4819.0      0.0                      del node_b_distances[node_c]
+420    200755    930470616   4634.9      0.0                      node_b_changed = True
+421                                                               
+422                                                               ## Affinity distances update
+423    200755   4717125063  23496.9      0.2                      node_b_chemical.del_affinityDistance(node_b, node_c)
+424                                                       
+425                                                       # If we've modified node_b's distance table, tell its chemical to update accordingly
+426    550522   2684634615   4876.5      0.1              if(node_b_changed):
+427    235034   1383213780   5885.2      0.1                  node_b_chemical.nodes_changed.add(node_b)
+428                                                   
+429                                                   # Remove any neighbours that have infinite distance (have just unbound)
+430                                                   ## TODO: not sure what difference it makes to do this here rather than above (after updating self.node_distances for neighbours)
+431                                                   ##       but doing it above seems to break the walker's movement
+432    791349   4367879451   5519.5      0.2          for (node_b, neighbour_distance_b_a) in self.neighbours[node_a].items(): # Can't use iteritems() here, as deleting from the dictionary
+433    550522   2968919613   5392.9      0.1              if(neighbour_distance_b_a &gt; cutoff_distance):
+434       148       775638   5240.8      0.0                  del self.neighbours[node_a][node_b]
+435                                                           
+436                                                           ## Affinity distances update
+437       148      2096343  14164.5      0.0                  self.del_affinityDistance(node_a, node_b)
+</code></pre>
+<br />

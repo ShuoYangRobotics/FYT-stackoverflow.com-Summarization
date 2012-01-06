@@ -1,0 +1,232 @@
+Question (ID-62567): Ignore case in Python strings What is the easiest way to compare strings in Python, ignoring case? 
+
+ Of course one can do (str1.lower() &lt;= str2.lower()), etc., but this created two additional temporary strings (with the obvious alloc/g-c overheads). 
+
+ I guess I'm looking for an equivalent to C's stricmp(). 
+
+ [Some more context requested, so I'll demonstrate with a trivial example:] 
+
+ Suppose you want to sort a looong list of strings. You simply do theList.sort().
+This is O(n * log(n)) string comparisons and no memory management (since all
+strings and list elements are some sort of smart pointers). You are happy. 
+
+ Now, you want to do the same, but ignore the case (let's simplify and say
+all strings are ascii, so locale issues can be ignored).
+You can do theList.sort(key=lambda s: s.lower()), but then you cause two new 
+allocations per comparison, plus burden the garbage-collector with the duplicated
+(lowered) strings. 
+Each such memory-management noise is orders-of-magnitude slower than simple string comparison. 
+
+ Now, with an in-place stricmp()-like function, you do: theList.sort(cmp=stricmp)
+and it is as fast and as memory-friendly as theList.sort(). You are happy again. 
+
+ The problem is any Python-based case-insensitive comparison involves implicit string 
+duplications, so I was expecting to find a C-based comparisons (maybe in module string). 
+
+ Could not find anything like that, hence the question here.
+(Hope this clarifies the question). 
+ Answers (Total-16): #0 The proposed (and accepted) solution of calling into clib is quite stupid. Here is a simple benchmark: 
+
+ #/usr/bin/env python2.5
+import random
+import timeit
+
+from ctypes import *
+libc = CDLL("libc.dylib") # change to "libc.so.6" on linux
+
+words = [word.rstrip() for word in
+   open('/usr/share/dict/words', 'r').readlines()]
+random.shuffle(words)
+print '%i words in list' % len(words)
+
+setup = 'from __main__ import words, libc'
+stmts = [
+ ("simple sort", "sorted(words)"),
+ ("sort with key=str.lower", "sorted(words, key=str.lower)"),
+ ("sort with cmp=libc.strcasecmp", "sorted(words, cmp=libc.strcasecmp)"),
+]
+
+for (comment, stmt) in stmts:
+ t = timeit.Timer(stmt=stmt, setup=setup)
+ print "%s: %.2f msec/pass" % (comment, (1000*t.timeit(10)/10))
+ 
+
+ typical times on my machine: 
+
+ 234936 words in list
+simple sort: 397.59 msec/pass
+sort with key=str.lower: 827.00 msec/pass
+sort with cmp=libc.strcasecmp: 2924.86 msec/pass
+ 
+
+ So, the version with str.lower is not only the fastest by far, but also the most portable and pythonic of all the proposed solutions here.
+I have not profiled memory usage, but the original poster has still not given a compelling reason to worry about it. Also, who says that a call into the libc module doesn't duplicate any strings? 
+
+ NB: The lower() string method also has the advantage of being locale-dependent. Something you will probably not be getting right when writing your own "optimised" solution. Even so, due to bugs and missing features in Python, this kind of comparison may give you wrong results in a unicode context. 
+ #1 Your question implies that you don't need Unicode. Try the following code snippet; if it works for you, you're done: 
+
+ Python 2.5.2 (r252:60911, Aug 22 2008, 02:34:17)
+[GCC 4.3.1] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import locale
+&gt;&gt;&gt; locale.setlocale(locale.LC_COLLATE, "en_US")
+'en_US'
+&gt;&gt;&gt; sorted("ABCabc", key=locale.strxfrm)
+['a', 'A', 'b', 'B', 'c', 'C']
+&gt;&gt;&gt; sorted("ABCabc", cmp=locale.strcoll)
+['a', 'A', 'b', 'B', 'c', 'C']
+ 
+
+ Clarification: in case it is not obvious at first sight, locale.strcoll seems to be the function you need, avoiding the str.lower or locale.strxfrm "duplicate" strings. 
+ #2 Are you using this compare in a very-frequently-executed path of a highly-performance-sensitive application? Alternatively, are you running this on strings which are megabytes in size? If not, then you shouldn't worry about the performance and just use the .lower() method. 
+
+ The following code demonstrates that doing a case-insensitive compare by calling .lower() on two strings which are each almost a megabyte in size takes about 0.009 seconds on my 1.8GHz desktop computer: 
+
+ from timeit import Timer
+
+s1 = "1234567890" * 100000 + "a"
+s2 = "1234567890" * 100000 + "B"
+
+code = "s1.lower() &lt; s2.lower()"
+time = Timer(code, "from __main__ import s1, s2").timeit(1000)
+print time / 1000 # 0.00920499992371 on my machine
+ 
+
+ If indeed this is an extremely significant, performance-critical section of code, then I recommend writing a function in C and calling it from your Python code, since that will allow you to do a truly efficient case-insensitive search. Details on writing C extension modules can be found here: http://www.python.org/doc/ext/intro.html 
+ #3 This is how you'd do it with re: 
+
+ import re
+p = re.compile('^hello$', re.I)
+p.match('Hello')
+p.match('hello')
+p.match('HELLO')
+ 
+ #4 There's no built in equivalent to that function you want. 
+
+ You can write your own fuction that converts to .lower() each carachter at a time to avoid duplicating both strings, but I'm sure it will very cpu-intensive and extremely inefficient. 
+
+ Unless you are working with extremely long strings (so long that can cause a memory problem if duplicated) then I would keep it simple and use 
+
+ str1.lower() == str2.lower()
+ 
+
+ You'll be ok 
+ #5 I can't find any other built-in way of doing case-insensitive comparison: The python cook-book recipe uses lower(). 
+
+ However you have to be careful when using lower for comparisons because of the Turkish I problem . Unfortunately Python's handling for Turkish Is is not good. ı is converted to I, but I is not converted to ı. İ is converted to i, but i is not converted to İ. 
+ #6 The recommended idiom to sort lists of values using expensive-to-compute keys is to the so-called "decorated pattern". It consists simply in building a list of (key, value) tuples from the original list, and sort that list. Then it is trivial to eliminate the keys and get the list of sorted values: 
+
+ &gt;&gt;&gt; original_list = ['a', 'b', 'A', 'B']
+&gt;&gt;&gt; decorated = [(s.lower(), s) for s in original_list]
+&gt;&gt;&gt; decorated.sort()
+&gt;&gt;&gt; sorted_list = [s[1] for s in decorated]
+&gt;&gt;&gt; sorted_list
+['A', 'a', 'B', 'b']
+ 
+
+ Or if you like one-liners: 
+
+ &gt;&gt;&gt; sorted_list = [s[1] for s in sorted((s.lower(), s) for s in original_list)]
+&gt;&gt;&gt; sorted_list
+['A', 'a', 'B', 'b']
+ 
+
+ If you really worry about the cost of calling lower(), you can just store tuples of (lowered string, original string) everywhere. Tuples are the cheapest kind of containers in Python, they are also hashable so they can be used as dictionary keys, set members, etc. 
+ #7 I'm pretty sure you either have to use .lower() or use a regular expression. I'm not aware of a built-in case-insensitive string comparison function. 
+ #8 You could subclass str and create your own case-insenstive string class but IMHO that would be extremely unwise and create far more trouble than it's worth. 
+ #9 For occasional or even repeated comparisons, a few extra string objects shouldn't matter as long as this won't happen in the innermost loop of your core code or you don't have enough data to actually notice the performance impact. See if you do: doing things in a "stupid" way is much less stupid if you also do it less. 
+
+ If you seriously want to keep comparing lots and lots of text case-insensitively you could somehow keep the lowercase versions of the strings at hand to avoid finalization and re-creation, or normalize the whole data set into lowercase. This of course depends on the size of the data set. If there are a relatively few needles and a large haystack, replacing the needles with compiled regexp objects is one solution. If It's hard to say without seeing a concrete example. 
+ #10 An alternative way to do this in place is to iterate over each character in the first string and compare it to the same character in the second string (make sure you check the sizes match first.. if they don't the strings are not the same) and then just lowercase each character individually. This will prevent having to make a new copy of the string. (this is psuedo real python code i don't know python very well and am too lazy to look the exact syntax up) 
+
+ if string1.size &lt;&gt; string2.size return false 
+for char in string1: y = char
+ for char in string2: x = char 
+  if x.lower() &lt;&gt; y.lower() then 
+  return false 
+return true
+ 
+ #11 You could translate each string to lowercase once --- lazily only when you need it, or as a prepass to the sort if you know you'll be sorting the entire collection of strings. There are several ways to attach this comparison key to the actual data being sorted, but these techniques should be addressed in a separate issue. 
+
+ Note that this technique can be used not only to handle upper/lower case issues, but for other types of sorting such as locale specific sorting, or "Library-style" title sorting that ignores leading articles and otherwise normalizes the data before sorting it. 
+ #12 Just use the str().lower() method, unless high-performance is important - in which case write that sorting method as a C extension. 
+
+ "How to write a Python Extension" seems like a decent intro.. 
+
+ More interestingly, This guide compares using the ctypes library vs writing an external C module (the ctype is quite-substantially slower than the C extension). 
+ #13 This question is asking 2 very different things: 
+
+ 
+ What is the easiest way to compare strings in Python, ignoring case? 
+ I guess I'm looking for an equivalent to C's stricmp(). 
+ 
+
+ Since #1 has been answered very well already (ie: str1.lower() &lt; str2.lower()) I will answer #2. 
+
+ def strincmp(str1, str2, numchars=None):
+ result = 0
+ len1 = len(str1)
+ len2 = len(str2)
+ if numchars is not None:
+  minlen = min(len1,len2,numchars)
+ else:
+  minlen = min(len1,len2)
+ #end if
+ orda = ord('a')
+ ordz = ord('z')
+
+ i = 0
+ while i &lt; minlen and 0 == result:
+  ord1 = ord(str1[i])
+  ord2 = ord(str2[i])
+  if ord1 &gt;= orda and ord1 &lt;= ordz:
+   ord1 = ord1-32
+  #end if
+  if ord2 &gt;= orda and ord2 &lt;= ordz:
+   ord2 = ord2-32
+  #end if
+  result = cmp(ord1, ord2)
+  i += 1
+ #end while
+
+ if 0 == result and minlen != numchars:
+  if len1 &lt; len2:
+   result = -1
+  elif len2 &lt; len1:
+   result = 1
+  #end if
+ #end if
+
+ return result
+#end def
+ 
+
+ Only use this function when it makes sense to as in many instances the lowercase technique will be superior. 
+
+ I only work with ascii strings, I'm not sure how this will behave with unicode. 
+ #14 I like the regular expression solution. Here's a function you can copy and paste into any function, thanks to python's block structure support. 
+
+ def equals_ignore_case(str1, str2):
+ import re
+ return re.match(re.escape(str1) + r'\Z', str2, re.I) is not None
+ 
+
+ Since I used match instead of search, I didn't need to add a caret (^) to the regular expression. 
+ #15 In response to your clarification... 
+
+ You could use ctypes to execute the c function "strcasecmp". Ctypes is included in Python 2.5. It provides the ability to call out to dll and shared libraries such as libc. Here is a quick example (Python on Linux; see link for Win32 help): 
+
+ from ctypes import *
+libc = CDLL("libc.so.6") // see link above for Win32 help
+libc.strcasecmp("THIS", "this") // returns 0
+libc.strcasecmp("THIS", "THAT") // returns 8
+ 
+
+ may also want to reference strcasecmp documentation 
+
+ Not really sure this is any faster or slower (have not tested), but it's a way to use a C function to do case insensitive string comparisons. 
+
+ ~~~~~~~~~~~~~~ 
+
+ ActiveState Code - Recipe 194371: Case Insensitive Strings 
+is a recipe for creating a case insensitive string class. It might be a bit over kill for something quick, but could provide you with a common way of handling case insensitive strings if you plan on using them often.

@@ -1,0 +1,164 @@
+<h3>Question (ID-342434):</h3><h2>Python logging in Django</h2><p>I'm developing a Django app, and I'm trying to use Python's logging module for error/trace logging.  Ideally I'd like to have different loggers configured for different areas of the site.  So far I've got all of this working, but one thing has me scratching my head.</p>
+
+<p>I have the root logger going to sys.stderr, and I have configured another logger to write to a file.  This is in my settings.py file:</p>
+
+<pre><code>sviewlog = logging.getLogger('MyApp.views.scans')
+view_log_handler = logging.FileHandler('C:\\MyApp\\logs\\scan_log.log')
+view_log_handler.setLevel(logging.INFO)
+view_log_handler.setFormatter(logging.Formatter('%(asctime)s %(name)-12s %(levelname)-8s %(message)s'))
+sviewlog.addHandler(view_log_handler)
+</code></pre>
+
+<p>Seems pretty simple.  Here's the problem, though: whatever I write to the sviewlog gets written to the log file twice.  The root logger only prints it once.  It's like addHandler() is being called twice.  And when I put my code through a debugger, this is exactly what I see.  The code in settings.py is getting executed twice, so two FileHandlers are created and added to the same logger instance.  But why?  And how do I get around this?</p>
+
+<p>Can anyone tell me what's going on here?  I've tried moving the sviewlog logger/handler instantiation code to the file where it's used (since that actually seems like the appropriate place to me), but I have the same problem there.  Most of the examples I've seen online use only the root logger, and I'd prefer to have multiple loggers.</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>Allow me to answer my own question.  The underlying problem here is that settings.py gets imported twice, or maybe even more (See <a href="http://www.mail-archive.com/django-users@googlegroups.com/msg39059.html" rel="nofollow">here</a>).  (I still don't understand why this is.  Maybe some Django expert could explain that to me.)  This seems to be true of some other modules as well.  At this point I don't think it's wise to make assumptions about how many times settings.py will be imported.  For that matter, such assumptions aren't safe in general.  I've had this code in places other than settings.py, and the results are similar.</p>
+
+<p>You have to code around this.  That is, you have to check your logger for existing handlers before adding additional handlers to it.  This is a bit ugly because it's perfectly reasonable to have multiple handlers -- even of the same type -- attached to one logger.  There are a few solutions to dealing with this.  One is check the handlers property of your logger object.  If you only want one handler and your length > 0, then don't add it.  Personally I don't love this solution, because it gets messy with more handlers.</p>
+
+<p>I prefer something like this (thanks to Thomas Guettler):</p>
+
+<pre><code># file logconfig.py
+if not hasattr(logging, "set_up_done"):
+    logging.set_up_done=False
+
+def set_up(myhome):
+    if logging.set_up_done:
+        return
+    # set up your logging here
+    # ...
+    logging.set_up_done=True
+</code></pre>
+
+<p>I must say, I wish the fact that Django imports settings.py multiple times were better documented.  And I would imagine that my configuration is somehow cause this multiple import, but I'm having trouble finding out what is causing the problem and why.  Maybe I just couldn't find that in their documents, but I would think that's the sort of thing you need to warn your users about.</p>
+<br /><b>#1</b><br /><p>As of version 1.3, Django uses standard python logging, configured with the <code>LOGGING</code> setting (documented here: <a href="http://docs.djangoproject.com/en/1.3/ref/settings/#std%3asetting-LOGGING" rel="nofollow">1.3</a>, <a href="http://docs.djangoproject.com/en/dev/ref/settings/#std%3asetting-LOGGING" rel="nofollow">dev</a>).</p>
+
+<p>Django logging reference: <a href="http://docs.djangoproject.com/en/1.3/topics/logging/" rel="nofollow">1.3</a>, <a href="http://docs.djangoproject.com/en/dev/topics/logging/" rel="nofollow">dev</a>.</p>
+<br /><b>#2</b><br /><p>Difficult to comment on your specific case. If settings.py is executed twice, then it's normal that you get two lines for every log sent.</p>
+
+<p>The way we set it up in our projects is to have one module dedicated to logging. That modules has a "module singleton" pattern, so that we only execute the interesting code once.</p>
+
+<p>It looks like this:</p>
+
+<pre><code>def init_logging():
+    stdoutHandler = logging.StreamHandler( sys.stdout )
+    stdoutHandler.setLevel( DEBUG )
+    stdoutHandler.setFormatter( logging.Formatter( LOG_FORMAT_WITH_TIME ) )
+    logging.getLogger( LOG_AREA1 ).addHandler( stdoutHandler )
+
+logInitDone=False
+if not logInitDone:
+    logInitDone = True
+   init_logging()
+</code></pre>
+
+<p>Importing the log.py the first time will configure the logging correctly.</p>
+<br /><b>#3</b><br /><p>``To answer the question about why does "Django imports settings.py multiple times": it does not.''</p>
+
+<p>Actually, it does get imported twice (skip past the first code chunk to get right into it but a good read if you've got the time):</p>
+
+<p><a href="http://blog.dscpl.com.au/2010/03/improved-wsgi-script-for-use-with.html" rel="nofollow">http://blog.dscpl.com.au/2010/03/improved-wsgi-script-for-use-with.html</a></p>
+
+<p>PS-- Sorry to revive an old thread.</p>
+<br /><b>#4</b><br /><p>You could get around your problem by checking for the number of handlers when you are doing your init.</p>
+
+<pre><code>def init_logging():
+    stdoutHandler = logging.StreamHandler( sys.stdout )
+    stdoutHandler.setLevel( DEBUG )
+    stdoutHandler.setFormatter( logging.Formatter( LOG_FORMAT_WITH_TIME ) )
+    logger = logging.getLogger( LOG_AREA1 )
+    if len(logger.handlers) &lt; 1:
+        logger.addHandler( stdoutHandler )
+</code></pre>
+
+<p>I don't think this is a great way to handle it.  Personally, for logging in django with the python logging module, I create a logger in views.py for each application I'm interested in, then grab the logger in each view function.</p>
+
+<pre><code>from django.http import HttpResponse
+from magic import makeLogger
+from magic import getLogger
+
+makeLogger('myLogName', '/path/to/myLogName.log')
+def testLogger(request):
+    logger = getLogger('myLogName')
+    logger.debug('this worked')
+    return HttpResponse('TEXT, HTML or WHATEVER')
+</code></pre>
+
+<p>This is a pretty good article about debugging django and covers some logging:
+<a href="http://simonwillison.net/2008/May/22/debugging/" rel="nofollow">http://simonwillison.net/2008/May/22/debugging/</a></p>
+<br /><b>#5</b><br /><p>To answer the question about why does "Django imports settings.py multiple times": it does not. </p>
+
+<p>You are probably running a multiprocess/multithread web server which creates several python sub-interpreters, where each of those imports the code from your django app once.</p>
+
+<p>Test that on the django test server and you should see that settings are not imported many times.</p>
+
+<p>Some time ago, I had designed a nice singleton (python borg idiom version to be more precise) with my first django/apache app, before I quickly realised that yes, I had more than one instances of my singleton created...</p>
+<br /><b>#6</b><br /><p>You can also use a run-once Middleware to get a similar effect, without the private variables.  Note that this will only configure the logging for web-requests - you'll need to find a different solution if you want logging in your shell or command runs.</p>
+
+<pre><code>from django.conf import settings
+from django.core.exceptions import MiddlewareNotUsed
+import logging
+import logging.handlers
+import logging.config
+
+__all__ = ('LoggingConfigMiddleware',)
+
+
+class LoggingConfigMiddleware:
+    def __init__(self):
+        '''Initialise the logging setup from settings, called on first request.'''
+        if hasattr(settings, 'LOGGING'):
+            logging.config.dictConfig(settings.LOGGING)
+        elif getattr(settings, 'DEBUG', False):
+            print 'No logging configured.'
+        raise MiddlewareNotUsed('Logging setup only.')
+</code></pre>
+<br /><b>#7</b><br /><p>Why using python logger instead of django-logging? Give it a try it might just solve your problem. </p>
+
+<p><a href="http://code.google.com/p/django-logging/wiki/Overview" rel="nofollow">http://code.google.com/p/django-logging/wiki/Overview</a> </p>
+
+<p>At the moment it would only allow to view the root logger, but you can sure write to multiple loggers.</p>
+<br /><b>#8</b><br /><p>Reviving an old thread, but I was experiencing duplicate messages while using Django 1.3 Python logging with the <a href="http://docs.python.org/library/logging.config.html#configuration-dictionary-schema" rel="nofollow">dictConfig format</a>.  </p>
+
+<p>The <code>disable_existing_loggers</code> gets rid of the duplicate handler/logging problem with multiple settings.py loads, but you can still get duplicate log messages if you don't specify the <code>propagate</code> boolean appropriately on the specific <code>logger</code>.  Namely, make sure you set <code>propagate=False</code> for child loggers.  E.g.,</p>
+
+<pre><code>'loggers': {
+    'django': {
+        'handlers':['null'],
+        'propagate': True,
+        'level':'INFO',
+    },
+    'django.request': {
+        'handlers': ['console'],
+        'level': 'ERROR',
+        'propagate': False,
+    },
+    'project': {
+        'handlers': ['console', 'project-log-file'],
+        'level': 'DEBUG',
+        'propagate': True,
+    },
+    'project.customapp': {
+        'handlers': ['console', 'customapp-log-file'],
+        'level': 'DEBUG',
+        'propagate': False,
+    },
+}
+</code></pre>
+
+<p>Here, <code>project.customapp</code> sets <code>propagate=False</code> so that it won't be caught by the <code>project</code> logger as well.  The <a href="http://docs.djangoproject.com/en/dev/topics/logging/" rel="nofollow">Django logging docs</a> are excellent, as always.</p>
+<br /><b>#9</b><br /><p>A hackish way, but you can try to put the logging code inside an admin.py. It is supposed to be imported only once.</p>
+
+<p>Alternatively; can you first check if <code>MyApp.views.scans</code> log exists? If it exists (maybe an error is raised) you can simply skip creation (and therefore not add the handler again). A cleaner way but I haven't tried this though.</p>
+
+<p>Also there must be a more appropriate place to put this code (<code>__init__.py</code>?). <code>settings.py</code> is for settings.</p>
+<br /><b>#10</b><br /><p>To add to <strong>A Lee</strong> post, python logging documentation states this about propagate:</p>
+
+<blockquote>
+  <p><strong>Logger.propagate</strong></p>
+  
+  <p>If this evaluates to false, logging messages are not passed by this logger or by its child loggers to the handlers of higher level (ancestor) loggers. The constructor sets this attribute to 1.</p>
+</blockquote>
+
+<p>This means that if <code>propagate == False</code> then <strong>child logger</strong> will NOT pass logging message to its <strong>parent logger</strong></p>
+<br />

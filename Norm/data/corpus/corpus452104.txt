@@ -1,0 +1,339 @@
+Question (ID-452104): Is it worth using Python's re.compile? Is there any benefit in using compile for regular expressions in Python? 
+
+ h = re.compile('hello')
+h.match('hello world')
+ 
+
+ vs 
+
+ re.match('hello', 'hello world')
+ 
+ Answers (Total-12): #0 Good question 
+
+ I've had a lot of experience running a compiled regex 1000s of times versus compiling on-the-fly, and have not noticed any perceivable difference. Obviously, this is colloquial, and certainly not a great argument against compiling, but I've found the difference to be negligible. 
+
+ EDIT:
+After a quick glance at the actual Python 2.5 library code, I see that Python internally compiles AND CACHES regexes whenever you use them anyway (including calls to re.match() ), so you're really only changing WHEN the regex gets compiled, and shouldn't be saving much time at all - only the time it takes to check the cache (a key lookup on an internal dict type). 
+
+ From module re.py (comments are mine): 
+
+ def match(pattern, string, flags=0):
+ return _compile(pattern, flags).match(string)
+
+def _compile(*key):
+
+ # Does cache check at top of function
+ cachekey = (type(key[0]),) + key
+ p = _cache.get(cachekey)
+ if p is not None: return p
+
+ # ...
+ # Does actual compilation on cache miss
+ # ...
+
+ # Caches compiled regex
+ if len(_cache) &gt;= _MAXCACHE:
+  _cache.clear()
+ _cache[cachekey] = p
+ return p
+ 
+
+ I still often pre-compile regular expressions, but only to bind them to a nice, reusable name, not for any expected performance gain. 
+ #1 For me, the biggest benefit to re.compile isn't any kind of premature optimization (which is the root of all evil , anyway ). It's being able to separate definition of the regex from its use. 
+
+ Even a simple expression such as 0|[1-9][0-9]* (integer in base 10 without leading zeros) can be complex enough that you'd rather not have to retype it, check if you made any typos, and later have to recheck if there are typos when you start debugging. Plus, it's nicer to use a variable name such as num or num_b10 than 0|[1-9][0-9]+ . 
+
+ It's certainly possible to store strings and pass them to re.match; however, that's less readable: 
+
+ num = "..."
+# then, much later:
+m = re.match(num, input)
+ 
+
+ Versus compiling: 
+
+ num = re.compile("...")
+# then, much later:
+m = num.match(input)
+ 
+
+ Though it is fairly close, the last line of the second feels more natural and simpler when used repeatedly. 
+ #2 FWIW: 
+
+ $ python -m timeit -s "import re" "re.match('hello', 'hello world')"
+100000 loops, best of 3: 3.82 usec per loop
+
+$ python -m timeit -s "import re; h=re.compile('hello')" "h.match('hello world')"
+1000000 loops, best of 3: 1.26 usec per loop
+ 
+
+ so, if you're going to be using the same regex a lot, it may be worth it to do re.compile (especially for more complex regexes). 
+
+ The standard arguments against premature optimization apply, but I don't think you really lose much clarity/straightforwardness by using re.compile if you suspect that your regexps may become a performance bottleneck. 
+ #3 in general I find it is easier to use flags (at least easier to remember how), like re.I when compiling patterns than to use flags inline. 
+
+ foo_pat = re.compile('foo',re.I)
+
+foo_pat.findall('some string FoO bar')
+&gt;&gt; ['FoO']
+ 
+
+ vs 
+
+ re.findall('(?i)foo','some string FoO bar')
+&gt;&gt; ['FoO']
+ 
+ #4 I just tried this myself. For the simple case of parsing a number out of a string and summing it, using a compiled regular expression object is about twice as fast as using the re methods. 
+
+ As others have pointed out, the re methods (including re.compile ) look up the regular expression string in a cache of previously compiled expressions. Therefore, in the normal case, the extra cost of using the re methods is simply the cost of the cache lookup. 
+
+ However, examination of the code , shows the cache is limited to 100 expressions. This begs the question, how painful is it to overflow the cache? The code contains an internal interface to the regular expression compiler, re.sre_compile.compile . If we call it, we bypass the cache. It turns out to be about two orders of magnitude slower for a basic regular expression, such as r'\w+\s+([0-9_]+)\s+\w*' . 
+
+ Here's my test: 
+
+ 
+#!/usr/bin/env python
+import re
+import time
+
+def timed(func):
+ def wrapper(*args):
+  t = time.time()
+  result = func(*args)
+  t = time.time() - t
+  print '%s took %.3f seconds.' % (func.func_name, t)
+  return result
+ return wrapper
+
+regularExpression = r'\w+\s+([0-9_]+)\s+\w*'
+testString = "average 2 never"
+
+@timed
+def noncompiled():
+ a = 0
+ for x in xrange(1000000):
+  m = re.match(regularExpression, testString)
+  a += int(m.group(1))
+ return a
+
+@timed
+def compiled():
+ a = 0
+ rgx = re.compile(regularExpression)
+ for x in xrange(1000000):
+  m = rgx.match(testString)
+  a += int(m.group(1))
+ return a
+
+@timed
+def reallyCompiled():
+ a = 0
+ rgx = re.sre_compile.compile(regularExpression)
+ for x in xrange(1000000):
+  m = rgx.match(testString)
+  a += int(m.group(1))
+ return a
+
+
+@timed
+def compiledInLoop():
+ a = 0
+ for x in xrange(1000000):
+  rgx = re.compile(regularExpression)
+  m = rgx.match(testString)
+  a += int(m.group(1))
+ return a
+
+@timed
+def reallyCompiledInLoop():
+ a = 0
+ for x in xrange(10000):
+  rgx = re.sre_compile.compile(regularExpression)
+  m = rgx.match(testString)
+  a += int(m.group(1))
+ return a
+
+r1 = noncompiled()
+r2 = compiled()
+r3 = reallyCompiled()
+r4 = compiledInLoop()
+r5 = reallyCompiledInLoop()
+print "r1 = ", r1
+print "r2 = ", r2
+print "r3 = ", r3
+print "r4 = ", r4
+print "r5 = ", r5
+ 
+
+ And here is the output on my machine: 
+
+ 
+$ regexTest.py 
+noncompiled took 4.555 seconds.
+compiled took 2.323 seconds.
+reallyCompiled took 2.325 seconds.
+compiledInLoop took 4.620 seconds.
+reallyCompiledInLoop took 4.074 seconds.
+r1 = 2000000
+r2 = 2000000
+r3 = 2000000
+r4 = 2000000
+r5 = 20000
+ 
+
+ The 'reallyCompiled' methods use the internal interface, which bypasses the cache. Note the one that compiles on each loop iteration is only iterated 10,000 times, not one million. 
+ #5 Interestingly, compiling does prove more efficient for me (Python 2.5.2 on Win XP): 
+
+ import re
+import time
+
+rgx = re.compile('(\w+)\s+[0-9_]?\s+\w*')
+str = "average 2 never"
+a = 0
+
+t = time.time()
+
+for i in xrange(1000000):
+ if re.match('(\w+)\s+[0-9_]?\s+\w*', str):
+ #~ if rgx.match(str):
+  a += 1
+
+print time.time() - t
+ 
+
+ Running the above code once as is, and once with the two if lines commented the other way around, the compiled regex is twice as fast 
+ #6 Regular Expressions are compiled before being used when using the second version. If you are going to executing it many times it is definatly better to compile it first. If not compiling every time you match for one off's is fine. 
+ #7 This is a good question. You often see people use re.compile without reason. It lessens readability. But sure there are lots of times when pre-compiling the expression is called for. Like when you use it repeated times in a loop or some such. 
+
+ It's like everything about programming (everything in life actually). Apply common sense. 
+ #8 I ran this test before stumbling upon the discussion here. However, having run it I thought I'd at least post my results. 
+
+ I stole and bastardized the example in Jeff Friedl's "Mastering Regular Expressions". This is on a macbook running OSX 10.6 (2Ghz intel core 2 duo, 4GB ram). Python version is 2.6.1. 
+
+ Run 1 - using re.compile 
+
+ import re 
+import time 
+import fpformat
+Regex1 = re.compile('^(a|b|c|d|e|f|g)+$') 
+Regex2 = re.compile('^[a-g]+$')
+TimesToDo = 1000
+TestString = "" 
+for i in range(1000):
+ TestString += "abababdedfg"
+StartTime = time.time() 
+for i in range(TimesToDo):
+ Regex1.search(TestString) 
+Seconds = time.time() - StartTime 
+print "Alternation takes " + fpformat.fix(Seconds,3) + " seconds"
+
+StartTime = time.time() 
+for i in range(TimesToDo):
+ Regex2.search(TestString) 
+Seconds = time.time() - StartTime 
+print "Character Class takes " + fpformat.fix(Seconds,3) + " seconds"
+
+Alternation takes 2.299 seconds
+Character Class takes 0.107 seconds
+ 
+
+ Run 2 - Not using re.compile 
+
+ import re 
+import time 
+import fpformat
+
+TimesToDo = 1000
+TestString = "" 
+for i in range(1000):
+ TestString += "abababdedfg"
+StartTime = time.time() 
+for i in range(TimesToDo):
+ re.search('^(a|b|c|d|e|f|g)+$',TestString) 
+Seconds = time.time() - StartTime 
+print "Alternation takes " + fpformat.fix(Seconds,3) + " seconds"
+
+StartTime = time.time() 
+for i in range(TimesToDo):
+ re.search('^[a-g]+$',TestString) 
+Seconds = time.time() - StartTime 
+print "Character Class takes " + fpformat.fix(Seconds,3) + " seconds"
+
+Alternation takes 2.508 seconds
+Character Class takes 0.109 seconds
+ 
+ #9 (months later) it's easy to add your own cache around re.match,
+or anything else for that matter -- 
+
+ """ Re.py: Re.match = re.match + cache 
+ efficiency: re.py does this already (but what's _MAXCACHE ?)
+ readability, inline / separate: matter of taste
+"""
+
+import re
+
+cache = {}
+_re_type = type( re.compile( "" ))
+
+def match( pattern, str, *opt ):
+ """ Re.match = re.match + cache re.compile( pattern ) 
+ """
+ if type(pattern) == _re_type:
+  cpat = pattern
+ elif pattern in cache:
+  cpat = cache[pattern]
+ else:
+  cpat = cache[pattern] = re.compile( pattern, *opt )
+ return cpat.match( str )
+
+# def search ...
+ 
+
+ A wibni, wouldn't it be nice if: cachehint( size= ), cacheinfo() -> size, hits, nclear ... 
+ #10 My understanding is that those two examples are effectively equivalent. The only difference is that in the first, you can reuse the compiled regular expression elsewhere without causing it to be compiled again. 
+
+ Here's a reference for you: ( http://diveintopython.org/refactoring/refactoring.html ) 
+
+ 
+ Calling the compiled pattern object's search function with the string 'M' accomplishes the same thing as calling re.search with both the regular expression and the string 'M'. Only much, much faster. (In fact, the re.search function simply compiles the regular expression and calls the resulting pattern object's search method for you.) 
+ 
+ #11 i'd like to motivate that pre-compiling is both conceptually and 'literately' (as in 'literate programming') advantageous. have a look at this code snippet: 
+
+ from re import compile as _Re
+
+class TYPO:
+
+ def text_has_foobar( self, text ):
+ return self._text_has_foobar_re_search( text ) is not None
+ _text_has_foobar_re_search = _Re( r"""(?i)foobar""" ).search
+
+TYPO = TYPO()
+ 
+
+ in your application, you'd write: 
+
+ from TYPO import TYPO
+print( TYPO.text_has_foobar( 'FOObar ) )
+ 
+
+ this is about as simple in terms of functionality as it can get. because this is example is so short, i conflated the way to get _text_has_foobar_re_search all in one line. the disadvantage of this code is that it occupies a little memory for whatever the lifetime of the TYPO library object is; the advantage is that when doing a foobar search, you'll get away with two function calls and two class dictionary lookups. how many regexes are cached by re and the overhead of that cache are irrelevant here. 
+
+ compare this with the more usual style, below: 
+
+ import re
+
+class Typo:
+
+ def text_has_foobar( self, text ):
+ return re.compile( r"""(?i)foobar""" ).search( text ) is not None
+ 
+
+ In the application: 
+
+ typo = Typo()
+print( typo.text_has_foobar( 'FOObar ) )
+ 
+
+ I readily admit that my style is highly unusual for python, maybe even debatable. however, in the example that more closely matches how python is mostly used, in order to do a single match, we must instantiate an object, do three instance dictionary lookups, and perform three function calls; additionally, we might get into re caching troubles when using more than 100 regexes. also, the regular expression gets hidden inside the method body, which most of the time is not such a good idea. 
+
+ be it said that every subset of measures---targeted, aliased import statements; aliased methods where applicable; reduction of function calls and object dictionary lookups---can help reduce computational and conceptual complexity.

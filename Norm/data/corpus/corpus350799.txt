@@ -1,0 +1,97 @@
+Question (ID-350799): How does Django Know the Order to Render Form Fields? If I have a Django form such as: 
+
+ class ContactForm(forms.Form):
+ subject = forms.CharField(max_length=100)
+ message = forms.CharField()
+ sender = forms.EmailField()
+ 
+
+ And I call the as_table() method of an instance of this form, Django will render the fields as the same order as specified above. 
+
+ My question is how does Django know the order that class variables where defined? 
+
+ (Also how do I override this order, for example when I want to add a field from the classe's init method?) 
+ Answers (Total-7): #0 If f is a form, its fields are f.fields, which is a sortedDict (it presents the items in the order they are added). After form construction f.fields has a keyOrder attribute, which is a list containing the field names in the order they should be presented. You can set this to the correct ordering (though you need to exercise care to ensure you don't omit items or add extras). 
+
+ Here's an example I just created in my current project: 
+
+ class PrivEdit(ModelForm):
+ def __init__(self, *args, **kw):
+  super(ModelForm, self).__init__(*args, **kw)
+  self.fields.keyOrder = [
+   'super_user',
+   'all_districts',
+   'multi_district',
+   'all_schools',
+   'manage_users',
+   'direct_login',
+   'student_detail',
+   'license']
+ class Meta:
+  model = Privilege
+ 
+ #1 I went ahead and answered my own question. Here's the answer for future reference: 
+
+ In Django form.py does some dark magic using the __new__ method to load your class variables ultimately into self.fields in the order defined in the class. self.fields is a Django SortedDict instance (defined in datastructures.py ). 
+
+ So to override this, say in my example you wanted sender to come first but needed to add it in an init method, you would do: 
+
+ class ContactForm(forms.Form):
+ subject = forms.CharField(max_length=100)
+ message = forms.CharField()
+ def __init__(self,*args,**kwargs):
+  forms.Form.__init__(self,*args,**kwargs)
+  #first argument, index is the position of the field you want it to come before
+  self.fields.insert(0,'sender',forms.EmailField(initial=str(time.time())))
+ 
+ #2 Form fields have an attribute for creation order, called creation_counter . .fields attribute is a dictionary, so simple adding to dictionary and changing creation_counter attributes in all fields to reflect new ordering should suffice (never tried this, though). 
+ #3 For future reference: things have changed a bit since newforms. This is one way of reordering fields from base formclasses you have no control over: 
+
+ def move_field_before(form, field, before_field):
+ content = form.base_fields[field]
+ del(form.base_fields[field])
+ insert_at = list(form.base_fields).index(before_field)
+ form.base_fields.insert(insert_at, field, content)
+ return form
+ 
+
+ Also, there's a little bit of documentation about the SortedDict that base_fields uses here: http://code.djangoproject.com/wiki/SortedDict 
+ #4 Use a counter in the Field class. Sort by that counter: 
+
+ import operator
+import itertools
+
+class Field(object):
+ _counter = itertools.count()
+ def __init__(self):
+  self.count = Field._counter.next()
+  self.name = ''
+ def __repr__(self):
+  return "Field(%r)" % self.name
+
+class MyForm(object):
+ b = Field()
+ a = Field()
+ c = Field()
+
+ def __init__(self):
+  self.fields = []
+  for field_name in dir(self):
+   field = getattr(self, field_name)
+   if isinstance(field, Field):
+    field.name = field_name
+    self.fields.append(field)
+  self.fields.sort(key=operator.attrgetter('count'))
+
+m = MyForm()
+print m.fields # in defined order
+ 
+
+ Output: 
+
+ [Field('b'), Field('a'), Field('c')]
+ 
+
+ 
+ #5 Fields are listed in the order they are defined in ModelClass._meta.fields 
+ #6 It has to do with the meta class that is used in defining the form class. I think it keeps an internal list of the fields and if you insert into the middle of the list it might work. It has been a while since I looked at that code.

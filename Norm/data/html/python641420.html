@@ -1,0 +1,336 @@
+<h3>Question (ID-641420):</h3><h2>How should I log while using multiprocessing in Python?</h2><p>Right now I have a central module in a framework that spawns multiple processes using the Python 2.6 <a href="http://docs.python.org/library/multiprocessing.html?#module-multiprocessing" rel="nofollow"><code>multiprocessing</code> module</a>. Because it uses <code>multiprocessing</code>, there is module-level multiprocessing-aware log, <code>LOG = multiprocessing.get_logger()</code>. Per <a href="http://docs.python.org/library/multiprocessing.html#logging" rel="nofollow">the docs</a>, this logger has process-shared locks so that you don't garble things up in <code>sys.stderr</code> (or whatever filehandle) by having multiple processes writing to it simultaneously.</p>
+
+<p>The issue I have now is that the other modules in the framework are not multiprocessing-aware. The way I see it, I need to make all dependencies on this central module use multiprocessing-aware logging. That's annoying <em>within</em> the framework, let alone for all clients of the framework. Are there alternatives I'm not thinking of?</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>The only way to deal with this non-intrusively is to spawn each worker process <strong>such that its log goes to a different file descriptor</strong> (to disk or to pipe.)  Ideally, all log entries should be timestamped.  Your controller process can then (if using disk files) coalesce the log files at the end of the run (sorting by timestamp) or, if using pipes (recommended approach), coalesce log entries on-the-fly from all pipes into a central log (e.g. periodically <a href="http://docs.python.org/library/select.html" rel="nofollow"><code>select</code></a> from the pipes' fd's, perform merge-sort on the available log entries, flush to centralized log, repeat.)</p>
+<br /><b>#1</b><br /><p>I just now wrote a log handler of my own that just feeds everything to the parent process via a pipe.  I've only been testing it for ten minutes but it seems to work pretty well (note this is hardcoded to RotatingFileHandler, which is my own use case)</p>
+
+<p><strong>Updated.</strong>  This now uses a queue for correct handling of concurrency, and also recovers from errors correctly.  I've now been using this in production for several months and the current version below works without issue.</p>
+
+<pre><code>from logging.handlers import RotatingFileHandler
+import multiprocessing, threading, logging, sys, traceback
+
+class MultiProcessingLog(logging.Handler):
+    def __init__(self, name, mode, maxsize, rotate):
+        logging.Handler.__init__(self)
+
+        self._handler = RotatingFileHandler(name, mode, maxsize, rotate)
+        self.queue = multiprocessing.Queue(-1)
+
+        t = threading.Thread(target=self.receive)
+        t.daemon = True
+        t.start()
+
+    def setFormatter(self, fmt):
+        logging.Handler.setFormatter(self, fmt)
+        self._handler.setFormatter(fmt)
+
+    def receive(self):
+        while True:
+            try:
+                record = self.queue.get()
+                self._handler.emit(record)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except EOFError:
+                break
+            except:
+                traceback.print_exc(file=sys.stderr)
+
+    def send(self, s):
+        self.queue.put_nowait(s)
+
+    def _format_record(self, record):
+        # ensure that exc_info and args
+        # have been stringified.  Removes any chance of
+        # unpickleable things inside and possibly reduces
+        # message size sent over the pipe
+        if record.args:
+            record.msg = record.msg % record.args
+            record.args = None
+        if record.exc_info:
+            dummy = self.format(record)
+            record.exc_info = None
+
+        return record
+
+    def emit(self, record):
+        try:
+            s = self._format_record(record)
+            self.send(s)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            self.handleError(record)
+
+    def close(self):
+        self._handler.close()
+        logging.Handler.close(self)
+</code></pre>
+<br /><b>#2</b><br /><p>Yet another alternative might be the various non-file-based logging handlers in the <a href="http://docs.python.org/library/logging.html" rel="nofollow">logging package</a>: </p>
+
+<ul>
+<li>SocketHandler</li>
+<li>DatagramHandler</li>
+<li>SyslogHandler</li>
+</ul>
+
+<p>(and others)</p>
+
+<p>This way, you could easily have a logging daemon somewhere that you could write to safely and would handle the results correctly. Eg a simple socket server that just unpickles the message and emits it to its own rotating file handler.</p>
+
+<p>The syslog handler would take care of this for you too. Of course, you could use your own instance of syslog not the system one.</p>
+<br /><b>#3</b><br /><p>just publish somewhere your instance of the logger. that way, the other modules and clients can use your API to get the logger without having to <code>import multiprocessing</code>.</p>
+<br /><b>#4</b><br /><p>I also like zzzeek's answer but Andre is correct that a queue is required to prevent garbling. I had some luck with the pipe, but did see garbling which is somewhat expected. Implementing it turned out to be harder than I thought, particularly due to running on Windows, where there are some additional restrictions about global variables and stuff (see: <a href="http://stackoverflow.com/questions/765129/hows-python-multiprocessing-implemented-on-windows">http://stackoverflow.com/questions/765129/hows-python-multiprocessing-implemented-on-windows</a>)</p>
+
+<p>But, I finally got it working. This example probably isn't perfect, so comments and suggestions are welcome. It also does not support setting the formatter or anything other than the root logger. Basically, you have to reinit the logger in each of the pool processes with the queue and set up the other attributes on the logger.</p>
+
+<p>Again, any suggestions on how to make the code better are welcome. I certainly don't know all the Python tricks yet :-)</p>
+
+<pre><code>import multiprocessing, logging, sys, re, os, StringIO, threading, time, Queue
+
+class MultiProcessingLogHandler(logging.Handler):
+    def __init__(self, handler, queue, child=False):
+        logging.Handler.__init__(self)
+
+        self._handler = handler
+        self.queue = queue
+
+        # we only want one of the loggers to be pulling from the queue.
+        # If there is a way to do this without needing to be passed this
+        # information, that would be great!
+        if child == False:
+            self.shutdown = False
+            self.polltime = 1
+            t = threading.Thread(target=self.receive)
+            t.daemon = True
+            t.start()
+
+    def setFormatter(self, fmt):
+        logging.Handler.setFormatter(self, fmt)
+        self._handler.setFormatter(fmt)
+
+    def receive(self):
+        #print "receive on"
+        while (self.shutdown == False) or (self.queue.empty() == False):
+            # so we block for a short period of time so that we can
+            # check for the shutdown cases.
+            try:
+                record = self.queue.get(True, self.polltime)
+                self._handler.emit(record)
+            except Queue.Empty, e:
+                pass
+
+    def send(self, s):
+        # send just puts it in the queue for the server to retrieve
+        self.queue.put(s)
+
+    def _format_record(self, record):
+        ei = record.exc_info
+        if ei:
+            dummy = self.format(record) # just to get traceback text into record.exc_text
+            record.exc_info = None  # to avoid Unpickleable error
+
+        return record
+
+    def emit(self, record):
+        try:
+            s = self._format_record(record)
+            self.send(s)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            self.handleError(record)
+
+    def close(self):
+        time.sleep(self.polltime+1) # give some time for messages to enter the queue.
+        self.shutdown = True
+        time.sleep(self.polltime+1) # give some time for the server to time out and see the shutdown
+
+    def __del__(self):
+        self.close() # hopefully this aids in orderly shutdown when things are going poorly.
+
+def f(x):
+    # just a logging command...
+    logging.critical('function number: ' + str(x))
+    # to make some calls take longer than others, so the output is "jumbled" as real MP programs are.
+    time.sleep(x % 3)
+
+def initPool(queue, level):
+    """
+    This causes the logging module to be initialized with the necessary info
+    in pool threads to work correctly.
+    """
+    logging.getLogger('').addHandler(MultiProcessingLogHandler(logging.StreamHandler(), queue, child=True))
+    logging.getLogger('').setLevel(level)
+
+if __name__ == '__main__':
+    stream = StringIO.StringIO()
+    logQueue = multiprocessing.Queue(100)
+    handler= MultiProcessingLogHandler(logging.StreamHandler(stream), logQueue)
+    logging.getLogger('').addHandler(handler)
+    logging.getLogg<br /><b>#5</b><br /><p>I liked zzzeek's answer. I would just substitute the Pipe for a Queue since if multiple threads/processes use the same pipe end to generate log messages they will get garbled.</p>
+<br /><b>#6</b><br /><p>A variant of the others that keeps the logging and queue thread separate.</p>
+
+<pre><code>"""sample code for logging in subprocesses using multiprocessing
+
+* Little handler magic - The main process uses loggers and handlers as normal.
+* Only a simple handler is needed in the subprocess that feeds the queue.
+* Original logger name from subprocess is preserved when logged in main
+  process.
+* As in the other implementations, a thread reads the queue and calls the
+  handlers. Except in this implementation, the thread is defined outside of a
+  handler, which makes the logger definitions simpler.
+* Works with multiple handlers.  If the logger in the main process defines
+  multiple handlers, they will all be fed records generated by the
+  subprocesses loggers.
+
+tested with Python 2.5 and 2.6 on Linux and Windows
+
+"""
+
+import os
+import sys
+import time
+import traceback
+import multiprocessing, threading, logging, sys
+
+DEFAULT_LEVEL = logging.DEBUG
+
+formatter = logging.Formatter("%(levelname)s: %(asctime)s - %(name)s - %(process)s - %(message)s")
+
+class SubProcessLogHandler(logging.Handler):
+    """handler used by subprocesses
+
+    It simply puts items on a Queue for the main process to log.
+
+    """
+
+    def __init__(self, queue):
+        logging.Handler.__init__(self)
+        self.queue = queue
+
+    def emit(self, record):
+        self.queue.put(record)
+
+class LogQueueReader(threading.Thread):
+    """thread to write subprocesses log records to main process log
+
+    This thread reads the records written by subprocesses and writes them to
+    the handlers defined in the main process's handlers.
+
+    """
+
+    def __init__(self, queue):
+        threading.Thread.__init__(self)
+        self.queue = queue
+        self.daemon = True
+
+    def run(self):
+        """read from the queue and write to the log handlers
+
+        The logging documentation says logging is thread safe, so there
+        shouldn't be contention between normal logging (from the main
+        process) and this thread.
+
+        Note that we're using the name of the original logger.
+
+        """
+        # Thanks Mike for the error checking code.
+        while True:
+            try:
+                record = self.queue.get()
+                # get the logger for this record
+                logger = logging.getLogger(record.name)
+                logger.callHandlers(record)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except EOFError:
+                break
+            except:
+                traceback.print_exc(file=sys.stderr)
+
+class LoggingProcess(multiprocessing.Process):
+
+    def __init__(self, queue):
+        multiprocessing.Process.__init__(self)
+        self.queue = queue
+
+    def _setupLogger(self):
+        # create the logger to use.
+        logger = logging.getLogger('test.subprocess')
+        # The only handler desired is the SubProcessLogHandler.  If any others
+        # exist, remove them. In this case, on Unix and Linux the StreamHandler
+        # will be inherited.
+
+        for handler in logger.handlers:
+            # just a check for my sanity
+            assert not isinstance(handler, SubProcessLogHandler)
+            logger.removeHandler(handler)
+        # add the handler
+        handler = SubProcessLogHandler(self.queue)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+        # On Windows, the level will not be inherited.  Also, we could just
+        # set the level to log everything here and filter it in the main
+        # process handlers.  For now, just set it from the global default.
+        logger.setLevel(DEFAULT_LEVEL)
+        self.logger = logger
+
+    def run(self):
+        self._setupLogger()
+        logger = self.logger
+        # and here goes the logging
+        p = multiprocessing.current_process()
+        logger.info('hello from process %s with pid %s' % (p.name, p.pid))
+
+
+if __name__ == '__main__':
+    # queue used by the subprocess loggers
+    queue = multiprocessing.Queue()
+    # Just a normal logger
+    logger = logging.getLogger('test')
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(DEFAULT_LEVEL)
+    logger.info('hello from the main process')
+    # This thread will read from the subprocesses and write to the main log's
+    # handlers.
+    log_queue_reader = LogQueueReader(queue)
+    log_queue_reader.start()
+    # create the processes.
+    for i in range(10):
+        p = LoggingProcess(queue)
+        p.start()
+    # The way I read the multiprocessing warning about Queue, joining a
+    # process before it has finished feeding the Queue can cause a deadlock.
+    # Also, Queue.empty() is not realiable, so just make sure all processes
+    # are finished.
+    # active_children joins subprocesses when they're finished.
+    while multiprocessing.active_children():
+        time.sleep(.1)
+</code></pre>
+<br /><b>#7</b><br /><p>One of the alternatives is to write the mutliprocessing logging to a known file and register an <code>atexit</code> handler to join on those processes read it back on stderr; however, you won't get a real-time flow to the output messages on stderr that way.</p>
+<br /><b>#8</b><br /><p>I have a solution that's similar to ironhacker's except that I use logging.exception in some of my code and found that I needed to format the exception before passing it back over the Queue since tracebacks aren't pickle'able:</p>
+
+<pre><code>class QueueHandler(logging.Handler):
+    def __init__(self, queue):
+        logging.Handler.__init__(self)
+        self.queue = queue
+    def emit(self, record):
+        if record.exc_info:
+            # can't pass exc_info across processes so just format now
+            record.exc_text = self.formatException(record.exc_info)
+            record.exc_info = None
+        self.queue.put(record)
+    def formatException(self, ei):
+        sio = cStringIO.StringIO()
+        traceback.print_exception(ei[0], ei[1], ei[2], None, sio)
+        s = sio.getvalue()
+        sio.close()
+        if s[-1] == "\n":
+            s = s[:-1]
+        return s
+</code></pre>
+<br />

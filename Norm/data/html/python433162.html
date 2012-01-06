@@ -1,0 +1,172 @@
+<h3>Question (ID-433162):</h3><h2>Can I access constants in settings.py from templates in Django?</h2><p>I have some stuff in settings.py that I'd like to be able to access from a template, but I can't figure out how to do it. I already tried</p>
+
+<pre><code>{{CONSTANT_NAME}}
+</code></pre>
+
+<p>but that doesn't seem to work. Is this possible?</p>
+<br /><h3>Answers (Total-5):</h3><b>#0</b><br /><p>If it's a value you'd like to have for every request &amp; template, using a <a href="http://docs.djangoproject.com/en/dev/ref/templates/api/?from=olddocs#writing-your-own-context-processors" rel="nofollow">context processor</a> is more appropriate.</p>
+
+<p>Here's how:</p>
+
+<ol>
+<li><p>Make a *context_processors.py* file in your app directory. Let's say I want to have the <code>ADMIN_PREFIX_VALUE</code> value in every context:</p>
+
+<pre><code>from django.conf import settings # import the settings file
+
+
+def admin_media(context):
+    # return the value you want as a dictionnary. you may add multiple values in there.
+    return {'ADMIN_MEDIA_URL': settings.ADMIN_MEDIA_PREFIX}
+</code></pre></li>
+<li><p>add your context processor to your <em>settings.py</em> file:</p>
+
+<pre><code>TEMPLATE_CONTEXT_PROCESSORS = (
+"your_app.context_processors.admin_media"
+</code></pre>
+
+<p>)</p></li>
+<li><p>Use <code>RequestContext</code> in your view to add your context processors in your template:</p>
+
+<pre><code>from django.template import Template, context, RequestContext
+from django.shortcuts import render_to_response
+
+
+def my_view(request):
+    return render_to_response(
+        "index.html",
+        context_instance=RequestContext(request)
+    )
+</code></pre></li>
+<li><p>and finally, in your template:</p>
+
+<pre><code>...
+&lt;a href="{{ ADMIN_MEDIA_URL }}"&gt;path to admin media&lt;/a&gt;
+...
+</code></pre></li>
+</ol>
+<br /><b>#1</b><br /><p>Django provides access to certain, frequently-used settings constants to the template such as <code>settings.MEDIA_URL</code> and some of the language settings if you use django's built in generic views or pass in a context instance keyword argument in the <code>render_to_response</code> shortcut function.  Here's an example of each case:</p>
+
+<pre><code>from django.shortcuts import render_to_response
+from django.template import RequestContext
+from django.views.generic.simple import direct_to_template
+
+def my_generic_view(request, template='my_template.html'):
+    return direct_to_template(request, template)
+
+def more_custom_view(request, template='my_template.html'):
+    return render_to_response(template, {}, context_instance=RequestContext(request))
+</code></pre>
+
+<p>These views will both have several frequently used settings like <code>settings.MEDIA_URL</code> available to the template as <code>{{ MEDIA_URL }}</code>, etc.</p>
+
+<p>If you're looking for access to other constants in the settings, then simply unpack the constants you want and add them to the context dictionary you're using in your view function, like so:</p>
+
+<pre><code>from django.conf import settings
+from django.shortcuts import render_to_response
+
+def my_view_function(request, template='my_template.html'):
+    context = {'favorite_color': settings.FAVORITE_COLOR}
+    return render_to_response(template, context)
+</code></pre>
+
+<p>Now you can access <code>settings.FAVORITE_COLOR</code> on your template as <code>{{ favorite_color }}</code>.  </p>
+<br /><b>#2</b><br /><p>Another way to do this is to create a custom template tag which can let you fish values out of the settings.</p>
+
+<pre><code>@register.tag
+def value_from_settings(parser, token):
+    try:
+        # split_contents() knows not to split quoted strings.
+        tag_name, var = token.split_contents()
+    except ValueError:
+        raise template.TemplateSyntaxError, "%r tag requires a single argument" % token.contents.split()[0]
+    return ValueFromSettings(var)
+
+class ValueFromSettings(template.Node):
+    def __init__(self, var):
+        self.arg = template.Variable(var)
+    def render(self, context):        
+        return settings.__getattr__(str(self.arg))
+</code></pre>
+
+<p>You can then use:</p>
+
+<pre><code>{% value_from_settings "FQDN" %}
+</code></pre>
+
+<p>to print it on any page, without jumping through context-processor hoops.</p>
+<br /><b>#3</b><br /><p>The example above from bchhun is nice except that you need to explicitly build your context dictionary from settings.py.  Below is an UNTESTED example of how you could auto-build the context dictionary from all upper-case attributes of settings.py (re: "^[A-Z0-9_]+$").</p>
+
+<p>At the end of settings.py:</p>
+
+<pre><code>_context = {} 
+local_context = locals()
+for (k,v) in local_context.items():
+    if re.search('^[A-Z0-9_]+$',k):
+        _context[k] = str(v)
+
+def settings_context(context):
+    return _context
+
+TEMPLATE_CONTEXT_PROCESSORS = (
+...
+'myproject.settings.settings_context',
+...
+)
+</code></pre>
+<br /><b>#4</b><br /><p>I improved <a href="http://stackoverflow.com/questions/433162/can-i-access-constants-in-settings-py-from-templates-in-django/5235614#5235614">chrisdew's answer</a> (to create your own tag) a little bit.</p>
+
+<p>First, create the file <code>yourapp/templatetags/value_from_settings.py</code> in which you define your own new tag <code>value_from_settings</code>:</p>
+
+<pre><code>from django.template import TemplateSyntaxError, Variable, Node, Variable, Library
+from yourapp import settings
+
+register = Library()
+# I found some tricks in URLNode and url from defaulttags.py:
+# https://code.djangoproject.com/browser/django/trunk/django/template/defaulttags.py
+@register.tag
+def value_from_settings(parser, token):
+  bits = token.split_contents()
+  if len(bits) &lt; 2:
+    raise TemplateSyntaxError("'%s' takes at least one " \
+      "argument (settings constant to retrieve)" % bits[0])
+  settingsvar = bits[1]
+  settingsvar = settingsvar[1:-1] if settingsvar[0] == '"' else settingsvar
+  asvar = None
+  bits = bits[2:]
+  if len(bits) &gt;= 2 and bits[-2] == 'as':
+    asvar = bits[-1]
+    bits = bits[:-2]
+  if len(bits):
+    raise TemplateSyntaxError("'value_from_settings' didn't recognise " \
+      "the arguments '%s'" % ", ".join(bits))
+  return ValueFromSettings(settingsvar, asvar)
+
+class ValueFromSettings(Node):
+  def __init__(self, settingsvar, asvar):
+    self.arg = Variable(settingsvar)
+    self.asvar = asvar
+  def render(self, context):
+    ret_val = getattr(settings,str(self.arg))
+    if self.asvar:
+      context[self.asvar] = ret_val
+      return ''
+    else:
+      return ret_val
+</code></pre>
+
+<p>You can use this tag in your Template via:</p>
+
+<pre><code>{% load value_from_settings %}
+[...]
+{% value_from_settings "FQDN" %}
+</code></pre>
+
+<p>or via</p>
+
+<pre><code>{% load value_from_settings %}
+[...]
+{% value_from_settings "FQDN" as my_fqdn %}
+</code></pre>
+
+<p>The advantage of the <code>as ...</code> notation is that this makes it easy to use in <code>blocktrans</code> blocks vi <code>{{my_fqdn}}</code>.</p>
+<br />

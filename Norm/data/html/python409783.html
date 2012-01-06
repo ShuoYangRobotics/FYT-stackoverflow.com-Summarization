@@ -1,0 +1,70 @@
+<h3>Question (ID-409783):</h3><h2>socket.shutdown vs socket.close</h2><p>I recently saw a bit of code that looked like this (with sock being a socket object of course):</p>
+
+<pre><code>sock.shutdown(socket.SHUT_RDWR)
+sock.close()
+</code></pre>
+
+<p>What exactly is the purpose of calling shutdown on the socket and then closing it?  If it makes a difference, this socket is being used for non-blocking IO.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Calling <code>close</code> and <code>shutdown</code> have two different affects on the underlying socket.</p>
+
+<p>The first thing to point out is that the socket is a resource in the underlying OS and <strong>multiple processes can have a handle for the same underlying socket.</strong></p>
+
+<p>When you call <code>close</code> it decrements the handle count by one and if the handle count has reached zero then the socket and associated connection goes through the normal close procedure (effectively sending a FIN / EOF to the peer) and the socket is deallocated.</p>
+
+<p>The thing to pay attention to here is that if the handle count does not reach zero because another process still has a handle to the socket then the connection <strong>is not closed and the socket is not deallocated.</strong></p>
+
+<p>On the other hand calling <code>shutdown</code> for reading and writing closes the underlying connection and sends a FIN / EOF to the peer regardless of how many processes have handles to the socket.  However, it <strong>does not</strong> deallocate the socket and you still need to call close afterward.</p>
+<br /><b>#1</b><br /><p>Here's one <a href="http://publib.boulder.ibm.com/infocenter/systems/index.jsp?topic=/com.ibm.aix.progcomm/doc/progcomc/skt_shutdn.htm" rel="nofollow">explanation</a>:</p>
+
+<blockquote>
+  <p>Once a socket is no longer required,
+  the calling program can discard the
+  socket by applying a close subroutine
+  to the socket descriptor. If a
+  reliable delivery socket has data
+  associated with it when a close takes
+  place, the system continues to attempt
+  data transfer. However, if the data is
+  still undelivered, the system discards
+  the data. Should the application
+  program have no use for any pending
+  data, it can use the shutdown
+  subroutine on the socket prior to
+  closing it.</p>
+</blockquote>
+<br /><b>#2</b><br /><p>Explanation of shutdown and close: <a href="http://msdn.microsoft.com/en-us/library/ms738547(VS.85).aspx" rel="nofollow">Graceful shutdown (msdn)</a></p>
+
+<p>Shutdown (in your case) indicates to the other end of the connection there is no further intention to read from or write to the socket. Then close frees up any memory associated with the socket.</p>
+
+<p>Omitting shutdown may cause the socket to linger in the OSs stack until the connection has been closed gracefully.</p>
+
+<p>IMO the names 'shutdown' and 'close' are misleading, 'close' and 'destroy' would emphasise their differences.</p>
+<br /><b>#3</b><br /><p>there are some flavours of shutdown: <a href="http://msdn.microsoft.com/en-us/library/system.net.sockets.socket.shutdown.aspx" rel="nofollow">http://msdn.microsoft.com/en-us/library/system.net.sockets.socket.shutdown.aspx</a>. *nix is similar.</p>
+<br /><b>#4</b><br /><p>Shutdown(1) , forces the socket no to send any more data</p>
+
+<p>This is usefull in</p>
+
+<p>1- Buffer flushing</p>
+
+<p>2- Strange error detection</p>
+
+<p>3- Safe guarding</p>
+
+<p>Let me explain more , when you send a data from A to B , it's not guaranteed to be 
+sent to B , it's only guaranteed to be sent to the A os buffer , 
+which in turn sends it to the B os buffer</p>
+
+<p>So by calling shutdown(1) on A , you flush A's buffer and an error is raised 
+if the buffer is not empty ie: data has not been sent to the peer yet</p>
+
+<p>Howoever this is irrevesable , so you can do that after you completely 
+sent all your data and you want to be sure that it's atleast at the peer 
+os buffer</p>
+<br /><b>#5</b><br /><p>Isn't this code above wrong?</p>
+
+<p>The close call directly after the shutdown call might make the kernel discard all outgoing buffers anyway.</p>
+
+<p>According to
+<a href="http://blog.netherlabs.nl/articles/2009/01/18/the-ultimate-so_linger-page-or-why-is-my-tcp-not-reliable" rel="nofollow">http://blog.netherlabs.nl/articles/2009/01/18/the-ultimate-so_linger-page-or-why-is-my-tcp-not-reliable</a>
+one needs to wait between the shutdown and the close until read returns 0.</p>
+<br />

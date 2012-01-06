@@ -1,0 +1,143 @@
+<h3>Question (ID-89228):</h3><h2>How to call external command in Python</h2><p>I want to be able to call external command in Python.</p>
+
+<p>Thanks for your help!</p>
+<br /><h3>Answers (Total-14):</h3><b>#0</b><br /><p>Here's a summary of the ways to call external programs and the advantages and disadvantages of each:</p>
+
+<ol>
+<li><p><code>os.system("some_command with args")</code> passes the command and arguments to your system's shell.  This is nice because you can actually run multiple commands at once in this manner and set up pipes and input/output redirection.  For example,<br />
+<code>os.system("some_command &lt; input_file | another_command > output_file")</code><br />
+However, while this is convenient, you have to manually handle the escaping of shell characters such as spaces, etc.  On the other hand, this also lets you run commands which are simply shell commands and not actually external programs.<br />
+<a href="http://docs.python.org/lib/os-process.html" rel="nofollow">http://docs.python.org/lib/os-process.html</a></p></li>
+<li><p><code>stream = os.popen("some_command with args")</code> will do the same thing as <code>os.system</code> except that it gives you a file-like object that you can use to access standard input/output for that process.  There are 3 other variants of popen that all handle the i/o slightly differently.  If you pass everything as a string, then your command is passed to the shell; if you pass them as a list then you don't need to worry about escaping anything.<br />
+<a href="http://docs.python.org/lib/os-newstreams.html" rel="nofollow">http://docs.python.org/lib/os-newstreams.html</a></p></li>
+<li><p>The <code>Popen</code> class of the <code>subprocess</code> module.  This is intended as a replacement for <code>os.popen</code> but has the downside of being slightly more complicated by virtue of being so comprehensive.  For example, you'd say<br />
+<code>print Popen("echo Hello World", stdout=PIPE, shell=True).stdout.read()</code><br />
+instead of<br />
+<code>print os.popen("echo Hello World").read()</code><br />
+but it is nice to have all of the options there in one unified class instead of 4 different popen functions.<br />
+<a href="http://docs.python.org/lib/node528.html" rel="nofollow">http://docs.python.org/lib/node528.html</a></p></li>
+<li><p>The <code>call</code> function from the <code>subprocess</code> module.  This is basically just like the <code>Popen</code> class and takes all of the same arguments, but it simply wait until the command completes and gives you the return code.  For example:<br />
+<code>return_code = call("echo Hello World", shell=True)</code><br />
+<a href="http://docs.python.org/lib/node529.html" rel="nofollow">http://docs.python.org/lib/node529.html</a></p></li>
+<li><p>The os module also has all of the fork/exec/spawn functions that you'd have in a C program, but I don't recommend using them directly.</p></li>
+</ol>
+
+<p>The <code>subprocess</code> module should probably be what you use.</p>
+<br /><b>#1</b><br /><p>Look at the <a href="http://docs.python.org/library/subprocess.html" rel="nofollow">subprocess module</a> in the stdlib:</p>
+
+<pre><code>from subprocess import call
+call(["ls", "-l"])
+</code></pre>
+
+<p>The advantage of subprocess vs system is that it is more flexible (you can get the stdout, stderr, the "real" status code, better error handling, etc...). I think os.system is deprecated, too, or will be:</p>
+
+<p><a href="http://www.python.org/doc/2.5/lib/node534.html" rel="nofollow">http://www.python.org/doc/2.5/lib/node534.html</a></p>
+
+<p>For quick/dirty/one time scripts, os.system is enough, though.</p>
+<br /><b>#2</b><br /><p>I'd recommend using the subprocess module instead of os.system because it does shell escaping for you and is therefore much safer: <a href="http://docs.python.org/lib/module-subprocess.html" rel="nofollow">http://docs.python.org/lib/module-subprocess.html</a></p>
+
+<blockquote>
+  <p>subprocess.call(['ping', 'localhost'])</p>
+</blockquote>
+<br /><b>#3</b><br /><p>I typically use:</p>
+
+<pre><code>import subprocess
+
+p = subprocess.Popen('ls', shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+for line in p.stdout.readlines():
+    print line,
+retval = p.wait()
+</code></pre>
+
+<p>You are free to do what you want with the stdout data in the pipe.  In fact, you can simply omit those parameters (stdout= and stderr=) and it'll behave like os.system().</p>
+<br /><b>#4</b><br /><p>Some hints on detaching the child process from the calling one (starting the child process in background).</p>
+
+<p>Suppose you want to start a long task from a CGI-script, that is the child process should live longer than the CGI-script execution process.</p>
+
+<p>The classical example from the subprocess module docs is:</p>
+
+<pre><code>import subprocess
+import sys
+
+# some code here
+
+pid = subprocess.Popen([sys.executable, "longtask.py"]) # call subprocess
+
+# some more code here
+</code></pre>
+
+<p>The idea here is that you do not want to wait in the line 'call subprocess' until the longtask.py is finished. But it is not clear what happens after the line 'some more code here' from the example.</p>
+
+<p>My target platform was freebsd, but the development was on windows, so I faced the problem on windows first.</p>
+
+<p>On windows (win xp), the parent process will not finish until the longtask.py has finished its work. It is not what you want in CGI-script. The problem is not specific to Python, in PHP community the problems are the same.</p>
+
+<p>The solution is to pass DETACHED_PROCESS flag to the underlying CreateProcess function in win API.
+If you happen to have installed pywin32 you can import the flag from the win32process module, otherwise you should define it yourself:</p>
+
+<pre><code>DETACHED_PROCESS = 0x00000008
+
+pid = subprocess.Popen([sys.executable, "longtask.py"],
+                       creationflags=DETACHED_PROCESS).pid
+</code></pre>
+
+<p>On freebsd we have another problem: when the parent process is finished, it finishes the child processes as well. And that is not what you want in CGI-script either. Some experiments showed that the problem seemed to be in sharing sys.stdout. And the working solution was the following:</p>
+
+<pre><code>pid = subprocess.Popen([sys.executable, "longtask.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+</code></pre>
+
+<p>I have not checked the code on other platforms and do not know the reasons of the behaviour on freebsd. If anyone knows, please share your ideas. Googling on starting background processes in Python does not shed any light yet.</p>
+<br /><b>#5</b><br /><pre><code>import os
+cmd = 'ls -al'
+os.system(cmd)
+</code></pre>
+
+<p>If you want to return the results of the command you need <a href="http://oreilly.com/catalog/lpython/chapter/ch09.html" rel="nofollow">os.popen</a>:</p>
+<br /><b>#6</b><br /><p>os.system is OK, but kind of dated.  It's also not very secure.  Instead, try subprocess.  subprocess does not call sh directly and is therefore more secure than os.system.</p>
+
+<p>Get more information at <a href="http://docs.python.org/lib/module-subprocess.html" rel="nofollow">http://docs.python.org/lib/module-subprocess.html</a></p>
+<br /><b>#7</b><br /><pre><code>import os
+os.system("your command")
+</code></pre>
+
+<p>Note that this is dangerous, since the command isn't cleaned. I leave it up to you to google for the relevant docs on the 'os' and 'sys' modules. There are a bunch of functions (exec* , spawn*) that will do similar things.</p>
+<br /><b>#8</b><br /><p><a href="http://www.python.org/doc/2.5/lib/module-subprocess.html" rel="nofollow">http://www.python.org/doc/2.5/lib/module-subprocess.html</a></p>
+
+<p>...or for a very simple command:</p>
+
+<pre><code>import os
+os.system('cat testfile')
+</code></pre>
+<br /><b>#9</b><br /><p>There is another difference here which is not mentioned above.</p>
+
+<p>subprocess.Popen executes the  as a subprocess. In my case, I need to execute file  which needs to communicate with another program . </p>
+
+<p>I tried subprocess, execution was successful. However  could not comm w/ .
+everything normal when I run both from the terminal.</p>
+
+<p>One more: 
+(NOTE: kwrite behaves different from other apps. If you try below with firefox results will not be the same)</p>
+
+<p>If you try os.system("kwrite"), program flow freezes until user closes kwrite. To overcome that I tried instead os.system(konsole -e kwrite). This time program continued to flow but kwrite became the subprocess of the konsole.</p>
+
+<p>Anyone runs the kwrite not being a subprocess (i.e. at the system monitor it must be appear at the leftmost edge of the tree)</p>
+
+<p>Thanks</p>
+<br /><b>#10</b><br /><p>Check "pexpect" python library, too.
+It allows for interactive controlling of external programs/commands, even ssh, ftp, telnet etc. You can just type something like:</p>
+
+<p>child = pexpect.spawn('ftp 192.168.0.24')</p>
+
+<p>child.expect('(?i)name .*: ')</p>
+
+<p>child.sendline('anonymous')</p>
+
+<p>child.expect('(?i)password')</p>
+<br /><b>#11</b><br /><p><code>subprocess.check_call</code> is convenient if you don't want to test return values. It throws an exception on any error.</p>
+<br /><b>#12</b><br /><p>If what you need is the output from the command you are calling you can use subprocess.check_output since Python 2.7</p>
+
+<pre><code>&gt;&gt;&gt; subprocess.check_output(["ls", "-l", "/dev/null"])
+'crw-rw-rw- 1 root root 1, 3 Oct 18  2007 /dev/null\n'
+</code></pre>
+<br /><b>#13</b><br /><p>os.system has been superceeded by the subprocess module. Use subproccess instead.</p>
+<br />

@@ -1,0 +1,225 @@
+Question (ID-3857052): Why is printing to stdout so slow? Can it be sped up? I've always been amazed/frustrated with how long it takes to simply output to the terminal with a print statement. After some recent painfully slow logging I decided to look into it and was quite surprised to find that almost all the time spent is waiting for the terminal to process the results. 
+
+ Can writing to stdout be sped up somehow? 
+
+ I wrote a script (' print_timer.py ' at the bottom of this question) to compare timing when writing 100k lines to stdout, to file, and with stdout redirected to /dev/null . Here is the timing result: 
+
+ $python print_timer.py
+this is a test
+this is a test
+&lt;snipped 99997 lines&gt;
+this is a test
+-----
+timing summary (100k lines each)
+-----
+print       :11.950 s
+write to file (+ fsync)  : 0.122 s
+print with stdout = /dev/null : 0.050 s 
+
+ Wow. To make sure python isn't doing something behind the scenes like recognizing that I reassigned stdout to /dev/null or something, I did the redirection outside the script... 
+
+ $ python print_timer.py > /dev/null
+-----
+timing summary (100k lines each)
+-----
+print       : 0.053 s
+write to file (+fsync)  : 0.108 s
+print with stdout = /dev/null : 0.045 s
+ 
+
+ So it isn't a python trick, it is just the terminal. I always knew dumping output to /dev/null sped things up, but never figured it was that significant! 
+
+ It amazes me how slow the tty is. How can it be that writing to physical disk is WAY faster than writing to the "screen" (presumably an all-RAM op), and is effectively as fast as simply dumping to the garbage with /dev/null? 
+
+ This link talks about how the terminal will block I/O so it can "parse [the input], update its frame buffer, communicate with the X server in order to scroll the window and so on" ... but I don't fully get it. What can be taking so long? 
+
+ I expect there is no way out (short of a faster tty implementation?) but figure I'd ask anyway. 
+
+ 
+
+ UPDATE: after reading some comments I wondered how much impact my screen size actually has on the print time, and it does have some significance. The really slow numbers above are with my Gnome terminal blown up to 1920x1200. If I reduce it very small I get... 
+
+ -----
+timing summary (100k lines each)
+-----
+print       : 2.920 s
+write to file (+fsync)  : 0.121 s
+print with stdout = /dev/null : 0.048 s
+ 
+
+ That is certainly better (~4x), but doesn't change my question. It only adds to my question as I don't understand why the terminal screen rendering should slow down an application writing to stdout. Why does my program need to wait for screen rendering to continue? 
+
+ Are all terminal/tty apps not created equal? I have yet to experiment. It really seems to me like a terminal should be able to buffer all incoming data, parse/render it invisibly, and only render the most recent chunk that is visible in the current screen configuration at a sensible frame rate. So if I can write+fsync to disk in ~0.1 seconds, a terminal should be able to complete the same operation in something of that order (with maybe a few screen updates while it did it). 
+
+ I'm still kind of hoping there is a tty setting that can be changed from the application side to make this behaviour better for programmer. If this is strictly a terminal application issue, then this maybe doesn't even belong on StackOverflow? 
+
+ What am I missing? 
+
+ 
+
+ Here is the python program used to generate the timing: 
+
+ import time, sys, tty
+import os
+
+lineCount = 100000
+line = "this is a test"
+summary = ""
+
+cmd = "print"
+startTime_s = time.time()
+for x in range(lineCount):
+ print line
+t = time.time() - startTime_s
+summary += "%-30s:%6.3f s\n" % (cmd, t)
+
+#Add a newline to match line outputs above...
+line += "\n"
+
+cmd = "write to file (+fsync)"
+fp = file("out.txt", "w")
+startTime_s = time.time()
+for x in range(lineCount):
+ fp.write(line)
+os.fsync(fp.fileno())
+t = time.time() - startTime_s
+summary += "%-30s:%6.3f s\n" % (cmd, t)
+
+cmd = "print with stdout = /dev/null"
+sys.stdout = file(os.devnull, "w")
+startTime_s = time.time()
+for x in range(lineCount):
+ fp.write(line)
+t = time.time() - startTime_s
+summary += "%-30s:%6.3f s\n" % (cmd, t)
+
+print &gt;&gt; sys.stderr, "-----"
+print &gt;&gt; sys.stderr, "timing summary (100k lines each)"
+print &gt;&gt; sys.stderr, "-----"
+print &gt;&gt; sys.stderr, summary
+ 
+ Answers (Total-6): #0 
+ How can it be that writing to physical disk is WAY faster than writing to the "screen" (presumably an all-RAM op), and is effectively as fast as simply dumping to the garbage with /dev/null? 
+ 
+
+ Congratulations, you have just discovered the importance of I/O buffering! :-) 
+
+ The disk appears to be faster, because it is highly buffered: all Python's write() calls are returning before anything is actually written to physical disk. (The OS does this later, combining many thousands of individual writes into a big, efficient chunks.) 
+
+ The terminal, on the other hand, does little or no buffering: each individual print / write(line) waits for the full write (i.e. display to output device) to complete. 
+
+ To make the comparison fair, you must make the file test use the same output buffering as the terminal, which you can do by modifying your example to: 
+
+ fp = file("out.txt", "w", 1) # line-buffered, like stdout
+[...]
+for x in range(lineCount):
+ fp.write(line)
+ os.fsync(fp.fileno())  # wait for the write to actually complete
+ 
+
+ I ran your file writing test on my machine, and with buffering, it also 0.05s here for 100,000 lines. 
+
+ However, with the above modifications to write unbuffered, it takes 40 seconds to write only 1,000 lines to disk. I gave up waiting for 100,000 lines to write, but extrapolating from the previous, it would take over an hour . 
+
+ That puts the terminal's 11 seconds into perspective, doesn't it? 
+
+ So to answer your original question, writing to a terminal is actually blazingly fast, all things considered, and there's not a lot of room to make it much faster (but individual terminals do vary in how much work they do; see Russ's comment to this answer). 
+
+ (You could add more write buffering, like with disk I/O, but then you wouldn't see what was written to your terminal until after the buffer gets flushed. It's a trade-off: interactivity versus bulk efficiency.) 
+ #1 Thanks for all the comments! I've ended up answering it myself with your help. It feels dirty answering your own question, though. 
+
+ Question 1: Why is printing to stdout slow? 
+
+ Answer: Printing to stdout is not inherently slow. It is the terminal you work with that is slow. And it has pretty much zero to do with I/O buffering on the application side (eg: python file buffering). See below. 
+
+ Question 2: Can it be sped up? 
+
+ Answer: Yes it can, but seemingly not from the program side (the side doing the 'printing' to stdout). To speed it up, use a faster different terminal emulator. 
+
+ Explanation... 
+
+ I tried a self-described 'lightweight' terminal program called wterm and got significantly better results. Below is the output of my test script (at the bottom of the question) when running in wterm at 1920x1200 in on the same system where the basic print option took 12s using gnome-terminal: 
+
+ 
+-----
+timing summary (100k lines each)
+-----
+print       : 0.261 s
+write to file (+fsync)  : 0.110 s
+print with stdout = /dev/null : 0.050 s
+ 
+
+ 0.26s is MUCH better than 12s! I don't know whether wterm is more intelligent about how it renders to screen along the lines of how I was suggesting (render the 'visible' tail at a reasonable frame rate), or whether it just "does less" than gnome-terminal . For the purposes of my question I've got the answer, though. gnome-terminal is slow. 
+
+ So - If you have a long running script that you feel is slow and it spews massive amounts of text to stdout... try a different terminal and see if it is any better! 
+
+ Note that I pretty much randomly pulled wterm from the ubuntu/debian repositories. This link might be the same terminal, but I'm not sure. I did not test any other terminal emulators. 
+
+ 
+
+ Update: Because I had to scratch the itch, I tested a whole pile of other terminal emulators with the same script and full screen (1920x1200). My manually collected stats are here: 
+
+ 
+wterm   0.3s
+aterm   0.3s
+rxvt   0.3s
+mrxvt   0.4s
+konsole   0.6s
+yakuake   0.7s
+lxterminal  7s
+xterm    9s
+gnome-terminal 12s
+xfce4-terminal 12s
+vala-terminal 18s
+xvt    48s
+ 
+
+ The recorded times are manually collected, but they were pretty consistent. I recorded the best(ish) value. YMMV, obviously. 
+
+ As a bonus, it was an interesting tour of some of the various terminal emulators available out there! I'm amazed my first 'alternate' test turned out to be the best of the bunch. 
+ #2 Your redirection probably does nothing as programs can determine whether their output FD points to a tty. 
+
+ It's likely that stdout is line buffered when pointing to a terminal (the same as C's stdout stream behaviour). 
+
+ As an amusing experiment, try piping the output to cat . 
+
+ 
+
+ I've tried my own amusing experiment, and here are the results. 
+
+ $ python test.py 2&gt;foo
+...
+$ cat foo
+-----
+timing summary (100k lines each)
+-----
+print       : 6.040 s
+write to file     : 0.122 s
+print with stdout = /dev/null : 0.121 s
+
+$ python test.py 2&gt;foo |cat
+...
+$ cat foo
+-----
+timing summary (100k lines each)
+-----
+print       : 1.024 s
+write to file     : 0.131 s
+print with stdout = /dev/null : 0.122 s
+ 
+ #3 Printing to the terminal is going to be slow. Unfortunately short of writing a new terminal implementation I can't really see how you'd speed this up significantly. 
+ #4 I can't talk about the technical details because I don't know them, but this doesn't surprise me: the terminal was not designed for printing lots of data like this. Indeed, you even provide a link to a load of GUI stuff that it has to do every time you want to print something! Notice that if you call the script with pythonw instead, it does not take 15 seconds; this is entirely a GUI issue. Redirect stdout to a file to avoid this: 
+
+ import contextlib, io
+@contextlib.contextmanager
+def redirect_stdout(stream):
+ import sys
+ sys.stdout = stream
+ yield
+ sys.stdout = sys.__stdout__
+
+output = io.StringIO
+with redirect_stdout(output):
+ ...
+ 
+ #5 In addition to the output probably defaulting to a line-buffered mode, output to a terminal is also causing your data to flow into a terminal and serial line with a maximum throughput, or a pseudo-terminal and a separate process that is handling a display event loop, rendering characters from some font, moving display bits to implement a scrolling display. The latter scenario is probably spread over multiple processes (e.g. telnet server/client, terminal app, X11 display server) so there are context switching and latency issues too.

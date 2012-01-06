@@ -1,0 +1,327 @@
+<h3>Question (ID-136168):</h3><h2>Get last n lines of a file with Python, similar to tail</h2><p>I'm writing a log file viewer for a web application and for that I want to paginate through the lines of the log file.  The items in the file are line based with the newest item on the bottom.</p>
+
+<p>So I need a <code>tail()</code> method that can read <code>n</code> lines from the bottom and supports an offset.  What I came up with looks like this:</p>
+
+<pre><code>def tail(f, n, offset=0):
+    """Reads a n lines from f with an offset of offset lines."""
+    avg_line_length = 74
+    to_read = n + offset
+    while 1:
+        try:
+            f.seek(-(avg_line_length * to_read), 2)
+        except IOError:
+            # woops.  apparently file is smaller than what we want
+            # to step back, go to the beginning instead
+            f.seek(0)
+        pos = f.tell()
+        lines = f.read().splitlines()
+        if len(lines) &gt;= to_read or pos == 0:
+            return lines[-to_read:offset and -offset or None]
+        avg_line_length *= 1.3
+</code></pre>
+
+<p>Is this a reasonable approach?  What is the recommended way to tail log files with offsets?</p>
+<br /><h3>Answers (Total-12):</h3><b>#0</b><br /><p>This may be quicker than yours.  Makes no assumptions about line length.  Backs through the file one block at a time till it's found the right number of '\n' characters.</p>
+
+<pre><code>def tail( f, window=20 ):
+    BUFSIZ = 1024
+    f.seek(0, 2)
+    bytes = f.tell()
+    size = window
+    block = -1
+    data = []
+    while size &gt; 0 and bytes &gt; 0:
+        if (bytes - BUFSIZ &gt; 0):
+            # Seek back one whole BUFSIZ
+            f.seek(block*BUFSIZ, 2)
+            # read BUFFER
+            data.append(f.read(BUFSIZ))
+        else:
+            # file too small, start from begining
+            f.seek(0,0)
+            # only read what was not read
+            data.append(f.read(bytes))
+        linesFound = data[-1].count('\n')
+        size -= linesFound
+        bytes -= BUFSIZ
+        block -= 1
+    return '\n'.join(''.join(data).splitlines()[-window:])
+</code></pre>
+
+<p>I don't like tricky assumptions about line length when -- as a practical matter -- you can never know things like that.</p>
+
+<p>Generally, this will locate the last 20 lines on the first or second pass through the loop.  If your 74 character thing is actually accurate, you make the block size 2048 and you'll tail 20 lines almost immediately.</p>
+
+<p>Also, I don't burn a lot of brain calories trying to finesse alignment with physical OS blocks.  Using these high-level I/O packages, I doubt you'll see any performance consequence of trying to align on OS block boundaries.  If you use lower-level I/O, then you might see a speedup.</p>
+<br /><b>#1</b><br /><p>The code I ended up using.  I think this is the best so far:</p>
+
+<pre><code>def tail(f, n, offset=None):
+    """Reads a n lines from f with an offset of offset lines.  The return
+    value is a tuple in the form ``(lines, has_more)`` where `has_more` is
+    an indicator that is `True` if there are more lines in the file.
+    """
+    avg_line_length = 74
+    to_read = n + (offset or 0)
+
+    while 1:
+        try:
+            f.seek(-(avg_line_length * to_read), 2)
+        except IOError:
+            # woops.  apparently file is smaller than what we want
+            # to step back, go to the beginning instead
+            f.seek(0)
+        pos = f.tell()
+        lines = f.read().splitlines()
+        if len(lines) &gt;= to_read or pos == 0:
+            return lines[-to_read:offset and -offset or None], \
+                   len(lines) &gt; to_read or pos &gt; 0
+        avg_line_length *= 1.3
+</code></pre>
+<br /><b>#2</b><br /><p>Assumes a unix-like system.</p>
+
+<pre><code>import os
+def tail(f, n, offset=0):
+  stdin,stdout = os.popen2("tail -n "+n+offset+" "+f)
+  stdin.close()
+  lines = stdout.readlines(); stdout.close()
+  return lines[:,-offset]
+</code></pre>
+<br /><b>#3</b><br /><p>If reading the whole file is acceptable then use a deque.</p>
+
+<pre><code>from collections import deque
+deque(f, maxlen=n)
+</code></pre>
+
+<p>Prior to 2.6, deques didn't have a maxlen option, but it's easy enough to implement.</p>
+
+<pre><code>import itertools
+def maxque(items, size):
+    items = iter(items)
+    q = deque(itertools.islice(items, size))
+    for item in items:
+    	del q[0]
+    	q.append(item)
+    return q
+</code></pre>
+
+<p>If it's a requirement to read the file from the end, then use a gallop (a.k.a exponential) search.</p>
+
+<pre><code>def tail(f, n):
+    assert n &gt;= 0
+    pos, lines = n+1, []
+    while len(lines) &lt;= n:
+    	try:
+    		f.seek(-pos, 2)
+    	except IOError:
+    		f.seek(0)
+    		break
+    	finally:
+    		lines = list(f)
+    	pos *= 2
+    return lines[-n:]
+</code></pre>
+<br /><b>#4</b><br /><p>For efficiency with very large files (common in logfile situations where you may want to use tail), you generally want to avoid reading the whole file (even if you do do it without reading the whole file into memory at once)  However, you do need to somehow work out the offset in lines rather than characters.  One possibility is reading backwards with seek() char by char, but this is very slow.  Instead, its better to process in larger blocks.</p>
+
+<p>I've a utility function I wrote a while ago to read files backwards that can be used here.</p>
+
+<pre><code>import os, itertools
+
+def rblocks(f, blocksize=4096):
+    """Read file as series of blocks from end of file to start.
+
+    The data itself is in normal order, only the order of the blocks is reversed.
+    ie. "hello world" -&gt; ["ld","wor", "lo ", "hel"]
+    Note that the file must be opened in binary mode.
+    """
+    if 'b' not in f.mode.lower():
+        raise Exception("File must be opened using binary mode.")
+    size = os.stat(f.name).st_size
+    fullblocks, lastblock = divmod(size, blocksize)
+
+    # The first(end of file) block will be short, since this leaves 
+    # the rest aligned on a blocksize boundary.  This may be more 
+    # efficient than having the last (first in file) block be short
+    f.seek(-lastblock,2)
+    yield f.read(lastblock)
+
+    for i in range(fullblocks-1,-1, -1):
+        f.seek(i * blocksize)
+        yield f.read(blocksize)
+
+def tail(f, nlines):
+    buf = ''
+    result = []
+    for block in rblocks(f):
+        buf = block + buf
+        lines = buf.splitlines()
+
+        # Return all lines except the first (since may be partial)
+        if lines:
+            result.extend(lines[1:]) # First line may not be complete
+            if(len(result) &gt;= nlines):
+                return result[-nlines:]
+
+            buf = lines[0]
+
+    return ([buf]+result)[-nlines:]
+
+
+f=open('file_to_tail.txt','rb')
+for line in tail(f, 20):
+    print line
+</code></pre>
+
+<p>[Edit] Added more specific version (avoids need to reverse twice)</p>
+<br /><b>#5</b><br /><p>On second thought, this is probably just as fast as anything here.</p>
+
+<pre><code>def tail( f, window=20 ):
+    lines= ['']*window
+    count= 0
+    for l in f:
+        lines[count%window]= l
+        count += 1
+    print lines[count%window:], lines[:count%window]
+</code></pre>
+
+<p>It's a lot simpler.  And it does seem to rip along at a good pace.  </p>
+<br /><b>#6</b><br /><p>based on S.Lott's top voted answer (Sep 25 '08 at 21:43), but fixed for small files.</p>
+
+<pre><code>def tail(the_file, lines_2find=20):  
+    the_file.seek(0, 2)                         #go to end of file
+    bytes_in_file = the_file.tell()             
+    lines_found, total_bytes_scanned = 0, 0
+    while lines_2find+1 &gt; lines_found and bytes_in_file &gt; total_bytes_scanned: 
+        byte_block = min(1024, bytes_in_file-total_bytes_scanned)
+        the_file.seek(-(byte_block+total_bytes_scanned), 2)
+        total_bytes_scanned += byte_block
+        lines_found += the_file.read(1024).count('\n')
+    the_file.seek(-total_bytes_scanned, 2)
+    line_list = list(the_file.readlines())
+    return line_list[-lines_2find:]
+
+    #we read at least 21 line breaks from the bottom, block by block for speed
+    #21 to ensure we don't get a half line
+</code></pre>
+
+<p>Hope this is useful.</p>
+<br /><b>#7</b><br /><p>you can go to the end of your file with f.seek(0, 2) and then read off lines one by one with the following replacement for readline():</p>
+
+<pre><code>def readline_backwards(self, f):
+    backline = ''
+    last = ''
+    while not last == '\n':
+        backline = last + backline
+        if f.tell() &lt;= 0:
+            return backline
+        f.seek(-1, 1)
+        last = f.read(1)
+        f.seek(-1, 1)
+    backline = last
+    last = ''
+    while not last == '\n':
+        backline = last + backline
+        if f.tell() &lt;= 0:
+            return backline
+        f.seek(-1, 1)
+        last = f.read(1)
+        f.seek(-1, 1)
+    f.seek(1, 1)
+    return backline
+</code></pre>
+<br /><b>#8</b><br /><p>Based on Eyecue answer (Jun 10 '10 at 21:28): this class add head() and tail() method to file object.</p>
+
+<pre><code>class File(file):
+    def head(self, lines_2find=1):
+        self.seek(0)                            #Rewind file
+        return [self.next() for x in xrange(lines_2find)]
+
+    def tail(self, lines_2find=1):  
+        self.seek(0, 2)                         #go to end of file
+        bytes_in_file = self.tell()             
+        lines_found, total_bytes_scanned = 0, 0
+        while (lines_2find+1 &gt; lines_found and
+               bytes_in_file &gt; total_bytes_scanned): 
+            byte_block = min(1024, bytes_in_file-total_bytes_scanned)
+            self.seek(-(byte_block+total_bytes_scanned), 2)
+            total_bytes_scanned += byte_block
+            lines_found += self.read(1024).count('\n')
+        self.seek(-total_bytes_scanned, 2)
+        line_list = list(self.readlines())
+        return line_list[-lines_2find:]
+</code></pre>
+
+<p>Usage:</p>
+
+<pre><code>f = File('path/to/file', 'r')
+f.head(3)
+f.tail(3)
+</code></pre>
+<br /><b>#9</b><br /><p>Several of these solutions have issues if the file doesn't end in \n or in ensuring the complete first line is read.</p>
+
+<pre><code>def tail(file, n=1, bs=1024):
+    f = open(file)
+    f.seek(-1,2)
+    l = 1-f.read(1).count('\n') # If file doesn't end in \n, count it anyway.
+    B = f.tell()
+    while n &gt;= l and B &gt; 0:
+            block = min(bs, B)
+            B -= block
+            f.seek(B, 0)
+            l += f.read(block).count('\n')
+    f.seek(B, 0)
+    l = min(l,n) # discard first (incomplete) line if l &gt; n
+    lines = f.readlines()[-l:]
+    f.close()
+    return lines
+</code></pre>
+<br /><b>#10</b><br /><p>Simple and fast solution with mmap:</p>
+
+<pre><code>import mmap
+import os
+
+def tail(filename, n):
+    """Returns last n lines from the filename. No exception handling"""
+    size = os.path.getsize(filename)
+    with open(filename, "rb") as f:
+        # for Windows the mmap parameters are different
+        fm = mmap.mmap(f.fileno(), 0, mmap.MAP_SHARED, mmap.PROT_READ)
+        try:
+            for i in xrange(size - 1, -1, -1):
+                if fm[i] == '\n':
+                    n -= 1
+                    if n == -1:
+                        break
+            return fm[i + 1 if i else 0:].splitlines()
+        finally:
+            fm.close()
+</code></pre>
+<br /><b>#11</b><br /><p>S.Lott's answer above almost works for me but ends up giving me partial lines. It turns out that it corrupts data on block boundaries because data holds the read blocks in reversed order. When ''.join(data) is called, the blocks are in the wrong order. This fixes that.</p>
+
+<pre><code>def tail(f, window=20):
+    """
+    Returns the last `window` lines of file `f` as a list.
+    """
+    BUFSIZ = 1024
+    f.seek(0, 2)
+    bytes = f.tell()
+    size = window + 1
+    block = -1
+    data = []
+    while size &gt; 0 and bytes &gt; 0:
+        if bytes - BUFSIZ &gt; 0:
+            # Seek back one whole BUFSIZ
+            f.seek(block * BUFSIZ, 2)
+            # read BUFFER
+            data.insert(0, f.read(BUFSIZ))
+        else:
+            # file too small, start from begining
+            f.seek(0,0)
+            # only read what was not read
+            data.insert(0, f.read(bytes))
+        linesFound = data[0].count('\n')
+        size -= linesFound
+        bytes -= BUFSIZ
+        block -= 1
+    return ''.join(data).splitlines()[-window:]
+</code></pre>
+<br />

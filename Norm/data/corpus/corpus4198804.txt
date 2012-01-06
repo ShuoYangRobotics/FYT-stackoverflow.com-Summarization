@@ -1,0 +1,155 @@
+Question (ID-4198804): How to reliably guess the encoding between MacRoman, CP1252, Latin1, UTF-8, and ASCII At work it seems like no week ever passes without some encoding-related conniption, calamity, or catastrophe. The problem usually derives from programmers who think they can reliably process a “text” file without specifying the encoding. But you can't. 
+
+ So it's been decided to henceforth forbid files from ever having names that end in *.txt or *.text . The thinking is that those extensions mislead the casual programmer into a dull complacency regarding encodings, and this leads to improper handling. It would almost be better to have no
+extension at all, because at least then you know that you don’t know what you’ve got. 
+
+ However, we aren’t goint to go that far. Instead you will be expected to use a filename that ends in the encoding. So for text files, for example, these would be something like README.ascii , README.latin1 , README.utf8 , etc. 
+
+ For files that demand a particular extension, if one can specify the encoding inside the file itself, such as in Perl or Python, then you shall do that. For files like Java source where no such facility exists internal to the file, you will put the encoding before the extension, such as SomeClass-utf8.java . 
+
+ For output, UTF-8 is to be strongly preferred. 
+
+ But for input, we need to figure out how to deal with the thousands of files in our codebase named *.txt . We want to rename all of them to fit into our new standard. But we can’t possibly eyeball them all. So we need a library or program that actually works. 
+
+ These are variously in ASCII, ISO-8859-1, UTF-8, Microsoft CP1252, or Apple MacRoman. Although we're know we can tell if something is ASCII, and we stand a good change of knowing if something is probably UTF-8, we’re stumped about the 8-bit encodings. Because we’re running in a mixed Unix environment (Solaris, Linux, Darwin) with most desktops being Macs, we have quite a few annoying MacRoman files. And these especially are a problem. 
+
+ For some time now I’ve been looking for a way to programmatically determine which of 
+
+ 
+ ASCII 
+ ISO-8859-1 
+ CP1252 
+ MacRoman 
+ UTF-8 
+ 
+
+ a file is in, and I haven’t found a program or library that can reliably distinguish between those the three different 8-bit encodings. We probably have over a thousand MacRoman files alone, so whatever charset detector we use has to be able to sniff those out. Nothing I’ve looked at can manage the trick. I had big hopes for the ICU charset detector library , but it cannot handle MacRoman. I’ve also looked at modules to do the same sort of thing in both Perl and Python, but again and again it’s always the same story: no support for detecting MacRoman. 
+
+ What I am therefore looking for is an existing library or program that reliably determines which of those five encodings a file is in—and preferably more than that. In particular it has to distinguish between the three 3-bit encoding I’ve cited, especially MacRoman . The files are more than 99% English language text; there are a few in other languages, but not many. 
+
+ If it’s library code, our language preference is for it to be in Perl, C, Java, or Python, and in that order. If it’s just a program, then we don’t really care what language it’s in so long as it comes in full source, runs on Unix, and is fully unencumbered. 
+
+ Has anyone else had this problem of a zillion legacy text files randomly encoded? If so, how did you attempt to solve it, and how successful were you? This is the most important aspect of my question, but I’m also interested in whether you think encouraging programmers to name (or rename) their files with the actual encoding those files are in will help us avoid the problem in the future. Has anyone ever tried to enforce this on an institutional basis, and if so, was that successful or not, and why? 
+
+ And yes, I fully understand why one cannot guarantee a definite answer given the nature of the problem. This is especially the case with small files, where you don’t have enough data to go on. Fortunately, our files are seldom small. Apart from the random README file, most are in the size range of 50k to 250k, and many are larger. Anything more than a few K in size is guaranteed to be in English. 
+
+ The problem domain is biomedical text mining, so we sometimes deal with extensive and extremely large corpora, like all of PubMedCentral’s Open Access respository. A rather huge file is the BioThesaurus 6.0, at 5.7 gigabytes. This file is especially annoying because it is almost all UTF-8. However, some numbskull went and stuck a few lines in it that are in some 8-bit encoding—Microsoft CP1252, I believe. It takes quite a while before you trip on that one. :( 
+ Answers (Total-9): #0 First, the easy cases: 
+
+ ASCII 
+
+ If your data contains no bytes above 0x7F, then it's ASCII. (Or a 7-bit ISO646 encoding, but those are very obsolete.) 
+
+ UTF-8 
+
+ If your data validates as UTF-8, then you can safely assume it is UTF-8. Due to UTF-8's strict validation rules, false positives are extremely rare. 
+
+ ISO-8859-1 vs. windows-1252 
+
+ The only difference between these two encodings is that ISO-8859-1 has the C1 control characters where windows-1252 has the printable characters €‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ. I've seen plenty of files that use curly quotes or dashes, but none that use C1 control characters. So don't even bother with them, or ISO-8859-1, just detect windows-1252 instead. 
+
+ That now leaves you with only one question. 
+
+ How do you distinguish MacRoman from cp1252? 
+
+ This is a lot trickier. 
+
+ Undefined characters 
+
+ The bytes 0x81, 0x8D, 0x8F, 0x90, 0x9D are not used in windows-1252. If they occur, then assume the data is MacRoman. 
+
+ Identical characters 
+
+ The bytes 0xA2 (¢), 0xA3 (£), 0xA9 (©), 0xB1 (±), 0xB5 (µ) happen to be the same in both encodings. If these are the only non-ASCII bytes, then it doesn't matter whether you choose MacRoman or cp1252. 
+
+ Statistical approach 
+
+ Count character (NOT byte!) frequencies in the data you know to be UTF-8. Determine the most frequent characters. Then use this data to determine whether the cp1252 or MacRoman characters are more common. 
+
+ For example, in a search I just performed on 100 random English Wikipedia articles, the most common non-ASCII characters are ·•–é°®’èö— . Based on this fact, 
+
+ 
+ The bytes 0x92, 0x95, 0x96, 0x97, 0xAE, 0xB0, 0xB7, 0xE8, 0xE9, or 0xF6 suggest windows-1252. 
+ The bytes 0x8E, 0x8F, 0x9A, 0xA1, 0xA5, 0xA8, 0xD0, 0xD1, 0xD5, or 0xE1 suggest MacRoman. 
+ 
+
+ Count up the cp1252-suggesting bytes and the MacRoman-suggesting bytes, and go with whichever is greatest. 
+ #1 My attempt at such a heuristic (assuming that you've ruled out ASCII and UTF-8): 
+
+ 
+ If 0x7f to 0x9f don't appear at all, it's probably ISO-8859-1, because those are very rarely used control codes 
+ If 0x91 through 0x94 appear at lot, it's probably Windows-1252, because those are the "smart quotes", by far the most likely characters in that range to be used in English text. To be more certain you could look for pairs. 
+ Otherwise, it's MacRoman, especially if you see a lot of 0xd2 through 0xd5 (that'S where the typographic quotes are in MacRoman). 
+ 
+
+ Side note: 
+
+ 
+ For files like Java source where no
+ such facility exists internal to the
+ file, you will put the encoding before
+ the extension, such as
+ SomeClass-utf8.java 
+ 
+
+ Do not do this!! 
+
+ The Java compiler expects file names to match class names, so renaming the files will render the source code uncompilable. The correct thing would be to guess the encoding, then use the native2ascii tool to convert all non-ASCII characters to unicode escape seqeuences . 
+ #2 Mozilla nsUniversalDetector (Perl bindings: Encode::Detect / Encode::Detect::Detector ) is millionfold proven. 
+ #3 As you have discovered, there is no perfect way to solve this problem, because without the implicit knowledge about which encoding a file uses, all 8-bit encodings are exactly the same: A collection of bytes. All bytes are valid for all 8-bit encodings. 
+
+ The best you can hope for, is some sort of algorithm that analyzes the bytes, and based on probabilities of a certain byte being used in a certain language with a certain encoding will guess at what encoding the files uses. But that has to know which language the file uses, and becomes completely useless when you have files with mixed encodings. 
+
+ On the upside, if you know that the text in a file is written in English, then the you're unlikely to notice any difference whichever encoding you decide to use for that file, as the differences between all the mentioned encodings are all localized in the parts of the encodings that specify characters not normally used in the English language. You might have some troubles where the text uses special formatting, or special versions of punctuation (CP1252 has several versions of the quote characters for instance), but for the gist of the text there will probably be no problems. 
+ #4 "Perl, C, Java, or Python, and in that order": interesting attitude :-) 
+
+ "we stand a good change of knowing if something is probably UTF-8": Actually the chance that a file containing meaningful text encoded in some other charset that uses high-bit-set bytes will decode successfully as UTF-8 is vanishingly small. 
+
+ UTF-8 strategies (in least preferred language): 
+
+ # 100% Unicode-standard-compliant UTF-8
+def utf8_strict(text):
+ try:
+  text.decode('utf8')
+  return True
+ except UnicodeDecodeError:
+  return False
+
+# looking for almost all UTF-8 with some junk
+def utf8_replace(text):
+ utext = text.decode('utf8', 'replace')
+ dodgy_count = utext.count(u'\uFFFD') 
+ return dodgy_count, utext
+ # further action depends on how large dodgy_count / float(len(utext)) is
+
+# checking for UTF-8 structure but non-compliant
+# e.g. encoded surrogates, not minimal length, more than 4 bytes:
+# Can be done with a regex, if you need it
+ 
+
+ Once you've decided that it's neither ASCII nor UTF-8: 
+
+ The Mozilla-origin charset detectors that I'm aware of don't support MacRoman and in any case don't do a good job on 8-bit charsets especially with English because AFAICT they depend on checking whether the decoding makes sense in the given language, ignoring the punctuation characters, and based on a wide selection of documents in that language. 
+
+ As others have remarked, you really only have the high-bit-set punctuation characters available to distinguish between cp1252 and macroman. I'd suggest training a Mozilla-type model on your own documents, not Shakespeare or Hansard or the KJV Bible, and taking all 256 bytes into account. I presume that your files have no markup (HTML, XML, etc) in them -- that would distort the probabilities something shocking. 
+
+ You've mentioned files that are mostly UTF-8 but fail to decode. You should also be very suspicious of: 
+
+ (1) files that are allegedly encoded in ISO-8859-1 but contain "control characters" in the range 0x80 to 0x9F inclusive ... this is so prevalent that the draft HTML5 standard says to decode ALL HTML streams declared as ISO-8859-1 using cp1252. 
+
+ (2) files that decode OK as UTF-8 but the resultant Unicode contains "control characters" in the range U+0080 to U+009F inclusive ... this can result from transcoding cp1252 / cp850 (seen it happen!) / etc files from "ISO-8859-1" to UTF-8. 
+
+ Background: I have a wet-Sunday-afternoon project to create a Python-based charset detector that's file-oriented (instead of web-oriented) and works well with 8-bit character sets including legacy ** n ones like cp850 and cp437. It's nowhere near prime time yet. I'm interested in training files; are your ISO-8859-1 / cp1252 / MacRoman files as equally "unencumbered" as you expect anyone's code solution to be? 
+ #5 If you can detect every encoding EXCEPT for macroman, than it would be logical to assume that the ones that can't be deciphered are in macroman. In other words, just make a list of files that couldn't be processed and handle those as if they were macroman. 
+
+ Another way to sort these files would be to make a server based program that allows users to decide which encoding isn't garbled. Of course, it would be within the company, but with 100 employees doing a few each day, you'll have thousands of files done in no time. 
+
+ Finally, wouldn't it be better to just convert all existing files to a single format, and require that new files be in that format. 
+ #6 You may consider this C source code for MacRoman: http://alienryderflex.com/utf-8/ 
+
+ For general guessing, would the method used in CSS 2.1 work? This is the method used by BBEdit and it seems to be correct 99% of the time -- at least as implemented by BBEdit. 
+
+ Another potential source is the text encoding auto detector used in Jedit. It also seems pretty accurate, and is written in open source Java. 
+ #7 "The problem usually derives from programmers who think they can reliably process a “text” file without specifying the encoding. "
+There are also protocol designers who define a series of octets to be an "ASCII" string without even thinking what values greater than 127 means. 
+ #8 Check out the chardet library for Python.

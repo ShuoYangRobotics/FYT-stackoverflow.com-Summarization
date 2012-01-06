@@ -1,0 +1,415 @@
+<h3>Question (ID-635483):</h3><h2>What is the best way to implement nested dictionaries in Python?</h2><p>I have a data structure which essentially amounts to a nested dictionary. Let's say it looks like this:</p>
+
+<pre><code>{'new jersey': {'mercer county': {'plumbers': 3,
+                                  'programmers': 81},
+                'middlesex county': {'programmers': 81,
+                                     'salesmen': 62}},
+ 'new york': {'queens county': {'plumbers': 9,
+                                'salesmen': 36}}}
+</code></pre>
+
+<p>Now, maintaining and creating this is pretty painful; every time I have a new state/county/profession I have to create the lower layer dictionaries via obnoxious try/catch blocks. Moreover, I have to create annoying nested iterators if I want to go over all the values. </p>
+
+<p>I could also use tuples as keys, like such:</p>
+
+<pre><code>{('new jersey', 'mercer county', 'plumbers'): 3,
+ ('new jersey', 'mercer county', 'programmers'): 81,
+ ('new jersey', 'middlesex county', 'programmers'): 81,
+ ('new jersey', 'middlesex county', 'salesmen'): 62,
+ ('new york', 'queens county', 'plumbers'): 9,
+ ('new york', 'queens county', 'salesmen'): 36}
+</code></pre>
+
+<p>This makes iterating over the values very simple and natural, but it is more syntactically painful to do things like aggregations and looking at subsets of the dictionary (e.g. if I just want to go state-by-state).</p>
+
+<p>Basically, sometimes I want to think of a nested dictionary as a flat dictionary, and sometimes I want to think of it indeed as a complex hierarchy. I could wrap this all in a class, but it seems like someone might have done this already. Alternatively, it seems like there might be some really elegant syntactical constructions to do this. </p>
+
+<p>How could I do this better?</p>
+
+<p>Addendum: I'm aware of <code>setdefault()</code> but it doesn't really make for clean syntax.  Also, each sub-dictionary you create still needs to have <code>setdefault()</code> manually set.</p>
+<br /><h3>Answers (Total-14):</h3><b>#0</b><br /><pre><code>class AutoVivification(dict):
+    """Implementation of perl's autovivification feature."""
+    def __getitem__(self, item):
+        try:
+            return dict.__getitem__(self, item)
+        except KeyError:
+            value = self[item] = type(self)()
+            return value
+</code></pre>
+
+<p>Testing:</p>
+
+<pre><code>a = AutoVivification()
+
+a[1][2][3] = 4
+a[1][3][3] = 5
+a[1][2]['test'] = 6
+
+print a
+</code></pre>
+
+<p>Output:</p>
+
+<pre><code>{1: {2: {'test': 6, 3: 4}, 3: {3: 5}}}
+</code></pre>
+<br /><b>#1</b><br /><p>You could create a YAML file and read it in using <a href="http://pyyaml.org/" rel="nofollow">PyYaml</a>.</p>
+
+<p>Step 1:  Create a YAML file, "employment.yml":</p>
+
+<pre><code>new jersey:
+  mercer county:
+    pumbers: 3
+    programmers: 81
+  middlesex county:
+    salesmen: 62
+    programmers: 81
+new york:
+  queens county:
+    plumbers: 9
+    salesmen: 36
+</code></pre>
+
+<p>Step 2:  Read it in Python</p>
+
+<pre><code>import yaml
+file_handle = open("employment.yml")
+my_shnazzy_dictionary = yaml.safe_load(file_handle)
+file_handle.close()
+</code></pre>
+
+<p>and now my_shnazzy_dictionary has all your values.  If you needed to do this on the fly, you can create the YAML as a string and feed that into yaml.safe_load(...).</p>
+<br /><b>#2</b><br /><p>Since you have a star-schema design, you might want to structure it more like a relational table and less like a dictionary.</p>
+
+<pre><code>import collections
+
+class Jobs( object ):
+    def __init__( self, state, county, title, count ):
+        self.state= state
+        self.count= county
+        self.title= title
+        self.count= count
+
+facts = [
+    Jobs( 'new jersey', 'mercer county', 'plumbers', 3 ),
+    ...
+
+def groupBy( facts, name ):
+    total= collections.defaultdict( int )
+    for f in facts:
+        key= getattr( f, name )
+        total[key] += f.count
+</code></pre>
+
+<p>That kind of thing can go a long way to creating a data warehouse-like design without the SQL overheads.</p>
+<br /><b>#3</b><br /><p>If the number of nesting levels is small, I use collections.defaultdict for this:</p>
+
+<pre>
+from collections import defaultdict
+
+def nested_dict_factory(): 
+  return defaultdict(int)
+def nested_dict_factory2(): 
+  return defaultdict(nested_dict_factory)
+db = defaultdict(nested_dict_factory2)
+
+db['new jersey']['mercer county']['plumbers'] = 3
+db['new jersey']['mercer county']['programmers'] = 81
+
+</pre>
+
+<p>Using defaultdict like this avoids a lot of messy setdefault(), get(), etc.</p>
+<br /><b>#4</b><br /><p>I find 'setdefault' quite useful - it checks if a key is present and adds it if not:</p>
+
+<pre><code>d = {}
+d.setdefault('new jersey', {}).setdefault('mercer county', {})['plumbers'] = 3
+</code></pre>
+
+<p>setdefault always returns the relevant key, so you are actually updating the values of 'd' in place.</p>
+
+<p>When it comes to iterating,  I'm sure you could write a generator easily enough if one doesn't already exist in Python:</p>
+
+<pre><code>def iterateStates(d):
+    # Let's count up the total number of "plumbers" / "dentists" / etc.
+    # across all counties and states
+    job_totals = {}
+
+    # I guess this is the annoying nested stuff you were talking about?
+    for (state, counties) in d.iteritems():
+        for (county, jobs) in counties.iteritems():
+            for (job, num) in jobs.iteritems():
+                # If job isn't already in job_totals, default it to zero
+                job_totals[job] = job_totals.get(job, 0) + num
+
+    # Now return an iterator of (job, number) tuples
+    return job_totals.iteritems()
+
+# Display all jobs
+for (job, num) in iterateStates(d):
+    print "There are %d %s in total" % (job, num)
+</code></pre>
+<br /><b>#5</b><br /><p>As for "obnoxious try/catch blocks":</p>
+
+<pre><code>d = {}
+d.setdefault('key',{}).setdefault('inner key',{})['inner inner key'] = 'value'
+print d
+</code></pre>
+
+<p>yields</p>
+
+<pre><code>{'key': {'inner key': {'inner inner key': 'value'}}}
+</code></pre>
+
+<p>You can use this to convert from your flat dictionary format to structured format:</p>
+
+<pre><code>fd = {('new jersey', 'mercer county', 'plumbers'): 3,
+ ('new jersey', 'mercer county', 'programmers'): 81,
+ ('new jersey', 'middlesex county', 'programmers'): 81,
+ ('new jersey', 'middlesex county', 'salesmen'): 62,
+ ('new york', 'queens county', 'plumbers'): 9,
+ ('new york', 'queens county', 'salesmen'): 36}
+
+for (k1,k2,k3), v in fd.iteritems():
+    d.setdefault(k1, {}).setdefault(k2, {})[k3] = v
+</code></pre>
+<br /><b>#6</b><br /><p>As others have suggested, a relational database could be more useful to you.  You can use a in-memory sqlite3 database as a data structure to create tables and then query them.</p>
+
+<pre><code>import sqlite3
+
+c = sqlite3.Connection(':memory:')
+c.execute('CREATE TABLE jobs (state, county, title, count)')
+
+c.executemany('insert into jobs values (?, ?, ?, ?)', [
+    ('New Jersey', 'Mercer County',    'Programmers', 81),
+    ('New Jersey', 'Mercer County',    'Plumbers',     3),
+    ('New Jersey', 'Middlesex County', 'Programmers', 81),
+    ('New Jersey', 'Middlesex County', 'Salesmen',    62),
+    ('New York',   'Queens County',    'Salesmen',    36),
+    ('New York',   'Queens County',    'Plumbers',     9),
+])
+
+# some example queries
+print list(c.execute('SELECT * FROM jobs WHERE county = "Queens County"'))
+print list(c.execute('SELECT SUM(count) FROM jobs WHERE title = "Programmers"'))
+</code></pre>
+
+<p>This is just a simple example.  You could define separate tables for states, counties and job titles.</p>
+<br /><b>#7</b><br /><p>I like the idea of wrapping this in a class and implementing __getitem__ and __setitem__ such that they implemented a simple query language:</p>
+
+<pre><code>&gt;&gt;&gt; d['new jersey/mercer county/plumbers'] = 3
+&gt;&gt;&gt; d['new jersey/mercer county/programmers'] = 81
+&gt;&gt;&gt; d['new jersey/mercer county/programmers']
+81
+&gt;&gt;&gt; d['new jersey/mercer country']
+&lt;view which implicitly adds 'new jersey/mercer county' to queries/mutations&gt;
+</code></pre>
+
+<p>If you wanted to get fancy you could also implement something like:</p>
+
+<pre><code>&gt;&gt;&gt; d['*/*/programmers']
+&lt;view which would contain 'programmers' entries&gt;
+</code></pre>
+
+<p>... but mostly I think such a thing would be really fun to implement :D </p>
+<br /><b>#8</b><br /><pre><code>class JobDb(object):
+    def __init__(self):
+        self.data = []
+        self.all = set()
+        self.free = []
+        self.index1 = {}
+        self.index2 = {}
+        self.index3 = {}
+
+    def _indices(self,(key1,key2,key3)):
+        indices = self.all.copy()
+        wild = False
+        for index,key in ((self.index1,key1),(self.index2,key2),
+                                             (self.index3,key3)):
+            if key is not None:
+                indices &amp;= index.setdefault(key,set())
+            else:
+                wild = True
+        return indices, wild
+
+    def __getitem__(self,key):
+        indices, wild = self._indices(key)
+        if wild:
+            return dict(self.data[i] for i in indices)
+        else:
+            values = [self.data[i][-1] for i in indices]
+            if values:
+                return values[0]
+
+    def __setitem__(self,key,value):
+        indices, wild = self._indices(key)
+        if indices:
+            for i in indices:
+                self.data[i] = key,value
+        elif wild:
+            raise KeyError(k)
+        else:
+            if self.free:
+                index = self.free.pop(0)
+                self.data[index] = key,value
+            else:
+                index = len(self.data)
+                self.data.append((key,value))
+                self.all.add(index)
+            self.index1.setdefault(key[0],set()).add(index)
+            self.index2.setdefault(key[1],set()).add(index)
+            self.index3.setdefault(key[2],set()).add(index)
+
+    def __delitem__(self,key):
+        indices,wild = self._indices(key)
+        if not indices:
+            raise KeyError
+        self.index1[key[0]] -= indices
+        self.index2[key[1]] -= indices
+        self.index3[key[2]] -= indices
+        self.all -= indices
+        for i in indices:
+            self.data[i] = None
+        self.free.extend(indices)
+
+    def __len__(self):
+        return len(self.all)
+
+    def __iter__(self):
+        for key,value in self.data:
+            yield key
+</code></pre>
+
+<p>Example:</p>
+
+<pre><code>&gt;&gt;&gt; db = JobDb()
+&gt;&gt;&gt; db['new jersey', 'mercer county', 'plumbers'] = 3
+&gt;&gt;&gt; db['new jersey', 'mercer county', 'programmers'] = 81
+&gt;&gt;&gt; db['new jersey', 'middlesex county', 'programmers'] = 81
+&gt;&gt;&gt; db['new jersey', 'middlesex county', 'salesmen'] = 62
+&gt;&gt;&gt; db['new york', 'queens county', 'plumbers'] = 9
+&gt;&gt;&gt; db['new york', 'queens county', 'salesmen'] = 36
+
+&gt;&gt;&gt; db['new york', None, None]
+{('new york', 'queens county', 'plumbers'): 9,
+ ('new york', 'queens county', 'salesmen'): 36}
+
+&gt;&gt;&gt; db[None, None, 'plumbers']
+{('new jersey', 'mercer county', 'plumbers'): 3,
+ ('new york', 'queens county', 'plumbers'): 9}
+
+&gt;&gt;&gt; db['new jersey', 'mercer county', None]
+{('new jersey', 'mercer county', 'plumbers'): 3,
+ ('new jersey', 'mercer county', 'programmers'): 81}
+
+&gt;&gt;&gt; db['new jersey', 'middlesex county', 'programmers']
+81
+
+&gt;&gt;&gt;
+</code></pre>
+
+<p><strong>Edit:</strong> Now returning dictionaries when querying with wild cards (<code>None</code>), and single values otherwise.</p>
+<br /><b>#9</b><br /><p>For easy iterating over your nested dictionary, why not just write a simple generator?</p>
+
+<pre><code>def each_job(my_dict):
+    for state, a in my_dict.items():
+        for county, b in a.items():
+            for job, value in b.items():
+                yield {
+                    'state'  : state,
+                    'county' : county,
+                    'job'    : job,
+                    'value'  : value
+                }
+</code></pre>
+
+<p>So then, if you have your compilicated nested dictionary, iterating over it becomes simple:</p>
+
+<pre><code>for r in each_job(my_dict):
+    print "There are %d %s in %s, %s" % (r['value'], r['job'], r['county'], r['state'])
+</code></pre>
+
+<p>Obviously your generator can yield whatever format of data is useful to you.</p>
+
+<p>Why are you using try catch blocks to read the tree? It's easy enough (and probably safer) to query whether a key exists in a dict before trying to retrieve it. A function using guard clauses might look like this:</p>
+
+<pre><code>if not my_dict.has_key('new jersey'):
+    return False
+
+nj_dict = my_dict['new jersey']
+...
+</code></pre>
+
+<p>Or, a perhaps somewhat verbose method, is to use the get method:</p>
+
+<pre><code>value = my_dict.get('new jersey', {}).get('middlesex county', {}).get('salesmen', 0)
+</code></pre>
+
+<p>But for a somewhat more succinct way, you might want to look at using a <a href="http://docs.python.org/library/collections.html#collections.defaultdict" rel="nofollow">collections.defaultdict</a>, which is part of the standard library since python 2.5.</p>
+
+<pre><code>import collections
+
+def state_struct(): return collections.defaultdict(county_struct)
+def county_struct(): return collections.defaultdict(job_struct)
+def job_struct(): return 0
+
+my_dict = collections.defaultdict(state_struct)
+
+print my_dict['new jersey']['middlesex county']['salesmen']
+</code></pre>
+
+<p>I'm making assumptions about the meaning of your data structure here, but it should be easy to adjust for what you actually want to do.</p>
+<br /><b>#10</b><br /><p>Unless your dataset is going to stay pretty small, you might want to consider using a relational database. It will do exactly what you want: make it easy to add counts, selecting subsets of counts, and even aggregate counts by state, county, occupation, or any combination of these.</p>
+<br /><b>#11</b><br /><p>collections.defaultdict can be subclassed to make a nested dict.  Then add any useful iteration methods to that class.</p>
+
+<pre><code>&gt;&gt;&gt; from collections import defaultdict
+&gt;&gt;&gt; class nesteddict(defaultdict):
+    def __init__(self):
+        defaultdict.__init__(self, nesteddict)
+    def walk(self):
+        for key, value in self.iteritems():
+            if isinstance(value, nesteddict):
+                for tup in value.walk():
+                    yield (key,) + tup
+            else:
+                yield key, value
+
+
+&gt;&gt;&gt; nd = nesteddict()
+&gt;&gt;&gt; nd['new jersey']['mercer county']['plumbers'] = 3
+&gt;&gt;&gt; nd['new jersey']['mercer county']['programmers'] = 81
+&gt;&gt;&gt; nd['new jersey']['middlesex county']['programmers'] = 81
+&gt;&gt;&gt; nd['new jersey']['middlesex county']['salesmen'] = 62
+&gt;&gt;&gt; nd['new york']['queens county']['plumbers'] = 9
+&gt;&gt;&gt; nd['new york']['queens county']['salesmen'] = 36
+&gt;&gt;&gt; for tup in nd.walk():
+    print tup
+
+
+('new jersey', 'mercer county', 'programmers', 81)
+('new jersey', 'mercer county', 'plumbers', 3)
+('new jersey', 'middlesex county', 'programmers', 81)
+('new jersey', 'middlesex county', 'salesmen', 62)
+('new york', 'queens county', 'salesmen', 36)
+('new york', 'queens county', 'plumbers', 9)
+</code></pre>
+<br /><b>#12</b><br /><p>defaultdict() is your friend!</p>
+
+<p>I didn't come up with this (see link)  but for a two dimensional dictionary you can do:</p>
+
+<p>d = defaultdict(defaultdict)</p>
+
+<p>d[1][2] = 3</p>
+
+<p>For more dimensions you can: </p>
+
+<p>d = defaultdict(lambda :defaultdict(defaultdict))
+d[1][2][3] = 4</p>
+
+<p>Original solution at:
+<a href="http://slacy.com/blog/2010/05/python-multi-dimensional-dicts-using-defaultdict/" rel="nofollow">http://slacy.com/blog/2010/05/python-multi-dimensional-dicts-using-defaultdict/</a></p>
+<br /><b>#13</b><br /><p>just because i haven't seen one this small, here's a dict that gets as nested as you like, no sweat</p>
+
+<pre><code># yo dawg, i heard you liked dicts                                                                      
+def yodict():
+    return defaultdict(yodict)
+</code></pre>
+<br />

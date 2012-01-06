@@ -1,0 +1,172 @@
+<h3>Question (ID-38987):</h3><h2>How can I merge two Python dictionaries as a single expression?</h2><p>I have two Python dictionaries, and I want to write a single expression that returns these two dictionaries, merged.  The update() method would be what I need, if it returned its result instead of modifying a dict in-place.</p>
+
+<pre><code>&gt;&gt;&gt; x = {'a':1, 'b': 2}
+&gt;&gt;&gt; y = {'b':10, 'c': 11}
+&gt;&gt;&gt; z = x.update(y)
+&gt;&gt;&gt; print z
+None
+&gt;&gt;&gt; x
+{'a': 1, 'b': 10, 'c': 11}
+</code></pre>
+
+<p>So I want that final merged dict in z, not x.  How can I do this?</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>In your case, what you can do is:</p>
+
+<pre><code>z = dict(x.items() + y.items())
+</code></pre>
+
+<p>This will, as you want it, put the final dict in z, and make the value for b be properly overridden by the second dict's value:</p>
+
+<pre><code>&gt;&gt;&gt; x = {'a':1, 'b': 2}
+&gt;&gt;&gt; y = {'b':10, 'c': 11}
+&gt;&gt;&gt; z = dict(x.items() + y.items())
+&gt;&gt;&gt; z
+{'a': 1, 'c': 11, 'b': 10}
+</code></pre>
+
+<p>If you use Python 3, it is only a little more complicated.  To create z:</p>
+
+<pre><code>&gt;&gt;&gt; z = dict(list(x.items()) + list(y.items()))
+&gt;&gt;&gt; z
+{'a': 1, 'c': 11, 'b': 10}
+</code></pre>
+<br /><b>#1</b><br /><p>Another, more concise, option:</p>
+
+<pre><code>z = dict(x, **y)
+</code></pre>
+
+<p><strong>Note</strong>: this has become a popular answer, but it is important to point out that if <code>y</code> has any non-string keys, the fact that this works at all is an abuse of a CPython implementation detail, and it does not work in CPython 3.2, or in PyPy, IronPython, or Jython. Also, <a href="http://mail.python.org/pipermail/python-dev/2010-April/099459.html" rel="nofollow">Guido is not a fan</a>. So I can't recommend this technique for forward-compatible or cross-implementation portable code, which really means it should be avoided entirely.</p>
+<br /><b>#2</b><br /><p>This probably won't be a popular answer, but you almost certainly do not want to do this.  If you want a copy that's a merge, then use copy (or <a href="http://docs.python.org/lib/module-copy.html" rel="nofollow">deepcopy</a>, depending on what you want) and then update.  The two lines of code are much more readable - more Pythonic - than the single line creation with .items() + .items().  Explicit is better than implicit.</p>
+
+<p>In addition, when you use .items() (pre Python 3.0), you're creating a new list that contains the items from the dict.  If your dictionaries are large, then that is quite a lot of overhead (two large lists that will be thrown away as soon as the merged dict is created).  update() can work more efficiently, because it can run through the second dict item-by-item.</p>
+
+<p>In terms of <a href="http://docs.python.org/lib/module-timeit.html" rel="nofollow">time</a>:</p>
+
+<pre><code>&gt;&gt;&gt; timeit.Timer("dict(x, **y)", "x = dict(zip(range(1000), range(1000)))\ny=dict(zip(range(1000,2000), range(1000,2000)))").timeit(100000)
+15.52571702003479
+&gt;&gt;&gt; timeit.Timer("temp = x.copy()\ntemp.update(y)", "x = dict(zip(range(1000), range(1000)))\ny=dict(zip(range(1000,2000), range(1000,2000)))").timeit(100000)
+15.694622993469238
+&gt;&gt;&gt; timeit.Timer("dict(x.items() + y.items())", "x = dict(zip(range(1000), range(1000)))\ny=dict(zip(range(1000,2000), range(1000,2000)))").timeit(100000)
+41.484580039978027
+</code></pre>
+
+<p>IMO the tiny slowdown between the first two is worth it for the readability.  In addition, keyword arguments for dictionary creation was only added in Python 2.3, whereas copy() and update() will work in older versions.</p>
+<br /><b>#3</b><br /><p>Carl, in a follow-up answer, you asked about the relative performance of these two alternatives:</p>
+
+<pre><code>z1 = dict(x.items() + y.items())
+z2 = dict(x, **y)
+</code></pre>
+
+<p>On my machine, at least (a fairly ordinary x86_64 running Python 2.5.2), alternative <code>z2</code> is not only shorter and simpler but also significantly faster.  You can verify this for yourself using the <code>timeit</code> module that comes with Python.</p>
+
+<p>Example 1: identical dictionaries mapping 20 consecutive integers to themselves</p>
+
+<pre><code>% python -m timeit -s 'x=y=dict((i,i) for i in range(20))' 'z1=dict(x.items() + y.items())'
+100000 loops, best of 3: 5.67 usec per loop
+% python -m timeit -s 'x=y=dict((i,i) for i in range(20))' 'z2=dict(x, **y)' 
+100000 loops, best of 3: 1.53 usec per loop
+</code></pre>
+
+<p><code>z2</code> wins by a factor of 3.5 or so.  Different dictionaries seem to yield quite different results, but <code>z2</code> always seems to come out ahead.  (If you get inconsistent results for the <em>same</em> test, try passing in <code>-r</code> with a number larger than the default 3.)</p>
+
+<p>Example 2: non-overlapping dictionaries mapping 252 short strings to integers and vice versa</p>
+
+<pre><code>% python -m timeit -s 'from htmlentitydefs import codepoint2name as x, name2codepoint as y' 'z1=dict(x.items() + y.items())'
+1000 loops, best of 3: 260 usec per loop
+% python -m timeit -s 'from htmlentitydefs import codepoint2name as x, name2codepoint as y' 'z2=dict(x, **y)'               
+10000 loops, best of 3: 26.9 usec per loop
+</code></pre>
+
+<p><code>z2</code> wins by about a factor of 10.  That's a pretty big win in my book!</p>
+
+<p>After comparing those two, I wondered if <code>z1</code>'s poor performance could be attributed to the overhead of constructing the two item lists, which in turn led me to wonder if this variation might work better:</p>
+
+<pre><code>from itertools import chain
+z3 = dict(chain(x.iteritems(), y.iteritems()))
+</code></pre>
+
+<p>A few quick tests, e.g.</p>
+
+<pre><code>% python -m timeit -s 'from itertools import chain; from htmlentitydefs import codepoint2name as x, name2codepoint as y' 'z3=dict(chain(x.iteritems(), y.iteritems()))'
+10000 loops, best of 3: 66 usec per loop
+</code></pre>
+
+<p>lead me to conclude that <code>z3</code> is somewhat faster than <code>z1</code>, but not nearly as fast as <code>z2</code>.  Definitely not worth all the extra typing.</p>
+
+<p>This discussion is still missing something important, which is a performance comparison of these alternatives with the "obvious" way of merging two lists: using the <code>update</code> method.  To try to keep things on an equal footing with the expressions, none of which modify x or y, I'm going to make a copy of x instead of modifying it in-place, as follows:</p>
+
+<pre><code>z0 = dict(x)
+z0.update(y)
+</code></pre>
+
+<p>A typical result:</p>
+
+<pre><code>% python -m timeit -s 'from htmlentitydefs import codepoint2name as x, name2codepoint as y' 'z0=dict(x); z0.update(y)'
+10000 loops, best of 3: 26.9 usec per loop
+</code></pre>
+
+<p>In other words, <code>z0</code> and <code>z2</code> seem to have essentially identical performance.  Do you think this might be a coincidence?  I don't....</p>
+
+<p>In fact, I'd go so far as to claim that it's impossible for pure Python code to do any better than this.  And if you can do significantly better in a C extension module, I imagine the Python folks might well be interested in incorporating your code (or a variation on your approach) into the Python core.  Python uses <code>dict</code> in lots of places; optimizing its operations is a big deal.</p>
+
+<p>[UPDATE: You could also write this as</p>
+
+<pre><code>z0 = x.copy()
+z0.update(y)
+</code></pre>
+
+<p>as Tony does, but (not surprisingly) the difference in notation turns out not to have any measurable effect on performance.  Use whichever looks right to you.  Of course, he's absolutely correct to point out that the two-statement version is much easier to understand.]</p>
+<br /><b>#4</b><br /><p>An alternative:</p>
+
+<pre><code>z = x.copy()
+z.update(y)
+</code></pre>
+<br /><b>#5</b><br /><p>I wanted something similar, but with the ability to specify how the values on duplicate keys were merged, so I hacked this out (not heavily tested!).  Obviously this is not a single expression, but it is a single fn. call.</p>
+
+<pre><code>def merge(d1, d2, merge=lambda x,y:y):
+    """
+    Merges two dictionaries, non-destructively, combining 
+    values on duplicate keys as defined by the optional merge
+    function.  The default behavior replaces the values in d1
+    with corresponding values in d2.  (There is no other generally
+    applicable merge strategy, but often you'll have homogeneous 
+    types in your dicts, so specifying a merge technique can be 
+    valuable.)
+
+    Examples:
+
+    &gt;&gt;&gt; d1
+    {'a': 1, 'c': 3, 'b': 2}
+    &gt;&gt;&gt; merge(d1, d1)
+    {'a': 1, 'c': 3, 'b': 2}
+    &gt;&gt;&gt; merge(d1, d1, lambda x,y: x+y)
+    {'a': 2, 'c': 6, 'b': 4}
+
+    """
+    result = dict(d1)
+    for k,v in d2.iteritems():
+        if k in result:
+            result[k] = merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+</code></pre>
+<br /><b>#6</b><br /><pre><code>x = {'a':1, 'b': 2}
+y = {'b':10, 'c': 11}
+z = dict(x.items() + y.items())
+print z
+</code></pre>
+
+<p>For items with keys in both dictionaries ('b'), you can control which one ends up in the output by putting that one last.</p>
+<br /><b>#7</b><br /><p>The best version I could think while not using copy would be:</p>
+
+<pre><code>from itertools import chain
+x = {'a':1, 'b': 2}
+y = {'b':10, 'c': 11}
+dict(chain(x.iteritems(), y.iteritems()))
+</code></pre>
+
+<p>It's faster than <code>dict(x.items() + y.items())</code> but not as fast as <code>n = copy(a); n.update(b)</code>, at least on CPython. This version also works in Python 3 if you change <code>iteritems()</code> to <code>items()</code>, which is automatically done by the 2to3 tool.</p>
+
+<p>Personally I like this version best because it describes fairly good what I want in a single  functional syntax. The only minor problem is that it doesn't make completely obvious that values from y takes precedence over values from x, but I don't believe it's difficult to figure that out.</p>
+<br />
