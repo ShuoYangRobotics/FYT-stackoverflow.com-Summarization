@@ -525,12 +525,21 @@ def annotate(word):
 This function annote the html file with identified function keywords and so on.
 """
 def htmlAnnotate(html, keyList):
+    common = getCommonWord()
     soup = BS(''.join(html))
     for j,item in enumerate(soup.contents):
         try:
+            count = 0
             sen = nltk.clean_html(str(item))
             if item.name == "pre":
                 continue
+            if not isinstance(item, NavigableString):
+                children = item.findChildren()
+                for child in children:
+                    if child.name == "code" or child.name == "a":
+                        print nltk.clean_html(str(child))
+                        keyList.append(nltk.clean_html(str(child).decode('utf8')))
+
             tokens = nltk.word_tokenize(sen)
             for i,token in enumerate(tokens):
                 if token == "?":
@@ -542,8 +551,9 @@ def htmlAnnotate(html, keyList):
                         token = token.split(")")[0]
                     try:
                         if bool(re.match(item2,token.strip())):
-                            if token != ".":
+                            if token != "." and token not in common:
                                 tokens[i] = annotate(token)
+                                count += 1
                     except:
                         pass
             try: 
@@ -552,6 +562,8 @@ def htmlAnnotate(html, keyList):
                         newSen += token
                         newSen += " "
                 soup.contents[j].setString(newSen)
+                soup.contents[j]['id'] = count
+                soup.contents[j]['class'] = "sentence"
             except UnicodeDecodeError:
                 pass
         except AttributeError:
@@ -618,17 +630,20 @@ def annotateID(testID):
     list(set(fQ+fA+aQ+aA+vQ+vA+cQ+cA+combQ+combA+packQ+packA+funcQ+funcA))
     mySoup = htmlAnnotate(myHtml, keyList)
     f = open(annotatedpath+"annotated"+testID+".html",'w')
-    import HTMLParser
 
     try:
         mySoup =HTMLParser.HTMLParser().unescape(str(mySoup).decode("utf8")) 
     except UnicodeEncodeError:
         pass
-    f.write(str(mySoup.encode("utf8")))
+
+    b = "<style>.sentence:hover{background-color:red;}</style>"
+    a = PQ("<html><head>"+b+"</head><body>"+str(mySoup.encode("utf8"))+"</body></html>") 
+    f.write(str(a))
     f.close()
-    return mySoup,keyList
+    return mySoup,keyList,myHtml
 
 if __name__=="__main__":
+    import HTMLParser
     import nltk
     import math
     import re
@@ -636,7 +651,9 @@ if __name__=="__main__":
     import numpy
     import string as StrLib
     from BeautifulSoup import BeautifulSoup as BS
+    from pyquery import PyQuery as PQ
     from collections import defaultdict
+    from BeautifulSoup import NavigableString
     idList = getIDList()
     qFileList, aFileList = getDataList()
 
