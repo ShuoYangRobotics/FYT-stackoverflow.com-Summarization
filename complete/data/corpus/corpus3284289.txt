@@ -1,0 +1,96 @@
+Question (ID-3284289): python handle endless XML I am working on a application, and my job just is to develop a sample Python interface for the application. The application can provide XML-based document, I can get the document via HTTP Get method, but the problem is the XML-based document is endless which means there will be no end element. I know that the document should be handled by SAX, but how to deal with the endless problem? Any idea, sample code? 
+ Answers (Total-7): #0 Take a look at the xmlstream module in jabberpy (also available from twisted ): 
+
+ 
+ xmlstream.py provides simple functionality for implementing
+ XML stream based network protocols. It is used as a base
+ for jabber.py. 
+ 
+ xmlstream.py manages the network connectivity and xml parsing
+ of the stream. When a complete 'protocol element' ( meaning a
+ complete child of the xmlstreams root ) is parsed the dipatch
+ method is called with a 'Node' instance of this structure. 
+ The Node class is a very simple XML DOM like class for
+ manipulating XML documents or 'protocol elements' in this
+ case. 
+ 
+ #1 If the document never gets an close-tag for an element in the document, then it isn't correctly formed XML, which is going to play havoc with any XML parser. 
+
+ That said, using the Python SAX2 API would seem to be the best approach, but you're going to have to determine what exception will be thrown by the missing close-tag, catch it, and handle it yourself. 
+
+ Added 
+
+ Assume that you're receiving an XML document like this: 
+
+ &lt;? xml version="1.0" ?&gt;
+&lt;foo&gt;
+ &lt;bar&gt;...&lt;/bar&gt;
+ &lt;bar&gt;...&lt;/bar&gt;
+ &lt;bar&gt;...&lt;/bar&gt;
+ &lt;bar&gt;...&lt;/bar&gt;
+ ...
+ 
+
+ And you never receive a closing &lt;/foo&gt; . In this case, a SAX parser that is reacting to the bar elements will issue a stream of events for startElement(bar) and endElement(bar) . Presumably you'll gather up all of the data between the start and the end, and then process it all at one shot once you see the end event. 
+
+ The only way to stop this loop is going to be through outside action: define in advance the number of bar elements to process, or define in advance the amount of time you want to devote to receiving bar events. Run the SAX parser in a thread and then kill the thread when you hit your limit. You'll want to have your main process sleep while waiting on the sax-parser thread to finish. 
+ #2 I assume your XML is basically a list of identical XML elements gathered under one container element. Something like 
+
+ &lt;items&gt;
+ &lt;item&gt;
+ &lt;!-- content here --&gt;
+ &lt;/item&gt;
+ &lt;item&gt;
+ &lt;!-- content here --&gt;
+ &lt;/item&gt;
+ &lt;item&gt;
+ &lt;!-- content here --&gt;
+ &lt;/item&gt;
+&lt;/items&gt;
+ 
+
+ In SAX when your parser gets and end event, you can parse the completed item, clear the stack, and pass the item on to whatever other code should be handling parsed items. 
+
+ def process(item) :
+ # App logic goes here
+
+class ItemsHandler(xml.sax.handler.ContentHandler) :
+ # Omitting __init__, startElement, and characters methods
+ # to store data on a stack during processing
+
+ def endElement(self, name) :
+ if name == "item" :
+  # create item from stored data on stack
+  parsed_item = self.parse_item_from_stack()
+  process(parsed_item)
+ 
+
+ If the application logic is complicated enough, you'll want to put the SAX parsing in a separate thread so you don't miss events. 
+ #3 If the document is endless why not add end tag (of main element) manually before opening it in parser? I don't know Python but why not add &lt;/endtag&gt; to string? 
+ #4 I can not provide a solution in Python right away, but will give you a hint. 
+
+ That kind of XML parsing is handled by StAX parsers. The problem here is that a SAX-parser pushes events, but StAX provives interface for pulling events. StAX is mainly used for partial XML parsing (parsing only headers from a SOAP message), and this seems to be your case. 
+
+ I have not seen a StAX-like parsers in Python standard library, but there should definetely be one. 
+
+ UPD: lxml (as a wrapper tp libxml2) seems to have similar functinality . 
+ #5 This is what I use for parsing an endless xml stream which I get from a remote computer (in my case I connect over a socket and use socket.makefile('r') to create the file object) 
+
+ 19.12.2. IncrementalParser Objects 
+
+ parser = xml.sax.make_parser(['xml.sax.IncrementalParser'])
+handler = FooHandler()
+parser.setContentHandler(handler)
+
+data = sockfile.readline()
+while ( len(data) != 0 ):
+ parser.feed(data)
+ data = sockfilefile.readline()
+ 
+ #6 You can use the iterparse function from the xml.etree.ElementTree (or cElementTree for speed) in the stdlib. (you could also use lxml ) 
+
+ The trick is described here: http://effbot.org/zone/element-iterparse.htm#incremental-parsing 
+
+ The example describes exactly what you need. It doesn't mention anything about endless files, but it will work. (it will just keep on going). Most importantly: don't forget to clear the root element. 
+
+ Easy and available in the stdlib ;-)

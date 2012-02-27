@@ -1,0 +1,147 @@
+Question (ID-691148): Pythonic way to implement a tokenizer I'm going to implement a tokenizer in Python and I was wondering if you could offer some style advice? 
+
+ I've implemented a tokenizer before in C and in Java so I'm fine with the theory, I'd just like to ensure I'm following pythonic styles and best practices. 
+
+ Listing Token Types: 
+
+ In Java, for example, I would have a list of fields like so: 
+
+ public static final int TOKEN_INTEGER = 0
+ 
+
+ But, obviously, there's no way (I think) to declare a constant variable in Python, so I could just replace this with normal variable declarations but that doesn't strike me as a great solution since the declarations could be altered. 
+
+ Returning Tokens From The Tokenizer: 
+
+ Is there a better alternative to just simply returning a list of tuples e.g. 
+
+ [ (TOKEN_INTEGER, 17), (TOKEN_STRING, "Sixteen")]?
+ 
+
+ Cheers, 
+
+ Pete 
+ Answers (Total-11): #0 Python takes a "we're all consenting adults" approach to information hiding. It's OK to use variables as though they were constants, and trust that users of your code won't do something stupid. 
+ #1 In many situations, exp. when parsing long input streams, you may find it more useful to implement you tokenizer as a generator function. This way you can easily iterate over all the tokens without the need for lots of memory to build the list of tokens first. 
+
+ For generator see the original proposal or other online docs 
+ #2 There's an undocumented class in the re module called re.Scanner . It's very straightforward to use for a tokenizer: 
+
+ import re
+scanner=re.Scanner([
+ (r"[0-9]+", 	lambda scanner,token:("INTEGER", token)),
+ (r"[a-z_]+", 	lambda scanner,token:("IDENTIFIER", token)),
+ (r"[,.]+", 	lambda scanner,token:("PUNCTUATION", token)),
+ (r"\s+", None), # None == skip token.
+])
+
+results, remainder=scanner.scan("45 pigeons, 23 cows, 11 spiders.")
+print results
+ 
+
+ will result in 
+
+ [('INTEGER', '45'),
+ ('IDENTIFIER', 'pigeons'),
+ ('PUNCTUATION', ','),
+ ('INTEGER', '23'),
+ ('IDENTIFIER', 'cows'),
+ ('PUNCTUATION', ','),
+ ('INTEGER', '11'),
+ ('IDENTIFIER', 'spiders'),
+ ('PUNCTUATION', '.')]
+ 
+
+ I used re.Scanner to write a pretty nifty configuration/structured data format parser in only a couple hundred lines. 
+ #3 "Is there a better alternative to just simply returning a list of tuples?" 
+
+ Nope. It works really well. 
+ #4 Thanks for your help, I've started to bring these ideas together, and I've come up with the following. Is there anything terribly wrong with this implementation (particularly I'm concerned about passing a file object to the tokenizer): 
+
+ class Tokenizer(object):
+
+ def __init__(self,file):
+  self.file = file
+
+ def __get_next_character(self):
+  return self.file.read(1)
+
+ def __peek_next_character(self):
+  character = self.file.read(1)
+  self.file.seek(self.file.tell()-1,0)
+  return character
+
+ def __read_number(self):
+  value = ""
+  while self.__peek_next_character().isdigit():
+   value += self.__get_next_character()
+  return value
+
+ def next_token(self):
+  character = self.__peek_next_character()
+
+  if character.isdigit():
+   return self.__read_number()
+ 
+ #5 "Is there a better alternative to just simply returning a list of tuples?" 
+
+ That's the approach used by the "tokenize" module for parsing Python source code. Returning a simple list of tuples can work very well. 
+ #6 I have recently built a tokenizer, too, and passed through some of your issues. 
+
+ Token types are declared as "constants", i.e. variables with ALL_CAPS names, at the module level. For example, 
+
+ _INTEGER = 0x0007
+_FLOAT = 0x0008
+_VARIABLE = 0x0009
+ 
+
+ and so on. I have used an underscore in front of the name to point out that somehow those fields are "private" for the module, but I really don't know if this is typical or advisable, not even how much Pythonic. (Also, I'll probably ditch numbers in favour of strings, because during debugging they are much more readable.) 
+
+ Tokens are returned as named tuples. 
+
+ from collections import namedtuple
+Token = namedtuple('Token', ['value', 'type'])
+# so that e.g. somewhere in a function/method I can write...
+t = Token(n, _INTEGER)
+# ...and return it properly
+ 
+
+ I have used named tuples because the tokenizer's client code (e.g. the parser) seems a little clearer while using names (e.g. token.value) instead of indexes (e.g. token[0]). 
+
+ Finally, I've noticed that sometimes, especially writing tests, I prefer to pass a string to the tokenizer instead of a file object. I call it a "reader", and have a specific method to open it and let the tokenizer access it through the same interface. 
+
+ def open_reader(self, source):
+ """
+ Produces a file object from source.
+ The source can be either a file object already, or a string.
+ """
+ if hasattr(source, 'read'):
+  return source
+ else:
+  from io import StringIO
+  return StringIO(source)
+ 
+ #7 When I start something new in Python I usually look first at some modules or libraries to use. There's 90%+ chance that there already is somthing available. 
+
+ For tokenizers and parsers this is certainly so. Have you looked at PyParsing ? 
+ #8 I've implemented a tokenizer for a C-like programming language. What I did was to split up the creation of tokens into two layers: 
+
+ 
+ a surface scanner : This one actually reads the text and uses regular expression to split it up into only the most primitve tokens (operators, identifiers, numbers,...); this one yields tuples (tokenname, scannedstring, startpos, endpos). 
+ a tokenizer : This consumes the tuples from the first layer, turning them into token objects (named tuples would do as well, I think). Its purpose is to detect some long-range dependencies in the token stream, particularly strings (with their opening and closing quotes) and comments (with their opening an closing lexems; - yes, I wanted to retain comments!) and coerce them into single tokens. The resulting stream of token objects is then returned to a consuming parser. 
+ 
+
+ Both are generators. The benefits of this approach were: 
+
+ 
+ Reading of the raw text is done only in the most primitive way, with simple regexps - fast and clean. 
+ The second layer is already implemented as a primitive parser, to detect string literals and comments - re-use of parser technology. 
+ You don't have to strain the surface scanner with complex detections. 
+ But the real parser gets tokens on the semantic level of the language to be parsed (again strings, comments). 
+ 
+
+ I feel quite happy with this layered approach. 
+ #9 "Is there a better alternative to just simply returning a list of tuples" 
+
+ I had to implement a tokenizer, but it required a more complex approach than a list of tuples, therefore I implemented a class for each token. You can then return a list of class instances, or if you want to save resources, you can return something implementing the iterator interface and generate the next token while you progress in the parsing. 
+ #10 I'd turn to the excellent Text Processing in Python by David Mertz

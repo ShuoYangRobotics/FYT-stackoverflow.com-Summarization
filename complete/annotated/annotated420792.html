@@ -1,0 +1,73 @@
+<h3>Question ( ID-420792 ) : </h3><h2>Migrating from CPython to Jython </h2><p>I 'm considering moving my code ( around 30K LOC ) from CPython to Jython , so that I could have better integration with my java code . </p>
+<p>Is there a checklist or a guide I should look at , to help my with the migration ? Does anyone have experience with doing something similar ? </p>
+<p>From reading the Jython site , most of the problems seem too obscure to bother me . </p>
+<p>I did notice that : </p>
+<ul>thread safety is an issue Unicode support seems to be quite different , which may be a problem for me mysqldb does n't work and needs to be replaced with zxJDBC </ul>
+<p>Anything else ? </p>
+<p>Related question : What are some strategies to write python code that works in CPython , Jython and IronPython </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>So far , I have noticed two further issues : </p>
+<ul>String interning 'a ' is 'a ' is not guaranteed ( and it is just an implementation fluke on CPython ) . This could be a serious problem , and really was in one of the libraries I was porting ( Jinja2 ) . Unit tests are ( as always ) your best friends ! </ul>
+<pre>
+Jython 2.5b0 (trunk:5540, Oct 31 2008, 13:55:41)
+>>> 'a' is 'a'
+True
+>>> s = 'a'
+>>> 'a' is s
+False
+>>> 'a' == s   
+True
+>>> intern('a') is intern(s)
+True
+</pre>
+<p>Here is the same session on CPython : </p>
+<pre>
+Python 2.5.2 (r252:60911, Oct  5 2008, 19:24:49)
+>>> 'a' is 'a'
+True
+>>> s = 'a'
+>>> 'a' is s
+True
+>>> 'a' == s
+True
+>>> intern('a') is intern(s)
+True
+
+</pre>
+<ul>os.spawn * functions are not implemented. Instead use subprocess.call. I was surprised really , as the implementation using subprocess.call would be easy , and I am sure they will accept patches . </ul>
+<p>( I have been doing a similar thing as you , porting an app recently ) </p>
+<br /><b># 1 </b><br /><p>First off , I have to say the Jython implementation is very good. Most things " just work " . </p>
+<p>Here are a few things that I have encountered : </p>
+<ul>C modules are not available , of course . open ( 'file ' ) .read ( ) does n't automatically close the file. This has to do with the difference in the garbage collector. This can cause issues with too many open files. It 's better to use the " with open ( 'file ' ) as fp " idiom . Setting the current working directory ( using os.setcwd ( ) ) works for Python code , but not for Java code. It emulates the current working directory for everything file-related but can only do so for Jython . XML parsing will try to validate an external DTD if it 's available. This can cause massive slowdowns in XML handling code because the parser will download the DTD over the network. I reported this issue , but so far it remains unfixed . The __ del __ method is invoked very late in Jython code , not immediately after the last reference to the object is deleted . </ul>
+<p>There is an old list of differences , but a recent list is not available . </p>
+<br /><b># 2 </b><br /><p>When I switched a project from CPython to Jython some time ago I realized a speed-down of up to 50x for time-critical sections. Because of that I stayed with CPython . </p>
+<p>However , that might have changed now with the current versions . </p>
+<br /><b># 3 </b><br /><p>You might also want to research JPype . I 'm not sure how mature it is compared to Jython , but it should allow CPython to access Java code . </p>
+<br /><b># 4 </b><br /><p>Recently , I worked on a project for a professor at my school with a group. Early on , it was decided that we would write the project in Python. We definitely should have used CPython. We wrote the program in Python and all of our unit tests eventually worked. Because most people already have Java installed on their computers , and not Python , we decided to just deploy it as a Jython jar. We therefore wrote the GUI with Swing , because that 's included in Java 's standard library . </p>
+<p>The first time I ran the program with Jython , it crashed immediately. For one , csv.reader 's " .fieldnames " always seemed to be None. Therefore I had to change several parts of our code to work around this . </p>
+<p>A different section of my code crashed as well , which worked fine with CPython. Jython accused me of referencing a variable before it was assigned anything ( which drove me nuts and really was n't the case ) . This is one example : ActiveState 's Code Recipe 's external sort </p>
+<p>Worse yet , the performance was awful. Basically this code combined several CSV files , one of which was about 2 GB. In CPython , it ran in 8.5 minutes. In Jython , it ran in 25 minutes . </p>
+<p>These problems happened with 2.5.2rc2 ( the latest at the time of writing this post ) . </p>
+<br /><b># 5 </b><br /><p>I 'm starting this as a wiki collected from the other answers and my experience. Feel free to edit and add stuff , but please try to stick to practical advice rather than a list of broken things. Here 's an old list of differences from the Jython site . </p>
+<h2>Resource management </h2>
+<p>Jython does not use reference counting , and so resources are released as they are garbage collected , which is much later then you 'd see in the equivalent CPython program </p>
+<ul>open ( 'file ' ) .read ( ) does n't automatically close the file . Better use the with open ( 'file ' ) as fp idiom . The __ del __ method is invoked very late in Jython code , not immediately after the last reference to the object is deleted . </ul>
+<h2>MySQL Integration </h2>
+<p>mysqldb is a c module , and therefore will not work in jython. Instead , you should use com.ziclix.python.sql.zxJDBC , which comes bundled with Jython . </p>
+<p>Replace the following MySQLdb code : </p>
+<pre><code>connection = MySQLdb.connect(host, user, passwd, db, use_unicode=True, chatset='utf8')
+</code></pre>
+<p>With : </p>
+<pre><code>url = "jdbc:mysql://%s/%s?useUnicode=true&characterEncoding=UTF-8&zeroDateTimeBehavior=convertToNull" % (host, db)
+connections = zxJDBC.connect(url, user, passwd, "com.mysql.jdbc.Driver")
+</code></pre>
+<p>You 'll also need to replace all _mysql_exception with zxJDBC . </p>
+<p>Finally , you 'll need to replace the query placeholders from % s to ? . </p>
+<h2>Unicode </h2>
+<ul>You ca n't express illegal unicode characters in Jython. Trying something like unichr ( 0xd800 ) would cause an exception , and having a literal u ' \ ud800 ' in your code will just wreak havoc . </ul>
+<h2>Missing things </h2>
+<ul>C modules are not available , of course . So no NumPy or SciPy . os.spawn * functions are not implemented. Instead use subprocess.call . </ul>
+<h2>Performance </h2>
+<ul>For most workloads , Jython will be much slower than CPython. Reports are anything between 3 to 50 times slower . </ul>
+<h2>Community </h2>
+<p>The Jython project is still alive , but is not fast-moving. The dev mailing list has about 20 messages a month , and there seem to be only about 2 developers commiting code lately . </p>
+<br />

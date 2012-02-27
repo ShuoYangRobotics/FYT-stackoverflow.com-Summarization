@@ -1,0 +1,213 @@
+<h3>Question (ID-1823293):</h3><h2>Optimized method for calculating cosine distance in Python</h2><p>I wrote a method to calculate the cosine distance between two arrays:</p>
+
+<pre><code>def cosine_distance(a, b):
+    if len(a) != len(b):
+    	return False
+    numerator = 0
+    denoma = 0
+    denomb = 0
+    for i in range(len(a)):
+    	numerator += a[i]*b[i]
+    	denoma += abs(a[i])**2
+    	denomb += abs(b[i])**2
+    result = 1 - numerator / (sqrt(denoma)*sqrt(denomb))
+    return result
+</code></pre>
+
+<p>Running it can be very slow on a large array. Is there an optimized version of this method that would run faster?</p>
+
+<p>Update: I've tried all the suggestions to date, including scipy. Here's the version to beat, incorporating suggestions from Mike and Steve:</p>
+
+<pre><code>def cosine_distance(a, b):
+    if len(a) != len(b):
+    	raise ValueError, "a and b must be same length" #Steve
+    numerator = 0
+    denoma = 0
+    denomb = 0
+    for i in range(len(a)):       #Mike's optimizations:
+    	ai = a[i]             #only calculate once
+    	bi = b[i]
+    	numerator += ai*bi    #faster than exponent (barely)
+    	denoma += ai*ai       #strip abs() since it's squaring
+    	denomb += bi*bi
+    result = 1 - numerator / (sqrt(denoma)*sqrt(denomb))
+    return result
+</code></pre>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>(I originally thought) you're not going to speed it up a lot without breaking out to C (like numpy or scipy) or changing what you compute. But here's how I'd try that, anyway:</p>
+
+<pre><code>from itertools import imap
+from math import sqrt
+from operator import mul
+
+def cosine_distance(a, b):
+    assert len(a) == len(b)
+    return 1 - (sum(imap(mul, a, b))
+                / sqrt(sum(imap(mul, a, a))
+                       * sum(imap(mul, b, b))))
+</code></pre>
+
+<p>It's roughly twice as fast in Python 2.6 with 500k-element arrays. (After changing map to imap, following Jarret Hardie.)</p>
+
+<p>Here's a tweaked version of the original poster's revised code:</p>
+
+<pre><code>from itertools import izip
+
+def cosine_distance(a, b):
+    assert len(a) == len(b)
+    ab_sum, a_sum, b_sum = 0, 0, 0
+    for ai, bi in izip(a, b):
+        ab_sum += ai * bi
+        a_sum += ai * ai
+        b_sum += bi * bi
+    return 1 - ab_sum / sqrt(a_sum * b_sum)
+</code></pre>
+
+<p>It's ugly, but it does come out faster. . .</p>
+
+<p><strong>Edit:</strong> And try <a href="http://psyco.sourceforge.net/">Psyco</a>! It speeds up the final version by another factor of 4. How could I forget?</p>
+<br /><b>#1</b><br /><p>If you can use SciPy, you can use <code>cosine</code> from <code>spatial.distance</code>:</p>
+
+<p><a href="http://docs.scipy.org/doc/scipy/reference/spatial.distance.html" rel="nofollow">http://docs.scipy.org/doc/scipy/reference/spatial.distance.html</a></p>
+
+<p>If you can't use SciPy, you could try to obtain a small speedup by rewriting your Python (EDIT: but it didn't work out like I thought it would, see below).</p>
+
+<pre><code>from itertools import izip
+from math import sqrt
+
+def cosine_distance(a, b):
+    if len(a) != len(b):
+        raise ValueError, "a and b must be same length"
+    numerator = sum(tup[0] * tup[1] for tup in izip(a,b))
+    denoma = sum(avalue ** 2 for avalue in a)
+    denomb = sum(bvalue ** 2 for bvalue in b)
+    result = 1 - numerator / (sqrt(denoma)*sqrt(denomb))
+    return result
+</code></pre>
+
+<p>It is better to raise an exception when the lengths of a and b are mismatched.</p>
+
+<p>By using generator expressions inside of calls to <code>sum()</code> you can calculate your values with most of the work being done by the C code inside of Python.  This should be faster than using a <code>for</code> loop.</p>
+
+<p>I haven't timed this so I can't guess how much faster it might be.  But the SciPy code is almost certainly written in C or C++ and it should be about as fast as you can get.</p>
+
+<p>If you are doing bioinformatics in Python, you really should be using SciPy anyway.</p>
+
+<p>EDIT: Darius Bacon timed my code and found it slower.  So I timed my code and... yes, it is slower.  The lesson for all: when you are trying to speed things up, don't guess, measure.</p>
+
+<p>I am baffled as to why my attempt to put more work on the C internals of Python is slower.  I tried it for lists of length 1000 and it was still slower.</p>
+
+<p>I can't spend any more time on trying to hack the Python cleverly.  If you need more speed, I suggest you try SciPy.</p>
+
+<p>EDIT: I just tested by hand, without timeit.  I find that for short a and b, the old code is faster; for long a and b, the new code is faster; in both cases the difference is not large.  (I'm now wondering if I can trust timeit on my Windows computer; I want to try this test again on Linux.)  I wouldn't change working code to try to get it faster.  And one more time I urge you to try SciPy.  :-)</p>
+<br /><b>#2</b><br /><p>No need to take <code>abs()</code> of <code>a[i]</code> and <code>b[i]</code> if you're squaring it.</p>
+
+<p>Store <code>a[i]</code> and <code>b[i]</code> in temporary variables, to avoid doing the indexing more than once.
+Maybe the compiler can optimize this, but maybe not.</p>
+
+<p>Check into the <code>**2</code> operator. Is it simplifying it into a multiply, or is it using a general power function (log - multiply by 2 - antilog).</p>
+
+<p>Don't do sqrt twice (though the cost of that is small). Do <code>sqrt(denoma * denomb)</code>.</p>
+<br /><b>#3</b><br /><p>This is faster for arrays of around 1000+ elements.   </p>
+
+<pre><code>from numpy import array
+def cosine_distance(a, b):
+    a=array(a)
+    b=array(b)
+    numerator=(a*b).sum()
+    denoma=(a*a).sum()
+    denomb=(b*b).sum()
+    result = 1 - numerator / sqrt(denoma*denomb)
+    return result
+</code></pre>
+<br /><b>#4</b><br /><p>Similar to Darius Bacon's answer, I've been toying with operator and itertools to produce a faster answer. The following seems to be 1/3 faster on a 500-item array according to timeit:</p>
+
+<pre><code>from math import sqrt
+from itertools import imap
+from operator import mul
+
+def op_cosine(a, b):
+    dot_prod = sum(imap(mul, a, b))
+    a_veclen = sqrt(sum(i ** 2 for i in a))
+    b_veclen = sqrt(sum(i ** 2 for i in b))
+
+    return 1 - dot_prod / (a_veclen * b_veclen)
+</code></pre>
+<br /><b>#5</b><br /><p>Using the C code inside of SciPy wins big for long input arrays.  Using simple and direct Python wins for short input arrays; Darius Bacon's <code>izip()</code>-based code benchmarked out best.  Thus, the ultimate solution is to decide which one to use at runtime, based on the length of the input arrays:</p>
+
+<pre><code>from scipy.spatial.distance import cosine as scipy_cos_dist
+
+from itertools import izip
+from math import sqrt
+
+def cosine_distance(a, b):
+    len_a = len(a)
+    assert len_a == len(b)
+    if len_a &gt; 200:  # 200 is a magic value found by benchmark
+        return scipy_cos_dist(a, b)
+    # function below is basically just Darius Bacon's code
+    ab_sum = a_sum = b_sum = 0
+    for ai, bi in izip(a, b):
+        ab_sum += ai * bi
+        a_sum += ai * ai
+        b_sum += bi * bi
+    return 1 - ab_sum / sqrt(a_sum * b_sum)
+</code></pre>
+
+<p>I made a test harness that tested the functions with different length inputs, and found that around length 200 the SciPy function started to win.  The bigger the input arrays, the bigger it wins.  For very short length arrays, say length 3, the simpler code wins.  This function adds a tiny amount of overhead to decide which way to do it, then does it the best way.</p>
+
+<p>In case you are interested, here is the test harness:</p>
+
+<pre><code>from darius2 import cosine_distance as fn_darius2
+fn_darius2.__name__ = "fn_darius2"
+
+from ult import cosine_distance as fn_ult
+fn_ult.__name__ = "fn_ult"
+
+from scipy.spatial.distance import cosine as fn_scipy
+fn_scipy.__name__ = "fn_scipy"
+
+import random
+import time
+
+lst_fn = [fn_darius2, fn_scipy, fn_ult]
+
+def run_test(fn, lst0, lst1, test_len):
+    start = time.time()
+    for _ in xrange(test_len):
+        fn(lst0, lst1)
+    end = time.time()
+    return end - start
+
+for data_len in range(50, 500, 10):
+    a = [random.random() for _ in xrange(data_len)]
+    b = [random.random() for _ in xrange(data_len)]
+    print "len(a) ==", len(a)
+    test_len = 10**3
+    for fn in lst_fn:
+        n = fn.__name__
+        r = fn(a, b)
+        t = run_test(fn, a, b, test_len)
+        print "%s:\t%f seconds, result %f" % (n, t, r)
+</code></pre>
+<br /><b>#6</b><br /><pre><code>def cd(a,b):
+    if(len(a)!=len(b)):
+        raise ValueError, "a and b must be the same length"
+    rn = range(len(a))
+    adb = sum([a[k]*b[k] for k in rn])
+    nma = sqrt(sum([a[k]*a[k] for k in rn]))
+    nmb = sqrt(sum([b[k]*b[k] for k in rn]))
+
+    result = 1 - adb / (nma*nmb)
+    return result
+</code></pre>
+<br /><b>#7</b><br /><p>Your updated solution still has two square roots. You can reduce this to one by replacing the sqrt line with:</p>
+
+<blockquote>
+  <p>result = 1 - numerator /
+  (sqrt(denoma*denomb))</p>
+</blockquote>
+
+<p>A multiply is typically quite a bit quicker than a sqrt. It might not seem much as it is only called once in the function, but it sounds like you are calculating a lot of cosine distances, so the improvement will add up.</p>
+
+<p>Your code looks like it should be ripe for vector optimizations. So if cross-platofrm support is not an issue and you want to speed it even further, you could code the cosine distance code in C and make sure your compiler is aggressively vectorizing the resulting code (even Pentium II is capable of some floating point vectorisation)</p>
+<br />

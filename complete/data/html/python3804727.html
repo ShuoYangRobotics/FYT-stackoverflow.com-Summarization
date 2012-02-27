@@ -1,0 +1,188 @@
+<h3>Question (ID-3804727):</h3><h2>python, subprocess: reading output from subprocess</h2><p>I have following script:</p>
+
+<pre><code>#!/usr/bin/python
+
+while True:
+    x = raw_input()
+    print x[::-1]
+</code></pre>
+
+<p>I am calling it from <code>ipython</code>:</p>
+
+<pre><code>In [5]: p = Popen('./script.py', stdin=PIPE)
+
+In [6]: p.stdin.write('abc\n')
+cba
+</code></pre>
+
+<p>and it works fine.</p>
+
+<p>However, when I do this:</p>
+
+<pre><code>In [7]: p = Popen('./script.py', stdin=PIPE, stdout=PIPE)
+
+In [8]: p.stdin.write('abc\n')
+
+In [9]: p.stdout.read()
+</code></pre>
+
+<p>the interpreter hangs. What am I doing wrong? I would like to be able to both write and read from another process multiple times, to pass some tasks to this process. What do I need to do differently?</p>
+
+<p><strong>EDIT 1</strong></p>
+
+<p>If I use <code>communicate</code>, I get this:</p>
+
+<pre><code>In [7]: p = Popen('./script.py', stdin=PIPE, stdout=PIPE)
+
+In [8]: p.communicate('abc\n')
+Traceback (most recent call last):
+  File "./script.py", line 4, in &lt;module&gt;
+    x = raw_input()
+EOFError: EOF when reading a line
+Out[8]: ('cba\n', None)
+</code></pre>
+
+<p><strong>EDIT 2</strong></p>
+
+<p>I tried flushing:</p>
+
+<pre><code>#!/usr/bin/python
+
+import sys
+
+while True:
+        x = raw_input()
+        print x[::-1]
+        sys.stdout.flush()
+</code></pre>
+
+<p>and here:</p>
+
+<pre><code>In [5]: from subprocess import PIPE, Popen
+
+In [6]: p = Popen('./script.py', stdin=PIPE, stdout=PIPE)
+
+In [7]: p.stdin.write('abc')
+
+In [8]: p.stdin.flush()
+
+In [9]: p.stdout.read()
+</code></pre>
+
+<p>but it hangs again.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I believe there are two problems at work here:</p>
+
+<p>1) Your parent script calls <code>p.stdout.read()</code>, which will read all data until end-of-file.  However, your child script runs in an infinite loop so end-of-file will never happen.  Probably you want <code>p.stdout.readline()</code>?</p>
+
+<p>2) In interactive mode, most programs do buffer only one line at a time.  When run from another program, they buffer much more.  The buffering improves efficiency in many cases, but causes problems when two programs need to communicate interactively.</p>
+
+<p>After <code>p.stdin.write('abc\n')</code> add:</p>
+
+<pre><code>p.stdin.flush()
+</code></pre>
+
+<p>In your subprocess script, after <code>print x[::-1]</code> add the following within the loop:</p>
+
+<pre><code>sys.stdout.flush()
+</code></pre>
+
+<p>(and <code>import sys</code> at the top)</p>
+<br /><b>#1</b><br /><p>You're probably tripping over Python's output buffering. Here's what <code>python --help</code> has to say about it.</p>
+
+<pre><code>-u     : unbuffered binary stdout and stderr; also PYTHONUNBUFFERED=x
+         see man page for details on internal buffering relating to '-u'
+</code></pre>
+<br /><b>#2</b><br /><p>When you are through writing to p.stdin, close it: <code>p.stdin.close()</code></p>
+<br /><b>#3</b><br /><p>The subprocess method <a href="http://docs.python.org/dev/library/subprocess.html#subprocess.check_output" rel="nofollow">check_output</a> can be useful for this:</p>
+
+<p><code>output = subprocess.check_output('./script.py')</code></p>
+
+<p>And output will be the stdout from the process. If you need stderr, too:</p>
+
+<p><code>output = subprocess.check_output('./script.py', stderr=subprocess.STDOUT)</code></p>
+
+<p>Because you avoid managing pipes directly, it may circumvent your issue.</p>
+<br /><b>#4</b><br /><p>If you'd like to pass several lines to <code>script.py</code> then you need to read/write simultaneously:</p>
+
+<pre><code>#!/usr/bin/env python
+import sys
+from subprocess import PIPE, Popen
+from threading  import Thread
+
+def print_output(out, ntrim=80):
+    for line in out:
+        print len(line)
+        if len(line) &gt; ntrim: # truncate long output
+            line = line[:ntrim-2]+'..'
+        print line.rstrip() 
+
+
+if __name__=="__main__":
+    p = Popen(['python', 'script.py'], stdin=PIPE, stdout=PIPE)
+    Thread(target=print_output, args=(p.stdout,)).start()
+    for s in ['abc', 'def', 'ab'*10**7, 'ghi']:
+        print &gt;&gt;p.stdin, s
+    p.stdin.close()
+    sys.exit(p.wait()) #NOTE: read http://docs.python.org/library/subprocess.html#subprocess.Popen.wait
+</code></pre>
+
+<h3>Output:</h3>
+
+<pre>4
+cba
+4
+fed
+20000001
+bababababababababababababababababababababababababababababababababababababababa..
+4
+ihg</pre>
+
+<p>Where <code>script.py</code>:</p>
+
+<pre><code>#!/usr/bin/env python
+"""Print reverse lines."""
+while True:
+    try: x = raw_input()
+    except EOFError:
+        break # no more input
+    else:
+        print x[::-1]
+</code></pre>
+
+<p>Or</p>
+
+<pre><code>#!/usr/bin/env python
+"""Print reverse lines."""
+import sys
+
+for line in sys.stdin:
+    print line.rstrip()[::-1]
+</code></pre>
+
+<p>Or</p>
+
+<pre><code>#!/usr/bin/env python
+"""Print reverse lines."""
+import fileinput
+
+for line in fileinput.input(): # accept files specified as command line arguments
+    print line.rstrip()[::-1]
+</code></pre>
+<br /><b>#5</b><br /><p>Use <code>communicate()</code> instead of <code>.stdout.read()</code>.</p>
+
+<p>Example:</p>
+
+<pre><code>from subprocess import Popen, PIPE
+p = Popen('./script.py', stdin=PIPE, stdout=PIPE, stderr=PIPE)
+input = 'abc\n'
+stdout, stderr = p.communicate(input)
+</code></pre>
+
+<p>This recommendation comes from the <a href="http://docs.python.org/library/subprocess#popen-objects" rel="nofollow">Popen objects</a> section in the <a href="http://docs.python.org/library/subprocess" rel="nofollow">subprocess documentation</a>:</p>
+
+<blockquote>
+  <p><strong>Warning</strong>: Use communicate() rather than .stdin.write, .stdout.read or .stderr.read
+  to avoid deadlocks due to any of the other OS pipe buffers filling up and blocking the
+  child process.</p>
+</blockquote>
+<br />

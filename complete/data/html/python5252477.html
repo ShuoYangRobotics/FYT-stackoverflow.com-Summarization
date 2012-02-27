@@ -1,0 +1,40 @@
+<h3>Question (ID-5252477):</h3><h2>Economically deleting data from app engine</h2><p>I have a popular social game, for which I was storing every user action as an Event entity in the data store and then once per day exporting these events from GAE for processing. Now I'd like to delete all of these entities from the data store, all 300 million of them.</p>
+
+<p>I started using the "datastore admin" for this. In the first few hours I let it run, it managed to delete about 2 million entities and use $10 of CPU to do this. So it seems it will cost $1500 just to run this delete. I'm starting to think I would be better off just deleting the whole application and copy items I <strong>don't</strong> want to delete over to the new application. </p>
+
+<p>Any other options?</p>
+
+<p><strong>Update</strong></p>
+
+<p>I got advice on #appengine in IRC that simply getting the keys of 2000 entities at a time and spawning tasks to delete them in pieces (can pass keys as strings to tasks) may be cheaper than using the Datastore Admin tool. I am trying this now and will try to remember to report back tomorrow if this seems to be cheaper or not.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Presuming your goal is to delete for the cheapest cost, rather than face migration, I would launch a self-scheduling task, that would clean up several hundred/thousand keys in each run, then re-schedules itself. I would purposefully throttle this task on a separate queue so that the task ran only often enough to avoid hitting my daily free quotas if possible.</p>
+
+<p>If you have some "acceptable" CPU cost per day that you'd be willing to live with, you could throttle the queue less, either way it would be better if each delete doesn't take too long to complete so it doesn't impact instance latency too heavily.</p>
+
+<p>kevpie's comment on vacuuming may also be relevant if you have composite indexes.</p>
+<br /><b>#1</b><br /><p>Removing indexes first will substantially reduce the cost of deleting records. You could also limit your deletion rate to keep under the 6.5 CPU hours per day you're allocated for free, to avoid paying.</p>
+
+<p>Regarding doing the deletion yourself, it's unlikely you can do it more efficiently than the datastore admin tool, which already does keys-only queries and uses cursors.</p>
+<br /><b>#2</b><br /><p>You mean you used GQL in the datastore admin? Like, <code>delete from x...</code>? And that was too expensive? Hmmm...</p>
+
+<p>Well, you might save some money if you integrate deleting into your runtime code. ie, if a user is logged in, you're already accessing the db, presumably with the same indicies, so why not delete it then? You would end up with fewer overall transactions if you do it right.</p>
+<br /><b>#3</b><br /><p>Questions.
+- Are your Event entities grouped in entity groups?
+- How many indexes do you have? Any composite ones? 
+- How many properties that are not indexed=False?  </p>
+
+<p>Just trying to determine the cost of a delete.  </p>
+
+<p>You may be able have some of your indexes vacuumed before you start deleting the entities.</p>
+<br /><b>#4</b><br /><p>I've run into this problem while developing a new app that didn't always clean up after itself.  After running several experiments, what I learned was</p>
+
+<ol>
+<li><p>Tune the number of deletions you do so that you do as many as possible without getting timeouts.  For me, that was around 200 entities per chunk, though sometimes I could get away with 400, but never more.</p></li>
+<li><p>If you can query in such a way that you can get the keys only, it is more efficient.</p></li>
+<li><p>My biggest efficiency gains were from using <a href="http://code.google.com/appengine/docs/python/datastore/queries.html#Query_Cursors" rel="nofollow">Query Cursors</a>.  These enabled more efficient queries with bigger chunk sizes.</p></li>
+<li><p>Use scheduling to spread the pain. This can be automatic cron scheduling or manual scheduling.  Since my project was still alpha, I would check my quotas late in the evening and run out unused quota by starting my deletion tasks manually.</p></li>
+<li><p>Complain to Google.  This had the effect of making me feel better.</p></li>
+</ol>
+<br /><b>#5</b><br /><p>Try deleting via the remote_api. It will reduce the consumption of CPU hours by a large extent
+<a href="http://code.google.com/appengine/articles/remote_api.html" rel="nofollow">http://code.google.com/appengine/articles/remote_api.html</a></p>
+<br />

@@ -1,0 +1,132 @@
+Question (ID-1019756): split a string by a delimiter in a context sensitive way For example, I want to split 
+
+ str = '"a,b,c",d,e,f'
+ 
+
+ into 
+
+ ["a,b,c",'d','e','f']
+ 
+
+ (i.e. don't split the quoted part) In this case, this can be done with 
+
+ re.findall('".*?"|[^,]+',str)
+ 
+
+ However, if 
+
+ str = '"a,,b,c",d,,f'
+ 
+
+ I want 
+
+ ["a,,b,c",'d','','f']
+ 
+
+ i.e. I want a behavior that is like python's split function. Is there any way I can do this in one (small) line, possibly using Python's re library? 
+
+ Actually, I just realized (on this site) that the csv module is perfect for what I want to do, but I am curious whether there is a regular expression that re can use to do it as well. 
+ Answers (Total-7): #0 Use the csv module as it is a real parser. Regular expressions are nonoptimal (or completely unsuited) for most things involving matching delimiters in which the rules change (I'm unsure as to whether this particular grammar is regular or not). You might be able to create a regex that would work in this case, but it would be rather complex (especially dealing with cases like "He said, \"How are you\""). 
+ #1 re.split(',(?=(?:[^"]*"[^"]*")*[^"]*$)', str)
+ 
+
+ After matching a comma, if there's an odd number of quotation marks up ahead ahead, the comma must be inside a pair of quotation marks, so it doesn't count as a delimiter. Obviously this doesn't take the possibility of escaped quotation marks into account, but that can handled if need be--it just makes the regex about twice as ugly as it already is. :D 
+ #2 Writing a state machine for this would, on the other hand, seem to be quite straightforward. DFAs and regexes have the same power, but usually one of them is better suited to the problem at hand, and is usually very dependent on the additional logic you might need to implement. 
+ #3 Page 271 of Friedl's Mastering Regular Expressions has a regular expression for extracting possibly quoted CSV fields, but it requires a bit of postprocessing: 
+
+ &gt;&gt;&gt; re.findall('(?:^|,)(?:"((?:[^"]|"")*)"|([^",]*))',str)
+[('a,b,c', ''), ('', 'd'), ('', 'e'), ('', 'f')]
+&gt;&gt;&gt; re.findall('(?:^|,)(?:"((?:[^"]|"")*)"|([^",]*))','"a,b,c",d,,f')
+[('a,b,c', ''), ('', 'd'), ('', ''), ('', 'f')]
+ 
+
+ Same pattern with the verbose flag: 
+
+ csv = re.compile(r"""
+ (?:^|,)
+ (?: # now match either a double-quoted field
+  # (inside, paired double quotes are allowed)...
+  " # (double-quoted field's opening quote)
+   ( (?: [^"] | "" )* )
+  " # (double-quoted field's closing quote)
+ |
+  # ...or some non-quote/non-comma text...
+  ( [^",]* )
+ )""", re.X)
+ 
+ #4 You can get close using non-greedy specifiers. The closest I've got is: 
+
+ &gt;&gt;&gt; re.findall('(".*?"|.*?)(?:,|$)', '"a,b,c",d,e,f')
+['"a,,b,c"', 'd', '', 'f', '']
+ 
+
+ But as you see, you end up with a redundant empty string at the end, which is indistinguishable from the result you get when the string ends with a comma: 
+
+ &gt;&gt;&gt; re.findall('(".*?"|.*?)(?:,|$)', '"a,b,c",d,e,f,')
+['"a,,b,c"', 'd', '', 'f', '']
+ 
+
+ so you'd need to do some manual tweaking at the end - something like: 
+
+ matches = regex,findall(s)
+if not s.endswith(","): matches.pop()
+ 
+
+ or 
+
+ matches = regex.findall(s+",")[:-1]
+ 
+
+ There's probably a better way. 
+ #5 Here's a function that'll accomplish the task: 
+
+ def smart_split(data, delimiter=","):
+ """ Performs splitting with string preservation. This reads both single and
+  double quoted strings.
+ """
+ result = []
+ quote_type = None
+ buffer = ""
+ position = 0
+ while position &lt; len(data):
+  if data[position] in ["\"", "'"]:
+   quote_type = data[position]
+   while quote_type is not None:
+    position += 1
+    if data[position] == quote_type:
+     quote_type = None
+     position += 1
+    else:
+     buffer += data[position]
+  if data[position] == delimiter:
+   result.append(buffer)
+   buffer = ""
+  else:
+   buffer += data[position]
+  position += 1
+ result.append(buffer)
+ return result
+ 
+
+ Example of use: 
+
+ str = '"a,b,c",d,e,f'
+print smart_split(str)
+# Prints: ['a,b,c', 'd', 'e', 'f']
+ 
+ #6 Here's a really short function that will do the same thing: 
+
+ def split (aString):
+ splitByQuotes = (",%s,"%aString).split('"')
+ splitByQuotes[0::2] = [x.split(",")[1:-1] for x in splitByQuotes[0::2]]
+ return [a.strip() \
+  for b in splitByQuotes \
+  for a in (b if type(b)==list else [b])]
+ 
+
+ It splits the string where the quotes are, creating a list where every even element is the stuff outside the quotes and every odd element is the stuff that was encapsulated within quotes. The stuff in quotes it leaves alone, the stuff outside it splits where the commas are. Now we have a list of alternating lists and strings, which we then unwrap with the last line. The reason for wrapping the string in commas at the beginning and removing commas in the middle is to prevent spare empty elements in the list. It should be able to handle whitespace - I added a strip() function at the end to make it produce clean output, but that's not necessary. 
+
+ usage: 
+
+ &gt;&gt;&gt; print split('c, , "a,,b,c",d,"moo","f"')
+['c', '', 'a,,b,c', 'd', 'moo', 'f']

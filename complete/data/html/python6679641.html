@@ -1,0 +1,181 @@
+<h3>Question (ID-6679641):</h3><h2>how to split a list in two at the point where predicate is first False</h2><p>I keep thinking there should be a function for this, but I've searched the likely places (google, itertools docs, list methods, other SO questions), but nowhere found <em>quite</em> what I was looking for.</p>
+
+<p>Naive and working implementation:</p>
+
+<pre><code>def split_at_first_false(pred, seq):
+    first = []
+    second = []
+    true_so_far = True
+    for item in seq:
+        if true_so_far and pred(item):
+            first.append(item)
+        else:
+            true_so_far = False
+            second.append(item)
+    return first, second
+
+print split_at_first_false(str.isalpha, "abc1a2b")
+# (['a', 'b', 'c'], ['1', 'a', '2', 'b'])
+</code></pre>
+
+<p>It works, but it doesn't feel right. There should be a better way to do this!</p>
+
+<p><strong>EDIT:</strong> I ended up with using a slightly modified version of senderle's final suggestion after reviewing the answers:</p>
+
+<pre><code>from itertools import chain
+
+def split_at_pred(pred, seq):
+    head = []
+    it = iter(seq)
+    for i in it:
+        if not pred(i):
+            head.append(i)
+        else:
+            return iter(head), chain([i], it)
+    return iter(head), iter([])
+</code></pre>
+
+<p>It's short and elegant, output is two iterators no matter the input (strings, lists, iterators), and as a bonus, it even works with the following input:</p>
+
+<pre><code>from itertools import count
+split_at_pred(lambda x: x == 5, count())
+</code></pre>
+
+<p>The other solutions, those that work at all with iterators, will run out of memory with this input. (Note that this <em>is</em> just a bonus. Infinite iterators was something I hadn't even considered when I wrote this question)</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>This seems like a job for itertools.</p>
+
+<pre><code>&gt;&gt;&gt; first = list(itertools.takewhile(str.isalpha, l))
+&gt;&gt;&gt; second = list(itertools.dropwhile(str.isalpha, l))
+&gt;&gt;&gt; first
+['a', 'b', 'c']
+&gt;&gt;&gt; second
+['1', 'a', '2', 'b']
+</code></pre>
+
+<p>This needs to be altered if <code>l</code> is an iterator rather than a sequence.</p>
+
+<pre><code>&gt;&gt;&gt; def bisect_iter(pred, i):
+...     i1, i2 = itertools.tee(i)
+...     return itertools.takewhile(pred, i1), itertools.dropwhile(pred, i2)
+... 
+&gt;&gt;&gt; i1, i2 = bisect_iter(str.isalpha, iter(l))
+&gt;&gt;&gt; list(i1)
+['a', 'b', 'c']
+&gt;&gt;&gt; list(i2)
+['1', 'a', '2', 'b']
+</code></pre>
+
+<p>The downside of <code>tee</code> is that the initial values are cached and tested twice (by both <code>takewhile</code> and <code>dropwhile</code>). That's wasteful. But caching values is unavoidable if you want to both accept and return iterators. </p>
+
+<p>However, if you can return lists from an iterator, I can think of one solution that doesn't make extra copies or tests, and it's very close to yours:</p>
+
+<pre><code>&gt;&gt;&gt; def bisect_iter_to_list(pred, it):
+...     l1 = []
+...     for i in it:
+...         if pred(i):
+...             l1.append(i)
+...         else:
+...             l2 = [i]
+...             l2.extend(it)
+...     return l1, l2
+... 
+&gt;&gt;&gt; bisect_iter_to_list(str.isalpha, iter(l))
+(['a', 'b', 'c'], ['1', 'a', '2', 'b'])
+</code></pre>
+
+<p>The only sneaky bit is that where there would normally be a <code>break</code> statement (i.e. after the <code>else</code> clause), I've simply consumed the iterator, causing the <code>for</code> loop to terminate early. </p>
+
+<p>Finally, if you <em>still</em> want to return iterators, but don't want to do extra tests, here's a variation on the above that I believe is optimal.</p>
+
+<pre><code>&gt;&gt;&gt; def bisect_any_to_iter(pred, it):
+...     it = iter(it)
+...     head = []
+...     for i in it:
+...         if pred(i):
+...             head.append(i)
+...         else:
+...             tail = itertools.chain([i], it)
+...             break
+...     return iter(head), tail
+... 
+&gt;&gt;&gt; a, b = bisect_iter_to_iter(str.isalpha, iter(l))
+&gt;&gt;&gt; list(a)
+['a', 'b', 'c']
+&gt;&gt;&gt; list(b)
+['1', 'a', '2', 'b']
+</code></pre>
+<br /><b>#1</b><br /><p>How about this?</p>
+
+<pre><code>def split_at_first_false(pred, seq):
+    for i, item in enumerate(seq):
+        if not pred(item):
+            return seq[:i], seq[i:]
+</code></pre>
+<br /><b>#2</b><br /><p>What about this?</p>
+
+<pre><code>def split_at_first_false(pred, seq):
+    pos = 0
+    for item in seq:
+        if not pred(item):
+            return seq[:pos], seq[pos:]
+        pos += 1
+</code></pre>
+<br /><b>#3</b><br /><p>Don't shy away from iterators, this is a perfect case for using one.  Once the first false item is hit, use the same iterator to just fill out the rest of the items into the second list.</p>
+
+<pre><code>def split_at_false(pred, seq):
+    # if seq is not already an iterator, make it one
+    if not hasattr(seq,'next'):
+        seq = iter(seq)
+
+    first, second = [], []
+    for item in seq:
+        if not pred(item):
+            second.append(item)
+            break
+        first.append(item)
+
+    # at this point, seq points to the first item
+    # after the false item, just add it and all the 
+    # rest to the second list
+    second.extend(seq)
+
+    return first, second
+
+is_odd = lambda x : x % 2    
+print split_at_false(is_odd, [1])    
+print split_at_false(is_odd, [1,2,3,4,5])
+print split_at_false(is_odd, [2,3,4,5,6])
+print split_at_false(is_odd, [])
+</code></pre>
+
+<p>Prints:</p>
+
+<pre><code>([1], [])
+([1], [2, 3, 4, 5])
+([], [2, 3, 4, 5, 6])
+([], [])
+</code></pre>
+
+<p>No tee'ing, no extra list storage, no iterating twice over the list, no slicing, just an iterator.</p>
+<br /><b>#4</b><br /><p>Try that:</p>
+
+<pre><code> def split_at_first_false(pred, seq):
+        index = 0
+        while index &lt; len(seq):
+            if not pred(seq[index]):
+                 return seq[:index], seq[index+1:]
+            index+=1
+</code></pre>
+<br /><b>#5</b><br /><p>Try the following code :</p>
+
+<pre><code>data = "abc1a2b"
+
+def split_at_first_false(pred, seq):
+    if not isinstance(seq, list):
+       seq = list(seq)
+    for i,x in enumerate(seq):
+        if not pred(x):
+            return seq[:i], seq[i:]
+    return seq, []
+</code></pre>
+<br />

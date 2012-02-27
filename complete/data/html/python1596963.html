@@ -1,0 +1,80 @@
+<h3>Question (ID-1596963):</h3><h2>Read a file from server with ssh using python</h2><p>I am trying to read a file from a server using ssh from python. I am using paramiko to connect. I can connect to the server and run a command like 'cat filename' and get the data back from the server but some files I am trying to read are around 1 GB or more in size.</p>
+
+<p>How can I read the file on the server line by line using python?</p>
+
+<p>Additional Info: What is regularly do is run a 'cat filename' command and store the result in a variable and work off that. But since the file here is quite big, I am looking for a way to read a file line by line off the server.</p>
+
+<p>EDIT: I can read a bunch of data and split it into lines but the problem is that the data received in the buffer does not always include the complete lines. for eg, if buffer has 300 lines, the last line may only be half of the line on the server and the next half would be fetched in the next call to the server. I want complete lines </p>
+
+<p>EDIT 2: what command can I use to print lines in a file in a certain range. Like print first 100 lines, then the next 100 and so on? This way the buffer will always contain complete lines.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Paramiko's <code>SFTPClient</code> class allows you to get a file-like object to read data from a remote file in a Pythonic way.</p>
+
+<p>Assuming you have an open <code>SSHClient</code>:</p>
+
+<pre><code>sftp_client = ssh_client.open_sftp()
+remote_file = sftp_client.open('remote_filename')
+try:
+    for line in remote_file:
+        # process line
+finally:
+    remote_file.close()
+</code></pre>
+<br /><b>#1</b><br /><p>What do you mean by "line by line" - there are lots of data buffers between network hosts, and none of them are line-oriented. </p>
+
+<p>So you can read a bunch of data, then split it into lines at the near end.</p>
+
+<pre><code>ssh otherhost cat somefile | python process_standard_input.py | do_process_locally
+</code></pre>
+
+<p>Or you can have a process read a bunch of data at the far end, break it up, and format it line by line and send it to you.</p>
+
+<pre><code>scp process_standard_input.py otherhost
+ssh otherhost python process_standard_input.py somefile |  do_process_locally
+</code></pre>
+
+<p>The only difference I would care about is what way reduces the volume of data over a limited network pipe. In your situation it may, or may not matter.</p>
+
+<p>There is nothing wrong in general with using <code>cat</code> over an SSH pipe to move gigabytes of data.</p>
+<br /><b>#2</b><br /><pre><code>#!/usr/bin/env python
+import paramiko
+import select
+client = paramiko.SSHClient()
+client.load_system_host_keys()
+client.connect('yourhost.com')
+transport = client.get_transport()
+channel = transport.open_session()
+channel.exec_command("cat /path/to/your/file")
+while True:
+  rl, wl, xl = select.select([channel],[],[],0.0)
+  if len(rl) &gt; 0:
+      # Must be stdout
+      print channel.recv(1024)
+</code></pre>
+<br /><b>#3</b><br /><p>Use SFTP  <a href="http://stackoverflow.com/questions/432385/sftp-in-python-platform-independent">http://stackoverflow.com/questions/432385/sftp-in-python-platform-independent</a></p>
+<br /><b>#4</b><br /><p>You can write your own linebuffer/generator something like this</p>
+
+<pre><code>def linebuffer(source):
+    data=""
+    i=0
+    while source:
+        try:
+            i=data.index('\n',i)+1
+            yield data[:i]
+        except ValueError:
+            newdata = source.recv(1024)
+            if not newdata: break
+            data=data[i:]+newdata
+            i=0
+</code></pre>
+<br /><b>#5</b><br /><p>Here's an extension to <a href="http://stackoverflow.com/questions/1596963/read-a-file-from-server-with-ssh-using-python/1597750#1597750">@Matt Good's answer</a>:</p>
+
+<pre><code>from contextlib     import closing
+from fabric.network import connect
+
+with closing(connect(user, host, port)) as ssh:
+    with closing(ssh.open_sftp()) as sftp:
+         with closing(sftp.open('remote_filename')) as f:
+              for line in f:
+                  process(line)
+</code></pre>
+<br />

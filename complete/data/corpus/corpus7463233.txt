@@ -1,0 +1,313 @@
+Question (ID-7463233): Matching 2 regular expressions in Python Is it possible to match 2 regular expressions in Python? 
+
+ For instance, I have a use-case wherein I need to compare 2 expressions like this: 
+
+ re.match('google\.com\/maps', 'google\.com\/maps2', re.IGNORECASE)
+ 
+
+ I would expect to be returned a RE object. 
+
+ But obviously, Python expects a string as the second parameter.
+Is there a way to achieve this, or is it a limitation of the way regex matching works? 
+
+ 
+
+ Background: I have a list of regular expressions [r1, r2, r3, ...] that match a string and I need to find out which expression is the most specific match of the given string. The way I assumed I could make it work was by: 
+(1) matching r1 with r2. 
+(2) then match r2 with r1. 
+If both match, we have a 'tie'. If only (1) worked, r1 is a 'better' match than r2 and vice-versa. 
+I'd loop (1) and (2) over the entire list. 
+
+ I admit it's a bit to wrap one's head around (mostly because my description is probably incoherent), but I'd really appreciate it if somebody could give me some insight into how I can achieve this. Thanks! 
+ Answers (Total-8): #0 Outside of the syntax clarification on re.match , I think I am understanding that you are struggling with taking two or more unknown (user input) regex expressions and classifying which is a more 'specific' match against a string. 
+
+ Recall for a moment that a Python regex really is a type of computer program. Most modern forms, including Python's regex, are based on Perl. Perl's regex's have recursion, backtracking, and other forms that defy trivial inspection. Indeed a rogue regex can be used as a form of denial of service attack . 
+
+ To see of this on your own computer, try: 
+
+ &gt;&gt;&gt; re.match(r'^(a+)+$','a'*24+'!')
+ 
+
+ That takes about 1 second on my computer. Now increase the 24 in 'a'*24 to a bit larger number, say 28 . That take a lot longer. Try 48 ... You will probably need to CTRL + C now. The time increase as the number of a's increase is, in fact, exponential. 
+
+ You can read more about this issue in Russ Cox 's wonderful paper on 'Regular Expression Matching Can Be Simple And Fast' . Russ Cox is the Goggle engineer that built Google Code Search in 2006. As Cox observes, consider matching the regex 'a?'*33 + 'a'*33 against the string of 'a'*99 with awk and Perl (or Python or PCRE or Java or PHP or ...) Awk matches in 200 microseconds but Perl would require 10 15 years because of exponential back tracking. 
+
+ So the conclusion is: it depends! What do you mean by a more specific match? Look at some of Cox's regex simplification techniques in RE2 . If your project is big enough to write your own libraries (or use RE2) and you are willing to restrict the regex grammar used (i.e., no backtracking or recursive forms), I think the answer is that you would classify 'a better match' in a variety of ways. 
+
+ If you are looking for a simple way to state that (regex_3 &lt; regex_1 &lt; regex_2) when matched against some string using Python or Perl's regex language, I think that the answer is it is very very hard (i.e., this problem is NP Complete ) 
+
+ Edit 
+
+ Everything I said above is true! However, here is a stab at sorting matching regular expressions based on one form of 'specific': How many edits to get from the regex to the string. The greater number of edits (or the higher the Levenshtein distance) the less 'specific' the regex is. 
+
+ You be the judge if this works (I don't know what 'specific' means to you for your application): 
+
+ import re
+
+def ld(a,b):
+ "Calculates the Levenshtein distance between a and b."
+ n, m = len(a), len(b)
+ if n &gt; m:
+  # Make sure n &lt;= m, to use O(min(n,m)) space
+  a,b = b,a
+  n,m = m,n
+
+ current = range(n+1)
+ for i in range(1,m+1):
+  previous, current = current, [i]+[0]*n
+  for j in range(1,n+1):
+   add, delete = previous[j]+1, current[j-1]+1
+   change = previous[j-1]
+   if a[j-1] != b[i-1]:
+    change = change + 1
+   current[j] = min(add, delete, change)  
+ return current[n]
+
+s='Mary had a little lamb' 
+d={}
+regs=[r'.*', r'Mary', r'lamb', r'little lamb', r'.*little lamb',r'\b\w+mb',
+  r'Mary.*little lamb',r'.*[lL]ittle [Ll]amb',r'\blittle\b',s,r'little']
+
+for reg in regs:
+ m=re.search(reg,s)
+ if m:
+  print "'%s' matches '%s' with sub group '%s'" % (reg, s, m.group(0))
+  ld1=ld(reg,m.group(0))
+  ld2=ld(m.group(0),s)
+  score=max(ld1,ld2)
+  print " %i edits regex-&gt;match(0), %i edits match(0)-&gt;s" % (ld1,ld2)
+  print " score: ", score
+  d[reg]=score
+  print
+ else:
+  print "'%s' does not match '%s'" % (reg, s) 
+
+print " ===== %s ===== === %s ===" % ('RegEx'.center(10),'Score'.center(10))
+
+for key, value in sorted(d.iteritems(), key=lambda (k,v): (v,k)):
+ print " %22s  %5s" % (key, value) 
+ 
+
+ The program is taking a list of regex's and matching against the string Mary had a little lamb . 
+
+ Here is the sorted ranking from "most specific" to "least specific": 
+
+  ===== RegEx ===== === Score ===
+ Mary had a little lamb   0
+  Mary.*little lamb   7
+   .*little lamb   11
+    little lamb   11
+  .*[lL]ittle [Ll]amb   15
+    \blittle\b   16
+     little   16
+      Mary   18
+     \b\w+mb   18
+      lamb   18
+      .*   22
+ 
+
+ This based on the (perhaps simplistic) assumption that: a) the number of edits (the Levenshtein distance) to get from the regex itself to the matching substring is the result of wildcard expansions or replacements; b) the edits to get from the matching substring to the initial string. (just take one) 
+
+ As two simple examples: 
+
+ 
+ .* (or .*.* or .*?.* etc) against any sting is a large number of edits to get to the string, in fact equal to the string length. This is the max possible edits, the highest score, and the least 'specific' regex. 
+ The regex of the string itself against the string is as specific as possible. No edits to change one to the other resulting in a 0 or lowest score. 
+ 
+
+ As stated, this is simplistic. Anchors should increase specificity but they do not in this case. Very short stings don't work because the wild-card may be longer than the string. 
+
+ Edit 2 
+
+ I got anchor parsing to work pretty darn well using the undocumented sre_parse module in Python. Type &gt;&gt;&gt; help(sre_parse) if you want to read more... 
+
+ This is the goto worker module underlying the re module. It has been in every Python distribution since 2001 including all the P3k versions. It may go away, but I don't think it is likely... 
+
+ Here is the revised listing: 
+
+ import re
+import sre_parse
+
+def ld(a,b):
+ "Calculates the Levenshtein distance between a and b."
+ n, m = len(a), len(b)
+ if n &gt; m:
+  # Make sure n &lt;= m, to use O(min(n,m)) space
+  a,b = b,a
+  n,m = m,n
+
+ current = range(n+1)
+ for i in range(1,m+1):
+  previous, current = current, [i]+[0]*n
+  for j in range(1,n+1):
+   add, delete = previous[j]+1, current[j-1]+1
+   change = previous[j-1]
+   if a[j-1] != b[i-1]:
+    change = change + 1
+   current[j] = min(add, delete, change)  
+ return current[n]
+
+s='Mary had a little lamb' 
+d={}
+regs=[r'.*', r'Mary', r'lamb', r'little lamb', r'.*little lamb',r'\b\w+mb',
+  r'Mary.*little lamb',r'.*[lL]ittle [Ll]amb',r'\blittle\b',s,r'little',
+  r'^.*lamb',r'.*.*.*b',r'.*?.*',r'.*\b[lL]ittle\b \b[Ll]amb',
+  r'.*\blittle\b \blamb$','^'+s+'$']
+
+for reg in regs:
+ m=re.search(reg,s)
+ if m:
+  ld1=ld(reg,m.group(0))
+  ld2=ld(m.group(0),s)
+  score=max(ld1,ld2)
+  for t, v in sre_parse.parse(reg):
+   if t=='at':  # anchor...
+    if v=='at_beginning' or 'at_end':
+     score-=1 # ^ or $, adj 1 edit
+
+    if v=='at_boundary': # all other anchors are 2 char
+     score-=2
+
+  d[reg]=score
+ else:
+  print "'%s' does not match '%s'" % (reg, s) 
+
+print
+print " ===== %s ===== === %s ===" % ('RegEx'.center(15),'Score'.center(10))
+
+for key, value in sorted(d.iteritems(), key=lambda (k,v): (v,k)):
+ print " %27s  %5s" % (key, value) 
+ 
+
+ And soted RegEx's: 
+
+  =====  RegEx  ===== === Score ===
+  Mary had a little lamb   0
+  ^Mary had a little lamb$   0
+   .*\blittle\b \blamb$   6
+    Mary.*little lamb   7
+  .*\b[lL]ittle\b \b[Ll]amb   10
+     \blittle\b   10
+     .*little lamb   11
+     little lamb   11
+   .*[lL]ittle [Ll]amb   15
+      \b\w+mb   15
+      little   16
+      ^.*lamb   17
+       Mary   18
+       lamb   18
+      .*.*.*b   21
+       .*   22
+       .*?.*   22
+ 
+ #1 
+ Is it possible to match 2 regular expressions in Python? 
+ 
+
+ That certainly is possible. Use parenthetical match groups joined by | for alteration. If you arrange the parenthetical match groups by most specific regex to least specific, the rank in the returned tuple from m.groups() will show how specific your match is. You can also use named groups to name how specific your match is, such as s10 for very specific and s0 for a not so specific match. 
+
+ &gt;&gt;&gt; s1='google.com/maps2text'
+&gt;&gt;&gt; s2='I forgot my goggles at the house'
+&gt;&gt;&gt; s3='blah blah blah'
+&gt;&gt;&gt; m1=re.match(r'(^google\.com\/maps\dtext$)|(.*go[a-z]+)',s1)
+&gt;&gt;&gt; m2=re.match(r'(^google\.com\/maps\dtext$)|(.*go[a-z]+)',s2)
+&gt;&gt;&gt; m1.groups()
+('google.com/maps2text', None)
+&gt;&gt;&gt; m2.groups()
+(None, 'I forgot my goggles')
+&gt;&gt;&gt; patt=re.compile(r'(?P&lt;s10&gt;^google\.com\/maps\dtext$)|
+... (?P&lt;s5&gt;.*go[a-z]+)|(?P&lt;s0&gt;[a-z]+)')
+&gt;&gt;&gt; m3=patt.match(s3)
+&gt;&gt;&gt; m3.groups()
+(None, None, 'blah')
+&gt;&gt;&gt; m3.groupdict()
+{'s10': None, 's0': 'blah', 's5': None}
+ 
+
+ If you do not know ahead of time which regex is more specific, this is a much harder problem to solve. You want to have a look at this paper covering security of regex matches against file system names. 
+ #2 It depends on what kind of regular expressions you have; as @carrot-top suggests, if you actually aren't dealing with "regular expressions" in the CS sense, and instead have crazy extensions, then you are definitely out of luck. 
+
+ However, if you do have traditional regular expressions, you might make a bit more progress. First, we could define what "more specific" means. Say R is a regular expression, and L(R) is the language generated by R. Then we might say R1 is more specific than R2 if L(R1) is a (strict) subset of L(R2) (L(R1) &lt; L(R2)). That only gets us so far: in many cases, L(R1) is neither a subset nor a superset of L(R2), and so we might imagine that the two are somehow incomparable. An example, trying to match "mary had a little lamb", we might find two matching expressions: .*mary and lamb.* . 
+
+ One non-ambiguous solution is to define specificity via implementation . For instance, convert your regular expression in a deterministic (implementation-defined) way to a DFA and simply count states. Unfortunately, this might be relatively opaque to a user. 
+
+ Indeed, you seem to have an intuitive notion of how you want two regular expressions to compare, specificity-wise. Why not simple write down a definition of specificity, based on the syntax of regular expressions, that matches your intuition reasonably well? 
+
+ Totally arbitrary rules follow: 
+
+ 
+ Characters = 1 . 
+ Character ranges of n characters = n (and let's say \b = 5 , because I'm not sure how you might choose to write it out long-hand). 
+ Anchors are 5 each. 
+ * divides its argument by 2 . 
+ + divides its argument by 2 , then adds 1 . 
+ . = -10 . 
+ 
+
+ Anyway, just food for thought, as the other answers do a good job of outlining some of the issues you're facing; hope it helps. 
+ #3 I don't think it's possible. 
+
+ An alternative would be to try to calculate the number of strings of length n that the regular expression also matches. A regular expression that matches 1,000,000,000 strings of length 15 characters is less specific than one that matches only 10 strings of length 15 characters. 
+
+ Of course, calculating the number of possible matches is not trivial unless the regular expressions are simple. 
+ #4 Option 1: 
+
+ Since users are supplying the regexes, perhaps ask them to also submit some test strings which they think are illustrative of their regex's specificity. (i.e. that show their regex is more specific than a competitor's regex.) Collect all the user's submitted test strings, and then test all the regexes against the complete set of test strings. 
+
+ To design a good regex, the author must have put thought into what strings match and don't match their regex, so it should be easy for them to supply good test strings. 
+
+ 
+
+ Option 2: 
+
+ You might try a Monte Carlo approach: Starting with the string that both regexes match, write a generator which generates mutations of that string (permute characters, add/remove characters, etc.) If both regexes match or don't match the same way for each mutation, then the regexes " probably tie ". If one matches a mutations that the other doesn't, and vice versa, then they " absolutely tie ". 
+
+ But if one matches a strict superset of mutations then it is " probably less specific " than the other. 
+
+ The verdict after a large number of mutations may not always be correct, but may be reasonable. 
+
+ 
+
+ Option 3: 
+
+ Use ipermute or pyParsing's invert to generate strings which match each regex. This will only work on a regexes that use a limited subset of regex syntax. 
+ #5 I think you could do it by looking the result of matching with the longest result 
+
+ &gt;&gt;&gt; m = re.match(r'google\.com\/maps','google.com/maps/hello')
+&gt;&gt;&gt; len(m.group(0))
+15
+
+&gt;&gt;&gt; m = re.match(r'google\.com\/maps2','google.com/maps/hello')
+&gt;&gt;&gt; print (m)
+None
+
+&gt;&gt;&gt; m = re.match(r'google\.com\/maps','google.com/maps2/hello')
+&gt;&gt;&gt; len(m.group(0))
+15
+
+&gt;&gt;&gt; m = re.match(r'google\.com\/maps2','google.com/maps2/hello')
+&gt;&gt;&gt; len(m.group(0))
+16
+ 
+ #6 re.match('google\.com\/maps', 'google\.com\/maps2', re.IGNORECASE)
+ 
+
+ The second item to re.match() above is a string -- that's why it's not working: the regex says to match a period after google, but instead it finds a backslash. What you need to do is double up the backslashes in the regex that's being used as a regex: 
+
+ def compare_regexes(regex1, regex2):
+ """returns regex2 if regex1 is 'smaller' than regex2
+ returns regex1 if they are the same
+ returns regex1 if regex1 is 'bigger' than regex2
+ otherwise returns None"""
+ regex1_mod = regex1.replace('\\', '\\\\')
+ regex2_mod = regex2.replace('\\', '\\\\')
+ if regex1 == regex2:
+  return regex1
+ if re.match(regex1_mod, regex2):
+  return regex2
+ if re.match(regex2_mod, regex1):
+  return regex1
+ 
+
+ You can change the returns to whatever suits your needs best. Oh, and make sure you are using raw strings with re. r'like this, for example' 
+ #7 I realize that this is a non-solution, but as there is no unambiguous way to tell which is the "most specific match", certainly when it depends on what your users "meant", the easiest thing to do would be to ask them to provide their own priority. For example just by putting the regexes in the right order. Then you can simply take the first one that matches. If you expect the users to be comfortable with regular expressions anyway, this is maybe not too much to ask?

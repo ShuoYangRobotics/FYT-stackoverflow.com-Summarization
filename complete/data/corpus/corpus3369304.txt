@@ -1,0 +1,185 @@
+Question (ID-3369304): Why = I am using the following code to do the test and it seems like &lt; is slower that >=., does anyone know why? 
+
+ import timeit
+s = """
+ x=5
+ if x&lt;0: pass
+"""
+ t = timeit.Timer(stmt=s)
+ print "%.2f usec/pass" % (1000000 * t.timeit(number=100000)/100000)
+#0.21 usec/pass
+z = """
+ x=5
+ if x&gt;=0: pass
+"""
+t2 = timeit.Timer(stmt=z)
+print "%.2f usec/pass" % (1000000 * t2.timeit(number=100000)/100000)
+#0.18 usec/pass
+ 
+ Answers (Total-7): #0 In Python 3.1.2, sometime &lt; is faster than >=. I try to read it in disassembler, 
+
+ import dis
+def f1():
+ x=5
+ if x &lt; 0: pass
+
+def f2():
+ x = 5
+ if x &gt;=0: pass
+
+&gt;&gt;&gt; dis.dis(f1)
+ 2   0 LOAD_CONST    1 (5) 
+    3 STORE_FAST    0 (x) 
+
+ 3   6 LOAD_FAST    0 (x) 
+    9 LOAD_CONST    2 (0) 
+    12 COMPARE_OP    0 (&lt;) 
+    15 POP_JUMP_IF_FALSE  21 
+    18 JUMP_FORWARD    0 (to 21) 
+  &gt;&gt; 21 LOAD_CONST    0 (None) 
+    24 RETURN_VALUE   
+&gt;&gt;&gt; dis.dis(f2)
+ 2   0 LOAD_CONST    1 (5) 
+    3 STORE_FAST    0 (x) 
+
+ 3   6 LOAD_FAST    0 (x) 
+    9 LOAD_CONST    2 (0) 
+    12 COMPARE_OP    5 (&gt;=) 
+    15 POP_JUMP_IF_FALSE  21 
+    18 JUMP_FORWARD    0 (to 21) 
+  &gt;&gt; 21 LOAD_CONST    0 (None) 
+    24 RETURN_VALUE   
+ 
+
+ Code is almost identical, but f1 is always run line 15 and jump to 21, f2 is always run 15 -> 18 -> 21, so that performance should be affected by true/false in if statement rather than &lt; or >= problem. 
+ #1 The COMPARE_OP opcode contains an optimisation for the case where both operands are integers compatible with C and in that case it just does the comparison inline with a switch statement on the type of comparison: 
+
+ if (PyInt_CheckExact(w) &amp;&amp; PyInt_CheckExact(v)) {
+  /* INLINE: cmp(int, int) */
+  register long a, b;
+  register int res;
+  a = PyInt_AS_LONG(v);
+  b = PyInt_AS_LONG(w);
+  switch (oparg) {
+  case PyCmp_LT: res = a &lt; b; break;
+  case PyCmp_LE: res = a &lt;= b; break;
+  case PyCmp_EQ: res = a == b; break;
+  case PyCmp_NE: res = a != b; break;
+  case PyCmp_GT: res = a &gt; b; break;
+  case PyCmp_GE: res = a &gt;= b; break;
+  case PyCmp_IS: res = v == w; break;
+  case PyCmp_IS_NOT: res = v != w; break;
+  default: goto slow_compare;
+  }
+  x = res ? Py_True : Py_False;
+  Py_INCREF(x);
+}
+ 
+
+ So the only variations you can have in the comparison are the route through the switch statement and whether the result is True or False. My guess would be that you are just seeing variations due to the CPU's execution path (and maybe branch prediction), so the effect you are seeing could just as easily disappear or be the other way round in other versions of Python. 
+ #2 Your first test evaluates to true, the second to false. Perhaps there's marginally different processing as a result. 
+ #3 Interesting! the result is more emphasised if you simplify the expression 
+
+ using IPython I see that x&lt;=0 takes 150ns and x&lt;0 takes 320ns - over twice as long 
+
+ other comparisons x&gt;0 and x&gt;=0 seem to take around 300ns too 
+
+ even over 1000000 loops the results fluctuate quite a lot though 
+ #4 I've just tried it in Python 3.1.2 - no difference there. 
+
+ EDIT: After many tries with a higher number of repeats, I'm seeing wildly varying values by a factor of 3 for both versions: 
+
+ &gt;&gt;&gt; import timeit
+&gt;&gt;&gt; s = """x=5
+... if x&lt;0: pass"""
+&gt;&gt;&gt; t = timeit.Timer(stmt=s)
+&gt;&gt;&gt; print ("%.2f usec/pass" % (1000000 * t.timeit(number=1000000)/100000))
+1.48 usec/pass
+&gt;&gt;&gt;
+&gt;&gt;&gt; z = """x=5
+... if x&gt;=0: pass"""
+&gt;&gt;&gt; t2 = timeit.Timer(stmt=z)
+&gt;&gt;&gt; print ("%.2f usec/pass" % (1000000 * t.timeit(number=1000000)/100000))
+0.59 usec/pass
+&gt;&gt;&gt;
+&gt;&gt;&gt; import timeit
+&gt;&gt;&gt; s = """x=5
+... if x&lt;0: pass"""
+&gt;&gt;&gt; t = timeit.Timer(stmt=s)
+&gt;&gt;&gt; print ("%.2f usec/pass" % (1000000 * t.timeit(number=1000000)/100000))
+0.57 usec/pass
+&gt;&gt;&gt;
+&gt;&gt;&gt; z = """x=5
+... if x&gt;=0: pass"""
+&gt;&gt;&gt; t2 = timeit.Timer(stmt=z)
+&gt;&gt;&gt; print ("%.2f usec/pass" % (1000000 * t.timeit(number=1000000)/100000))
+1.47 usec/pass
+ 
+
+ So I guess that scheduling conflicts with other processes are the main variable here. 
+ #5 There appears to be some inherent overhead in 'timeit' for certain activations of it (unexpectedly enough). 
+
+ Try - 
+
+ import timeit
+
+Times = 30000000
+
+s = """
+ x=5
+ if x&gt;=0: pass
+"""
+
+t1 = timeit.Timer( stmt=s )
+t2 = timeit.Timer( stmt=s )
+t3 = timeit.Timer( stmt=s )
+
+print t1.timeit( number=Times )
+print t2.timeit( number=Times )
+print t3.timeit( number=Times )
+print t1.timeit( number=Times )
+print t2.timeit( number=Times )
+print t3.timeit( number=Times )
+print t1.timeit( number=Times )
+print t2.timeit( number=Times )
+print t3.timeit( number=Times )
+print t1.timeit( number=Times )
+print t2.timeit( number=Times )
+print t3.timeit( number=Times )
+ 
+
+ On my machine the output is (consistently, and regardless of how many loops I try - so it probably doesn't just happen to coincide with something else happening on the machine) - 
+
+ 1.96510925271
+1.84014169399
+1.84004224001
+1.97851123537
+1.86845451028
+1.83624929984
+1.94599509155
+1.85690220405
+1.8338135154
+1.98382475985
+1.86861430713
+1.86006657271
+ 
+
+ 't1' always takes longer.
+But if you try to reorder the calls or object creation, things behave differently (and not in a pattern I could easily explain). 
+
+ This isn't an answer to your question, just an observation that measuring in this way may have inherent inaccuracies. 
+ #6 This was a rather intriguing question. I removed the if cond: pass by using v=cond instead, but it did not eliminate the difference entirely. I am still not certain of the answer, but I found one plausible reason: 
+
+ switch (op) {
+ case Py_LT: c = c &lt; 0; break;
+ case Py_LE: c = c &lt;= 0; break;
+ case Py_EQ: c = c == 0; break;
+ case Py_NE: c = c != 0; break;
+ case Py_GT: c = c &gt; 0; break;
+ case Py_GE: c = c &gt;= 0; break;
+}
+ 
+
+ This is from Objects/object.c funcion convert_3way_to_object. Note that >= is the last branch; that means it, alone, needs no exit jump. That break statement is eliminated. It matches up with the 0 and 5 in shiki's disassembly. Being an unconditional break, it may be handled by branch prediction, but it may also result in less code to load. 
+
+ At this level, the difference is naturally going to be highly machine specific. My measurements aren't very thorough, but this was the one point at C level I saw a bias between the operators. I probably got a larger bias from CPU speed scaling.

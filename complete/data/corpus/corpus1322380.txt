@@ -1,0 +1,279 @@
+Question (ID-1322380): gotchas where Numpy differs from straight python? Folks, 
+
+ is there a collection of gotchas where Numpy differs from python,
+points that have puzzled and cost time ? 
+
+ 
+ "The horror of that moment I shall
+ never never forget !" 
+ "You will, though," the Queen said, "if you don't
+ make a memorandum of it." 
+ 
+
+ For example, NaNs are always trouble, anywhere.
+If you can explain this without running it, give yourself a point -- 
+
+ from numpy import array, NaN, isnan
+
+pynan = float("nan")
+print pynan is pynan, pynan is NaN, NaN is NaN
+a = (0, pynan)
+print a, a[1] is pynan, any([aa is pynan for aa in a])
+
+a = array(( 0, NaN ))
+print a, a[1] is NaN, isnan( a[1] )
+ 
+
+ (I'm not knocking numpy, lots of good work there, just think a FAQ or Wiki of gotchas would be useful.) 
+
+ Edit: I was hoping to collect half a dozen gotchas (surprises for people learning Numpy). 
+Then, if there are common gotchas or, better, common explanations,
+we could talk about adding them to a community Wiki (where ?)
+It doesn't look like we have enough so far. 
+ Answers (Total-11): #0 NaN is not a singleton like None , so you can't really use the is check on it. What makes it a bit tricky is that NaN == NaN is False as IEEE-754 requires. That's why you need to use the numpy.isnan() function to check if a float is not a number. Or the standard library math.isnan() if you're using Python 2.6+. 
+ #1 I think this one is funny: 
+
+ &gt;&gt;&gt; import numpy as n
+&gt;&gt;&gt; a = n.array([[1,2],[3,4]])
+&gt;&gt;&gt; a[1], a[0] = a[0], a[1]
+&gt;&gt;&gt; a
+array([[1, 2],
+  [1, 2]])
+ 
+
+ For Python lists on the other hand this works as intended: 
+
+ &gt;&gt;&gt; b = [[1,2],[3,4]]
+&gt;&gt;&gt; b[1], b[0] = b[0], b[1]
+&gt;&gt;&gt; b
+[[3, 4], [1, 2]]
+ 
+
+ Funny side note: numpy itself had a bug in the shuffle function, because it used that notation :-) (see here ). 
+
+ The reason is that in the first case we are dealing with views of the array, so the values are overwritten in-place. 
+ #2 The biggest gotcha for me was that almost every standard operator is overloaded to distribute across the array. 
+
+ Define a list and an array 
+
+ &gt;&gt;&gt; l = range(10)
+&gt;&gt;&gt; l
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+&gt;&gt;&gt; import numpy
+&gt;&gt;&gt; a = numpy.array(l)
+&gt;&gt;&gt; a
+array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+ 
+
+ Multiplication duplicates the python list, but distributes over the numpy array 
+
+ &gt;&gt;&gt; l * 2
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+&gt;&gt;&gt; a * 2
+array([ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18])
+ 
+
+ Addition and division are not defined on python lists 
+
+ &gt;&gt;&gt; l + 2
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: can only concatenate list (not "int") to list
+&gt;&gt;&gt; a + 2
+array([ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+&gt;&gt;&gt; l / 2.0
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: unsupported operand type(s) for /: 'list' and 'float'
+&gt;&gt;&gt; a / 2.0
+array([ 0. , 0.5, 1. , 1.5, 2. , 2.5, 3. , 3.5, 4. , 4.5])
+ 
+
+ Numpy overloads to treat lists like arrays sometimes 
+
+ &gt;&gt;&gt; a + a
+array([ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18])
+&gt;&gt;&gt; a + l
+array([ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18])
+ 
+ #3 Because __eq__ does not return a bool, using numpy arrays in any kind of containers prevents equality testing without a container-specific work around. 
+
+ Example: 
+
+ &gt;&gt;&gt; import numpy
+&gt;&gt;&gt; a = numpy.array(range(3))
+&gt;&gt;&gt; b = numpy.array(range(3))
+&gt;&gt;&gt; a == b
+array([ True, True, True], dtype=bool)
+&gt;&gt;&gt; x = (a, 'banana')
+&gt;&gt;&gt; y = (b, 'banana')
+&gt;&gt;&gt; x == y
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+ 
+
+ This is a horrible problem. For example, you cannot write unittests for containers which use TestCase.assertEqual() and must instead write custom comparison functions. Suppose we write a work-around function special_eq_for_numpy_and_tuples . Now we can do this in a unittest: 
+
+ x = (array1, 'deserialized')
+y = (array2, 'deserialized')
+self.failUnless( special_eq_for_numpy_and_tuples(x, y) )
+ 
+
+ Now we must do this for every container type we might use to store numpy arrays. Furthermore, __eq__ might return a bool rather than an array of bools: 
+
+ &gt;&gt;&gt; a = numpy.array(range(3))
+&gt;&gt;&gt; b = numpy.array(range(5))
+&gt;&gt;&gt; a == b
+False
+ 
+
+ Now each of our container-specific equality comparison functions must also handle that special case. 
+
+ Maybe we can patch over this wart with a subclass? 
+
+ &gt;&gt;&gt; class SaneEqualityArray (numpy.ndarray):
+... def __eq__(self, other):
+...  return isinstance(other, SaneEqualityArray) and self.shape == other.shape and (numpy.ndarray.__eq__(self, other)).all()
+... 
+&gt;&gt;&gt; a = SaneEqualityArray( (2, 3) )
+&gt;&gt;&gt; a.fill(7)
+&gt;&gt;&gt; b = SaneEqualityArray( (2, 3) )
+&gt;&gt;&gt; b.fill(7)
+&gt;&gt;&gt; a == b
+True
+&gt;&gt;&gt; x = (a, 'banana')
+&gt;&gt;&gt; y = (b, 'banana')
+&gt;&gt;&gt; x == y
+True
+&gt;&gt;&gt; c = SaneEqualityArray( (7, 7) )
+&gt;&gt;&gt; c.fill(7)
+&gt;&gt;&gt; a == c
+False
+ 
+
+ That seems to do the right thing. The class should also explicitly export elementwise comparison, since that is often useful. 
+ #4 The truth value of a Numpy array differs from that of a python sequence type, where any non-empty sequence is true. 
+
+ &gt;&gt;&gt; import numpy as np
+&gt;&gt;&gt; l = [0,1,2,3]
+&gt;&gt;&gt; a = np.arange(4)
+&gt;&gt;&gt; if l: print "Im true"
+... 
+Im true
+&gt;&gt;&gt; if a: print "Im true"
+... 
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ValueError: The truth value of an array with more than one element is ambiguous. Use
+a.any() or a.all()
+&gt;&gt;&gt;
+ 
+
+ The numerical types are true when they are non-zero and as a collection of numbers, the Nupy array inherits this definition. But with a collection of numbers, truth could reasonably mean "all elements are non-zero" or "at least one element is non-zero". Numpy refuses to guess which definition is meant and raises the above exception. Using the .any() and .all() methods allows one to specify which meaning of true is meant. 
+
+ &gt;&gt;&gt; if a.any(): print "Im true"
+... 
+Im true
+&gt;&gt;&gt; if a.all(): print "Im true"
+... 
+&gt;&gt;&gt;
+ 
+ #5 print pynan is pynan, pynan is NaN, NaN is NaN
+ 
+
+ This tests identity, that is if it is the same object. The result should therefore obviously be True, False, True, because when you do float(whatever) you are creating a new float object. 
+
+ a = (0, pynan)
+print a, a[1] is pynan, any([aa is pynan for aa in a])
+ 
+
+ I don't know what it is that you find surprising with this. 
+
+ a = array(( 0, NaN ))
+print a, a[1] is NaN, isnan( a[1] )
+ 
+
+ This I did have to run. :-) When you stick NaN into an array it's converted into a numpy.float64 object, which is why a[1] is NaN fails. 
+
+ This all seems fairly unsurprising to me. But then I don't really know anything much about NumPy. :-) 
+ #6 Slicing creates views, not copies. 
+
+ &gt;&gt;&gt; l = [1, 2, 3, 4]
+&gt;&gt;&gt; s = l[2:3]
+&gt;&gt;&gt; s[0] = 5
+&gt;&gt;&gt; l
+[1, 2, 3, 4]
+
+&gt;&gt;&gt; a = array([1, 2, 3, 4])
+&gt;&gt;&gt; s = a[2:3]
+&gt;&gt;&gt; s[0] = 5
+&gt;&gt;&gt; a
+array([1, 2, 5, 4])
+ 
+ #7 from Neil Martinsen-Burrell in numpy-discussion 7 Sept -- 
+
+ 
+ The ndarray type available in Numpy is
+ not conceptually an extension of 
+ Python's iterables. If you'd like to
+ help other Numpy users with this 
+ issue, you can edit the documentation
+ in the online documentation editor at
+ numpy-docs 
+ 
+ #8 I found the fact that multiplying up lists of elements just creates view of elements caught me out. 
+
+ &gt;&gt;&gt; a=[0]*5
+&gt;&gt;&gt;a
+[0,0,0,0,0]
+&gt;&gt;&gt;a[2] = 1
+&gt;&gt;&gt;a
+[0,0,1,0,0]
+&gt;&gt;&gt;b = [np.ones(3)]*5
+&gt;&gt;&gt;b
+[array([ 1., 1., 1.]), array([ 1., 1., 1.]), array([ 1., 1., 1.]), array([ 1., 1., 1.]), array([ 1., 1., 1.])]
+&gt;&gt;&gt;b[2][1] = 2
+&gt;&gt;&gt;b
+[array([ 1., 2., 1.]), array([ 1., 2., 1.]), array([ 1., 2., 1.]), array([ 1., 2., 1.]), array([ 1., 2., 1.])]
+ 
+
+ So if you create a list of elements like this and intend to do different operations on them you are scuppered ... 
+
+ A straightforward solution is to iteratively create each of the arrays (using a 'for loop' or list comprehension) or use a higher dimensional array (where e.g. each of these 1D arrays is a row in your 2D array, which is generally faster). 
+ #9 (Related, but a NumPy vs. SciPy gotcha, rather than NumPy vs Python) 
+
+ 
+
+ Slicing beyond an array's real size works differently: 
+
+ &gt;&gt;&gt; import numpy, scipy.sparse
+
+&gt;&gt;&gt; m = numpy.random.rand(2, 5) # create a 2x5 dense matrix
+&gt;&gt;&gt; print m[:3, :] # works like list slicing in Python: clips to real size
+[[ 0.12245393 0.20642799 0.98128601 0.06102106 0.74091038]
+[ 0.0527411 0.9131837 0.6475907 0.27900378 0.22396443]]
+
+&gt;&gt;&gt; s = scipy.sparse.lil_matrix(m) # same for csr_matrix and other sparse formats
+&gt;&gt;&gt; print s[:3, :] # doesn't clip!
+IndexError: row index out of bounds
+ 
+
+ So when slicing scipy.sparse arrays, you must make manually sure your slice bounds are within range. This differs from how both NumPy and plain Python work. 
+ #10 Not such a big gotcha: With boolean slicing, I sometimes wish I could do 
+
+ 
+ x[ 3&lt;= y &lt; 7 ] 
+ 
+
+ like the python double comparison. Instead, I have to write 
+
+ 
+ x[ np.logical_and( 3&lt;=y, y&lt;7) ] 
+ 
+
+ (Unless you know something better?) 
+
+ Also, np.logical_and and np.logical_or only take two arguments each, I would like them to take a variable number, or a list, so I could feed in more than just two logical clauses. 
+
+ (numpy 1.3, maybe this has all changed in later versions.)

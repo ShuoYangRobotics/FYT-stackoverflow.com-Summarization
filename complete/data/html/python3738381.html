@@ -1,0 +1,209 @@
+<h3>Question (ID-3738381):</h3><h2>What do I do when I need a self referential dictionary?</h2><p>I'm new to Python, and am sort of surprised I cannot do this.  </p>
+
+<pre><code>dictionary = {
+    'a' : '123',
+    'b' : dictionary['a'] + '456'
+}
+</code></pre>
+
+<p>I'm wondering what the Pythonic way to correctly do this in my script, because I feel like I'm not the only one that has tried to do this.</p>
+
+<p><strong>EDIT:</strong> Enough people were wondering what I'm doing with this, so here are more details for my use cases.  Lets say I want to keep dictionary objects to hold file system paths.  The paths are relative to other values in the dictionary.  For example, this is what one of my dictionaries may look like.</p>
+
+<pre><code>dictionary = {
+    'user': 'gnucom',
+    'home': '/home/' + dictionary['user']
+}
+</code></pre>
+
+<p>It is important that at any point in time I may change <code>dictionary['user']</code> and have all of the dictionaries values reflect the change.  Again, this is an <strong>example</strong> of what I'm using it for, so I hope that it conveys my goal.</p>
+
+<p>From my own research I think I will need to implement a class to do this.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>No fear of creating new classes -
+You can take advantage of Python's string formating capabilities
+and simply do:</p>
+
+<pre><code>class MyDict(dict):
+   def __getitem__(self, item):
+       return dict.__getitem__(self, item) % self
+
+dictionary = MyDict({
+
+    'user' : 'gnucom',
+    'home' : '/home/%(user)s',
+    'bin' : '%(home)s/bin' 
+})
+
+
+print dictionary["home"]
+print dictionary["bin"]
+</code></pre>
+<br /><b>#1</b><br /><pre><code>&gt;&gt;&gt; dictionary = {
+... 'a':'123'
+... }
+&gt;&gt;&gt; dictionary['b'] = dictionary['a'] + '456'
+&gt;&gt;&gt; dictionary
+{'a': '123', 'b': '123456'}
+</code></pre>
+
+<p>It works fine but when you're trying to use <code>dictionary</code> it hasn't been defined yet (because it has to evaluate that literal dictionary first).</p>
+
+<p>But be careful because this assigns to the key of <code>'b'</code> the value referenced by the key of <code>'a'</code> <em>at the time of assignment</em> and is not going to do the lookup every time.  If that is what you are looking for, it's possible but with more work.</p>
+<br /><b>#2</b><br /><p>This is an interesting problem. It seems like Greg has a <a href="http://stackoverflow.com/questions/3738381/what-do-i-do-when-i-need-a-self-referential-dictionary/3740202#3740202">good solution</a>. But that's no fun ;)</p>
+
+<p>jsbueno as a <a href="http://stackoverflow.com/questions/3738381/what-do-i-do-when-i-need-a-self-referential-dictionary/3740096#3740096">very elegant solution</a> but that only applies to strings (as you requested).</p>
+
+<p>The trick to a 'general' self referential dictionary is to use a surrogate object. It takes a few (understatement) lines of code to pull off, but the usage is about what you want:</p>
+
+<pre><code>S = SurrogateDict(AdditionSurrogateDictEntry)
+d = S.resolve({'user': 'gnucom',
+               'home': '/home/' + S['user'],
+               'config': [S['home'] + '/.emacs', S['home'] + '/.bashrc']})
+</code></pre>
+
+<p>The code to make that happen is not nearly so short. It lives in three classes:</p>
+
+<pre><code>import abc
+
+class SurrogateDictEntry(object):
+    __metaclass__ = abc.ABCMeta
+    def __init__(self, key):
+        """record the key on the real dictionary that this will resolve to a 
+           value for
+        """
+        self.key = key
+
+    def resolve(self, d):
+        """ return the actual value"""
+        if hasattr(self, 'op'):
+            # any operation done on self will store it's name in self.op. 
+            # if this is set, resolve it by calling the appropriate method 
+            # now that we can get self.value out of d
+            self.value = d[self.key]
+            return getattr(self, self.op + 'resolve__')()
+        else:
+            return d[self.key]
+
+    @staticmethod
+    def make_op(opname):
+        """A convience class. This will be the form of all op hooks for subclasses
+           The actual logic for the op is in __op__resolve__ (e.g. __add__resolve__)
+        """
+        def op(self, other):
+            self.stored_value = other
+            self.op = opname
+            return self
+        op.__name__ = opname
+        return op
+</code></pre>
+
+<p>Next, comes the concrete class. simple enough.</p>
+
+<pre><code>class AdditionSurrogateDictEntry(SurrogateDictEntry):
+
+    __add__ = SurrogateDictEntry.make_op('__add__')
+    __radd__ = SurrogateDictEntry.make_op('__radd__')
+
+    def __add__resolve__(self):
+        return self.value + self.stored_value 
+
+    def __radd__resolve__(self):
+        return self.stored_value + self.value
+</code></pre>
+
+<p>Here's the final class</p>
+
+<pre><code>class SurrogateDict(object):
+    def __init__(self, EntryClass):
+        self.EntryClass = EntryClass
+
+    def __getitem__(self, key):
+        """record the key and return""" 
+        return self.EntryClass(key)
+
+    @staticmethod
+    def resolve(d):
+        """I eat generators resolve self references"""
+        stack = [d]
+        while stack:
+            cur = stack.pop()
+            # This just tries to set it to an appropriate iterable
+            it = xrange(len(cur)) if not hasattr(cur, 'keys') else cur.keys()
+            for key in it:
+                # sorry for being a duche. Just register your class with
+                # SurrogateDictEntry and you can pass whatever.
+                while isinstance(cur[key], SurrogateDictEntry):
+                    cur[key] = cur[key].resolve(d)
+                # I'm just going to check for iter but you can add other
+                # checks here for items that we should loop over. 
+                if hasattr(cur[key], '__iter__'):
+                    stack.append(cur[key])
+        return d
+</code></pre>
+
+<p>In response to gnucoms's question about why I named the classes the way that I did. </p>
+
+<p>The word surrogate is generally associated with standing in for something else so it seemed appropriate because that's what the <code>SurrogateDict</code> class does: an instance replaces the 'self' references in a dictionary literal. That being said, (other than just being straight up stupid sometimes) naming is probably one of the hardest things for me about coding. If you (or anyone else) can suggest a better name, I'm all ears.</p>
+
+<p>I'll provide a brief explanation. Throughout <code>S</code> refers to an instance of SurrogateDict and <code>d</code> is the real dictionary.</p>
+
+<ol>
+<li><p>A reference <code>S[key]</code> triggers <code>S.__getitem__</code> and  <code>SurrogateDictEntry(key)</code> to be placed in the <code>d</code>.</p></li>
+<li><p>When <code>S[key] = SurrogateDictEntry(key)</code> is constructed, it stores <code>key</code>. This will be the <code>key</code> into <code>d</code> for the value that this entry of <code>SurrogateDictEntry</code> is acting as a surrogate for.</p></li>
+<li><p>After <code>S[key]</code> is returned, it is either entered into the <code>d</code>, or has some operation(s) performed on it. If an operation is performed on it, it triggers the relative <code>__op__</code> method which simple stores the value that the operation is performed on and the name of the operation and then returns itself. We can't actually resolve the operation because <code>d</code> hasn't been constructed yet.</p></li>
+<li><p>After <code>d</code> is constructed, it is passed to <code>S.resolve</code>. This method loops through <code>d</code>  finding any instances of <code>SurrogateDictEntry</code> and replacing them with the result of calling the <code>resolve</code> method on the instance.</p></li>
+<li><p>The <code>SurrogateDictEntry.resolve</code> method receives the now constructed <code>d</code> as an argument and can use the value of <code>key</code> that it stored at construction time to get the value that it is acting as a surrogate for. If an operation was performed on it after creation, the <code>op</code> attribute will have been set with the name of the operation that was performed. If the class has a <code>__op__</code> method, then it has a <code>__op__resolve__</code> method with the actual logic that would normally be in the <code>__op__</code> method. So now we have the logic (self.<strong>op__resolve</strong>) and all necessary values (self.value, self.stored_value) to finally get the real value of <code>d[key]</code>. So we return that which step 4 places in the dictionary.</p></li>
+<li><p>finally the <code>SurrogateDict.resolve</code> method returns <code>d</code> with all references resolved.</p></li>
+</ol>
+
+<p>That'a a rough sketch. If you have any more questions, feel free to ask.</p>
+<br /><b>#3</b><br /><p>What you're describing in your edit is how an INI config file works.  Python does have a built in library called <a href="http://docs.python.org/library/configparser.html" rel="nofollow">ConfigParser</a> which should work for what you're describing.</p>
+<br /><b>#4</b><br /><p>Nearest I came up without doing object:</p>
+
+<pre><code>dictionary = {
+    'user' : 'gnucom',
+    'home' : lambda:'/home/'+dictionary['user'] 
+}
+
+print dictionary['home']()
+dictionary['user']='tony'
+print dictionary['home']()
+</code></pre>
+<br /><b>#5</b><br /><p>Write a class, maybe something with properties:</p>
+
+<pre><code>class PathInfo(object):
+    def __init__(self, user):
+        self.user = user
+
+    @property
+    def home(self):
+        return '/home/' + self.user
+
+p = PathInfo('thc')
+print p.home # /home/thc 
+</code></pre>
+<br /><b>#6</b><br /><p>As sort of an extended version of <a href="http://stackoverflow.com/questions/3738381/what-do-i-do-when-i-need-a-self-referential-dictionary#answer-3739894">@Tony's answer</a>, you could build a dictionary subclass that calls its values if they are callables:</p>
+
+<pre><code>class CallingDict(dict):
+    """Returns the result rather than the value of referenced callables.
+
+    &gt;&gt;&gt; cd = CallingDict({1: "One", 2: "Two", 'fsh': "Fish",
+    ...                   "rhyme": lambda d: ' '.join((d[1], d['fsh'],
+    ...                                                d[2], d['fsh']))})
+    &gt;&gt;&gt; cd["rhyme"]
+    'One Fish Two Fish'
+    &gt;&gt;&gt; cd[1] = 'Red'
+    &gt;&gt;&gt; cd[2] = 'Blue'
+    &gt;&gt;&gt; cd["rhyme"]
+    'Red Fish Blue Fish'
+    """
+    def __getitem__(self, item):
+        it = super(CallingDict, self).__getitem__(item)
+        if callable(it):
+            return it(self)
+        else:
+            return it
+</code></pre>
+
+<p>Of course this would only be usable if you're not actually going to store callables as values.  If you need to be able to do that, you could wrap the lambda declaration in a function that adds some attribute to the resulting lambda, and check for it in <code>CallingDict.__getitem__</code>, but at that point it's getting complex, and long-winded, enough that it might just be easier to use a class for your data in the first place.</p>
+<br />

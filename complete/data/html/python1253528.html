@@ -1,0 +1,85 @@
+<h3>Question (ID-1253528):</h3><h2>Is there an easy way to pickle a python function (or otherwise serialize its code)?</h2><p>I'm trying to transfer a transfer a function across a network connection (using asyncore). Is there an easy way to serialize a python function (one that, in this case at least, will have no side affects) for transfer like this?</p>
+
+<p>I would ideally like to have a pair of functions similar to these:</p>
+
+<pre><code>def transmit(func):
+    obj = pickle.dumps(func)
+    [send obj across the network]
+
+def receive():
+    [receive obj from the network]
+    func = pickle.loads(s)
+    func()
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You could serialise the function bytecode and then reconstruct it on the caller.  The <a href="http://www.python.org/doc/2.1.1/lib/module-marshal.html" rel="nofollow">marshal</a> module can be used to serialise code objects, which can then be reassembled into a function.  ie:</p>
+
+<pre><code>import marshal
+def foo(x): return x*x
+code_string = marshal.dumps(foo.func_code)
+</code></pre>
+
+<p>Then in the remote process (after transferring code_string):</p>
+
+<pre><code>import marshal, types
+
+code = marshal.loads(code_string)
+func = types.FunctionType(code, globals(), "some_func_name")
+
+func(10)  # gives 100
+</code></pre>
+
+<p>A few caveats:</p>
+
+<ul>
+<li><p>marshal's format (any python bytecode for that matter) may not be compatable between major python versions.</p></li>
+<li><p>Will only work for cpython implementation.</p></li>
+<li><p>If the function references globals (including imported modules, other functions etc) that you need to pick up, you'll need to serialise these too, or recreate them on the remote side.  My example just gives it the remote process's global namespace.</p></li>
+<li><p>You'll probably need to do a bit more to support more complex cases, like closures or generator functions.</p></li>
+</ul>
+<br /><b>#1</b><br /><p>The most simple way is probably <code>inspect.getsource(object)</code> (see the <a href="http://docs.python.org/library/inspect.html#retrieving-source-code" rel="nofollow">inspect module</a>) which returns a String with the source code for a function or a method.</p>
+<br /><b>#2</b><br /><p><a href="http://pyro.sourceforge.net/" rel="nofollow">Pyro</a> can <a href="http://pyro.sourceforge.net/manual/7-features.html#mobile" rel="nofollow">do this for you</a>.</p>
+<br /><b>#3</b><br /><p>It all depends on whether you generate the function at runtime or not:</p>
+
+<p>If you do - <code>inspect.getsource(object)</code> won't work for dynamically generated functions as it gets object's source from <code>.py</code> file, so only functions defined before execution can be retrieved as source.</p>
+
+<p>And if your functions are placed in files anyway, why not give receiver access to them and only pass around module and function names.</p>
+
+<p>The only solution for dynamically created functions that I can think of is to construct function as a string before transmission, transmit source, and then <code>eval()</code> it on the receiver side.</p>
+
+<p>Edit: the <code>marshal</code> solution looks also pretty smart, didn't know you can serialize something other thatn built-ins</p>
+<br /><b>#4</b><br /><p>The basic functions used for this module covers your query, plus you get the best compression over the wire; see the instructive source code:</p>
+
+<p>y_serial.py module :: warehouse Python objects with SQLite</p>
+
+<p>"Serialization + persistance :: in a few lines of code, compress and annotate Python objects into SQLite; then later retrieve them chronologically by keywords without any SQL. Most useful "standard" module for a database to store schema-less data."</p>
+
+<p><a href="http://yserial.sourceforge.net" rel="nofollow">http://yserial.sourceforge.net</a></p>
+<br /><b>#5</b><br /><p>It will work if you keep it simple.
+Read the section "<a href="http://docs.python.org/library/pickle.html?highlight=pickle#what-can-be-pickled-and-unpickled" rel="nofollow">What can be pickled and unpickled?</a>" for details.</p>
+
+<pre><code>&gt;&gt;&gt; import pickle
+&gt;&gt;&gt;
+&gt;&gt;&gt; def hi():
+...     print 'hello'
+...
+&gt;&gt;&gt;
+&gt;&gt;&gt; hi()
+hello
+&gt;&gt;&gt; p_func = pickle.dumps(hi)
+&gt;&gt;&gt;
+&gt;&gt;&gt; loaded_func = pickle.loads(p_func)
+&gt;&gt;&gt;
+&gt;&gt;&gt; loaded_func()
+hello
+</code></pre>
+
+<p>As Aaron Digulla pointed at, you may just want to consider sending the source file of the function.</p>
+
+<p>Something like:</p>
+
+<pre><code>transmit(&lt;source file&gt;, &lt;function name in source file&gt;)
+trasmit('./my_functions.py', 'hi')
+</code></pre>
+
+<p>As your probably aware you don't want to do this out of a completely controlled environment.</p>
+<br />

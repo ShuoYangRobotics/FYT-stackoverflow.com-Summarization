@@ -1,0 +1,437 @@
+<h3>Question (ID-1595492):</h3><h2>blocks - send input to python subprocess pipeline</h2><p>I'm testing subprocesses pipelines with python. I'm aware that I can do what the programs below do in python directly, but that's not the point. I just want to test the pipeline so I know how to use it.</p>
+
+<p>My system is Linux Ubuntu 9.04 with default python 2.6.</p>
+
+<p>I started with this <a href="http://docs.python.org/library/subprocess.html#replacing-shell-pipeline" rel="nofollow">documentation example</a>.</p>
+
+<pre><code>from subprocess import Popen, PIPE
+p1 = Popen(["grep", "-v", "not"], stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+output = p2.communicate()[0]
+print output
+</code></pre>
+
+<p>That works, but since <code>p1</code>'s <code>stdin</code> is not being redirected, I have to type stuff in the terminal to feed the pipe. When I type <code>^D</code> closing stdin, I get the output I want.</p>
+
+<p>However, I want to send data to the pipe using a python string variable. First I tried writing on stdin:</p>
+
+<pre><code>p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+p1.stdin.write('test\n')
+output = p2.communicate()[0] # blocks forever here
+</code></pre>
+
+<p>Didn't work. I tried using <code>p2.stdout.read()</code> instead on last line, but it also blocks. I added <code>p1.stdin.flush()</code> and <code>p1.stdin.close()</code> but it didn't work either. I Then I moved to communicate:</p>
+
+<pre><code>p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+p1.communicate('test\n') # blocks forever here
+output = p2.communicate()[0]
+</code></pre>
+
+<p>So that's still not it.</p>
+
+<p>I noticed that running a single process (like <code>p1</code> above, removing <code>p2</code>) works perfectly. And passing a file handle to <code>p1</code> (<code>stdin=open(...)</code>) also works. So the problem is:</p>
+
+<p>Is it possible to pass data to a pipeline of 2 or more subprocesses in python, without blocking? Why not?</p>
+
+<p>I'm aware I could run a shell and run the pipeline in the shell, but that's not what I want.</p>
+
+<p><hr /></p>
+
+<p><strong>UPDATE 1</strong>: Following Aaron Digulla's hint below I'm now trying to use threads to make it work.</p>
+
+<p>First I've tried running p1.communicate on a thread.</p>
+
+<pre><code>p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+t = threading.Thread(target=p1.communicate, args=('some data\n',))
+t.start()
+output = p2.communicate()[0] # blocks forever here
+</code></pre>
+
+<p>Okay, didn't work. Tried other combinations like changing it to <code>.write()</code> and also <code>p2.read()</code>. Nothing. Now let's try the opposite approach:</p>
+
+<pre><code>def get_output(subp):
+    output = subp.communicate()[0] # blocks on thread
+    print 'GOT:', output
+
+p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+t = threading.Thread(target=get_output, args=(p2,)) 
+t.start()
+p1.communicate('data\n') # blocks here.
+t.join()
+</code></pre>
+
+<p>code ends up blocking somewhere. Either in the spawned thread, or in the main thread, or both. So it didn't work. If you know how to make it work it would make easier if you can provide working code. I'm trying here.</p>
+
+<p><hr /></p>
+
+<p><strong>UPDATE 2</strong></p>
+
+<p>Paul Du Bois answered below with some information, so I did more tests. 
+I've read entire <code>subprocess.py</code> module and got how it works. So I tried applying exactly that to code.</p>
+
+<p>I'm on linux, but since I was testing with threads, my first approach was to replicate the exact windows threading code seen on <code>subprocess.py</code>'s <code>communicate()</code> method, but for two processes instead of one. Here's the entire listing of what I tried:</p>
+
+<pre><code>import os
+from subprocess import Popen, PIPE
+import threading
+
+def get_output(fobj, buffer):
+    while True:
+        chunk = fobj.read() # BLOCKS HERE
+        if not chunk:
+            break
+        buffer.append(chunk)
+
+p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+
+b = [] # create a buffer
+t = threading.Thread(target=get_output, args=(p2.stdout, b))
+t.start() # start reading thread
+
+for x in xrange(100000):
+    p1.stdin.write('hello world\n') # write data
+    p1.stdin.flush()
+p1.stdin.close() # close input...
+t.join()
+</code></pre>
+
+<p>Well. It didn't work. Even after <code>p1.stdin.close()</code> was called, <code>p2.stdout.read()</code> still blocks.</p>
+
+<p>Then I tried the posix code on <code>subprocess.py</code>:</p>
+
+<pre><code>import os
+from subprocess import Popen, PIPE
+import select
+
+p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+
+numwrites = 100000
+to_read = [p2.stdout]
+to_write = [p1.stdin]
+b = [] # create buffer
+
+while to_read or to_write:
+    read_now, write_now, xlist = select.select(to_read, to_write, [])
+    if read_now:
+        data = os.read(p2.stdout.fileno(), 1024)
+        if not data:
+            p2.stdout.close()
+            to_read = []
+        else:
+            b.append(data)
+
+    if write_now:
+        if numwrites &gt; 0:
+            numwrites -= 1
+            p1.stdin.write('hello world!\n'); p1.stdin.flush()
+        else:
+            p1.stdin.close()
+            to_write = []
+
+print b
+</code></pre>
+
+<p>Also blocks on <code>select.select()</code>. By spreading <code>print</code>s around, I found out this:</p>
+
+<ul>
+<li>Reading is working. Code reads many times during execution.</li>
+<li>Writing is also working. Data is written to <code>p1.stdin</code>.</li>
+<li>At the end of <code>numwrites</code>, <code>p1.stdin.close()</code> is called.</li>
+<li>When <code>select()</code> starts blocking, only <code>to_read</code> has something, <code>p2.stdout</code>. <code>to_write</code> is already empty.</li>
+<li><code>os.read()</code> call always returns something, so <code>p2.stdout.close()</code> is never called.</li>
+</ul>
+
+<p><strong>Conclusion from both tests</strong>:  Closing the <code>stdin</code> of the first process on the pipeline (<code>grep</code> in the example) is not making it dump its buffered output to the next and die.</p>
+
+<p>No way to make it work?</p>
+
+<p>PS: I don't want to use a temporary file, I've already tested with files and I know it works. And I don't want to use windows.</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>I found out how to do it.</p>
+
+<p>It is not about threads, and not about select().</p>
+
+<p>When I run the first process (<code>grep</code>), it creates two low-level file descriptors, one for each pipe. Lets call those <code>a</code> and <code>b</code>.</p>
+
+<p>When I run the second process, <code>b</code> gets passed to <code>cut</code> <code>sdtin</code>. But there is a brain-dead default on <code>Popen</code> - <code>close_fds=False</code>. </p>
+
+<p>The effect of that is that <code>cut</code> also inherits <code>a</code>. So <code>grep</code> can't die even if I close <code>a</code>, because stdin is still open on <code>cut</code>'s process (<code>cut</code> ignores it).</p>
+
+<p>The following code now runs perfectly.</p>
+
+<pre><code>from subprocess import Popen, PIPE
+
+p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE, close_fds=True)
+p1.stdin.write('Hello World\n')
+p1.stdin.close()
+result = p2.stdout.read() 
+assert result == "Hello Worl\n"
+</code></pre>
+
+<p><strong><code>close_fds=True</code> SHOULD BE THE DEFAULT</strong> on unix systems. On windows it closes <strong>all</strong> fds, so it prevents piping.</p>
+
+<p>EDIT:</p>
+
+<p>PS: For people with a similar problem reading this answer: As pooryorick said in a comment, that also could block if data written to <code>p1.stdin</code> is bigger than the buffers. In that case you should chunk the data into smaller pieces, and use <code>select.select()</code> to know when to read/write. The code in the question should give a hint on how to implement that.</p>
+
+<p>EDIT2: Found another solution, with more help from pooryorick - instead of using <code>close_fds=True</code> and close <strong>ALL</strong> fds, one could close the <code>fd</code>s that belongs to the first process, when executing the second, and it will work. The closing must be done in the child so the <code>preexec_fn</code> function from Popen comes very handy to do just that. On executing p2 you can do:</p>
+
+<pre><code>p2 = Popen(cmd2, stdin=p1.stdout, stdout=PIPE, stderr=devnull, preexec_fn=p1.stdin.close)
+</code></pre>
+<br /><b>#1</b><br /><p>You must do this in several threads. Otherwise, you'll end up in a situation where you can't send data: child p1 won't read your input since p2 doesn't read p1's output because you don't read p2's output.</p>
+
+<p>So you need a background thread that reads what p2 writes out. That will allow p2 to continue after writing some data to the pipe, so it can read the next line of input from p1 which again allows p1 to process the data which you send to it.</p>
+
+<p>Alternatively, you can send the data to p1 with a background thread and read the output from p2 in the main thread. But either side must be a thread.</p>
+<br /><b>#2</b><br /><p>I think you may be examining the wrong problem.  Certainly as Aaron says if you try to be both a producer to the beginning of a pipeline, and a consumer of the end of the pipeline, it is easy to get into a deadlock situation.  This is the problem that communicate() solves.</p>
+
+<p>communicate() isn't exactly correct for you since stdin and stdout are on different subprocess objects; but if you take a look at the implementation in subprocess.py you'll see that it does exactly what Aaron suggested.</p>
+
+<p>Once you see that communicate both reads and writes, you'll see that in your second try communicate() competes with p2 for the output of p1:</p>
+
+<pre><code>p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+# ...
+p1.communicate('data\n')       # reads from p1.stdout, as does p2
+</code></pre>
+
+<p>I am running on win32, which definitely has different i/o and buffering characteristics, but this works for me:</p>
+
+<pre><code>p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+t = threading.Thread(target=get_output, args=(p2,)) 
+t.start()
+p1.stdin.write('hello world\n' * 100000)
+p1.stdin.close()
+t.join()
+</code></pre>
+
+<p>I tuned the input size to produce a deadlock when using a naive unthreaded p2.read()</p>
+
+<p>You might also try buffering into a file, eg</p>
+
+<pre><code>fd, _ = tempfile.mkstemp()
+os.write(fd, 'hello world\r\n' * 100000)
+os.lseek(fd, 0, os.SEEK_SET)
+p1 = Popen(["grep", "-v", "not"], stdin=fd, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+print p2.stdout.read()
+</code></pre>
+
+<p>That also works for me without deadlocks.</p>
+<br /><b>#3</b><br /><p>What about using a SpooledTemporaryFile ?  This bypasses (but perhaps doesn't solve) the issue:</p>
+
+<p><a href="http://docs.python.org/library/tempfile.html#tempfile.SpooledTemporaryFile" rel="nofollow">http://docs.python.org/library/tempfile.html#tempfile.SpooledTemporaryFile</a></p>
+
+<p>You can write to it like a file, but it's actually a memory block.</p>
+
+<p>Or am I totally misunderstanding...</p>
+<br /><b>#4</b><br /><p>There are three main tricks to making pipes work as expected</p>
+
+<ol>
+<li><p>Make sure each end of the pipe is used in a different thread/process
+(some of the examples near the top suffer from this problem).</p></li>
+<li><p>explicitly close the unused end of the pipe in each process</p></li>
+<li><p>deal with buffering by either disabling it (Python -u option), using
+pty's, or simply filling up the buffer with something that won't affect the
+data, ( maybe '\n', but whatever fits).</p></li>
+</ol>
+
+<p>The examples in the Python "pipeline" module (I'm the author) fit your scenario
+exactly, and make the low-level steps fairly clear.</p>
+
+<p><a href="http://pypi.python.org/pypi/pipeline/" rel="nofollow">http://pypi.python.org/pypi/pipeline/</a></p>
+
+<p>More recently, I used the subprocess module as part of a
+producer-processor-consumer-controller pattern:</p>
+
+<p><a href="http://www.darkarchive.org/w/Pub/PythonInteract" rel="nofollow">http://www.darkarchive.org/w/Pub/PythonInteract</a></p>
+
+<p>This example deals with buffered stdin without resorting to using a pty, and
+also illustrates which pipe ends should be closed where.  I prefer processes to
+threading, but the principle is the same.  Additionally, it illustrates
+synchronizing Queues to which feed the producer and collect output from the consumer,
+and how to shut them down cleanly (look out for the sentinels inserted into the
+queues).  This pattern allows new input to be generated based on recent output,
+allowing for recursive discovery and processing.</p>
+<br /><b>#5</b><br /><p>Nosklo's offered solution will quickly break if too much data is written to the receiving end of the pipe:</p>
+
+<pre><code>
+from subprocess import Popen, PIPE
+
+p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE, close_fds=True)
+p1.stdin.write('Hello World\n' * 20000)
+p1.stdin.close()
+result = p2.stdout.read() 
+assert result == "Hello Worl\n"
+</code></pre>
+
+<p>If this script doesn't hang on your machine, just increase "20000" to something that exceeds the size of your operating system's pipe buffers.</p>
+
+<p>This is because the operating system is buffering the input to "grep", but once that buffer is full, the <code>p1.stdin.write</code> call will block until something reads from <code>p2.stdout</code>.  In toy scenarios, you can get way with writing to/reading from a pipe in the same process, but in normal usage, it is necessary to write from one thread/process and read from a separate thread/process.  This is true for subprocess.popen, os.pipe, os.popen*, etc.</p>
+
+<p>Another twist is that sometimes you want to keep feeding the pipe with items generated from earlier output of the same pipe.  The solution is to make both the pipe feeder and the pipe reader asynchronous to the man program, and implement two queues:  one between the main program and the pipe feeder and one between the main program and the pipe reader.  <a href="http://www.darkarchive.org/w/Pub/PythonInteract" rel="nofollow">PythonInteract</a> is an example of that.</p>
+
+<p>Subprocess is a nice convenience model, but because it hides the details of the os.popen and os.fork calls it does under the hood, it can sometimes be more difficult to deal with than the lower-level calls it utilizes.  For this reason, subprocess is not a good way to learn about how inter-process pipes really work.</p>
+<br /><b>#6</b><br /><p>In one of the comments above, I challenged nosklo to either post some code to back up his assertions about <code>select.select</code> or to upvote my responses he had previously down-voted.  He responded with the following code:</p>
+
+<pre><code>from subprocess import Popen, PIPE
+import select
+
+p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE, close_fds=True)
+
+data_to_write = 100000 * 'hello world\n'
+to_read = [p2.stdout]
+to_write = [p1.stdin]
+b = [] # create buffer
+written = 0
+
+
+while to_read or to_write:
+    read_now, write_now, xlist = select.select(to_read, to_write, [])
+    if read_now:
+        data = p2.stdout.read(1024)
+        if not data:
+            p2.stdout.close()
+            to_read = []
+        else:
+            b.append(data)
+
+    if write_now:
+        if written &lt; len(data_to_write):
+            part = data_to_write[written:written+1024]
+            written += len(part)
+            p1.stdin.write(part); p1.stdin.flush()
+        else:
+            p1.stdin.close()
+            to_write = []
+
+print b
+</code></pre>
+
+<p>One problem with this script is that it second-guesses the size/nature of the
+system pipe buffers.  The script would experience fewer failures if it could remove
+magic numbers like 1024.</p>
+
+<p>The big problem is that this script code only works consistently with the right
+combination of data input and external programs.  grep and cut both work with
+lines, and so their internal buffers behave a bit differently.  If we use a
+more generic command like "cat", and write smaller bits of data into the pipe,
+the fatal race condition will pop up more often:</p>
+
+<pre><code>from subprocess import Popen, PIPE
+import select
+import time
+
+p1 = Popen(["cat"], stdin=PIPE, stdout=PIPE)
+p2 = Popen(["cat"], stdin=p1.stdout, stdout=PIPE, close_fds=True)
+
+data_to_write = 'hello world\n'
+to_read = [p2.stdout]
+to_write = [p1.stdin]
+b = [] # create buffer
+written = 0
+
+
+while to_read or to_write:
+    time.sleep(1)
+    read_now, write_now, xlist = select.select(to_read, to_write, [])
+    if read_now:
+        print 'I am reading now!'
+        data = p2.stdout.read(1024)
+        if not data:
+            p1.stdout.close()
+            to_read = []
+        else:
+            b.append(data)
+
+    if write_now:
+        print 'I am writing now!'
+        if written &lt; len(data_to_write):
+            part = data_to_write[written:written+1024]
+            written += len(part)
+            p1.stdin.write(part); p1.stdin.flush()
+        else:
+            print 'closing file'
+            p1.stdin.close()
+            to_write = []
+
+print b
+</code></pre>
+
+<p>In this case, two different results will manifest:</p>
+
+<pre><code>write, write, close file, read -&gt; success
+write, read -&gt; hang
+</code></pre>
+
+<p>So again, I challenge nosklo to either post code showing the use of
+<code>select.select</code> to handle arbitrary input and pipe buffering from a
+single thread, or to upvote my responses.</p>
+
+<p>Bottom line:  don't try to manipulate both ends of a pipe from a single thread.
+It's just not worth it.  See
+<a href="http://pypi.python.org/pypi/pipeline/0.1" rel="nofollow">pipeline</a> for a nice low-level
+example of how to do this correctly.</p>
+<br /><b>#7</b><br /><p>Responding to nosklo's assertion (see other comments to this question) that it can't be done without <code>close_fds=True</code>:</p>
+
+<p><code>close_fds=True</code> is only necessary if you've left other file
+descriptors open.  When opening multiple child processes, it's always good to
+keep track of open files that might get inherited, and to explicitly close any
+that aren't needed:</p>
+
+<pre><code>from subprocess import Popen, PIPE
+
+p1 = Popen(["grep", "-v", "not"], stdin=PIPE, stdout=PIPE)
+p1.stdin.write('Hello World\n')
+p1.stdin.close()
+p2 = Popen(["cut", "-c", "1-10"], stdin=p1.stdout, stdout=PIPE)
+result = p2.stdout.read() 
+assert result == "Hello Worl\n"
+</code></pre>
+
+<p><code>close_fds</code> defaults to <code>False</code> because subprocess
+prefers to trust the calling program to know what it's doing with open file
+descriptors, and just provide the caller with an easy option to close them all
+if that's what it wants to do.</p>
+
+<p>But the real issue is that pipe buffers will bite you for all but toy examples.
+As I have said in my other answers to this question, the rule of thumb is to
+not have your reader and your writer open in the same process/thread.  Anyone
+who wants to use the subprocess module for two-way communication would be
+well-served to study os.pipe and os.fork, first.  They're actually not that
+hard to use if you have a <a href="http://pypi.python.org/pypi/pipeline/0.1" rel="nofollow">good example</a> to look at.</p>
+<br /><b>#8</b><br /><p>Here's an example of using Popen together with os.fork to accomplish the same
+thing.  Instead of using <code>close_fds</code> it just closes the pipes at the
+right places.  Much simpler than trying to use <code>select.select</code>, and
+takes full advantage of system pipe buffers.</p>
+
+<pre><code>from subprocess import Popen, PIPE
+import os
+import sys
+
+p1 = Popen(["cat"], stdin=PIPE, stdout=PIPE)
+
+pid = os.fork()
+
+if pid: #parent
+    p1.stdin.close()
+    p2 = Popen(["cat"], stdin=p1.stdout, stdout=PIPE)
+    data = p2.stdout.read()
+    sys.stdout.write(data)
+    p2.stdout.close()
+
+else: #child
+    data_to_write = 'hello world\n' * 100000
+    p1.stdin.write(data_to_write)
+    p1.stdin.close()
+</code></pre>
+<br />

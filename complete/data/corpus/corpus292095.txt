@@ -1,0 +1,133 @@
+Question (ID-292095): Polling the keyboard in python How can I poll the keyboard from a console python app? Specifically, I would like to do something akin to this in the midst of a lot of other I/O activities (socket selects, serial port access, etc.): 
+
+  while 1:
+  # doing amazing pythonic embedded stuff
+  # ...
+
+  # periodically do a non-blocking check to see if
+  # we are being told to do something else
+  x = keyboard.read(1000, timeout = 0)
+
+  if len(x):
+   # ok, some key got pressed
+   # do something
+ 
+
+ What is the correct pythonic way to do this on Windows? Also, portability to Linux wouldn't be bad, though it's not required. 
+ Answers (Total-6): #0 The standard approach is to use the select module. 
+
+ However, this doesn't work on Windows. For that, you can use the msvcrt module's keyboard polling. 
+
+ Often, this is done with multiple threads -- one per device being "watched" plus the background processes that might need to be interrupted by the device. 
+ #1 You might look at how pygame handles this to steal some ideas. 
+ #2 Ok, since my attempt to post my solution in a comment failed, here's what I was trying to say. I could do exactly what I wanted from native Python (on Windows, not anywhere else though) with the following code: 
+
+ import msvcrt 
+
+def kbfunc(): 
+ x = msvcrt.kbhit()
+ if x: 
+  ret = ord(msvcrt.getch()) 
+ else: 
+  ret = 0 
+ return ret
+ 
+ #3 
+import sys
+import select
+
+def heardEnter():
+ i,o,e = select.select([sys.stdin],[],[],0.0001)
+ for s in i:
+  if s == sys.stdin:
+   input = sys.stdin.readline()
+   return True
+ return False
+ 
+ #4 A solution using the curses module. Printing a numeric value corresponding to each key pressed: 
+
+ import curses
+
+def main(stdscr):
+ # do not wait for input when calling getch
+ stdscr.nodelay(1)
+ while True:
+  # get keyboard input, returns -1 if none available
+  c = stdscr.getch()
+  if c != -1:
+   # print numeric value
+   stdscr.addstr(str(c))
+   stdscr.refresh()
+   # return curser to start position
+   stdscr.move(0, 0)
+
+if __name__ == '__main__':
+ curses.wrapper(main)
+ 
+ #5 From the comments: 
+
+ import msvcrt # built-in module
+
+def kbfunc():
+ return ord(msvcrt.getch()) if msvcrt.kbhit() else 0
+ 
+
+ 
+
+ Thanks for the help. I ended up writing a C DLL called PyKeyboardAccess.dll and accessing the crt conio functions, exporting this routine: 
+
+ #include &lt;conio.h&gt;
+
+int kb_inkey () {
+ int rc;
+ int key;
+
+ key = _kbhit();
+
+ if (key == 0) {
+  rc = 0;
+ } else {
+  rc = _getch();
+ }
+
+ return rc;
+}
+ 
+
+ And I access it in python using the ctypes module (built into python 2.5): 
+
+ import ctypes
+import time
+
+#
+# first, load the DLL
+#
+
+
+try:
+ kblib = ctypes.CDLL("PyKeyboardAccess.dll")
+except:
+ raise ("Error Loading PyKeyboardAccess.dll")
+
+
+#
+# now, find our function
+#
+
+try:
+ kbfunc = kblib.kb_inkey
+except:
+ raise ("Could not find the kb_inkey function in the dll!")
+
+
+#
+# Ok, now let's demo the capability
+#
+
+while 1:
+ x = kbfunc()
+
+ if x != 0:
+  print "Got key: %d" % x
+ else:
+  time.sleep(.01)

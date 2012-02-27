@@ -1,0 +1,226 @@
+<h3>Question (ID-1591920):</h3><h2>Python binary data reading</h2><p>A urllib2 request receives binary response as below:</p>
+
+<pre><code>00 00 00 01 00 04 41 4D 54 44 00 00 00 00 02 41
+97 33 33 41 99 5C 29 41 90 3D 71 41 91 D7 0A 47
+0F C6 14 00 00 01 16 6A E0 68 80 41 93 B4 05 41
+97 1E B8 41 90 7A E1 41 96 8F 57 46 E6 2E 80 00
+00 01 16 7A 53 7C 80 FF FF
+</code></pre>
+
+<p>Its structure is:</p>
+
+<pre><code>DATA, TYPE, DESCRIPTION
+
+00 00 00 01, 4 bytes, Symbol Count =1
+
+00 04, 2 bytes, Symbol Length = 4
+
+41 4D 54 44, 6 bytes, Symbol = AMTD
+
+00, 1 byte, Error code = 0 (OK)
+
+00 00 00 02, 4 bytes, Bar Count =  2
+
+FIRST BAR
+
+41 97 33 33, 4 bytes, Close = 18.90
+
+41 99 5C 29, 4 bytes, High = 19.17
+
+41 90 3D 71, 4 bytes, Low = 18.03
+
+41 91 D7 0A, 4 bytes, Open = 18.23
+
+47 0F C6 14, 4 bytes, Volume = 3,680,608
+
+00 00 01 16 6A E0 68 80, 8 bytes, Timestamp = November 23,2007
+
+SECOND BAR
+
+41 93 B4 05, 4 bytes, Close = 18.4629
+
+41 97 1E B8, 4 bytes, High = 18.89
+
+41 90 7A E1, 4 bytes, Low = 18.06
+
+41 96 8F 57, 4 bytes, Open = 18.82
+
+46 E6 2E 80, 4 bytes, Volume = 2,946,325
+
+00 00 01 16 7A 53 7C 80, 8 bytes, Timestamp = November 26,2007
+
+TERMINATOR
+
+FF FF, 2 bytes,
+</code></pre>
+
+<p>How to read binary data like this?</p>
+
+<p>Thanks in advance.</p>
+
+<h3>Update:</h3>
+
+<p>I tried struct module on first 6 bytes with following code:</p>
+
+<pre><code>struct.unpack('ih', response.read(6))
+</code></pre>
+
+<p>(16777216, 1024)</p>
+
+<p>But it should output (1, 4). I take a look at the manual but have no clue what was wrong.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>So here's my best shot at interpreting the data you're giving...:</p>
+
+<pre><code>import datetime
+import struct
+
+class Printable(object):
+  specials = ()
+  def __str__(self):
+    resultlines = []
+    for pair in self.__dict__.items():
+      if pair[0] in self.specials: continue
+      resultlines.append('%10s %s' % pair)
+    return '\n'.join(resultlines)
+
+head_fmt = '&gt;IH6sBH'
+head_struct = struct.Struct(head_fmt)
+class Header(Printable):
+  specials = ('bars',)
+  def __init__(self, symbol_count, symbol_length,
+               symbol, error_code, bar_count):
+    self.__dict__.update(locals())
+    self.bars = []
+    del self.self
+
+bar_fmt = '&gt;5fQ'
+bar_struct = struct.Struct(bar_fmt)
+class Bar(Printable):
+  specials = ('header',)
+  def __init__(self, header, close, high, low,
+               open, volume, timestamp):
+    self.__dict__.update(locals())
+    self.header.bars.append(self)
+    del self.self
+    self.timestamp /= 1000.0
+    self.timestamp = datetime.date.fromtimestamp(self.timestamp)
+
+def showdata(data):
+  terminator = '\xff' * 2
+  assert data[-2:] == terminator
+  head_data = head_struct.unpack(data[:head_struct.size])
+  try:
+    assert head_data[4] * bar_struct.size + head_struct.size == \
+           len(data) - len(terminator)
+  except AssertionError:
+    print 'data length is %d' % len(data)
+    print 'head struct size is %d' % head_struct.size
+    print 'bar struct size is %d' % bar_struct.size
+    print 'number of bars is %d' % head_data[4]
+    print 'head data:', head_data
+    print 'terminator:', terminator
+    print 'so, something is wrong, since',
+    print head_data[4] * bar_struct.size + head_struct.size, '!=',
+    print len(data) - len(terminator)
+    raise
+
+  head = Header(*head_data)
+  for i in range(head.bar_count):
+    bar_substr = data[head_struct.size + i * bar_struct.size:
+                      head_struct.size + (i+1) * bar_struct.size]
+    bar_data = bar_struct.unpack(bar_substr)
+    Bar(head, *bar_data)
+  assert len(head.bars) == head.bar_count
+  print head
+  for i, x in enumerate(head.bars):
+    print 'Bar #%s' % i
+    print x
+
+datas = '''
+00 00 00 01 00 04 41 4D 54 44 00 00 00 00 02 41
+97 33 33 41 99 5C 29 41 90 3D 71 41 91 D7 0A 47
+0F C6 14 00 00 01 16 6A E0 68 80 41 93 B4 05 41
+97 1E B8 41 90 7A E1 41 96 8F 57 46 E6 2E 80 00
+00 01 16 7A 53 7C 80 FF FF
+'''
+
+data = ''.join(chr(int(x, 16)) for x in datas.split())
+showdata(data)
+</code></pre>
+
+<p>this emits:</p>
+
+<pre><code>symbol_count 1
+ bar_count 2
+    symbol AMTD
+error_code 0
+symbol_length 4
+Bar #0
+    volume 36806.078125
+ timestamp 2007-11-22
+      high 19.1700000763
+       low 18.0300006866
+     close 18.8999996185
+      open 18.2299995422
+Bar #1
+    volume 29463.25
+ timestamp 2007-11-25
+      high 18.8899993896
+       low 18.0599994659
+     close 18.4629001617
+      open 18.8199901581
+</code></pre>
+
+<p>...which seems to be pretty close to what you want, net of some output formatting details.  Hope this helps!-)</p>
+<br /><b>#1</b><br /><blockquote>
+<pre><code>&gt;&gt;&gt; struct.unpack('ih', response.read(6))
+(16777216, 1024)
+</code></pre>
+</blockquote>
+
+<p>You are unpacking big-endian data on a little-endian machine. Try this instead:</p>
+
+<pre><code>&gt;&gt;&gt; struct.unpack('!IH', response.read(6))
+(1L, 4)
+</code></pre>
+
+<p>This tells unpack to consider the data in network-order (big-endian). Also, the values of counts and lengths can not be negative, so you should should use the unsigned variants in your format string.</p>
+<br /><b>#2</b><br /><p>Take a look at the <a href="http://docs.python.org/library/struct.html?#struct.unpack" rel="nofollow">struct.unpack</a> in the struct module.</p>
+<br /><b>#3</b><br /><pre><code>&gt;&gt;&gt; data
+'\x00\x00\x00\x01\x00\x04AMTD\x00\x00\x00\x00\x02A\x9733A\x99\\)A\x90=qA\x91\xd7\nG\x0f\xc6\x14\x00\x00\x01\x16j\xe0h\x80A\x93\xb4\x05A\x97\x1e\xb8A\x90z\xe1A\x96\x8fWF\xe6.\x80\x00\x00\x01\x16zS|\x80\xff\xff'
+&gt;&gt;&gt; from struct import unpack, calcsize
+&gt;&gt;&gt; scount, slength = unpack("!IH", data[:6])
+&gt;&gt;&gt; assert scount == 1
+&gt;&gt;&gt; symbol, error_code = unpack("!%dsb" % slength, data[6:6+slength+1])
+&gt;&gt;&gt; assert error_code == 0
+&gt;&gt;&gt; symbol
+'AMTD'
+&gt;&gt;&gt; bar_count = unpack("!I", data[6+slength+1:6+slength+1+4])
+&gt;&gt;&gt; bar_count
+(2,)
+&gt;&gt;&gt; bar_format = "!5fQ"                                                         
+&gt;&gt;&gt; from collections import namedtuple
+&gt;&gt;&gt; Bar = namedtuple("Bar", "Close High Low Open Volume Timestamp")             
+&gt;&gt;&gt; b = Bar(*unpack(bar_format, data[6+slength+1+4:6+slength+1+4+calcsize(bar_format)]))
+&gt;&gt;&gt; b
+Bar(Close=18.899999618530273, High=19.170000076293945, Low=18.030000686645508, Open=18.229999542236328, Volume=36806.078125, Timestamp=1195794000000L)
+&gt;&gt;&gt; import time
+&gt;&gt;&gt; time.ctime(b.Timestamp//1000)
+'Fri Nov 23 08:00:00 2007'
+&gt;&gt;&gt; int(b.Volume*100 + 0.5)
+3680608
+</code></pre>
+<br /><b>#4</b><br /><p>Use pack/unpack functions from "struct" package. More info here <a href="http://docs.python.org/library/struct.html" rel="nofollow">http://docs.python.org/library/struct.html</a></p>
+
+<p>Bye!</p>
+<br /><b>#5</b><br /><p>As it was already mentioned, <code>struct</code> is the module you need to use.</p>
+
+<p>Please read its documentation to learn about byte ordering, etc.</p>
+
+<p>In your example you need to do the following (as your data is big-endian and unsigned):</p>
+
+<pre><code>&gt;&gt;&gt; import struct
+&gt;&gt;&gt; x = '\x00\x00\x00\x01\x00\x04'
+&gt;&gt;&gt; struct.unpack('&gt;IH', x)
+(1, 4)
+</code></pre>
+<br />

@@ -1,0 +1,130 @@
+<h3>Question (ID-1703640):</h3><h2>How to implement a pythonic equivalent of tail -F?</h2><p>What is the pythonic way of watching the tail end of a growing file for the occurrence of certain keywords?</p>
+
+<p>In shell I might say:</p>
+
+<pre><code>tail -f "$file" | grep "$string" | while read hit; do
+    #stuff
+done
+</code></pre>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>You can use select to poll for new contents in a file.</p>
+
+<pre><code>def tail(filename, bufsize = 1024):
+    fds = [ os.open(filename, os.O_RDONLY) ]
+    while True:
+        reads, _, _ = select.select(fds, [], [])
+        if 0 &lt; len(reads):
+            yield os.read(reads[0], bufsize)
+</code></pre>
+<br /><b>#1</b><br /><p>Well, the simplest way would be to constantly read from the file, check what's new and test for hits.</p>
+
+<pre><code>import time
+
+def watch(fn, words):
+    fp = open(fn, 'r')
+    while True:
+        new = fp.readline()
+        # Once all lines are read this just returns ''
+        # until the file changes and a new line appears
+
+        if new:
+            for word in words:
+                if word in new:
+                    yield (word, new)
+        else:
+            time.sleep(0.5)
+
+fn = 'test.py'
+words = ['word']
+for hit_word, hit_sentence in watch(fn, words):
+    print "Found %r in line: %r" % (hit_word, hit_sentence)
+</code></pre>
+
+<p>This solution with <code>readline</code> works if you know your data will appear in lines. </p>
+
+<p>If the data is some sort of stream you need a buffer, larger than the largest <code>word</code> you're looking for, and fill it first. It gets a bit more complicated that way...</p>
+<br /><b>#2</b><br /><p>If you can't constraint the problem to work for a line-based read, you need to resort to blocks.</p>
+
+<p>This should work:</p>
+
+<pre><code>import sys
+
+needle = "needle"
+
+blocks = []
+
+inf = sys.stdin
+
+if len(sys.argv) == 2:
+    inf = open(sys.argv[1])
+
+while True:
+    block = inf.read()
+    blocks.append(block)
+    if len(blocks) &gt;= 2:
+        data = "".join((blocks[-2], blocks[-1]))
+    else:
+        data = blocks[-1]
+
+    # attention, this needs to be changed if you are interested
+    # in *all* matches separately, not if there was any match ata all
+    if needle in data:
+        print "found"
+        blocks = []
+    blocks[:-2] = []
+
+    if block == "":
+        break
+</code></pre>
+
+<p>The challenge lies in ensuring that you match needle even if it's separated by two block-boundaries.</p>
+<br /><b>#3</b><br /><p>Either open the file with <code>O_NONBLOCK</code> and use <code>select</code> to poll for read availability and then <code>read</code> to read the new data and the string methods to filter lines on the end of a file...or just use the <code>subprocess</code> module and let <code>tail</code> and <code>grep</code> do the work for you just as you would in the shell.</p>
+<br /><b>#4</b><br /><p>You can use <code>collections.deque</code> to implement tail.</p>
+
+<p>From <a href="http://docs.python.org/library/collections.html#deque-recipes" rel="nofollow">http://docs.python.org/library/collections.html#deque-recipes</a> ...</p>
+
+<pre><code>def tail(filename, n=10):
+    'Return the last n lines of a file'
+    return deque(open(filename), n)
+</code></pre>
+
+<p>Of course, this reads the entire file contents, but it's a neat and terse way of implementing tail.</p>
+<br /><b>#5</b><br /><pre><code>def tail(f):
+    f.seek(0, 2)
+
+    while True:
+        line = f.readline()
+
+        if not line:
+            time.sleep(0.1)
+            continue
+
+        yield line
+
+def process_matches(matchtext):
+    while True:
+        line = (yield)  
+        if matchtext in line:
+            do_something_useful() # email alert, etc.
+
+
+list_of_matches = ['ERROR', 'CRITICAL']
+matches = [process_matches(string_match) for string_match in list_of_matches]    
+
+for m in matches: # prime matches
+    m.next()
+
+while True:
+    auditlog = tail( open(log_file_to_monitor) )
+    for line in auditlog:
+        for m in matches:
+            m.send(line)
+</code></pre>
+
+<p>I use this to monitor log files.  In the full implementation, I keep list_of_matches in a configuration file so it can be used for multiple purposes.  On my list of enhancements is support for regex instead of a simple 'in' match.</p>
+<br /><b>#6</b><br /><p>To my knowledge there's no equivalent to "tail" in the Python function list. Solution would be to use tell() (get file size) and read() to work out the ending lines.</p>
+
+<p>This blog post (not by me) has the function written out, looks appropriate to me!
+<a href="http://www.manugarg.com/2007/04/real-tailing-in-python.html" rel="nofollow">http://www.manugarg.com/2007/04/real-tailing-in-python.html</a></p>
+<br /><b>#7</b><br /><p>You might want to take a look at this recipe I've just submitted:
+<a href="http://code.activestate.com/recipes/577968-log-watcher-tail-f-log/" rel="nofollow">http://code.activestate.com/recipes/577968-log-watcher-tail-f-log/</a></p>
+<br />

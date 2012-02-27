@@ -1,0 +1,73 @@
+Question (ID-742): Class views in Django Django view points to a function, which can be a problem if you want to change only a bit of functionality. Yes, I could have million keyword arguments and even more if statements in the function, but I was thinking more of an object oriented approach. 
+
+ For example, I have a page that displays a user. This page is very similar to page that displays a group, but it's still not so similar to just use another data model. Group also has members etc... 
+
+ One way would be to point views to class methods and then extend that class. Has anyone tried this approach or has any other idea? Answers (Total-8): #0 I've created and used my own generic view classes, defining __call__ so an instance of the class is callable. I really like it; while Django's generic views allow some customization through keyword arguments, OO generic views (if their behavior is split into a number of separate methods) can have much more fine-grained customization via subclassing, which lets me repeat myself a lot less. (I get tired of rewriting the same create/update view logic anytime I need to tweak something Django's generic views don't quite allow). 
+
+ I've posted some code at djangosnippets.org . 
+
+ The only real downside I see is the proliferation of internal method calls, which may impact performance somewhat. I don't think this is much of a concern; it's rare that Python code execution would be your performance bottleneck in a web app. 
+
+ UPDATE : Django's own generic views are now class-based. 
+
+ UPDATE : FWIW, I've changed my opinion on class-based views since this answer was written. After having used them extensively on a couple of projects, I feel they tend to lead to code that is satisfyingly DRY to write, but very hard to read and maintain later, because functionality is spread across so many different places, and subclasses are so dependent on every implementation detail of the superclasses and mixins. I now feel that TemplateResponse and view decorators is a better answer for decomposing view code. 
+ #1 If you're simply displaying data from models, why not use the Django Generic Views ? They're designed to let you easy show data from a model without having to write your own view and stuff about mapping URL paramaters to views, fetching data, handling edge cases, rendering output, etc. #2 I needed to use class based views, but I wanted to be able to use the full name of the class in my URLconf without always having to instantiate the view class before using it. What helped me was a surprisingly simple metaclass: 
+
+ class CallableViewClass(type):
+ def __call__(cls, *args, **kwargs):
+  if args and isinstance(args[0], HttpRequest):
+   instance = super(CallableViewClass, cls).__call__()
+   return instance.__call__(*args, **kwargs)
+  else:
+   instance = super(CallableViewClass, cls).__call__(*args, **kwargs)
+   return instance
+
+
+class View(object):
+ __metaclass__ = CallableViewClass
+
+ def __call__(self, request, *args, **kwargs):
+  if hasattr(self, request.method):
+   handler = getattr(self, request.method)
+   if hasattr(handler, '__call__'):
+    return handler(request, *args, **kwargs)
+  return HttpResponseBadRequest('Method Not Allowed', status=405)
+ 
+
+ I can now both instantiate view classes and use the instances as view functions, OR I can simply point my URLconf to my class and have the metaclass instantiate (and call) the view class for me. This works by checking the first argument to __call__ – if it's a HttpRequest , it must be an actual HTTP request because it would be nonsense to attept to instantiate a view class with an HttpRequest instance. 
+
+ class MyView(View):
+ def __init__(self, arg=None):
+  self.arg = arg
+ def GET(request):
+  return HttpResponse(self.arg or 'no args provided')
+
+@login_required
+class MyOtherView(View):
+ def POST(request):
+  pass
+
+# And all the following work as expected.
+urlpatterns = patterns(''
+ url(r'^myview1$', 'myapp.views.MyView', name='myview1'),
+ url(r'^myview2$', myapp.views.MyView, name='myview2'),
+ url(r'^myview3$', myapp.views.MyView('foobar'), name='myview3'),
+ url(r'^myotherview$', 'myapp.views.MyOtherView', name='otherview'),
+)
+ 
+
+ (I posted a snippet for this at http://djangosnippets.org/snippets/2041/ ) 
+ #3 Sounds to me like you're trying to combine things that shouldn't be combined. If you need to do different processing in your view depending on if it's a User or Group object you're trying to look at then you should use two different view functions. 
+
+ On the other hand there can be common idioms you'd want to extract out of your object_detail type views... perhaps you could use a decorator or just helper functions? 
+
+ -Dan #4 Unless you want to do something a little complex, using the generic views are the way to go. They are far more powerful than their name implies, and if you are just displaying model data generic views will do the job. 
+ #5 You can always create a class, override the __call__ function and then point the URL file to an instance of the class. You can take a look at the FormWizard class to see how this is done. 
+ #6 If you want to share common functionality between pages I suggest you look at custom tags. They're quite easy to create , and are very powerful. 
+
+ Also, templates can extend from other templates . This allows you to have a base template to set up the layout of the page and to share this between other templates which fill in the blanks. You can nest templates to any depth; allowing you to specify the layout on separate groups of related pages in one place. 
+ #7 Generic views will usually be the way to go, but ultimately you're free to handle URLs however you want. FormWizard does things in a class-based way, as do some apps for RESTful APIs. 
+
+ Basically with a URL you are given a bunch of variables and place to provide a callable, what callable you provide is completely up to you - the standard way is to provide a function - but ultimately Django puts no restrictions on what you do. 
+
+ I do agree that a few more examples of how to do this would be good, FormWizard is probably the place to start though.

@@ -1,0 +1,173 @@
+<h3>Question (ID-370357):</h3><h2>Python variable scope question</h2><p>I've been programming for many years, and recently started learning Python. The following code works as expected in both python 2.5 and 3.0 (on OS X if that matters):</p>
+
+<pre><code>a, b, c = (1, 2, 3)
+
+print(a, b, c)
+
+def test():
+    print(a)
+    print(b)
+    print(c)    # (A)
+    #c+=1       # (B)
+test()
+</code></pre>
+
+<p>However, when I uncomment line <b>(B)</b>, I get an <i>UnboundLocalError: 'c' not assigned</i> at line <b>(A)</b>. The values of <i>a</i> and <i>b</i> are printed correctly. This has me completely baffled for two reasons:</p>
+
+<p>1) Why is there an runtime error thrown at line <b>(A)</b> because of a later statement on line <b>(B)</b>?</p>
+
+<p>2) Why are variables <i>a</i> and <i>b</i> printed as expected, while <i>c</i> raises an error?</p>
+
+<p>The only explanation I can come up with is that a <b>local</b> variable <i>c</i> is created by the assignment <i>c+=1</i>, which takes precedent over the "global" variable <i>c</i> even before the local variable is created. Of course, it doesn't make sense for a variable to "steal" scope before it exists.</p>
+
+<p>Could someone please explain this behavior?
+Thank you very much,
+brainfsck</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Python treats variables in functions differently depending on whether you assign values to them from within the function or not.  If you assign any value to a variable, it is treated by default as a local variable.  Therefore, when you uncomment the line, you are attempting to reference a local variable before any value has been assigned to it.</p>
+
+<p>If you want the variable c to refer to the global c put</p>
+
+<pre><code>global c
+</code></pre>
+
+<p>as the first line of the function.</p>
+
+<p>As of python 3, there is now</p>
+
+<pre><code>nonlocal c
+</code></pre>
+
+<p>that you can use to refer to the nearest enclosing (not necessarily global) scope.</p>
+<br /><b>#1</b><br /><p>okay, here's the deal.  Python is a little weird, in that it keeps everything in a dictionary for the various scopes.  The original a,b,c are in the uppermost scope and so in that uppermost dictionary.  The function has its own dictionary.  When you reach the <code>print(a)</code> and <code>print(b)</code> statements, there's nothing by that name in the dictionary, so Python looks up the list and finds them in the clobal dictionary.</p>
+
+<p>Now we get to <code>c+=1</code>, which is, of course, equivalent to <code>c=c+1</code>.  When Python scans that line, it says "ahah, there's a variable named c, I'll put it into my local scope dictionary."  Then when it goes looking for a value for c for the c on the right hand side of the assignment, it finds its <em>local variable named c</em>, which has no value yet, and so throws the error.</p>
+
+<p>The statement <code>global c</code> mentioned above simply tells the parser that it uses the c from the global scope and so doesn't need a new one.</p>
+
+<p>The reason it says there's an issue on the line it does is because it is effectively looking for the names before it tries to generate code, and so in some sense doesn't think it's really doing that line yet.  I'd argue that is a useability bug, but it's generally a good practice to just learn not to take a compiler's messages <em>too</em> seriously.</p>
+
+<p>If it's any comfort, I spent probably a day digging and experimenting with this same issue before I found something Guido had written about the dictionaries that Explained Everything.</p>
+
+<h3>Update, see comments:</h3>
+
+<p>It doesn't scan the code twice, but it does scan the code in two phases, lexing and parsing.</p>
+
+<p>Consider how the parse of this cline of code works.  The lexer reads the source text and breaks it into lexemes, the "smallest components" of the grammar.  So when it hits the line</p>
+
+<pre><code>c+=1
+</code></pre>
+
+<p>it breaks it up into something like</p>
+
+<pre><code>SYMBOL(c) OPERATOR(+=) DIGIT(1)
+</code></pre>
+
+<p>The parser eventually wants to make this into a parse tree and execute it, but since it's an assignment, before it does, it looks for the name c in the local dictionary, doesn't see it, and inserts it in the dictionary, marking it as uninitialized. In a fullly compiled language, it would just go into the symbol table and wait for the parse, but since it WON'T have the luxury of a second pass, the lexer does a little extra work to make life easier later on.   Only, then it sees the OPERATOR, sees that the rules say "if you have an operator += the left hand side must have been initialized" and says "whoops!"</p>
+
+<p>The point here is that it <em>hasn't really started the parse of the line yet</em>.  This is all happening sort of preparatory to the actual parse, so the line counter hasn't advanced to the next line.  Thus when it signals the error, it still thinks its on the previous line.</p>
+
+<p>As I say, you could argue it's a usability bug, but its actually a fairly common thing.  Some compilers are more honest about it and say "error on or around line XXX", but this one doesn't.</p>
+<br /><b>#2</b><br /><p>Taking a look at the disassembly may clarify what is happening:</p>
+
+<pre><code>&gt;&gt;&gt; def f():
+...    print a
+...    print b
+...    a = 1
+
+&gt;&gt;&gt; import dis
+&gt;&gt;&gt; dis.dis(f)
+
+  2           0 LOAD_FAST                0 (a)
+              3 PRINT_ITEM
+              4 PRINT_NEWLINE
+
+  3           5 LOAD_GLOBAL              0 (b)
+              8 PRINT_ITEM
+              9 PRINT_NEWLINE
+
+  4          10 LOAD_CONST               1 (1)
+             13 STORE_FAST               0 (a)
+             16 LOAD_CONST               0 (None)
+             19 RETURN_VALUE
+</code></pre>
+
+<p>As you can see, the bytecode for accessing a is <code>LOAD_FAST</code>, and for b, <code>LOAD_GLOBAL</code>.  This is because the compiler has identified that a is assigned to within the function, and classified it as a local variable.  The access mechanism for locals is fundamentally different for globals - they are statically assigned an offset in the frame's variables table, meaning lookup is a quick index, rather than the more expensive dict lookup as for globals.  Because of this, Python is reading the <code>print a</code> line as "get the value of local variable 'a' held in slot 0, and print it", and when it detects that this variable is still uninitialised, raises an exception.</p>
+<br /><b>#3</b><br /><p>Python has rather interesting behavior when you try traditional global variable semantics.  I don't remember the details, but you can read the value of a variable declared in 'global' scope just fine, if you want to modify it, you have to use the global keyword.  Try changing test() to this:</p>
+
+<pre><code>def test():
+    global c
+    print(a)
+    print(b)
+    print(c)    # (A)
+    c+=1       # (B)
+</code></pre>
+
+<p>Also, the reason you are getting this error is because you can also declare a new variable inside that function with the same name as a 'global' one, and it would be completely separate.  The interpreter thinks you are trying to make a new variable in this scope called 'c' and modify it all in one operation, which isn't allowed in python because this new 'c' wasn't initialized.</p>
+<br /><b>#4</b><br /><p>This is not a direct answer to your question, but it is closely related, as it's another gotcha caused by the relationship between augmented assignment and function scopes.</p>
+
+<p>In most cases, you tend to think of augmented assignment (a += b) as exactly equivalent to simple assignment (a = a + b). It is possible to get into some trouble with this though, in one corner case. Let me explain:</p>
+
+<p>The way python's simple assignment works means that if a is passed into a function (like func(a); note that python is always pass-by-reference), then a = a + b will not modify the a that is passed in. Instead, it will just modify the local pointer to a. </p>
+
+<p>But if you use a += b, then it is sometimes implemented as:</p>
+
+<pre><code>a = a + b
+</code></pre>
+
+<p>or sometimes (if the method exists) as:</p>
+
+<pre><code>a.__iadd__(b)
+</code></pre>
+
+<p>In the first case (as long as a is not declared global), there are no side-effects outside local scope, as the assignment to "a" is just a pointer update.</p>
+
+<p>In the second case, a will actually modify itself, so all references to a will point to the modified version. This is demonstrated by the following code:</p>
+
+<pre><code>def copy_on_write(a):
+      a = a + a
+def inplace_add(a):
+      a += a
+a = [1]
+copy_on_write(a)
+print a # [1]
+inplace_add(a)
+print a # [1, 1]
+b = 1
+copy_on_write(b)
+print b # [1]
+inplace_add(b)
+print b # 1
+</code></pre>
+
+<p>So the trick is to avoid augmented assignment on function arguments (I try to only use it for local/loop variables). Use simple assignment, and you will be safe from ambiguous behaviour. </p>
+<br /><b>#5</b><br /><p>Here are two links that may help</p>
+
+<p>1: <a href="http://docs.python.org/3.1/faq/programming.html?highlight=nonlocal#why-am-i-getting-an-unboundlocalerror-when-the-variable-has-a-value" rel="nofollow">docs.python.org/3.1/faq/programming.html?highlight=nonlocal#why-am-i-getting-an-unboundlocalerror-when-the-variable-has-a-value</a></p>
+
+<p>2: <a href="http://docs.python.org/3.1/faq/programming.html?highlight=nonlocal#how-do-i-write-a-function-with-output-parameters-call-by-reference" rel="nofollow">docs.python.org/3.1/faq/programming.html?highlight=nonlocal#how-do-i-write-a-function-with-output-parameters-call-by-reference</a></p>
+
+<p>link one describes the error UnboundLocalError.  Link two can help with with re-writing your test function.  Based on link two, the original problem could be rewritten as:</p>
+
+<pre><code>&gt;&gt;&gt; a, b, c = (1, 2, 3)
+&gt;&gt;&gt; print (a, b, c)
+(1, 2, 3)
+&gt;&gt;&gt; def test (a, b, c):
+...     print (a)
+...     print (b)
+...     print (c)
+...     c += 1
+...     return a, b, c
+...
+&gt;&gt;&gt; a, b, c = test (a, b, c)
+1
+2
+3
+&gt;&gt;&gt; print (a, b ,c)
+(1, 2, 4)
+</code></pre>
+<br /><b>#6</b><br /><p>The Python interpreter will read a function as a complete unit. I think of it as reading it in two passes, once to gather its closure (the local variables), then again to turn it into byte-code.</p>
+
+<p>As I'm sure you were already aware, any name used on the left of a '=' is implicitly a local variable. More than once I've been caught out by changing a variable access to a += and it's suddenly a different variable.</p>
+
+<p>I also wanted to point out it's not really anything to do with global scope specifically. You get the same behaviour with nested functions.</p>
+<br />

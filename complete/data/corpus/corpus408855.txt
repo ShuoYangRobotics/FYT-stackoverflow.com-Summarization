@@ -1,0 +1,112 @@
+Question (ID-408855): How to compare and search list of integers efficiently? I have a database populated with 1 million objects. Each object has a 'tags' field - set of integers. 
+
+ For example: 
+
+ object1: tags(1,3,4)
+object2: tags(2)
+object3: tags(3,4)
+object4: tags(5)
+ 
+
+ and so on. 
+
+ Query parameter is a set on integers, lets try q(3,4,5) 
+
+ object1 does not match ('1' not in '3,4,5')
+object2 does not match ('2' not in '3,4,5')
+object3 matches ('3 and 4' in '3,4,5' )
+object4 matches ('5' in '3,4,5' )
+ 
+
+ How to select matched objects efficiently? 
+ Answers (Total-7): #0 Given that you are using PostgreSQL, you could use its array datatype and its contains/overlaps operators. 
+
+ Of course this would tie your app to PostgreSQL tightly, which may not be desired. On the other hand, it may save you coding for when it's really needed (ie, when you finally have to port it to another database) 
+
+ Although, given that in Python you have the set datatype for that exact group of operations, using PostgreSQL might be overkill (depending on the performance requirements) 
+
+ &gt;&gt;&gt; a = set([1,2,3])
+&gt;&gt;&gt; a
+set([1, 2, 3])
+&gt;&gt;&gt; 1 in a
+True
+&gt;&gt;&gt; set([1,2]) in a
+False
+&gt;&gt;&gt; set([2,3]) &amp; a
+set([2, 3])
+&gt;&gt;&gt; set([8,9]) &amp; a
+set([])
+&gt;&gt;&gt; set([1,3]) &amp; a
+set([1, 3])
+&gt;&gt;&gt;
+ 
+ #1 You're making a common mistake in database design, by storing a comma-separated list of tag id's. It's not a surprise that performing efficient queries against this is a blocker for you. 
+
+ What you need is to model the mapping between objects and tags in a separate table. 
+
+ CREATE TABLE Tagged (
+ object_id INT NOT NULL,
+ tag_id  INT NOT NULL,
+ PRIMARY KEY (object_id, tag_id),
+ FOREIGN KEY (object_id) REFERENCES Objects(object_id),
+ FOREIGN KEY (tag_id) REFERENCES Tags(tag_id)
+);
+ 
+
+ Insert one row for each object/tag pairing. Of course, this means you have several rows for each object_id , but that's okay. 
+
+ You can query for all objects that have tags 3,4,5: 
+
+ SELECT DISTINCT object_id
+FROM Tagged
+WHERE tag_id IN (3, 4, 5);
+ 
+
+ But this matches object1, which you don't want. You want to exclude objects that have other tags not in 3,4,5. 
+
+ SELECT DISTINCT t1.object_id
+FROM Tagged t1 
+ LEFT OUTER JOIN Tagged t2
+ ON (t1.object_id = t2.object_id AND t2.tag_id NOT IN (3, 4, 5))
+WHERE t1.tag_id IN (3, 4, 5)
+ AND t2.object_id IS NULL;
+ 
+ #2 If I understood it right, its something like a: 
+
+ Post-&gt; posttags &lt;-tags 
+
+ kindof schema. 
+
+ I wonder why are you doing it this way? 
+
+ Is it a problem you have reached because you are using an ORM which retrieves data in objects and other lazy loaded associated objects. 
+
+ Like a Post and Tag class in SQLAlchemy, with Post mapper having a property called 'tags' which can load set of Tag objects for given Post object. 
+
+ If that's so, those kind of operations are usually very costly in ORM's and should be done with the SQL Statement support of ORM's or using the direct dbapi's like psycopg2.
+Again, if the number of objects loaded from a query is huge (keeping in mind your 1Million) you need machine with lot of resources (or maybe None at all - pure ORM not recommended). 
+
+ If its not an ORM and still your tags are stored like (sets) then I think there is something wrong with the schema. 
+
+ posttags is a many-to-many relationship as i see it and its a different table by itself (which is easily queriable), not a 'set' in posts table. 
+ #3 You haven't stated weather you'd like to use SQL or if your reading the data into an application before doing so. From sounds of things your looking for a code based solution? 
+
+ In .NET you would make a class implement the ICompare interface and write your own method to to compare two values that would either return a 0 or 1. 
+ #4 This is basic set theory. Intersect the two sets and if the result is the same as the original then the result is "match". Otherwise its not. 
+
+ You can apply this principle using many languages. Most have libraries for doing things with sets. You can even do this using SQL. 
+ #5 Looks to me like the issubset() method of sets is what you are looking for: 
+
+ tags(1, 2, 3).issubset(q(1, 2, 3, 4))
+ 
+
+ If both tags and q are subclasses of the set class.
+But I agree with the other answers that solving this in the database would be a better solution. 
+ #6 I'm sorry. Looks like it was hard to me to explain the problem well :) 
+
+ The 'postgresql' tag here os lot more meaningful than 'python'.
+Self joined TAG table with IS NULL condition is what I really need. 
+
+ SQLalchemy is also good advise. 
+
+ Thank you all.

@@ -1,0 +1,218 @@
+Question (ID-4865195): How do I test beginner student Python programs that use input() (maybe with unittest?)? I'm a grader for a beginning programming class using Python. My python-fu is not so strong myself, but I would like to try to automate some of the grading. 
+
+ Looking online, I like the PyUnit testing suite, though it probably is a bit overpowered for what I want. 
+
+ My problem is that I'm not sure how to pass the test inputs I want to the student's functions, since they are not using command line arguments or even multiple functions yet, but getting user input through the input() function. 
+
+ A silly example: 
+
+ #/usr/bin/python3.1
+# A silly example python program
+def main():
+ a = int(input("Enter an integer: "))
+ b = int(input("Enter another integer: "))
+ c = a+b
+ print("The sum is %d" % c)
+
+if __name__ == '__main__'
+ main()
+ 
+
+ For my silly example, how would I write a unit test that could check the output for several different inputs? (ie, if I pass 2 and 3 to the input, the output string should be "The sum is 5") 
+ Answers (Total-8): #0 Edit: Only proposing this since the example isn't unittest-able (and I'm assuming the beginner students will just be confused by the constraint) 
+
+ If you are just concerned with the output matching what you are looking for, why not just use some "silly" bash? Something like: 
+
+ echo -e "2\n3" | python test.py | grep -q "The sum is 5" &amp;&amp; echo "Success"
+ 
+
+ If you are doing relatively trivial programs like this, then this should be a sufficient, or good enough, solution that requires little effort. 
+ #1 You can't really unit-test that. One of the things about writing unit tests is you often need to write your code differently to allow it to be unit-tested. So in this case, you would need to factor out the calls to input into a separate function, which you can then patch. 
+
+ def my_input(prompt):
+ return input(prompt)
+
+def main():
+ a = int(eval(my_input("Enter an integer: "))
+ 
+
+ etc. Now your test can monkey-patch myscript.my_input to return the values you want. 
+ #2 If you need more complicated interaction with command-line programs than can be provided with echo then you might want to look at expect . 
+ #3 From the docs : 
+
+ 
+ The objects sys.stdin, sys.stdout and
+ sys.stderr are initialized to file
+ objects corresponding to the
+ interpreter’s standard input, output
+ and error streams. 
+ 
+
+ So following this logic, something like this seems to work. Create a file with your required input: 
+
+ $ cat sample_stdin.txt
+hello
+world
+ 
+
+ Then redirect sys.stdin to point to that file: 
+
+ #!/usr/bin/env python
+import sys
+
+fh = open('sample_stdin.txt', 'r')
+sys.stdin = fh
+
+line1 = raw_input('foo: ')
+line2 = raw_input('bar: ')
+
+print line1
+print line2
+ 
+
+ Output: 
+
+ $python redirecting_stdin.py
+foo: bar: hello
+world
+ 
+ #4 Short answer, don't do that. You have to design for testability. This means providing an simple way to provide interfaces for things to use to talk to system resources so you can provide alternate implementations of those interfaces when testing. 
+
+ The monkey patching solution described in the other answer does work, but it's the most primitive of your options. Personally, I would write an interface class for user interaction. For example: 
+
+ class UserInteraction(object):
+ def get_input(self):
+  raise NotImplementedError()
+ def send_output(self, output):
+  raise NotImplementedError()
+ 
+
+ Then things that need to talk to the user can get an instance of your class as a constructor or function argument. The default implementation can call the actual input function or whatever, but there is a version used for testing that provides sample input or buffers up the output so it can be checked. 
+
+ This, by the way, is why I hate Singleton (which can't really be effectively implemented in Python anyway). It destroys your ability to test by making an instance which is globally accessible that can't be stubbed out with a stub version for testing. 
+ #5 My suggestion is to refactor your code using one of the two frameworks that Python provides for unit-testing: unittest (aka PyUnit) and doctest . 
+
+ This is an example using unittest : 
+
+ import unittest
+
+def adder(a, b):
+ "Return the sum of two numbers as int"
+ return int(a) + int(b)
+
+class TestAdder(unittest.TestCase):
+ "Testing adder() with two int"
+ def test_adder_int(self):
+  self.assertEqual(adder(2,3), 5)
+
+ "Testing adder() with two float"
+ def test_adder_float(self):
+  self.assertEqual(adder(2.0, 3.0), 5)
+
+ "Testing adder() with two str - lucky case"
+ def test_adder_str_lucky(self):
+  self.assertEqual(adder('4', '1'), 5)
+
+ "Testing adder() with two str"
+ def test_adder_str(self):
+  self.assertRaises(ValueError, adder, 'x', 'y')
+
+if __name__ == '__main__':
+ unittest.main()
+ 
+
+ And this is an example using doctest : 
+
+ # adder.py
+
+def main(a, b):
+ """This program calculate the sum of two numbers. 
+ It prints an int (see %d in print())
+
+ &gt;&gt;&gt; main(2, 3)
+ The sum is 5
+
+ &gt;&gt;&gt; main(3, 2)
+ The sum is 5
+
+ &gt;&gt;&gt; main(2.0, 3)
+ The sum is 5
+
+ &gt;&gt;&gt; main(2.0, 3.0)
+ The sum is 5
+
+ &gt;&gt;&gt; main('2', '3')
+ Traceback (most recent call last):
+  ...
+ TypeError: %d format: a number is required, not str
+ """
+ c = a + b
+ print("The sum is %d" % c)
+
+def _test():
+ import doctest, adder
+ return doctest.testmod(adder)
+
+if __name__ == '__main__':
+ _test()
+ 
+
+ With doctest I made another example using input() (I assume you are using Python 3.X): 
+
+ # adder_ugly.py
+
+def main():
+ """This program calculate the sum of two numbers.
+ It prints an int (see %d in print())
+
+ &gt;&gt;&gt; main()
+ The sum is 5
+ """
+ a = int(input("Enter an integer: "))
+ b = int(input("Enter another integer: "))
+ c = a+b
+ print("The sum is %d" % c)
+
+
+def _test():
+ import doctest, adder_ugly
+ return doctest.testmod(adder_ugly)
+
+if __name__ == '__main__':
+ _test()
+ 
+
+ I would run each of the above mentioned examples with the -v option: 
+
+ python adder_ugly.py -v
+ 
+
+ For your reference see: 
+
+ http://docs.python.org/py3k/library/unittest.html?highlight=unittest#unittest 
+
+ and 
+
+ http://docs.python.org/py3k/library/doctest.html#module-doctest 
+ #6 You may be able to mock the input function to supply inputs from your test environment. 
+
+ This seems like it might work. It's untested. 
+
+ class MockInput( object ):
+ def __init__( self, *values ):
+  self.values= list(values)
+  self.history= []
+ def __call__( self, *args, **kw ):
+  try:
+   response= self.values.pop(0)
+   self.history.append( (args, kw, response) )
+   return response
+  except IndexError:
+   raise EOFError()
+
+class TestSomething( unittest.TestCase ):
+ def test_when_input_invalid( self ):
+  input= MockInput( "this", "and", "that" )
+  # some test case based on the input function
+ 
+ #7 Replace sys.stdin with a StringIO (or cStringIO) object.

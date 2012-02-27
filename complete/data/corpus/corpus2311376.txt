@@ -1,0 +1,143 @@
+Question (ID-2311376): speed-up python function to process files with data segments separated by a blank space I need to process files with data segments separated by a blank space, for example: 
+
+ 93.18 15.21 36.69 33.85 16.41 16.81 29.17 
+21.69 23.71 26.38 63.70 66.69 0.89 39.91 
+86.55 56.34 57.80 98.38 0.24 17.19 75.46 
+[...]
+1.30 73.02 56.79 39.28 96.39 18.77 55.03
+
+99.95 28.88 90.90 26.70 62.37 86.58 65.05 
+25.16 32.61 17.47 4.23 34.82 26.63 57.24 
+36.72 83.30 97.29 73.31 31.79 80.03 25.71 
+[...]
+2.74 75.92 40.19 54.57 87.41 75.59 22.79
+
+.
+.
+.
+ 
+
+ for this I am using the following function. 
+In every call I get the necessary data, but I need to speed-up the code. 
+
+ Is there a more efficient way? 
+
+ EDIT : I will be updating the code with the changes that achieve improvements 
+
+ ORIGINAL: 
+
+ def get_pos_nextvalues(pos_file, indices):
+ result = []
+ for line in pos_file:
+  line = line.strip()
+  if not line:
+   break
+  values = [float(value) for value in line.split()]
+  result.append([float(values[i]) for i in indices])
+ return np.array(result)
+ 
+
+ NEW: 
+
+ def get_pos_nextvalues(pos_file, indices):
+ result = ''
+ for line in pos_file:
+  if len(line) &gt; 1:
+   s = line.split()
+   result += ' '.join([s [i] for i in indices])
+  else:
+   break
+ else:
+  return np.array([])
+ result = np.fromstring(result, dtype=float, sep=' ')
+ result = result.reshape(result.size/len(indices), len(indices))
+ return result
+ 
+
+ . 
+
+ pos_file = open(filename, 'r', buffering=1024*10)
+
+[...]
+
+while(some_condition):
+ vs = get_pos_nextvalues(pos_file, (4,5,6))
+ [...]
+ 
+
+ speedup = 2.36 
+ Answers (Total-6): #0 not to convert floats to floats would be the first step. I would suggest, however, to first profile your code and then try to optimize the bottleneck parts. 
+
+ I understand that you've changed your code from the original, but 
+
+ values = [value for value in line.split()]
+ 
+
+ is not a good thing either. just write values = line.split() if this is what you mean. 
+
+ Seeing how you're using NumPy, I'd suggest some methods of file reading that are demonstrated in their docs . 
+ #1 You are only reading every character exactly once, so there isn't any real performance to gain. 
+
+ You could combine strip and split if the empty lines contain a lot of whitespace. 
+
+ You could also save some time initializing the numpy array from start, instead of first creating a python array and then converting. 
+ #2 try increasing the read buffer, IO is probably the bottle neck of your code 
+
+ open('file.txt', 'r', 1024 * 10) 
+ 
+
+ also if the data is fully sequential you can try to skip the line by line code and convert a bunch of lines at once 
+ #3 Instead of : 
+
+ if len(line) &lt;= 1: # only '\n' in «empty» lines
+ break
+values = line.split()
+ 
+
+ try this: 
+
+ values = line.split()
+if not values: # line is wholly whitespace, end of segment
+ break
+ 
+ #4 numpy.fromfile doesn't work for you? 
+
+ arr = fromfile('tmp.txt', sep=' ', dtype=int)
+ 
+ #5 Here's a variant that might be faster for few indices. It builds a string of only the desired values so that np.fromstring does less work. 
+
+ def get_pos_nextvalues_fewindices(pos_file, indices):
+ result = ''
+ for line in pos_file:
+  if len(line) &gt; 1:
+   s = line.split()
+   for i in indices:
+    result += s[i] + ' '
+  else:
+   return np.array([])
+ result = np.fromstring(result, dtype=float, sep=' ')
+ result = result.reshape(result.size/len(indeces), len(indeces))
+ return result
+ 
+
+ This trades off the overhead of split() and an added loop for less parsing. Or perhaps there's some clever regex trick you can do to extract the desired substrings directly? 
+
+ Old Answer 
+
+ np.mat('1.23 2.34 3.45 6\n1.32 2.43 7 3.54') converts the string to a numpy matrix of floating point values. This might be a faster kernel for you to use. For instance: 
+
+ import numpy as np
+def ReadFileChunk(pos_file):
+ chunktxt = ""
+ for line in pos_file:
+  if len(line) &gt; 1:
+   chunktxt = chunktxt + line
+  else:
+   break
+
+ return np.mat(chunktxt).tolist()
+ # or alternatively
+ #return np.array(np.mat(s))
+ 
+
+ Then you can move your indexing stuff to another function. Hopefully having numpy parse the string internally is faster than calling float() repetitively.

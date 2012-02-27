@@ -1,0 +1,95 @@
+Question (ID-135664): How many bytes per element are there in a Python list (tuple)? For example, how much memory is required to store a list of one million (32-bit) integers? 
+
+ alist = range(1000000) # or list(range(1000000)) in Python 3.0
+ 
+ Answers (Total-6): #0 "It depends." Python allocates space for lists in such a way as to achieve amortized constant time for appending elements to the list. 
+
+ In practice, what this means with the current implementation is... the list always has space allocated for a power-of-two number of elements. So range(1000000) will actually allocate a list big enough to hold 2^20 elements (~ 1.045 million). 
+
+ This is only the space required to store the list structure itself (which is an array of pointers to the Python objects for each element). A 32-bit system will require 4 bytes per element, a 64-bit system will use 8 bytes per element. 
+
+ Furthermore, you need space to store the actual elements. This varies widely. For small integers (-5 to 256 currently), no additional space is needed, but for larger numbers Python allocates a new object for each integer, which takes 10-100 bytes and tends to fragment memory. 
+
+ Bottom line: it's complicated and Python lists are not a good way to store large homogeneous data structures. For that, use the array module or, if you need to do vectorized math, use NumPy. 
+
+ PS- Tuples, unlike lists, are not designed to have elements progressively appended to them. I don't know how the allocator works, but don't even think about using it for large data structures :-) 
+ #1 Useful links: 
+
+ How to get memory size/usage of python object 
+
+ Memory sizes of python objects? 
+
+ if you put data into dictionary, how do we calculate the data size? 
+
+ However they don't give a definitive answer. The way to go: 
+
+ 
+ Measure memory consumed by Python interpreter with/without the list (use OS tools). 
+ Use a third-party extension module which defines some sort of sizeof(PyObject). 
+ 
+
+ Update : 
+
+ Recipe 546530: Size of Python objects (revised) 
+
+ import asizeof
+
+N = 1000000
+print asizeof.asizeof(range(N)) / N
+# -&gt; 20 (python 2.5, WinXP, 32-bit Linux)
+# -&gt; 33 (64-bit Linux)
+ 
+ #2 Addressing "tuple" part of the question 
+
+ Declaration of CPython's PyTuple in a typical build configuration boils down to this: 
+
+ struct PyTuple {
+ size_t refcount; // tuple's reference count
+ typeobject *type; // tuple type object
+ size_t n_items; // number of items in tuple
+ PyObject *items[1]; // contains space for n_items elements
+};
+ 
+
+ Size of PyTuple instance is fixed during it's construction and cannot be changed afterwards. The number of bytes occupied by PyTuple can be calculated as 
+
+ 
+ sizeof(size_t) x 2 + sizeof(void*) x (n_items + 1) . 
+ 
+
+ This gives shallow size of tuple. To get full size you also need to add total number of bytes consumed by object graph rooted in PyTuple::items[] array. 
+
+ It's worth noting that tuple construction routines make sure that only single instance of empty tuple is ever created (singleton). 
+
+ References:
+ Python.h ,
+ object.h ,
+ tupleobject.h ,
+ tupleobject.c 
+ #3 
+ A new function, getsizeof() , takes a
+ Python object and returns the amount
+ of memory used by the object, measured
+ in bytes. Built-in objects return
+ correct results; third-party
+ extensions may not, but can define a
+ __sizeof__() method to return the object’s size. 
+ 
+
+ kveretennicov@nosignal:~/py/r26rc2$ ./python
+Python 2.6rc2 (r26rc2:66712, Sep 2 2008, 13:11:55) 
+[GCC 4.2.3 (Ubuntu 4.2.3-2ubuntu7)] on linux2
+&gt;&gt;&gt; import sys
+&gt;&gt;&gt; sys.getsizeof(range(1000000))
+4000032
+&gt;&gt;&gt; sys.getsizeof(tuple(range(1000000)))
+4000024
+ 
+
+ Obviously returned numbers don't include memory consumed by contained objects (sys.getsizeof(1) == 12). 
+ #4 This is implementation specific, I'm pretty sure. Certainly it depends on the internal representation of integers - you can't assume they'll be stored as 32-bit since Python gives you arbitrarily large integers so perhaps small ints are stored more compactly. 
+
+ On my Python (2.5.1 on Fedora 9 on core 2 duo) the VmSize before allocation is 6896kB, after is 22684kB. After one more million element assignment, VmSize goes to 38340kB. This very grossly indicates around 16000kB for 1000000 integers, which is around 16 bytes per integer. That suggests a lot of overhead for the list. I'd take these numbers with a large pinch of salt. 
+ #5 I'm wary of why you're asking. Are you trying to figure out how much memory you'll need for a given implementation? Say, you're going to read 10,000,000 widgets and want to know how much RAM it will suck? 
+
+ If that's the case, rather than trying to figure out how much RAM each widget takes, figure out how much RAM, say, 10,000 widgets takes and multiply up to get your actual size.

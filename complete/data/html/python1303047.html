@@ -1,0 +1,155 @@
+<h3>Question (ID-1303047):</h3><h2>Interface with remote computers using Python</h2><p>I've just become the system admin for my research group's cluster and, in this respect, am a novice. I'm trying to make a few tools to monitor the network and need help getting started implementing them with python (my native tongue).</p>
+
+<p>For example, I would like to view who is logged onto remote machines. By hand, I'd ssh and <code>who</code>, but how would I get this info into a script for manipulation? Something like,</p>
+
+<pre><code>import remote_info as ri
+ri.open("foo05.bar.edu")
+ri.who()
+
+Out[1]: 
+hutchinson tty7         2009-08-19 13:32 (:0)
+hutchinson pts/1        2009-08-19 13:33 (:0.0)
+</code></pre>
+
+<p>Similarly for things like <code>cat /proc/cpuinfo</code> to get the processor information of a node. A starting point would be really great. Thanks.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Here's a simple, cheap solution to get you started</p>
+
+<pre><code>from subprocess import *
+p = Popen('ssh servername who', shell=True, stdout=PIPE)
+p.wait()
+print p.stdout.readlines()
+</code></pre>
+
+<p>returns (eg)</p>
+
+<pre><code>['usr      pts/0        2009-08-19 16:03 (kakapo)\n',
+ 'usr      pts/1        2009-08-17 15:51 (kakapo)\n',
+ 'usr      pts/5        2009-08-17 17:00 (kakapo)\n']
+</code></pre>
+
+<p>and for cpuinfo:</p>
+
+<pre><code>p = Popen('ssh servername cat /proc/cpuinfo', shell=True, stdout=PIPE)
+</code></pre>
+<br /><b>#1</b><br /><p>I've been using <a href="http://sourceforge.net/projects/pexpect/" rel="nofollow">Pexpect</a>, which let's you ssh into machines, send commands, read the output, and react to it, with success. I even started an open-source project around it, <a href="http://bitbucket.org/inerte/proxpect/" rel="nofollow">Proxpect</a> - which haven't been updated in ages, but I digress...</p>
+<br /><b>#2</b><br /><p>The <a href="http://pexpect.sourceforge.net/pexpect.html" rel="nofollow">pexpect</a> module can help you interface with ssh. More or less, here is what your example would look like.</p>
+
+<pre><code>child = pexpect.spawn('ssh servername')
+child.expect('Password:')
+child.sendline('ABCDEF')
+(output,status) = child.sendline('who')
+</code></pre>
+<br /><b>#3</b><br /><p>If your needs overgrow simple "<code>ssh remote-host.example.org who</code>" then there is an awesome python library, called <a href="http://en.wikipedia.org/wiki/RPyC" rel="nofollow">RPyC</a>. It has so called "classic" mode which allows to almost transparently execute Python code over the network with several lines of code. Very useful tool for trusted environments.</p>
+
+<p>Here's an example from Wikipedia:</p>
+
+<pre><code>import rpyc
+# assuming a classic server is running on 'hostname'
+conn = rpyc.classic.connect("hostname")
+
+# runs os.listdir() and os.stat() remotely, printing results locally
+def remote_ls(path):
+    ros = conn.modules.os
+    for filename in ros.listdir(path):
+        stats = ros.stat(ros.path.join(path, filename))
+        print "%d\t%d\t%s" % (stats.st_size, stats.st_uid, filename)
+
+remote_ls("/usr/bin")
+</code></pre>
+
+<p>If you're interested, there's <a href="http://rpyc.wikidot.com/tutorial:part1" rel="nofollow">a good tutorial on their wiki</a>.</p>
+
+<p>But, of course, if you're perfectly fine with ssh calls using <code>Popen</code> or just don't want to run separate "RPyC" daemon, then this is definitely an overkill.</p>
+<br /><b>#4</b><br /><p>This covers the bases.  Notice the use of sudo for things that needed more privileges.  We configured sudo to allow those commands for that user without needing a password typed.</p>
+
+<p>Also, keep in mind that you should run ssh-agent to make this "make sense".  But all in all, it works really well.  Running <code>deploy-control httpd configtest</code> will check the apache configuration on all the remote servers.</p>
+
+<pre><code>#!/usr/local/bin/python
+
+import subprocess
+import sys
+
+# The user@host: for the SourceURLs (NO TRAILING SLASH)
+RemoteUsers = [
+        "deploy@host1.example.com",
+        "deploy@host2.appcove.net",
+        ]
+
+###################################################################################################
+# Global Variables
+Arg                             = None
+
+
+# Implicitly verified below in if/else
+Command = tuple(sys.argv[1:])
+
+ResultList = []
+###################################################################################################
+for UH in RemoteUsers:
+        print "-"*80
+        print "Running %s command on: %s" % (Command, UH)
+
+        #----------------------------------------------------------------------------------------------
+        if Command == ('httpd', 'configtest'):
+                CommandResult = subprocess.call(('ssh', UH, 'sudo /sbin/service httpd configtest'))
+
+        #----------------------------------------------------------------------------------------------
+        elif Command == ('httpd', 'graceful'):
+                CommandResult = subprocess.call(('ssh', UH, 'sudo /sbin/service httpd graceful'))
+
+        #----------------------------------------------------------------------------------------------
+        elif Command == ('httpd', 'status'):
+                CommandResult = subprocess.call(('ssh', UH, 'sudo /sbin/service httpd status'))
+
+        #----------------------------------------------------------------------------------------------
+        elif Command == ('disk', 'usage'):
+                CommandResult = subprocess.call(('ssh', UH, 'df -h'))
+
+        #----------------------------------------------------------------------------------------------
+        elif Command == ('uptime',):
+                CommandResult = subprocess.call(('ssh', UH, 'uptime'))
+
+        #----------------------------------------------------------------------------------------------
+        else:
+                print
+                print "#"*80
+                print
+                print "Error: invalid command"
+                print
+                HelpAndExit()
+
+        #----------------------------------------------------------------------------------------------
+        ResultList.append(CommandResult)
+        print
+
+
+###################################################################################################
+if any(ResultList):
+        print "#"*80
+        print "#"*80
+        print "#"*80
+        print
+        print "ERRORS FOUND.  SEE ABOVE"
+        print
+        sys.exit(0)
+
+else:
+        print "-"*80
+        print
+        print "Looks OK!"
+        print
+        sys.exit(1)
+</code></pre>
+<br /><b>#5</b><br /><p>Fabric is a simple way to automate some simple tasks like this, the version I'm currently using allows you to wrap up commands like so:</p>
+
+<pre><code>run('whoami', fail='ignore')
+</code></pre>
+
+<p>you can specify config options (config.fab_user, config.fab_password) for each machine you need (if you want to automate username password handling).</p>
+
+<p>More info on Fabric here:</p>
+
+<p><a href="http://www.nongnu.org/fab/" rel="nofollow">http://www.nongnu.org/fab/</a></p>
+
+<p>There is a new version which is more Pythonic - I'm not sure whether that is going to be better for you int his case... works fine for me at present...</p>
+<br />

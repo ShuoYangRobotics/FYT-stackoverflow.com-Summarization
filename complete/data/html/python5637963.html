@@ -1,0 +1,330 @@
+<h3>Question (ID-5637963):</h3><h2>Only extract those words from a list that include no repeating letters, using regex</h2><p>I have a large word list file with one word per line. I would like to filter out the words with repeating alphabets. </p>
+
+<pre><code>INPUT:
+  abducts
+  abe
+  abeam
+  abel
+  abele
+
+OUTPUT:
+  abducts
+  abe
+  abel
+</code></pre>
+
+<p>I'd like to do this using Regex (grep or perl or python). Is that possible?</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>It's much easier to write a regex that matches words that <em>do</em> have repeating letters, and then negate the match:</p>
+
+<pre><code>my @input = qw(abducts abe abeam abel abele);
+my @output = grep { not /(\w).*\1/ } @input;
+</code></pre>
+
+<p>(This code assumes that <code>@input</code> contains one word per entry.) But this problem isn't necessarily best solved with a regex.</p>
+
+<p>I've given the code in Perl, but it could easily be translated into any regex flavor that supports backreferences, including <code>grep</code> (which also has the <code>-v</code> switch to negate the match).</p>
+<br /><b>#1</b><br /><pre><code>$ egrep -vi '(.).*\1' wordlist
+</code></pre>
+<br /><b>#2</b><br /><p>It is possible to use regex:</p>
+
+<pre><code>import re
+
+inp = [
+    'abducts'
+,   'abe'
+,   'abeam'
+,   'abel'
+,   'abele'
+]
+
+# detect word which contains a character at least twice
+rgx = re.compile(r'.*(.).*\1.*') 
+
+def filter_words(inp):
+    for word in inp:
+        if rgx.match(word) is None:
+            yield word
+
+print list(filter_words(inp))
+</code></pre>
+<br /><b>#3</b><br /><h1>Simple Stuff</h1>
+
+<p>Despite the inaccurate protestation that this is impossible with a regex, it certainly is.</p>
+
+<p>While @cjm justly states that it is a lot easier to negate a positive match than  it is to express a negative one as a single pattern, the model for doing so is sufficiently well-known that it becomes a mere matter of plugging things into that model. Given that:</p>
+
+<pre>
+    /X/
+</pre>
+
+<p>matches something, then the way to express the condition</p>
+
+<pre>
+    ! /X/
+</pre>
+
+<p>in a single, positively-matching pattern is to write it as</p>
+
+<pre>
+    /\A (?: (?! X ) . ) * \z /sx
+</pre>
+
+<p>Therefore, given that the positive pattern is</p>
+
+<pre>
+    / (\pL) .* \1 /sxi
+</pre>
+
+<p>the corresponding negative needs must be</p>
+
+<pre>
+    /\A (?: (?! (\pL) .* \1  ) . ) * \z /sxi
+</pre>
+
+<p>by way of simple substitution for <em>X.</em></p>
+
+<h1>Real-World Concerns</h1>
+
+<p>That said, there are extenuating concerns that may sometimes require more work. For example, while <code>\pL</code> describes any code point having the <em>GeneralCategory=Letter</em> property, it does not consider what to do with words like <em>red‐violet–colored</em>, <em>’Tisn’t</em>, or <em>fiancée</em> — the latter of which is different in otherwise-equivalent NFD vs NFC forms.</p>
+
+<p>You therefore must first run it through full decomposition, so that a string like <code>"r\x{E9}sume\x{301}"</code> would correctly detect the duplicate “letter <em>é</em>’s” — that is, all canonically equivalent grapheme cluster units.</p>
+
+<p>To account for such as these, you must at a bare minimum first run your string through an NFD decomposition, and then afterwards also use grapheme clusters via <code>\X</code> instead of arbitrary code points via <code>.</code>. </p>
+
+<p>So for English, you would want something that followed along these lines for the positive match, with the corresponding negative match per the substitution give above:</p>
+
+<pre>
+    NFD($string) =~ m{
+        (?&lt;ELEMENT&gt;
+           (?= [\p{Alphabetic}\p{Dash}\p{Quotation_Mark}] ) \X 
+        )
+        \X *
+        \k&lt;ELEMENT&gt;
+    }xi
+</pre>
+
+<p>But even with that there still remain certain outstanding issues unresolved, such as for example whether <code>\N{EN DASH}</code> and <code>\N{HYPHEN}</code> should be considered equivalent elements or different ones. </p>
+
+<p>That’s because properly written,  hyphenating two elements like <em>red‐violet</em> and <em>colored</em> to form the single compound word <em>red‐violet–colored</em>, where at least one of the pair <em>already contains a hyphen</em>, requires that one employ an EN DASH as the separator instead of a mere HYPHEN.</p>
+
+<p>Normally the EN DASH is reserved for compounds of like nature, such as <em>a time–space trade‐off</em>. People using typewriter‐English don’t even do that, though, using that super‐massively overloaded legacy code point, HYPHEN-MINUS, for both: <em>red-violet-colored</em>. </p>
+
+<p>It just depends whether your text came from some 19th‐century manual typewriter — or whether it represents English text properly rendered under modern typesetting rules. :)</p>
+
+<h1>Conscientious Case Insensitivity</h1>
+
+<p>You will note I am here considering letter that differ in case alone to be the same one. That’s because I use the <code>/i</code> regex switch, ᴀᴋᴀ the <code>(?i)</code> pattern modifier.</p>
+
+<p>That’s <em>rather</em> like saying that they are the same as collation strength 1 — but not quite, because Perl uses only case folding (albeit <em>full</em> case folding not <em>simple</em>) for its case insensitive matches, not some higher collation strength than the tertiary level as might be preferred.</p>
+
+<p>Full equivalence at the primary collation strength is a significantly stronger statement, but one that may well be needed to fully solve the problem in the general case. However, <em>that</em> requires a lot more work than the problem necessarily requires in many specific instances. In short, it is overkill for many specific cases that actually arise, no matter how much it might be needed for the hypothetical general case. </p>
+
+<p>This is made even more difficult because, although you can for example do this:</p>
+
+<pre>
+    my $collator = new Unicode::Collate::Locale::
+                       level =&gt; 1, 
+                       locale =&gt; "de__phonebook",
+                       normalization =&gt; undef,
+                    ;
+
+    if ($collator-&gt;cmp("müß", "MUESS") == 0) { ... }
+</pre>
+
+<p>and expect to get the right answer — and you do, hurray! — this sort of robust string comparison is not easily extended to regex matches.</p>
+
+<p>Yet. :)</p>
+
+<h1>Summary</h1>
+
+<p>The choice of whether to under‐engineer — or to over‐engineer — a solution will vary according to individual circumstances, which no one can decide for you.</p>
+
+<p>I like CJM’s solution that negates a positive match, myself, although it’s somewhat cavalier about what it considers a duplicate letter.  Notice:</p>
+
+<pre>
+    while ("de__phonebook" =~ /(?=((\w).*?\2))/g) {
+        print "The letter &lt;$2&gt; is duplicated in the substring &lt;$1&gt;.\n";
+    } 
+</pre>
+
+<p>produces:</p>
+
+<pre>
+    The letter &lt;e&gt; is duplicated in the substring &lt;e__phone&gt;.
+    The letter &lt;_&gt; is duplicated in the substring &lt;__&gt;.
+    The letter &lt;o&gt; is duplicated in the substring &lt;onebo&gt;.
+    The letter &lt;o&gt; is duplicated in the substring &lt;oo&gt;.
+</pre>
+
+<p>That shows why when you need to match a letter, you should <em>alwasy</em> use <code>\pL</code> ᴀᴋᴀ <code>\p{Letter}</code> instead of <code>\w</code>, which actually matches <code>[\p{alpha}\p{GC=Mark}\p{NT=De}\p{GC=Pc}]</code>. </p>
+
+<p>Of course, when you need to match an alphabetic, you need to use <code>\p{alpha}</code> ᴀᴋᴀ<code>\p{Alphabetic}</code>, which isn’t at all the same as a mere letter — contrary to popular misunderstanding. :)</p>
+<br /><b>#4</b><br /><p>If you're dealing with <em>long</em> strings that are likely to have duplicate letters, stopping ASAP may help.</p>
+
+<pre><code>INPUT: for (@input) {
+   my %seen;
+   while (/(.)/sg) {
+      next INPUT if $seen{$1}++;
+   }
+   say;
+}
+</code></pre>
+
+<p>I'd go with the simplest solution unless the performance is found to be really unacceptable.</p>
+
+<pre><code>my @output = grep !/(.).*?\1/s, @input;
+</code></pre>
+<br /><b>#5</b><br /><p>I was very curious about the relative speed of the various Perl-based methods submitted by other authors for this question. So, I decided to benchmark them. </p>
+
+<p>Where necessary, I slightly modified each method so that it would populate an <code>@output</code> array, to keep the input and output consistent. I verified that all the methods produce the same <code>@output</code>, although I have not documented that assertion here. </p>
+
+<p>Here is the script to benchmark the various methods:</p>
+
+<pre><code>#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Benchmark qw(cmpthese :hireswallclock);
+
+# get a convenient list of words (on Mac OS X 10.6.6, this contains 234,936 entries)
+open (my $fh, '&lt;', '/usr/share/dict/words') or die "can't open words file: $!\n";
+my @input = &lt;$fh&gt;;
+close $fh;
+
+# remove line breaks
+chomp @input;
+
+# set-up the tests (
+my %tests = (
+
+  # Author: cjm
+  RegExp =&gt; sub { my @output = grep { not /(\w).*\1/ } @input },
+
+  # Author: daotoad
+  SplitCount =&gt; sub { my @output = grep { my @l = split ''; my %l; @l{@l} = (); keys %l == @l } @input; },
+
+  # Author: ikegami
+  NextIfSeen =&gt; sub {
+    my @output;
+    INPUT: for (@input) {
+      my %seen;
+      while (/(.)/sg) {
+        next INPUT if $seen{$1}++;
+      }
+      push @output, $_;
+    }
+
+  },
+
+  # Author: ysth
+  BitMask =&gt; sub {
+    my @output;
+    for my $word (@input) {
+      my $mask1 = $word x ( length($word) - 1 );
+      my $mask2 = join( '', map { substr($word, $_), substr($word, 0, $_) } 1..length($word)-1 );
+      if ( ( $mask1 ^ $mask2 ) !~ tr/\0// ) {
+        push @output, $word;
+      }
+    }
+  },
+
+);
+
+# run each test 100 times
+cmpthese(100, \%tests);
+</code></pre>
+
+<p>Here are the results for 100 iterations. </p>
+
+<pre><code>           s/iter SplitCount    BitMask NextIfSeen     RegExp
+SplitCount   2.85         --       -11%       -58%       -85%
+BitMask      2.54        12%         --       -53%       -83%
+NextIfSeen   1.20       138%       113%         --       -64%
+RegExp      0.427       567%       496%       180%         --
+</code></pre>
+
+<p>As you can see, cjm's "RegExp" method is the fastest by far. It is 180% faster than the next fastest method, ikegami's "NextIfSeen" method. I suspect that the relative speed of the RegExp and NextIfSeen methods will converge as the average length of the input strings increases. But for "normal" length English words, the RegExp method is the fastest.</p>
+<br /><b>#6</b><br /><p>cjm gave the regex, but here's an interesting non-regex way:</p>
+
+<pre><code>@words = qw/abducts abe abeam abel abele/;
+for my $word (@words) {
+    my $mask1 = $word x ( length($word) - 1 );
+    my $mask2 = join( '', map { substr($word, $_), substr($word, 0, $_) } 1..length($word)-1 );
+    if ( ( $mask1 ^ $mask2 ) !~ tr/\0// ) {
+        print "$word\n";
+    }
+}
+</code></pre>
+<br /><b>#7</b><br /><p>In response to cjm's solution, I wondered about how it compared to some rather terse Perl:</p>
+
+<pre><code>my @output = grep { my @l = split ''; my %l; @l{@l} = (); keys %l == @l } @input;
+</code></pre>
+
+<p>Since I am not constrained in character count and formatting here, I'll be a bit clearer, even to the point of over-documenting:</p>
+
+<pre><code>my @output = grep {
+
+    # Split $_ on the empty string to get letters in $_. 
+    my @letters = split '';
+
+    # Use a hash to remove duplicate letters.
+    my %unique_letters;
+    @unique_letters{@letters} = ();  # This is a hash slice assignment.
+                                     # See perldoc perlvar for more info
+
+    # is the number of unique letters equal to the number of letters?
+    keys %unique_letters == @letters
+
+} @input;
+</code></pre>
+
+<p>And, of course in production code, please do something like this:</p>
+
+<pre><code>my @output = grep ! has_repeated_chars($_), @input;
+
+sub has_repeated_letters {
+    my $word = shift;
+    #blah blah blah
+    # see example above for the code to use here, with a nip and a tuck.
+}
+</code></pre>
+<br /><b>#8</b><br /><p>In python with a regex:</p>
+
+<pre><code>python -c 'import re, sys; print "".join(s for s in open(sys.argv[1]) if not re.match(r".*(\w).*\1", s))' wordlist.txt
+</code></pre>
+
+<p>In python without a regex:</p>
+
+<pre><code>python -c 'import sys; print "".join(s for s in open(sys.argv[1]) if len(s) == len(frozenset(s)))' wordlist.txt
+</code></pre>
+
+<p>I performed some timing tests with a hardcoded file name and output redirected to /dev/null to avoid including output in the timing:</p>
+
+<p>Timings without the regex:</p>
+
+<pre><code>python -m timeit 'import sys' 'print &gt;&gt; sys.stderr, "".join(s for s in open("wordlist.txt") if len(s) == len(frozenset(s)))' 2&gt;/dev/null
+10000 loops, best of 3: 91.3 usec per loop
+</code></pre>
+
+<p>Timings with the regex:</p>
+
+<pre><code>python -m timeit 'import re, sys' 'print &gt;&gt; sys.stderr, "".join(s for s in open("wordlist.txt") if re.match(r".*(\w).*\1", s))' 2&gt;/dev/null
+10000 loops, best of 3: 105 usec per loop
+</code></pre>
+
+<p>Clearly the regex is a tiny bit slower than a simple frozenset creation and len comparison in python.</p>
+<br /><b>#9</b><br /><p>You can't do this with Regex.  Regex is a Finite State Machine, and this would require a stack to store what letters have been seen.</p>
+
+<p>I would suggest doing this with a foreach and manually check each word with code.
+Something like</p>
+
+<pre><code>List chars
+foreach word in list
+    foreach letter in word
+        if chars.contains letter then remove word from list
+        else
+            chars.Add letter
+    chars.clear
+</code></pre>
+<br />

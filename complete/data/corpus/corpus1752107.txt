@@ -1,0 +1,108 @@
+Question (ID-1752107): How to loop until EOF in Python? I need to loop until I hit the end of a file-like object, but I'm not finding an "obvious way to do it", which makes me suspect I'm overlooking something, well, obvious. :-) 
+
+ I have a stream (in this case, it's a StringIO object, but I'm curious about the general case as well) which stores an unknown number of records in "&lt;length>&lt;data>" format, e.g.: 
+
+ data = StringIO("\x07\x00\x00\x00foobar\x00\x04\x00\x00\x00baz\x00")
+ 
+
+ Now, the only clear way I can imagine to read this is using (what I think of as) an initialized loop, which seems a little un-Pythonic: 
+
+ len_name = data.read(4)
+
+while len_name != "":
+ len_name = struct.unpack("&lt;I", len_name)[0]
+ names.append(data.read(len_name))
+
+ len_name = data.read(4)
+ 
+
+ In a C-like language, I'd just stick the read(4) in the while 's test clause, but of course that won't work for Python. Any thoughts on a better way to accomplish this? 
+ Answers (Total-6): #0 You can combine iteration through iter() with a sentinel: 
+
+ for block in iter(lambda: file_obj.read(4), ""):
+ use(block)
+ 
+ #1 Have you seen how to iterate over lines in a text file? 
+
+ for line in file_obj:
+ use(line)
+ 
+
+ You can do the same thing with your own generator: 
+
+ def read_blocks(file_obj, size):
+ while True:
+ data = file_obj.read(size)
+ if not data:
+  break
+ yield data
+
+for block in read_blocks(file_obj, 4):
+ use(block)
+ 
+
+ See also: 
+
+ 
+ file.read 
+ 
+ #2 I see, as predicted, that the typical and most popular answer are using very specialized generators to "read 4 bytes at a time". Sometimes generality isn't any harder (and much more rewarding;-), so, I've suggested instead the following very general solution: 
+
+ import operator
+def funlooper(afun, *a, **k):
+ wearedone = k.pop('wearedone', operator.not_)
+ while True:
+ data = afun(*a, **k)
+ if wearedone(data): break
+ yield data
+ 
+
+ Now your desired loop header is just: for len_name in funlooper(data.read, 4): . 
+
+ Edit : made much more general by the wearedone idiom since a comment accused my slightly less general previous version (hardcoding the exit test as if not data: ) of having "a hidden dependency", of all things!-) 
+
+ The usual swiss army knife of looping, itertools , is fine too, of course, as usual: 
+
+ import itertools as it
+
+for len_name in it.takewhile(bool, it.imap(data.read, it.repeat(4))): ...
+ 
+
+ or, quite equivalently: 
+
+ import itertools as it
+
+def loop(pred, fun, *args):
+ return it.takewhile(pred, it.starmap(fun, it.repeat(args)))
+
+for len_name in loop(bool, data.read, 4): ...
+ 
+ #3 I prefer the already mentioned iterator-based solution to turn this into a for-loop. Another solution written directly is Knuth's "loop-and-a-half" 
+
+ while 1:
+ len_name = data.read(4)
+ if not len_name:
+  break
+ names.append(data.read(len_name))
+ 
+
+ You can see by comparison how that's easily hoisted into its own generator and used as a for-loop. 
+ #4 The EOF marker in python is an empty string so what you have is pretty close to the best you are going to get without writing a function to wrap this up in an iterator. I could be written in a little more pythonic way by changing the while like: 
+
+ while len_name:
+ len_name = struct.unpack("&lt;I", len_name)[0]
+ names.append(data.read(len_name))
+ len_name = data.read(4)
+ 
+ #5 I'd go with Tendayi's suggestion re function and iterator for readability: 
+
+ def read4():
+ len_name = data.read(4)
+ if len_name:
+  len_name = struct.unpack("&lt;I", len_name)[0]
+  return data.read(len_name)
+ else:
+  raise StopIteration
+
+for d in iter(read4, ''):
+ names.append(d)

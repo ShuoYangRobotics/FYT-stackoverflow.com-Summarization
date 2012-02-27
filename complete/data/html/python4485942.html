@@ -1,0 +1,429 @@
+<h3>Question (ID-4485942):</h3><h2>how to avoid substrings</h2><p>I currently process sections of a string like this:</p>
+
+<pre><code>for (i, j) in huge_list_of_indices:
+    process(huge_text_block[i:j])
+</code></pre>
+
+<p>I want to avoid the overhead of generating these temporary substrings. Any ideas? Perhaps a wrapper that somehow uses index offsets? This is currently my bottleneck.</p>
+
+<p>Note that <em>process()</em> is another python module that expects a string as input.</p>
+
+<p><strong>Edit:</strong></p>
+
+<p>A few people doubt there is a problem. Here are some sample results:</p>
+
+<pre><code>import time
+import string
+text = string.letters * 1000
+
+def timeit(fn):
+    t1 = time.time()
+    for i in range(len(text)):
+        fn(i)
+    t2 = time.time()
+    print '%s took %0.3f ms' % (fn.func_name, (t2-t1) * 1000)
+
+def test_1(i):
+    return text[i:]
+
+def test_2(i):
+    return text[:]
+
+def test_3(i):
+    return text
+
+timeit(test_1)
+timeit(test_2)
+timeit(test_3)
+</code></pre>
+
+<p>Output:</p>
+
+<pre><code>test_1 took 972.046 ms
+test_2 took 47.620 ms
+test_3 took 43.457 ms
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p><strong>I think what you are looking for are <a href="http://docs.python.org/library/functions.html#buffer">buffers</a>.</strong></p>
+
+<p>The characteristic of buffers is that they "slice" an object supporting the buffer interface <em>without copying its content</em>, but essentially opening a "window" on the sliced object content. Some more technical explanation is available <a href="http://docs.python.org/c-api/buffer.html">here</a>. An excerpt:</p>
+
+<blockquote>
+  <p>Python objects implemented in C can export a group of functions called the “buffer interface.” These functions can be used by an object to expose its data in a raw, byte-oriented format. Clients of the object can use the buffer interface to access the object data directly, without needing to copy it first.</p>
+</blockquote>
+
+<p>In your case the code should look more or less like this:</p>
+
+<pre><code>&gt;&gt;&gt; s = 'Hugely_long_string_not_to_be_copied'
+&gt;&gt;&gt; ij = [(0, 3), (6, 9), (12, 18)]
+&gt;&gt;&gt; for i, j in ij:
+...     print buffer(s, i, j-i)  # Should become process(...)
+Hug
+_lo
+string
+</code></pre>
+
+<p>HTH!</p>
+<br /><b>#1</b><br /><p>A wrapper that uses index offsets to a mmap object could work, yes. </p>
+
+<p>But before you do that, are you sure that generating these substrings are a problem? Don't optimize before you have found out where the time and memory actually goes. I wouldn't expect this to be a significant problem.</p>
+<br /><b>#2</b><br /><p>If you are using Python3 you can use protocol buffer and memory views. Assuming that the text is stored somewhere in the filesystem:</p>
+
+<pre><code>f = open(FILENAME, 'rb')
+data = bytearray(os.path.getsize(FILENAME))
+f.readinto(data)
+
+mv = memoryview(data)
+
+for (i, j) in huge_list_of_indices:
+    process(mv[i:j])
+</code></pre>
+
+<p>Check also <a href="http://eli.thegreenplace.net/2011/11/28/less-copies-in-python-with-the-buffer-protocol-and-memoryviews/" rel="nofollow">this</a> article. It might be useful.</p>
+<br /><b>#3</b><br /><p>Maybe a wrapper that uses index offsets is indeed what you are looking for.  Here is an example that does the job.  You may have to add more checks on slices (for overflow and negative indexes) depending on your needs.</p>
+
+<pre><code>#!/usr/bin/env python
+
+from collections import Sequence
+from timeit import Timer
+
+def process(s):
+    return s[0], len(s)
+
+class FakeString(Sequence):
+    def __init__(self, string):
+        self._string = string
+        self.fake_start = 0
+        self.fake_stop = len(string)
+
+    def setFakeIndices(self, i, j):
+        self.fake_start = i
+        self.fake_stop = j
+
+    def __len__(self):
+        return self.fake_stop - self.fake_start
+
+    def __getitem__(self, ii):
+        if isinstance(ii, slice):
+            if ii.start is None:
+                start = self.fake_start
+            else:
+                start = ii.start + self.fake_start
+            if ii.stop is None:
+                stop = self.fake_stop
+            else:
+                stop = ii.stop + self.fake_start
+            ii = slice(start,
+                       stop,
+                       ii.step)
+        else:
+            ii = ii + self.fake_start
+        return self._string[ii]
+
+def initial_method():
+    r = []
+    for n in xrange(1000):
+        r.append(process(huge_string[1:9999999]))
+    return r
+
+def alternative_method():
+    r = []
+    for n in xrange(1000):
+        fake_string.setFakeIndices(1, 9999999)
+        r.append(process(fake_string))
+    return r
+
+
+if __name__ == '__main__':
+    huge_string = 'ABCDEFGHIJ' * 100000
+    fake_string = FakeString(huge_string)
+
+    fake_string.setFakeIndices(5,15)
+    assert fake_string[:] == huge_string[5:15]
+
+    t = Timer(initial_method)
+    print "initial_method(): %fs" % t.timeit(number=1)
+</code></pre>
+
+<p>which gives:</p>
+
+<pre><code>initial_method(): 1.248001s  
+alternative_method(): 0.003416s
+</code></pre>
+<br /><b>#4</b><br /><p>The example the OP gives, will give nearly biggest performance difference between slicing and not slicing possible.</p>
+
+<p>If processing actually does something that takes significant time, the problem <strong>may</strong> hardly exist.</p>
+
+<p>Fact is OP needs to let us know what process does.  The most likely scenario is it does something significant, and therefore he should <strong>profile his code.</strong></p>
+
+<p>Adapted from op's example:</p>
+
+<pre><code>#slice_time.py
+
+import time
+import string
+text = string.letters * 1000
+import random
+indices = range(len(text))
+random.shuffle(indices)
+import re
+
+
+def greater_processing(a_string):
+    results = re.findall('m', a_string)
+
+def medium_processing(a_string):
+    return re.search('m.*?m', a_string)                                                                              
+
+def lesser_processing(a_string):
+    return re.match('m', a_string)
+
+def least_processing(a_string):
+    return a_string
+
+def timeit(fn, processor):
+    t1 = time.time()
+    for i in indices:
+        fn(i, i + 1000, processor)
+    t2 = time.time()
+    print '%s took %0.3f ms %s' % (fn.func_name, (t2-t1) * 1000, processor.__name__)
+
+def test_part_slice(i, j, processor):
+    return processor(text[i:j])
+
+def test_copy(i, j, processor):
+    return processor(text[:])
+
+def test_text(i, j, processor):
+    return processor(text)
+
+def test_buffer(i, j, processor):
+    return processor(buffer(text, i, j - i))
+
+if __name__ == '__main__':
+    processors = [least_processing, lesser_processing, medium_processing, greater_processing]
+    tests = [test_part_slice, test_copy, test_text, test_buffer]
+    for processor in processors:
+        for test in tests:
+            timeit(test, processor)
+</code></pre>
+
+<p>And then the run...</p>
+
+<pre><code>In [494]: run slice_time.py
+test_part_slice took 68.264 ms least_processing
+test_copy took 42.988 ms least_processing
+test_text took 33.075 ms least_processing
+test_buffer took 76.770 ms least_processing
+test_part_slice took 270.038 ms lesser_processing
+test_copy took 197.681 ms lesser_processing
+test_text took 196.716 ms lesser_processing
+test_buffer took 262.288 ms lesser_processing
+test_part_slice took 416.072 ms medium_processing
+test_copy took 352.254 ms medium_processing
+test_text took 337.971 ms medium_processing
+test_buffer took 438.683 ms medium_processing
+test_part_slice took 502.069 ms greater_processing
+test_copy took 8149.231 ms greater_processing
+test_text took 8292.333 ms greater_processing
+test_buffer took 563.009 ms greater_processing
+</code></pre>
+
+<p>Notes:</p>
+
+<p>Yes I tried OP's original test_1 with [i:] slice and it's much slower, making his test even more bunk.</p>
+
+<p>Interesting that buffer almost always performs slightly slower then slicing.  This time there is one where it does better though!  The real test though is below and buffer seems to do better for larger substrings while slicing does better for smaller substrings.</p>
+
+<p>And, yes, I do have some randomness in this test so test away and see the different results :).  It also may be interesting to changes the size of the 1000's.</p>
+
+<p>So, maybe some others believe you, but <strong>I don't</strong>, so I'd like to know something about what <strong>processing does</strong> and how you came to the conclusion: "<strong>slicing is the problem.</strong>"</p>
+
+<p>I profiled medium processing in my example and upped the string.letters multiplier to 100000 and raised the length of the slices to 10000.  Also below is one with slices of length 100.  I used cProfile for these (much less overhead then profile!).</p>
+
+<pre><code>test_part_slice took 77338.285 ms medium_processing
+         31200019 function calls in 77.338 seconds
+
+   Ordered by: standard name
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   77.338   77.338 &lt;string&gt;:1(&lt;module&gt;)
+        2    0.000    0.000    0.000    0.000 iostream.py:63(write)
+  5200000    8.208    0.000   43.823    0.000 re.py:139(search)
+  5200000    9.205    0.000   12.897    0.000 re.py:228(_compile)
+  5200000    5.651    0.000   49.475    0.000 slice_time.py:15(medium_processing)
+        1    7.901    7.901   77.338   77.338 slice_time.py:24(timeit)
+  5200000   19.963    0.000   69.438    0.000 slice_time.py:31(test_part_slice)
+        2    0.000    0.000    0.000    0.000 utf_8.py:15(decode)
+        2    0.000    0.000    0.000    0.000 {_codecs.utf_8_decode}
+        2    0.000    0.000    0.000    0.000 {isinstance}
+        2    0.000    0.000    0.000    0.000 {method 'decode' of 'str' objects}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+  5200000    3.692    0.000    3.692    0.000 {method 'get' of 'dict' objects}
+  5200000   22.718    0.000   22.718    0.000 {method 'search' of '_sre.SRE_Pattern' objects}
+        2    0.000    0.000    0.000    0.000 {method 'write' of '_io.StringIO' objects}
+        4    0.000    0.000    0.000    0.000 {time.time}
+
+
+test_buffer took 58067.440 ms medium_processing
+         31200103 function calls in 58.068 seconds
+
+   Ordered by: standard name
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   58.068   58.068 &lt;string&gt;:1(&lt;module&gt;)
+        3    0.000    0.000    0.000    0.000 __init__.py:185(dumps)
+        3    0.000    0.000    0.000    0.000 encoder.py:102(__init__)
+        3    0.000    0.000    0.000    0.000 encoder.py:180(encode)
+        3    0.000    0.000    0.000    0.000 encoder.py:206(iterencode)
+        1    0.000    0.000    0.001    0.001 iostream.py:37(flush)
+        2    0.000    0.000    0.001    0.000 iostream.py:63(write)
+        1    0.000    0.000    0.000    0.000 iostream.py:86(_new_buffer)
+        3    0.000    0.000    0.000    0.000 jsonapi.py:57(_squash_unicode)
+        3    0.000    0.000    0.000    0.000 jsonapi.py:69(dumps)
+        2    0.000    0.000    0.000    0.000 jsonutil.py:78(date_default)
+        1    0.000    0.000    0.000    0.000 os.py:743(urandom)
+  5200000    6.814    0.000   39.110    0.000 re.py:139(search)
+  5200000    7.853    0.000   10.878    0.000 re.py:228(_compile)
+        1    0.000    0.000    0.000    0.000 session.py:149(msg_header)
+        1    0.000    0.000    0.000    0.000 session.py:153(extract_header)
+        1    0.000    0.000    0.000    0.000 session.py:315(msg_id)
+        1    0.000    0.000    0.000    0.000 session.py:350(msg_header)
+        1    0.000    0.000    0.000    0.000 session.py:353(msg)
+        1    0.000    0.000    0.000    0.000 session.py:370(sign)
+        1    0.000    0.000    0.000    0.000 session.py:385(serialize)
+        1    0.000    0.000    0.001    0.001 session.py:437(send)
+        3    0.000    0.000    0.000    0.000 session.py:75(&lt;lambda&gt;)
+  5200000    4.732    0.000   43.842    0.000 slice_time.py:15(medium_processing)
+        1    5.423    5.423   58.068   58.068 slice_time.py:24(timeit)
+  5200000    8.802    0.000   52.645    0.000 slice_time.py:40(test_buffer)
+        7    0.000    0.000    0.000    0.000 traitlets.py:268(__get__)
+        2    0.000    0.000    0.000    0.000 utf_8.py:15(decode)
+        1    0.000    0.000    0.000    0.000 uuid.py:101(__init__)
+        1    0.000    0.000    0.000    0.000 uuid.py:197(__str__)
+        1    0.000    0.000    0.000    0.000 uuid.py:531(uuid4)
+        2    0.000    0.000    0.000    0.000 {_codecs.utf_8_decode}
+        1    0.000    0.000    0.000    0.000 {built-in method now}
+       18    0.000    0.000    0.000    0.000 {isinstance}
+        4    0.000    0.000    0.000    0.000 {len}
+        1    0.000    0.000    0.000    0.000 {locals}
+        1    0.000    0.000    0.000    0.000 {map}
+        2    0.000    0.000    0.000    0.000 {method 'append' of 'list' objects}
+        1    0.000    0.000    0.000    0.000 {method 'close' of '_io.StringIO' objects}
+        1    0.000    0.000    0.000    0.000 {method 'count' of 'list' objects}
+        2    0.000    0.000    0.000    0.000 {method 'decode' of 'str' objects}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+        1    0.000    0.000    0.000    0.000 {method 'extend' of 'list' objects}
+  5200001    3.025    0.000    3.025    0.000 {method 'get' of 'dict' objects}
+        1    0.000    0.000    0.000    0.000 {method 'getvalue' of '_io.StringIO' objects}
+        3    0.000    0.000    0.000    0.000 {method 'join' of 'str' objects}
+  5200000   21.418    0.000   21.418    0.000 {method 'search' of '_sre.SRE_Pattern' objects}
+        1    0.000    0.000    0.000    0.000 {method 'send_multipart' of 'zmq.core.socket.Socket' objects}
+        2    0.000    0.000    0.000    0.000 {method 'strftime' of 'datetime.date' objects}
+        1    0.000    0.000    0.000    0.000 {method 'update' of 'dict' objects}
+        2    0.000    0.000    0.000    0.000 {method 'write' of '_io.StringIO' objects}
+        1    0.000    0.000    0.000    0.000 {posix.close}
+        1    0.000    0.000    0.000    0.000 {posix.open}
+        1    0.000    0.000    0.000    0.000 {posix.read}
+        4    0.000    0.000    0.000    0.000 {time.time}
+</code></pre>
+
+<p>Smaller slices (100 length).</p>
+
+<pre><code>test_part_slice took 54916.153 ms medium_processing
+         31200019 function calls in 54.916 seconds
+
+   Ordered by: standard name
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   54.916   54.916 &lt;string&gt;:1(&lt;module&gt;)
+        2    0.000    0.000    0.000    0.000 iostream.py:63(write)
+  5200000    6.788    0.000   38.312    0.000 re.py:139(search)
+  5200000    8.014    0.000   11.257    0.000 re.py:228(_compile)
+  5200000    4.722    0.000   43.034    0.000 slice_time.py:15(medium_processing)
+        1    5.594    5.594   54.916   54.916 slice_time.py:24(timeit)
+  5200000    6.288    0.000   49.322    0.000 slice_time.py:31(test_part_slice)
+        2    0.000    0.000    0.000    0.000 utf_8.py:15(decode)
+        2    0.000    0.000    0.000    0.000 {_codecs.utf_8_decode}
+        2    0.000    0.000    0.000    0.000 {isinstance}
+        2    0.000    0.000    0.000    0.000 {method 'decode' of 'str' objects}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+  5200000    3.242    0.000    3.242    0.000 {method 'get' of 'dict' objects}
+  5200000   20.268    0.000   20.268    0.000 {method 'search' of '_sre.SRE_Pattern' objects}
+        2    0.000    0.000    0.000    0.000 {method 'write' of '_io.StringIO' objects}
+        4    0.000    0.000    0.000    0.000 {time.time}
+
+
+test_buffer took 62019.684 ms medium_processing
+         31200103 function calls in 62.020 seconds
+
+   Ordered by: standard name
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   62.020   62.020 &lt;string&gt;:1(&lt;module&gt;)
+        3    0.000    0.000    0.000    0.000 __init__.py:185(dumps)
+        3    0.000    0.000    0.000    0.000 encoder.py:102(__init__)
+        3    0.000    0.000    0.000    0.000 encoder.py:180(encode)
+        3    0.000    0.000    0.000    0.000 encoder.py:206(iterencode)
+        1    0.000    0.000    0.001    0.001 iostream.py:37(flush)
+        2    0.000    0.000    0.001    0.000 iostream.py:63(write)
+        1    0.000    0.000    0.000    0.000 iostream.py:86(_new_buffer)
+        3    0.000    0.000    0.000    0.000 jsonapi.py:57(_squash_unicode)
+        3    0.000    0.000    0.000    0.000 jsonapi.py:69(dumps)
+        2    0.000    0.000    0.000    0.000 jsonutil.py:78(date_default)
+        1    0.000    0.000    0.000    0.000 os.py:743(urandom)
+  5200000    7.426    0.000   41.152    0.000 re.py:139(search)
+  5200000    8.470    0.000   11.628    0.000 re.py:228(_compile)
+        1    0.000    0.000    0.000    0.000 session.py:149(msg_header)
+        1    0.000    0.000    0.000    0.000 session.py:153(extract_header)
+        1    0.000    0.000    0.000    0.000 session.py:315(msg_id)
+        1    0.000    0.000    0.000    0.000 session.py:350(msg_header)
+        1    0.000    0.000    0.000    0.000 session.py:353(msg)
+        1    0.000    0.000    0.000    0.000 session.py:370(sign)
+        1    0.000    0.000    0.000    0.000 session.py:385(serialize)
+        1    0.000    0.000    0.001    0.001 session.py:437(send)
+        3    0.000    0.000    0.000    0.000 session.py:75(&lt;lambda&gt;)
+  5200000    5.399    0.000   46.551    0.000 slice_time.py:15(medium_processing)
+        1    5.958    5.958   62.020   62.020 slice_time.py:24(timeit)
+  5200000    9.510    0.000   56.061    0.000 slice_time.py:40(test_buffer)
+        7    0.000    0.000    0.000    0.000 traitlets.py:268(__get__)
+        2    0.000    0.000    0.000    0.000 utf_8.py:15(decode)
+        1    0.000    0.000    0.000    0.000 uuid.py:101(__init__)
+        1    0.000    0.000    0.000    0.000 uuid.py:197(__str__)
+        1    0.000    0.000    0.000    0.000 uuid.py:531(uuid4)
+        2    0.000    0.000    0.000    0.000 {_codecs.utf_8_decode}
+        1    0.000    0.000    0.000    0.000 {built-in method now}
+       18    0.000    0.000    0.000    0.000 {isinstance}
+        4    0.000    0.000    0.000    0.000 {len}
+        1    0.000    0.000    0.000    0.000 {locals}
+        1    0.000    0.000    0.000    0.000 {map}
+        2    0.000    0.000    0.000    0.000 {method 'append' of 'list' objects}
+        1    0.000    0.000    0.000    0.000 {method 'close' of '_io.StringIO' objects}
+        1    0.000    0.000    0.000    0.000 {method 'count' of 'list' objects}
+        2    0.000    0.000    0.000    0.000 {method 'decode' of 'str' objects}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+        1    0.000    0.000    0.000    0.000 {method 'extend' of 'list' objects}
+  5200001    3.158    0.000    3.158    0.000 {method 'get' of 'dict' objects}
+        1    0.000    0.000    0.000    0.000 {method 'getvalue' of '_io.StringIO' objects}
+        3    0.000    0.000    0.000    0.000 {method 'join' of 'str' objects}
+  5200000   22.097    0.000   22.097    0.000 {method 'search' of '_sre.SRE_Pattern' objects}
+        1    0.000    0.000    0.000    0.000 {method 'send_multipart' of 'zmq.core.socket.Socket' objects}
+        2    0.000    0.000    0.000    0.000 {method 'strftime' of 'datetime.date' objects}
+        1    0.000    0.000    0.000    0.000 {method 'update' of 'dict' objects}
+        2    0.000    0.000    0.000    0.000 {method 'write' of '_io.StringIO' objects}
+        1    0.000    0.000    0.000    0.000 {posix.close}
+        1    0.000    0.000    0.000    0.000 {posix.open}
+        1    0.000    0.000    0.000    0.000 {posix.read}
+        4    0.000    0.000    0.000    0.000 {time.time}
+</code></pre>
+<br /><b>#5</b><br /><blockquote>
+  <p>process(huge_text_block[i:j]) </p>
+  
+  <p><strong>I want to avoid</strong> the overhead of <strong>generating these temporary substrings</strong>.<br>
+  (...)<br>
+  Note that <strong>process()</strong> is another python module
+  that <strong>expects a string as input</strong>.</p>
+</blockquote>
+
+<p>Completely contradictory.<br>
+How can you imagine to find a way for not creating what the function requires ?!</p>
+<br />

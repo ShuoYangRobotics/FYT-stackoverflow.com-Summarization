@@ -1,0 +1,244 @@
+Question (ID-447086): Python's re module - saving state? One of the biggest annoyances I find in Python is the inability of the re module to save its state without explicitly doing it in a match object. Often, one needs to parse lines and if they comply a certain regex take out values from them by the same regex. I would like to write code like this: 
+
+ if re.match('foo (\w+) bar (\d+)', line):
+ # do stuff with .group(1) and .group(2)
+elif re.match('baz whoo_(\d+)', line):
+ # do stuff with .group(1)
+# etc.
+ 
+
+ But unfortunately it's impossible to get to the matched object of the previous call to re.match , so this is written like this: 
+
+ m = re.match('foo (\w+) bar (\d+)', line)
+if m:
+ # do stuff with m.group(1) and m.group(2)
+else:
+ m = re.match('baz whoo_(\d+)', line)
+ if m:
+ # do stuff with m.group(1)
+ 
+
+ Which is rather less convenient and gets really unwieldy as the list of elif s grows longer. 
+
+ A hackish solution would be to wrap the re.match and re.search in my own objects that keep state somewhere. Has anyone used this? Are you aware of semi-standard implementations (in large frameworks or something)? 
+
+ What other workarounds can you recommend?
+Or perhaps, am I just misusing the module and could achieve my needs in a cleaner way? 
+
+ Thanks in advance 
+ Answers (Total-6): #0 You might like this module which implements the wrapper you are looking for. 
+ #1 Trying out some ideas... 
+
+ It looks like you would ideally want an expression with side effects. If this were allowed in Python: 
+
+ if m = re.match('foo (\w+) bar (\d+)', line):
+ # do stuff with m.group(1) and m.group(2)
+elif m = re.match('baz whoo_(\d+)', line):
+ # do stuff with m.group(1)
+elif ...
+ 
+
+ ... then you would clearly and cleanly be expressing your intent. But it's not. If side effects were allowed in nested functions, you could: 
+
+ m = None
+def assign_m(x):
+ m = x
+ return x
+
+if assign_m(re.match('foo (\w+) bar (\d+)', line)):
+ # do stuff with m.group(1) and m.group(2)
+elif assign_m(re.match('baz whoo_(\d+)', line)):
+ # do stuff with m.group(1)
+elif ...
+ 
+
+ Now, not only is that getting ugly, but it's still not valid Python code -- the nested function 'assign_m' isn't allowed to modify the variable m in the outer scope. The best I can come up with is really ugly, using nested class which is allowed side effects: 
+
+ # per Brian's suggestion, a wrapper that is stateful
+class m_(object):
+ def match(self, *args):
+ self.inner_ = re.match(*args)
+ return self.inner_
+ def group(self, *args):
+ return self.inner_.group(*args)
+m = m_()
+
+# now 'm' is a stateful regex
+if m.match('foo (\w+) bar (\d+)', line):
+ # do stuff with m.group(1) and m.group(2)
+elif m.match('baz whoo_(\d+)', line):
+ # do stuff with m.group(1)
+elif ...
+ 
+
+ But that is clearly overkill. 
+
+ You migth consider using an inner function to allow local scope exits, which allows you to remove the else nesting: 
+
+ def find_the_right_match():
+ # now 'm' is a stateful regex
+ m = re.match('foo (\w+) bar (\d+)', line)
+ if m:
+ # do stuff with m.group(1) and m.group(2)
+ return # &lt;== exit nested function only
+ m = re.match('baz whoo_(\d+)', line)
+ if m:
+ # do stuff with m.group(1)
+ return
+
+find_the_right_match()
+ 
+
+ This lets you flatten nesting=(2*N-1) to nesting=1, but you may have just moved the side-effects problem around, and the nested functions are very likely to confuse most Python programmers. 
+
+ Lastly, there are side-effect-free ways of dealing with this: 
+
+ def cond_with(*phrases):
+ """for each 2-tuple, invokes first item. the first pair where
+ the first item returns logical true, result is passed to second
+ function in pair. Like an if-elif-elif.. chain"""
+ for (cond_lambda, then_lambda) in phrases:
+ c = cond_lambda()
+ if c:
+  return then_lambda(c) 
+ return None
+
+
+cond_with( 
+ ((lambda: re.match('foo (\w+) bar (\d+)', line)), 
+  (lambda m: 
+   ... # do stuff with m.group(1) and m.group(2)
+   )),
+ ((lambda: re.match('baz whoo_(\d+)', line)),
+  (lambda m:
+   ... # do stuff with m.group(1)
+   )),
+ ...)
+ 
+
+ And now the code barely even looks like Python, let alone understandable to Python programmers (is that Lisp?). 
+
+ I think the moral of this story is that Python is not optimized for this sort of idiom. You really need to just be a little verbose and live with a large nesting factor of else conditions. 
+ #2 You could write a utility class to do the "save state and return result" operation. I don't think this is that hackish. It's fairly trivial to implement: 
+
+ class Var(object):
+ def __init__(self, val=None): self.val = val
+
+ def set(self, result):
+  self.val = result
+  return result
+ 
+
+ And then use it as: 
+
+ lastMatch = Var()
+
+if lastMatch.set(re.match('foo (\w+) bar (\d+)', line)):
+ print lastMatch.val.groups()
+
+elif lastMatch.set(re.match('baz whoo_(\d+)', line)):
+ print lastMatch.val.groups()
+ 
+ #3 class last(object):
+ def __init__(self, wrapped, initial=None):
+ self.last = initial
+ self.func = wrapped
+
+ def __call__(self, *args, **kwds):
+ self.last = self.func(*args, **kwds)
+ return self.last
+
+def test():
+ """
+ &gt;&gt;&gt; test()
+ crude, but effective: (oYo)
+ """
+ import re
+ m = last(re.compile("(oYo)").match)
+ if m("abc"):
+ print("oops")
+ elif m("oYo"): #A
+ print("crude, but effective: (%s)" % m.last.group(1)) #B
+ else:
+ print("mark")
+
+if __name__ == "__main__":
+ import doctest
+ doctest.testmod()
+ 
+
+ last is also suitable as a decorator. 
+
+ Realized that in my effort to make it self-testing and work in 2.5, 2.6, and 3.0 that I obscured the real solution somewhat. The important lines are marked #A and #B above, where you use the same object to test (name it match or is_somename ) and retrieve its last value. Easy to abuse, but also easy to tweak and, if not pushed too far, get surprisingly clear code. 
+ #4 Based on the great answers to this question, I've concocted the following mechanism. It appears like a general way to solve the "no assignment in conditions" limitation of Python. The focus is transparency, implemented by silent delegation: 
+
+ class Var(object):
+ def __init__(self, val=None):
+  self._val = val
+
+ def __getattr__(self, attr):
+  return getattr(self._val, attr)
+
+ def __call__(self, arg):
+  self._val = arg
+  return self._val
+
+
+if __name__ == "__main__":
+ import re
+
+ var = Var()
+
+ line = 'foo kwa bar 12'
+
+ if var(re.match('foo (\w+) bar (\d+)', line)):
+  print var.group(1), var.group(2)
+ elif var(re.match('baz whoo_(\d+)', line)):
+  print var.group(1)
+ 
+
+ In the general case, this is a thread-safe solution, because you can create your own instances of Var . For more ease-of-use when threading is not an issue, a default Var object can be imported and used. Here's a module holding the Var class: 
+
+ class Var(object):
+ def __init__(self, val=None):
+  self._val = val
+
+ def __getattr__(self, attr):
+  return getattr(self._val, attr)
+
+ def __call__(self, arg):
+  self._val = arg
+  return self._val
+
+var = Var()
+ 
+
+ And here's the user's code: 
+
+ from var import Var, var
+import re
+
+line = 'foo kwa bar 12'
+
+if var(re.match('foo (\w+) bar (\d+)', line)):
+ print var.group(1), var.group(2)
+elif var(re.match('baz whoo_(\d+)', line)):
+ print var.group(1)
+ 
+
+ While not thread-safe, for a lot of simple scripts this provides a useful shortcut. 
+ #5 Probably the simplest solution is to return early so you can get back to creating variables instead of needing to make an immediate test. 
+
+ def get_results(line):
+ m = re.match('foo (\w+) bar (\d+)', line)
+ if m:
+  # do stuff with .group(1) and .group(2)
+  return result
+ m = re.match('baz whoo_(\d+)', line)
+ if m:
+  # do stuff with .group(1)
+  return other_result
+ # etc.
+ 
+
+ This way you avoid excessive nesting.

@@ -1,0 +1,136 @@
+<h3>Question (ID-1363413):</h3><h2>Efficient way to use python's lambda, map</h2><p>I need to store a big list of integers in Bigtable(db). For efficiency I am storing them as diff between 2 consecutive items.</p>
+
+<p>for eg:</p>
+
+<pre> original_list = [1005, 1004, 1003, 1004, 1006] </pre>
+
+<p>Storing the above list(which actually contains more than 1000k items) as</p>
+
+<pre>
+start = 1005
+diff = [-1, -1, 1, 2]</pre>
+
+<p>The closest I could manage is,</p>
+
+<pre>
+ltp = [start]
+map(lambda x: ltp.append(ltp[-1] + x), tick)</pre>
+
+<p>I am looking for an efficient way to convert it back into original list.</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>For such large data structures numpy will work well.  For this example, it's <strong>over 200x faster</strong> (see below), and a bit easier to code, basically just</p>
+
+<pre><code>add.accumulate(diff)
+</code></pre>
+
+<p>Comparison between numpy and direct list manipulation:</p>
+
+<pre><code>import numpy as nx
+import timeit
+
+N = 10000
+
+diff_nx = nx.zeros(N, dtype=nx.int)
+diff_py = list(diff_nx)
+
+start = 1005
+
+def f0():
+    orig = [start]
+    for x in diff_py: 
+        orig.append(orig[-1] + x)
+
+def f1():
+    diff_nx[0] = start
+    nx.add.accumulate(diff_nx)
+
+t = timeit.Timer("f0()", "from __main__ import f0, f1, diff_nx, diff_py, nx, start")
+print t.timeit(number=1000)
+t = timeit.Timer("f1()", "from __main__ import f0, f1, diff_nx, diff_py, nx, start")
+print t.timeit(number=1000)
+</code></pre>
+
+<p>gives</p>
+
+<pre><code>13.4044158459     # for list looping
+0.0474112033844   # for numpy accumulate
+</code></pre>
+
+<p>Really, though, it seems better to reuse an established compression algorithm, like can easily be done with <a href="http://www.pytables.org/moin" rel="nofollow">PyTables</a>, rather than rolling your own like it seems that you're doing here.</p>
+
+<p>Also, here, I'm suggesting that you read in the data with room for the prepended start term, rather than rebuild the list with the prepended term, of course, so you don't have to do the copy.</p>
+<br /><b>#1</b><br /><p>The following works for me:</p>
+
+<pre><code>orig = [start]
+for x in diff:
+    orig.append(orig[-1] + x)
+</code></pre>
+
+<p>Using <code>map</code> will create an new array of the same size, filled with <code>None</code>. I also find a simple <code>for</code> loop more readable, and in this case as fast as you can get.</p>
+<br /><b>#2</b><br /><p>Perfect for generators:</p>
+
+<pre><code>def diff2abs( diffs, start ):
+    yield start
+    for diff in diffs:
+        start += diff
+        yield start
+
+start = 1005
+diffs = [-1, -1, 1, 2]
+original_list = list( diff2abs( diffs, start ))
+</code></pre>
+<br /><b>#3</b><br /><p>Several of the other respondents have reasonable implementations of the algorithm you asked for, but I'm unclear on exactly what problem it is you're really trying to solve.</p>
+
+<p>Unless the numbers being stored are very large (i.e., overflow an integer and require bignums), your list of diffs won't gain you any efficiency -- an integer is an integer from the Python runtime POV, so your example "diff" list of <code>[-1, -1, 1, 2]</code> will consume just as much memory as the original list <code>[1005, 1004, 1003, 1004, 1006]</code>.</p>
+<br /><b>#4</b><br /><pre><code>class runningtotal:
+    def __init__(self, start = 0):
+        self.total = start
+    def __call__(self, value):
+        self.total += value
+        return self.total
+</code></pre>
+
+<p>Now try:</p>
+
+<pre><code>&gt;&gt;&gt; map(runningtotal(start), [0,]+diff)
+[1005, 1004, 1003, 1004, 1006]
+</code></pre>
+<br /><b>#5</b><br /><p>As mshsayem suggested, use list comprehensions - they are generally faster than for loops or map/lambdas (according do Mark Lutz's book Learning Python).</p>
+
+<p>If you really want to use an more FP-ish solution, the proper function would be "scan", wich [I believe] isn't implemented in Python so you would have to implement it yourself (which is not a hard task).</p>
+
+<p>"scan" is basically a reduce, but instead of reducing the list to a single value, it stores the result of each "iteration" in a new list.</p>
+
+<p>If you implemented it, you could do something like:</p>
+
+<pre><code>scan(lambda x,y: x+y, [start]++diff)
+</code></pre>
+<br /><b>#6</b><br /><p>Although I don't get why this should be more efficient, I am pretty sure a for loop will give the best performance:</p>
+
+<pre><code>l = [start]
+for i in diff:
+    l.append(l[-1] + i)
+</code></pre>
+<br /><b>#7</b><br /><p>I don't know about your reasoning for storing the integers as diffs -- rcoder gave a good answer about why this generally is not more efficient than storing the integers themselves -- but if you don't need to have access to the entire list at once, it's more efficient memory-wise for you to use a generator.  Since you say this is a "big list," you can save a lot of memory this way, instead of allocating the entire list at once.  Here's a generator comprehension to get your list back:</p>
+
+<pre><code>start = 1005
+def mod_start(x):
+    global start
+    start += x
+    return start
+int_generator = (mod_start(i) for i in diffs)
+</code></pre>
+
+<p>You can then iterate over int_generator like you would any list, without having the entire list in memory at once.  Note, however, that you cannot subscript or slice a generator, but you can use it in many useful situations.</p>
+
+<p>You can clean up the example so that the start variable does not need to be global.  It just can't be local to the mod_start function.</p>
+
+<p><strong>Edit:</strong> You don't have to use the generator comprehension to get a generator.  You can also use a generator function with the yield expression, like THC4k did.  That avoids the start variable scope issue and is probably a little cleaner.  You can also get a list from a generator at any time by passing it to the list() built-in function.</p>
+<br /><b>#8</b><br /><p>No comment on the performance of this, but you can use reduce here.</p>
+
+<pre><code>start = 1005
+diffs = [-1,-1,1,2]
+reduce(lambda undiffed_list, diff: undiffed_list + [undiffed_list[-1] + diff],diffs,[start])
+</code></pre>
+
+<p>gets you what you want.</p>
+<br />

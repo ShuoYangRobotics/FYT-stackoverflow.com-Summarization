@@ -1,0 +1,266 @@
+<h3>Question (ID-2785755):</h3><h2>How to split but ignore separators in quoted strings, in python?</h2><p>I need to split a string like this, on semicolons. But I don't want to split on semicolons that are inside of a string (' or "). I'm not parsing a file; just a simple string with no line breaks.</p>
+
+<p><code>part 1;"this is ; part 2;";'this is ; part 3';part 4;this "is ; part" 5</code></p>
+
+<p>Result should be:</p>
+
+<ul>
+<li>part 1</li>
+<li>"this is ; part 2;"</li>
+<li>'this is ; part 3'</li>
+<li>part 4</li>
+<li>this "is ; part" 5</li>
+</ul>
+
+<p>I suppose this can be done with a regex but if not; I'm open to another approach.</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>Most of the answers seem massively over complicated. You <strong>don't</strong> need back references. You <strong>don't</strong> need to depend on whether or not re.findall gives overlapping matches.  Given that the input cannot be parsed with the csv module so a regular expression is pretty well the only way to go, all you need is to call re.split with a pattern that matches a field.</p>
+
+<p>Note that it is much easier here to match a field than it is to match a separator:</p>
+
+<pre><code>import re
+data = """part 1;"this is ; part 2;";'this is ; part 3';part 4;this "is ; part" 5"""
+PATTERN = re.compile(r'''((?:[^;"']|"[^"]*"|'[^']*')+)''')
+print PATTERN.split(data)[1::2]
+</code></pre>
+
+<p>and the output is:</p>
+
+<pre><code>['part 1', '"this is ; part 2;"', "'this is ; part 3'", 'part 4', 'this "is ; part" 5']
+</code></pre>
+<br /><b>#1</b><br /><p>Here is an annotated <a href="http://pyparsing.wikispaces.com/" rel="nofollow">pyparsing</a> approach:</p>
+
+<pre><code>from pyparsing import (printables, originalTextFor, OneOrMore, 
+    quotedString, Word, delimitedList)
+
+# unquoted words can contain anything but a semicolon
+printables_less_semicolon = printables.replace(';','')
+
+# capture content between ';'s, and preserve original text
+content = originalTextFor(
+    OneOrMore(quotedString | Word(printables_less_semicolon)))
+
+# process the string
+print delimitedList(content, ';').parseString(test)
+</code></pre>
+
+<p>giving</p>
+
+<pre><code>['part 1', '"this is ; part 2;"', "'this is ; part 3'", 'part 4', 
+ 'this "is ; part" 5']
+</code></pre>
+
+<p>By using pyparsing's provided <code>quotedString</code>, you also get support for escaped quotes.</p>
+
+<p>You also were unclear how to handle leading whitespace before or after a semicolon delimiter, and none of your fields in your sample text has any.  Pyparsing would parse "a; b ; c" as:</p>
+
+<pre><code>['a', 'b', 'c']
+</code></pre>
+<br /><b>#2</b><br /><p>You appears to have a semi-colon seperated string. Why not use the <code>csv</code> module to do all the hard work?</p>
+
+<p>Off the top of my head, this should work</p>
+
+<pre><code>import csv 
+from StringIO import StringIO 
+
+line = '''part 1;"this is ; part 2;";'this is ; part 3';part 4;this "is ; part" 5'''
+
+data = StringIO(line) 
+reader = csv.reader(data, delimiter=';') 
+for row in reader: 
+    print row 
+</code></pre>
+
+<p>This should give you something like<br>
+<code>("part 1", "this is ; part 2;", 'this is ; part 3', "part 4", "this \"is ; part\" 5")</code></p>
+
+<p><strong>Edit:</strong><br>
+Unfortunately, this doesn't quite work, (even if you do use StringIO, as I intended), due to the mixed string quotes (both single and double). What you actually get is</p>
+
+<p><code>['part 1', 'this is ; part 2;', "'this is ", " part 3'", 'part 4', 'this "is ', ' part" 5']</code>.</p>
+
+<p>If you can change the data to only contain single or double quotes at the appropriate places, it should work fine, but that sort of negates the question a bit.</p>
+<br /><b>#3</b><br /><pre><code>re.split(''';(?=(?:[^'"]|'[^']*'|"[^"]*")*$)''', data)
+</code></pre>
+<br /><b>#4</b><br /><p>While it could be done with PCRE via lookaheads/behinds/backreferences, it's not really actually a task that regex is designed for due to the need to match balanced pairs of quotes.</p>
+
+<p>Instead it's probably best to just make a mini state machine and parse through the string like that.</p>
+
+<h1>Edit</h1>
+
+<p>As it turns out, due to the handy additional feature of Python <code>re.findall</code> which guarantees non-overlapping matches, this can be more straightforward to do with a regex in Python than it might otherwise be. See comments for details.</p>
+
+<p>However, if you're curious about what a non-regex implementation might look like:</p>
+
+<pre><code>x = """part 1;"this is ; part 2;";'this is ; part 3';part 4;this "is ; part" 5"""
+
+results = [[]]
+quote = None
+for c in x:
+  if c == "'" or c == '"':
+    if c == quote:
+      quote = None
+    elif quote == None:
+      quote = c
+  elif c == ';':
+    if quote == None:
+      results.append([])
+      continue
+  results[-1].append(c)
+
+results = [''.join(x) for x in results]
+
+# results = ['part 1', '"this is ; part 2;"', "'this is ; part 3'",
+#            'part 4', 'this "is ; part" 5']
+</code></pre>
+<br /><b>#5</b><br /><pre><code>&gt;&gt;&gt; x = '''part 1;"this is ; part 2;";'this is ; part 3';part 4;this "is ; part" 5'''
+&gt;&gt;&gt; import re
+&gt;&gt;&gt; re.findall(r'''(?:[^;'"]+|'(?:[^']|\\.)*'|"(?:[^']|\\.)*")+''', x)
+['part 1', "this is ';' part 2", "'this is ; part 3'", 'part 4', 'this "is ; part" 5']
+</code></pre>
+<br /><b>#6</b><br /><p>This regex will do that: <code>(?:^|;)("(?:[^"]+|"")*"|[^;]*)</code></p>
+<br /><b>#7</b><br /><p>since you do not have '\n', use it to replace any ';' that is not in a quote string</p>
+
+<pre><code>&gt;&gt;&gt; new_s = ''
+&gt;&gt;&gt; is_open = False
+
+&gt;&gt;&gt; for c in s:
+...     if c == ';' and not is_open:
+...         c = '\n'
+...     elif c in ('"',"'"):
+...         is_open = not is_open
+...     new_s += c
+
+&gt;&gt;&gt; result = new_s.split('\n')
+
+&gt;&gt;&gt; result
+['part 1', '"this is ; part 2;"', "'this is ; part 3'", 'part 4', 'this "is ; part" 5']
+</code></pre>
+<br /><b>#8</b><br /><p>This seemed to me an semi-elegant solution.</p>
+
+<h2>New Solution:</h2>
+
+<pre><code>import re
+reg = re.compile('(\'|").*?\\1')
+pp = re.compile('.*?;')
+def splitter(string):
+    #add a last semicolon
+    string += ';'
+    replaces = []
+    s = string
+    i = 1
+    #replace the content of each quote for a code
+    for quote in reg.finditer(string):
+        out = string[quote.start():quote.end()]
+        s = s.replace(out, '**' + str(i) + '**')
+        replaces.append(out)
+        i+=1
+    #split the string without quotes
+    res = pp.findall(s)
+
+    #add the quotes again
+    #TODO this part could be faster.
+    #(lineal instead of quadratic)
+    i = 1
+    for replace in replaces:
+        for x in range(len(res)):
+            res[x] = res[x].replace('**' + str(i) + '**', replace)
+        i+=1
+    return res
+</code></pre>
+
+<h2>Old solution:</h2>
+
+<p>I choose to match if there was an opening quote and wait it to close, and the match an ending semicolon. each "part" you want to match needs to end in semicolon.
+so this match things like this : </p>
+
+<ul>
+<li>'foobar;.sska'; </li>
+<li>"akjshd;asjkdhkj..,";</li>
+<li>asdkjhakjhajsd.jhdf;</li>
+</ul>
+
+<p>Code:</p>
+
+<pre><code>mm = re.compile('''((?P&lt;quote&gt;'|")?.*?(?(quote)\\2|);)''')
+res = mm.findall('''part 1;"this is ; part 2;";'this is ; part 3';part 4''')
+</code></pre>
+
+<p>you may have to do some postprocessing to res, but it contains what you want.</p>
+<br /><b>#9</b><br /><p>Even though I'm certain there is a clean regex solution (so far I like @noiflection's answer), here is a quick-and-dirty non-regex answer.</p>
+
+<pre><code>s = """part 1;"this is ; part 2;";'this is ; part 3';part 4;this "is ; part" 5"""
+
+inQuotes = False
+current = ""
+results = []
+currentQuote = ""
+for c in s:
+    if not inQuotes and c == ";":
+        results.append(current)
+        current = ""
+    elif not inQuotes and (c == '"' or c == "'"):
+        currentQuote = c
+        inQuotes = True
+    elif inQuotes and c == currentQuote:
+        currentQuote = ""
+        inQuotes = False
+    else:
+        current += c
+
+results.append(current)
+
+print results
+# ['part 1', 'this is ; part 2;', 'this is ; part 3', 'part 4', 'this is ; part 5']
+</code></pre>
+
+<p>(I've never put together something of this sort, feel free to critique my form!)</p>
+<br /><b>#10</b><br /><p>My approach is to replace all non-quoted occurrences of the semi-colon with another character which will never appear in the text, then split on that character. The following code uses the re.sub function with a function argument to search and replace all occurrences of a <code>srch</code> string, not enclosed in single or double quotes or parens, brackets or braces, with a <code>repl</code> string:  </p>
+
+<pre><code>def srchrepl(srch, repl, string):
+    """
+    Replace non-bracketed/quoted occurrences of srch with repl in string.
+    """
+    resrchrepl = re.compile(r"""(?P&lt;lbrkt&gt;[([{])|(?P&lt;quote&gt;['"])|(?P&lt;sep&gt;["""
+                          + srch + """])|(?P&lt;rbrkt&gt;[)\]}])""")
+    return resrchrepl.sub(_subfact(repl), string)
+
+
+def _subfact(repl):
+    """
+    Replacement function factory for regex sub method in srchrepl.
+    """
+    level = 0
+    qtflags = 0
+    def subf(mo):
+        nonlocal level, qtflags
+        sepfound = mo.group('sep')
+        if  sepfound:
+            if level == 0 and qtflags == 0:
+                return repl
+            else:
+                return mo.group(0)
+        elif mo.group('lbrkt'):
+            if qtflags == 0:
+                level += 1
+            return mo.group(0)
+        elif mo.group('quote') == "'":
+            qtflags ^= 1            # toggle bit 1
+            return "'"
+        elif mo.group('quote') == '"':
+            qtflags ^= 2            # toggle bit 2
+            return '"'
+        elif mo.group('rbrkt'):
+            if qtflags == 0:
+                level -= 1
+            return mo.group(0)
+    return subf
+</code></pre>
+
+<p>If you don't care about the bracketed characters, you can simplify this code a lot.<br>
+Say you wanted to use a pipe or vertical bar as the substitute character, you would do:  </p>
+
+<pre><code>mylist = srchrepl(';', '|', mytext).split('|')
+</code></pre>
+
+<p>BTW, this uses <code>nonlocal</code> from Python 3.1, change it to global if you need to. </p>
+<br />

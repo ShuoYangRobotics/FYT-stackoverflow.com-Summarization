@@ -1,0 +1,133 @@
+Question (ID-6880069): Compile to byte code takes up too much memory I need to import a very large dictionary into python and I'm running into some unexpected memory bottlenecks. The dictionary has the form, 
+
+ d = {(1,2,3):(1,2,3,4), (2,5,6)=(4,2,3,4,5,6), ... }
+ 
+
+ So each key is a 3-tuple and each value is a relatively small tuple of arbitrary size (probably never more than 30 elements). What makes the dictionary large is the number of keys. A smaller example of what I'm working with has roughly 247257 keys. I generate this dictionary through a simulation so I can write out a text file that defines this dictionary and for the example I just mentioned this is a 94MB file. The bottleneck I am running into is that the initial compile to python byte code eats up about 14GB of ram. So the first time I import the dictionary I see the RAM usage spike up and after a good 10 seconds everything is loaded. If the .pyc file is already generated the import is nearly instant. Using pympler, I've determined that this dictionary is only about 200 MB in memory. What is the deal here? Do I have any other options on how get this dictionary loaded into python or at least compiled to byte code. I'm running the generating simulations in C++ and I can't write files an whatever format I need. Are there any options there (python libraries, etc.)? I'm interfacing with some software that needs this data as a dictionary so please no other suggestions in that realm. Also just in case you are wondering, I have defined the dictionary in the text file like the definition above as well as like so, 
+
+ d = {}
+d[1,2,3] = (1,2,3,4)
+d[2,5,6] = (4,2,3,4,5,6)
+...
+ 
+
+ Both give the same memory spike in compile to byte code. In fact, the second one seems to be slightly worse, which is surprising to me. There's got to be some way to tame the amount of ram the initial compile needs. It seems like it should somehow be able to do the compile one key-value pair at a time. Any ideas? 
+
+ Other info:
+using python 2.6.5 
+ Answers (Total-6): #0 I guess the problem is that while parsing your file an enormous syntax tree is made with a small overhead for each element that all add up. Once the bytecode is generated the syntax tree is no longer necessary and dumped, resulting in your 200MB data. 
+
+ Have you tried storing the data in a seperate file in the following format and then dynamically load it in python? 
+
+ 1,2,3=1,2,3
+2,5,6=4,2,3,4,5,6
+ 
+
+ The Python script should look something like this: 
+
+ file = open("filename")
+d = {}
+
+for line in file:
+ key, val = line.split("=")
+ key = tuple(key.split(","))
+ d[key] = tuple(val.split(","))
+
+file.close()
+ 
+ #1 http://docs.python.org/library/shelve.html 
+ #2 I'm guessing that your big compile spike happens when you do "import module_containing_humungous_dict_statement". Then it doesn't matter if you've got just one statement or 247257 separate assignment statements, the whole module will still get compiled at once. You could try using the separate-assignment-statement form, and then opening the file, reading one line at a time, and exec'ing it. Then you will only be compiling one line at a time. Will probably take a while. 
+ #3 I suspect creating the list to use as a key is what is expensive. Define a function that takes the three parts of the triple as input and returns a pipe delimited string. Use that as your key. 
+ #4 The way I read your question, you are generating Python source in your simulator, and the generated source has the contents of the giant dictionary hard-coded. If that is true, then you might as easily generate this: 
+
+ def giantdict():
+ d0 = {(1, 2): (3, 4), (3, 4): (5, 6), ...} # first 1000 key/value pairs here
+ d1 = {(1, 2): (3, 4), (3, 4): (5, 6), ...} # next 1000 key/value pairs
+ d2 = {(1, 2): (3, 4), (3, 4): (5, 6), ...} # next 1000 key/value pairs
+ d3 = {(1, 2): (3, 4), (3, 4): (5, 6), ...} # next 1000 key/value pairs
+ # ... until you're done
+ bigd = d0
+ bigd.update(d1)
+ del d1
+ bigd.update(d2)
+ del d2
+ # ... continue updating with all the dN dictionaries
+ return bigd
+ 
+
+ I'm not sure that this will improve the compile time, but it would be something to try. If there is a penalty to putting everything in one data structure at compile time, splitting it up and assembling the pieces at run time may work around it. 
+
+ While this kind of code (mine or yours) would draw my fury and ire if a human wrote it, I see no need for generated code to be "nice", as long as you know that no human will ever need to read it or maintain it. 
+ #5 Here's a class that uses a defaultdict for the automatic nesting of indexed values, with some special __getitem__ and __setitem__ methods to accept tuples as arguments: 
+
+ from collections import defaultdict
+
+defdict3level = (lambda : defaultdict(lambda : 
+       defaultdict( lambda : 
+        defaultdict(tuple))))
+
+class dict3level(object):
+ def __init__(self):
+  self.defdict = defdict3level()
+
+ def __getitem__(self, key):
+  if isinstance(key, tuple):
+   if len(key)==3:
+    return self.defdict[key[0]][key[1]][key[2]]
+   elif len(key)==2:
+    return self.defdict[key[0]][key[1]]
+   elif len(key)==1:
+    return self.defdict[key[0]]
+  else:
+   return self.defdict[key]
+
+ def __setitem__(self, key, value):
+  if isinstance(key, tuple) and len(key)==3:
+   self.defdict[key[0]][key[1]][key[2]] = value
+  else:
+   self.defdict[key] = value
+
+ def __getattr__(self, attr):
+  return getattr(self.defdict, attr)
+ 
+
+ Now exec all your assignments like before: 
+
+ d = dict3level()
+d[1,2,3] = (1,2,3,4)
+d[1,2,7] = (3,4,5,6)
+d[2,5,6] = (4,2,3,4,5,6)
+ 
+
+ You can still get a specific entry for a specific tuple: 
+
+ # get a specific entry
+print d[1,2,3]
+ 
+
+ But you can also navigate your dict by levels: 
+
+ # get all different 0'th index values
+print d.keys()
+
+# get all sub values in d[1,2,*]
+print d[1,2].keys()
+for key in d[1,2]:
+ print "d[1,2,%d] = %s" % (key, d[1,2][key])
+
+# no such entry, return empty tuple
+print d[1,2,0]
+ 
+
+ Gives: 
+
+ print d[1,2,3] -&gt; (1, 2, 3, 4)
+print d.keys() -&gt; [1, 2]
+print d[1,2].keys() -&gt; [3, 7]
+for key in d[1,2]:... -&gt; 
+ d[1,2,3] = (1, 2, 3, 4)
+ d[1,2,7] = (3, 4, 5, 6)
+print d[1,2,0] -&gt; ()
+ 
+
+ (Don't know how this will affect your memory and/or pickling issues, but the resulting structure has a lot more capability to it.)

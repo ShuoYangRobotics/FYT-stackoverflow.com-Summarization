@@ -1,0 +1,173 @@
+<h3>Question (ID-2434689):</h3><h2>What is the best, python or bash for selectively concatenating lots of files?</h2><p>I have around 20000 files coming from the output of some program, and their names follow the format:</p>
+
+<pre><code>data1.txt
+data2.txt
+...
+data99.txt
+data100.txt
+...
+data999.txt
+data1000.txt
+...
+data20000.txt
+</code></pre>
+
+<p>I would like to write a script that gets as input argument the number N. Then it makes blocks of N concatenated files, so if N=5, it would make the following new files:</p>
+
+<pre><code>data_new_1.txt: it would contain (concatenated) data1.txt to data5.txt (like cat data1.txt data2.txt ...&gt; data_new_1.txt )
+
+data_new_2.txt: it would contain (concatenated) data6.txt to data10.txt
+.....
+</code></pre>
+
+<p>I wonder what do you think would be the best approach to do this, whether bash, python or another one like awk, perl, etc.</p>
+
+<p>The best approach I mean in terms of simplest code.</p>
+
+<p>Thanks</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Here's a Python (2.6) version (if you have Python 2.5, add a first line that says</p>
+
+<pre><code>from __future__ import with_statement
+</code></pre>
+
+<p>and the script will also work)...:</p>
+
+<pre><code>import sys
+
+def main(N):
+   rN = range(N)
+   for iout, iin in enumerate(xrange(1, 99999, N)):
+       with open('data_new_%s.txt' % (iout+1), 'w') as out:
+           for di in rN:
+               try: fin = open('data%s.txt' % (iin + di), 'r')
+               except IOError: return
+               out.write(fin.read())
+               fin.close()
+
+if __name__ == '__main__':
+    if len(sys.argv) &gt; 1:
+        N = int(sys.argv[1])
+    else:
+        N = 5
+    main(N)
+</code></pre>
+
+<p>As you see from other answers &amp; comments, opinions on performance differ -- some believe that the Python startup (and imports of modules) will make this slower than bash (but the import part at least is bogus: <code>sys</code>, the only needed module, is a built-in module, requires no "loading" and therefore basically negligible overhead to import it); I suspect avoiding the repeated fork/exec of <code>cat</code> may slow bash down; others think that I/O will dominate anyway, making the two solutions equivalent.  You'll have to benchmark with your own files, on your own system, to solve this performance doubt.</p>
+<br /><b>#1</b><br /><p>Best in what sense? Bash can do this quite well, but it may be harder for you to write a good bash script if you are more familiar with another scripting language. Do you want to optimize for something specific?</p>
+
+<p>That said, here's a bash implementation:</p>
+
+<pre><code> declare blocksize=5
+ declare i=1
+ declare blockstart=1
+ declare blockend=$blocksize
+ declare -a fileset 
+ while [ -f data${i}.txt ] ; do
+         fileset=("${fileset[@]}" $data${i}.txt)
+         i=$(($i + 1))
+         if [ $i -gt $blockend ] ; then
+                  cat "${fileset[@]}" &gt; data_new_${blockstart}.txt
+                  fileset=() # clear
+                  blockstart=$(($blockstart + $blocksize))
+                  blockend=$(($blockend+ $blocksize))
+         fi
+ done
+</code></pre>
+
+<p>EDIT: I see you now say "Best" == "Simplest code", but what's simple depends on you. For me Perl is simpler than Python, for some Awk is simpler than bash. It depends on what you know best.</p>
+
+<p>EDIT again: inspired by dtmilano, I've changed mine to use cat once per blocksize, so now cat will be called 'only' 4000 times.</p>
+<br /><b>#2</b><br /><p>I like this one which saves on executing processes, only 1 cat per block</p>
+
+<pre><code>#! /bin/bash
+
+N=5 # block size
+S=1 # start
+E=20000 # end
+
+for n in $(seq $S $N $E)
+do
+    CMD="cat "
+    i=$n
+    while [ $i -lt $((n + N)) ]
+    do
+        CMD+="data$((i++)).txt "
+    done
+    $CMD &gt; data_new_$((n / N + 1)).txt
+done
+</code></pre>
+<br /><b>#3</b><br /><p>how about a one liner ? :)</p>
+
+<pre><code>ls data[0-9]*txt|sort -nk1.5|awk 'BEGIN{rn=5;i=1}{while((getline _&lt;$0)&gt;0){print _ &gt;"data_new_"i".txt"}close($0)}NR%rn==0{i++}'
+</code></pre>
+<br /><b>#4</b><br /><p>Since this can easily be done in any shell I would simply use that.</p>
+
+<p>This should do it:</p>
+
+<pre><code>#!/bin/sh
+FILES=$1
+FILENO=1
+
+for i in data[0-9]*.txt; do
+    FILES=`expr $FILES - 1`
+    if [ $FILES -eq 0 ]; then
+        FILENO=`expr $FILENO + 1`
+        FILES=$1
+    fi
+
+    cat $i &gt;&gt; "data_new_${FILENO}.txt"
+done
+</code></pre>
+
+<p>Python version:</p>
+
+<pre><code>#!/usr/bin/env python
+
+import os
+import sys
+
+if __name__ == '__main__':
+    files_per_file = int(sys.argv[1])
+
+    i = 0
+    while True:
+        i += 1
+        source_file = 'data%d.txt' % i
+        if os.path.isfile(source_file):
+            dest_file = 'data_new_%d.txt' % ((i / files_per_file) + 1)
+            file(dest_file, 'wa').write(file(source_file).read())
+        else:
+            break
+</code></pre>
+<br /><b>#5</b><br /><p>Let's say, if you have a simple script that concatenates files and keeps a counter for you, like the following:</p>
+
+<pre><code>#!/usr/bin/bash
+COUNT=0
+if [ -f counter ]; then
+  COUNT=`cat counter`
+fi
+COUNT=$[$COUNT+1]
+echo $COUNT &gt; counter
+cat $@ &gt; $COUNT.data
+</code></pre>
+
+<p>The a command line will do:</p>
+
+<pre><code>find -name "*" -type f -print0 | xargs -0 -n 5 path_to_the_script
+</code></pre>
+<br /><b>#6</b><br /><p>Simple enough?</p>
+
+<p>make_cat.py</p>
+
+<pre><code>limit = 1000
+n = 5
+for i in xrange( 0, (limit+n-1)//n ):
+     names = [ "data{0}.txt".format(j) for j in range(i*n,i*n+n) ]
+     print "cat {0} &gt;data_new_{1}.txt".format( " ".join(names), i )
+</code></pre>
+
+<p>Script</p>
+
+<pre><code>python make_cat.py | sh
+</code></pre>
+<br />

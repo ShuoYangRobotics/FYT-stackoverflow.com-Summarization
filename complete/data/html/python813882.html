@@ -1,0 +1,214 @@
+<h3>Question (ID-813882):</h3><h2>Is there a way to check whether function output is assigned to a variable in Python?</h2><p>In Python, I'd like to write a function that would pretty-print its results to the console if called by itself (mostly for use interactively or for debugging). For the purpose of this question, let's say it checks the status of something. If I call just</p>
+
+<pre><code>check_status()
+</code></pre>
+
+<p>I would like to see something like:</p>
+
+<pre><code>Pretty printer status check 0.02v
+NOTE: This is so totally not written for giant robots
+=================================
+System operational: ... ok
+Time to ion canon charge is 9m 21s
+Booster rocket in AFTERBURNER state
+Range check is optimal
+Rocket fuel is 10h 19m 40s to depletion
+Beer served is type WICKSE LAGER, chill optimal
+Suggested catchphrase is 01_FIGHTING_SPIRIT_GOGOGO
+Virtual ... on
+</code></pre>
+
+<p>However, I would also like it to pass the output as a list if I call it in the context of a variable assignment:</p>
+
+<pre><code>not_robot_stat = check_status()
+print not_robot_stat
+&gt;&gt;&gt; {'cond_op': 1, 't_canoncharge': 1342, 'stage_booster': 5, 'range_est_sigma': 0.023, 'fuel_est': 32557154, 'beer_type': 31007, 'beer_temp': 2, 'catchphrase_suggestion': 1023, 'virtual_on': 'hell yes'}
+</code></pre>
+
+<p>So... is there a way to dynamically know, within a function, whether its output is being assigned? I'd like to be able to do this without resorting param passing, or writing another function dedicated for this. I've Googled for a bit, and from what little I can tell it looks like I'd have to resort to playing wth the bytecode. Is that really necessary?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><blockquote>
+  <p>However, I would also like it to pass the output as a list</p>
+</blockquote>
+
+<p>You mean "return the output as a dictionary" - be careful ;-)</p>
+
+<p>One thing you could do is use the ability of the Python interpreter to automatically convert to a string the result of any expression. To do this, create a custom subclass of <code>dict</code> that, when asked to convert itself to a string, performs whatever pretty formatting you want. For instance,</p>
+
+<pre><code>class PrettyDict(dict):
+    def __str__(self):
+        return '''Pretty printer status check 0.02v
+NOTE: This is so totally not written for giant robots
+=================================
+System operational: ... %s
+Time to ion canon charge is %dm %ds
+Booster rocket in %s state
+ (other stuff)
+''' % (self.conf_op and 'ok' or 'OMGPANIC!!!',
+       self.t_canoncharge / 60, self.t_canoncharge % 60, 
+       BOOSTER_STATES[self.booster_charge],
+       ... )
+</code></pre>
+
+<p>Of course you could probably come up with a prettier way to write the code, but the basic idea is that the <code>__str__</code> method creates the pretty-printed string that represents the state of the object and returns it. Then, if you return a <code>PrettyDict</code> from your <code>check_status()</code> function, when you type</p>
+
+<pre><code>&gt;&gt;&gt; check_status()
+</code></pre>
+
+<p>you would see</p>
+
+<pre>Pretty printer status check 0.02v
+NOTE: This is so totally not written for giant robots
+=================================
+System operational: ... ok
+Time to ion canon charge is 9m 21s
+Booster rocket in AFTERBURNER state
+Range check is optimal
+Rocket fuel is 10h 19m 40s to depletion
+Beer served is type WICKSE LAGER, chill optimal
+Suggested catchphrase is 01_FIGHTING_SPIRIT_GOGOGO
+Virtual ... on</pre>
+
+<p>The only catch is that</p>
+
+<pre><code>&gt;&gt;&gt; not_robot_stat = check_status()
+&gt;&gt;&gt; print not_robot_stat
+</code></pre>
+
+<p>would give you the same thing, because the same conversion to string takes place as part of the <code>print</code> function. But for using this in some real application, I doubt that that would matter. If you really wanted to see the return value as a pure dict, you could do</p>
+
+<pre><code>&gt;&gt;&gt; print repr(not_robot_stat)
+</code></pre>
+
+<p>instead, and it should show you</p>
+
+<pre>{'cond_op': 1, 't_canoncharge': 1342, 'stage_booster': 5, 'range_est_sigma': 0.023, 'fuel_est': 32557154, 'beer_type': 31007, 'beer_temp': 2, 'catchphrase_suggestion': 1023, 'virtual_on': 'hell yes'}</pre>
+
+<p>The point is that, as other posters have said, there is no way for a function in Python to know what's going to be done with it's return value (<em>EDIT</em>: okay, maybe there would be some weird bytecode-hacking way, but don't do that) - but you can work around it in the cases that matter.</p>
+<br /><b>#1</b><br /><p><strong>New Solution</strong></p>
+
+<p>This is a new that solution detects when the result of the function is used for assignment by examining its own bytecode. There is no bytecode writing done, and it should even be compatible with future versions of Python because it uses the opcode module for definitions.</p>
+
+<pre><code>import inspect, dis, opcode
+
+def check_status():
+
+    try:
+        frame = inspect.currentframe().f_back
+        next_opcode = opcode.opname[ord(frame.f_code.co_code[frame.f_lasti+3])]
+        if next_opcode == "POP_TOP": 
+            # or next_opcode == "RETURN_VALUE":
+            # include the above line in the if statement if you consider "return check_status()" to be assignment
+            print "I was not assigned"
+            print "Pretty printer status check 0.02v"
+            print "NOTE: This is so totally not written for giant robots"
+            return
+    finally:
+        del frame    
+
+    # do normal routine
+
+    info = {'cond_op': 1, 't_canoncharge': 1342, 'stage_booster': 5}
+
+    return info
+
+# no assignment    
+def test1():
+    check_status()
+
+# assignment
+def test2():
+    a = check_status()
+
+# could be assignment (check above for options)
+def test3():
+    return check_status()
+
+# assignment
+def test4():
+    a = []
+    a.append(check_status())
+    return a
+</code></pre>
+
+<p><strong>Solution 1</strong></p>
+
+<p>This is the old solution that detects whenever you are calling the function while debugging under python -i or PDB.</p>
+
+<pre><code>import inspect
+
+def check_status():
+    frame = inspect.currentframe()
+    try:
+        if frame.f_back.f_code.co_name == "&lt;module&gt;" and frame.f_back.f_code.co_filename == "&lt;stdin&gt;":
+            print "Pretty printer status check 0.02v"
+            print "NOTE: This is so totally not written for giant robots"
+    finally:
+        del frame
+
+    # do regular stuff   
+    return {'cond_op': 1, 't_canoncharge': 1342, 'stage_booster': 5}
+
+def test():
+    check_status()
+
+
+&gt;&gt;&gt; check_status()
+Pretty printer status check 0.02v
+NOTE: This is so totally not written for giant robots
+{'cond_op': 1, 't_canoncharge': 1342, 'stage_booster': 5}
+
+&gt;&gt;&gt; a=check_status()
+Pretty printer status check 0.02v
+NOTE: This is so totally not written for giant robots
+
+&gt;&gt;&gt; a
+{'cond_op': 1, 't_canoncharge': 1342, 'stage_booster': 5}
+
+test()
+&gt;&gt;&gt;
+</code></pre>
+<br /><b>#2</b><br /><p>There's no use case for this.  Python assigns all interactive results to a special variable named <code>_</code>.  </p>
+
+<p>You can do the following interactively.  Works great.  No funny business.</p>
+
+<pre><code>&gt;&gt;&gt; check_status()
+{'cond_op': 1, 't_canoncharge': 1342, 'stage_booster': 5, 'range_est_sigma': 0.023, 'fuel_est': 32557154, 'beer_type': 31007, 'beer_temp': 2, 'catchphrase_suggestion': 1023, 'virtual_on': 'hell yes'}
+
+&gt;&gt;&gt; pprint.pprint( _ )
+{'beer_temp': 2,
+ 'beer_type': 31007,
+ 'catchphrase_suggestion': 1023,
+ 'cond_op': 1,
+ 'fuel_est': 32557154,
+ 'range_est_sigma': 0.023,
+ 'stage_booster': 5,
+ 't_canoncharge': 1342,
+ 'virtual_on': 'hell yes'}
+</code></pre>
+<br /><b>#3</b><br /><p>There is no way for a function to know how its return value is being used.</p>
+
+<p>Well, as you mention, egregious bytecode hacks might be able to do it, but it would be really complicated and probably fragile.  Go the simpler explicit route.</p>
+<br /><b>#4</b><br /><p>Even if there is a way to do this, it's a bad idea. Imagine trying to debug something that behaves differently depending on the context it's called from. Now try to imagine that it's six months from now and this is buried in part of some system that's too big to keep in your head all at once.</p>
+
+<p>Keep it simple. Explicit is better than implicit. Just make a pretty-print function (or use the pprint module) and call that on the result. In an interactive Pythn session you can use _ to get the value of the last expression.</p>
+<br /><b>#5</b><br /><p>There is no way to do this, at least not with the normal syntax procedures, because the function call and the assignment are completely independent operations, which have no awareness of each other.</p>
+
+<p>The simplest workaround I can see for this is to pass a flag as an arg to your <code>check_status</code> function, and deal with it accordingly.</p>
+
+<pre><code>def check_status(return_dict=False) :
+    if return_dict :
+        # Return stuff here.
+    # Pretty Print stuff here.
+</code></pre>
+
+<p>And then...</p>
+
+<pre><code>check_status() # Pretty print
+not_robot_stat = check_status(True) # Get the dict.
+</code></pre>
+
+<p>EDIT: I assumed you'd be pretty printing more often than you'd assign. If that's not the case, interchange the default value and the value you pass in.</p>
+<br /><b>#6</b><br /><p>The only way to do what you want is indeed "to play with the bytecode" -- there is no other way to recover that info.  A much better way, of course, is to provide two separate functions: one to get the status as a dict, the other to call the first one and format it.  </p>
+
+<p>Alternatively (but not an excellent architecture) you could have a single function that takes an optional parameter to behave in these two utterly different ways -- this is not excellent because a function should have ONE function, i.e. basically do ONE thing, not two different ones such as these.</p>
+<br />

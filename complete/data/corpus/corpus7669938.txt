@@ -1,0 +1,194 @@
+Question (ID-7669938): Get the Olson TZ name for the local timezone? How do I get the Olson timezone name (such as Australia/Sydney ) corresponding to the value given by C's localtime call? 
+
+ This is the value overridden via TZ , by symlinking /etc/localtime , or setting a TIMEZONE variable in time-related system configuration files. 
+ Answers (Total-6): #0 One problem is that there are multiple "pretty names" , like "Australia/Sydney" , which point to the same time zone (e.g. CST). 
+
+ So you will need to get all the possible names for the local time zone, and then select the name you like. 
+
+ e.g.: for Australia, there are 5 time zones, but way more time zone identifiers: 
+
+  "Australia/Lord_Howe", "Australia/Hobart", "Australia/Currie", 
+  "Australia/Melbourne", "Australia/Sydney", "Australia/Broken_Hill", 
+  "Australia/Brisbane", "Australia/Lindeman", "Australia/Adelaide", 
+  "Australia/Darwin", "Australia/Perth", "Australia/Eucla"
+ 
+
+ 
+
+ you should check if there is a library which wraps TZinfo , to handle the time zone API. 
+
+ e.g.: for Python, check the pytz library: 
+
+ http://pytz.sourceforge.net/ 
+
+ and 
+
+ http://pypi.python.org/pypi/pytz/ 
+
+ in Python you can do: 
+
+ from pytz import timezone
+import pytz
+
+In [56]: pytz.country_timezones('AU')
+Out[56]: 
+[u'Australia/Lord_Howe',
+ u'Australia/Hobart',
+ u'Australia/Currie',
+ u'Australia/Melbourne',
+ u'Australia/Sydney',
+ u'Australia/Broken_Hill',
+ u'Australia/Brisbane',
+ u'Australia/Lindeman',
+ u'Australia/Adelaide',
+ u'Australia/Darwin',
+ u'Australia/Perth',
+ u'Australia/Eucla']
+ 
+
+ but the API for Python seems to be pretty limited, e.g. it doesn't seem to have a call like Ruby's all_linked_zone_names -- which can find all the synonym names for a given time zone. 
+ #1 This is kind of cheating, I know, but getting from '/etc/localtime' doesn't work for you? 
+Like following: 
+
+ &gt;&gt;&gt; import os
+&gt;&gt;&gt; '/'.join(os.readlink('/etc/localtime').split('/')[-2:])
+'Australia/Sydney'
+ 
+
+ Hope it helps. 
+
+ Edit : I liked @A.H.'s idea, in case '/etc/localtime' isn't a symlink. Translating that into Python: 
+
+ #!/usr/bin/env python
+
+from hashlib import sha224
+import os
+
+def get_current_olsonname():
+ tzfile = open('/etc/localtime')
+ tzfile_digest = sha224(tzfile.read()).hexdigest()
+ tzfile.close()
+
+ for root, dirs, filenames in os.walk("/usr/share/zoneinfo/"):
+  for filename in filenames:
+   fullname = os.path.join(root, filename)
+   f = open(fullname)
+   digest = sha224(f.read()).hexdigest()
+   if digest == tzfile_digest:
+    return '/'.join((fullname.split('/'))[-2:])
+   f.close()
+  return None
+
+if __name__ == '__main__':
+ print get_current_olsonname()
+ 
+ #2 I think best bet is to go thru all pytz timezones and check which one matches local timezone, each pytz timezone object contains info about utcoffset and tzname like CDT, EST, same info about local time can be obtained from time.timezone/altzone and time.tzname , and I think that is enough to correctly match local timezone in pytz database e.g. 
+
+ import time
+import pytz
+import datetime
+
+local_names = []
+if time.daylight:
+ local_offset = time.altzone
+ localtz = time.tzname[1]
+else:
+ local_offset = time.timezone
+ localtz = time.tzname[0]
+
+local_offset = datetime.timedelta(seconds=-local_offset)
+
+for name in pytz.all_timezones:
+ timezone = pytz.timezone(name)
+ if not hasattr(timezone, '_tzinfos'):
+  continue#skip, if some timezone doesn't have info
+ # go thru tzinfo and see if short name like EDT and offset matches
+ for (utcoffset, daylight, tzname), _ in timezone._tzinfos.iteritems():
+  if utcoffset == local_offset and tzname == localtz:
+   local_names.append(name)
+
+print local_names
+ 
+
+ output: 
+
+ 
+ ['America/Atikokan', 'America/Bahia_Banderas',
+ 'America/Bahia_Banderas', 'America/Belize', 'America/Cambridge_Bay',
+ 'America/Cancun', 'America/Chicago', 'America/Chihuahua',
+ 'America/Coral_Harbour', 'America/Costa_Rica', 'America/El_Salvador',
+ 'America/Fort_Wayne', 'America/Guatemala',
+ 'America/Indiana/Indianapolis', 'America/Indiana/Knox',
+ 'America/Indiana/Marengo', 'America/Indiana/Marengo',
+ 'America/Indiana/Petersburg', 'America/Indiana/Tell_City',
+ 'America/Indiana/Vevay', 'America/Indiana/Vincennes',
+ 'America/Indiana/Winamac', 'America/Indianapolis', 'America/Iqaluit',
+ 'America/Kentucky/Louisville', 'America/Kentucky/Louisville',
+ 'America/Kentucky/Monticello', 'America/Knox_IN',
+ 'America/Louisville', 'America/Louisville', 'America/Managua',
+ 'America/Matamoros', 'America/Menominee', 'America/Merida',
+ 'America/Mexico_City', 'America/Monterrey',
+ 'America/North_Dakota/Beulah', 'America/North_Dakota/Center',
+ 'America/North_Dakota/New_Salem', 'America/Ojinaga',
+ 'America/Pangnirtung', 'America/Rainy_River', 'America/Rankin_Inlet',
+ 'America/Resolute', 'America/Resolute', 'America/Tegucigalpa',
+ 'America/Winnipeg', 'CST6CDT', 'Canada/Central', 'Mexico/General',
+ 'US/Central', 'US/East-Indiana', 'US/Indiana-Starke'] 
+ 
+
+ In production you can create such a mapping beforehand and save it instead of iterating always. 
+
+ Testing script after changing timezone: 
+
+ 
+ $ export TZ='Australia/Sydney' 
+ $ python get_tz_names.py 
+ ['Antarctica/Macquarie', 'Australia/ACT', 'Australia/Brisbane',
+ 'Australia/Canberra', 'Australia/Currie', 'Australia/Hobart',
+ 'Australia/Lindeman', 'Australia/Melbourne', 'Australia/NSW',
+ 'Australia/Queensland', 'Australia/Sydney', 'Australia/Tasmania',
+ 'Australia/Victoria'] 
+ 
+ #3 Install pytz 
+
+ import pytz
+import time
+#import locale
+import urllib2
+
+yourOlsonTZ = None
+#yourCountryCode = locale.getdefaultlocale()[0].split('_')[1]
+yourCountryCode = urllib2.urlopen('http://api.hostip.info/country.php').read()
+
+for olsonTZ in [pytz.timezone(olsonTZ) for olsonTZ in pytz.all_timezones]:
+ if (olsonTZ._tzname in time.tzname) and (str(olsonTZ) in pytz.country_timezones[yourCountryCode]):
+  yourOlsonTZ = olsonTZ
+  break
+
+print yourOlsonTZ
+ 
+
+ This code will take a best-guess crack at your Olson Timezone based both on your Timezone Name (as according to Python's time module), and your Country Code (as according to Python's locale module the hostip.info project, which references your IP address and geolocates you accordingly). 
+
+ For example, simply matching the Timzone Names could result in America/Moncton , America/Montreal , or America/New_York for EST (GMT-5). If your country is the US, however, it will limit the answer to America/New_York . 
+
+ However, if your country is Canada, the script will simply default to the topmost Canadian result ( America/Moncton ). If there is a way to further refine this, please feel free to leave suggestions in comments. 
+ #4 If evaluating /etc/localtime is OK for you, the following trick might work - after translating it to python: 
+
+ &gt; md5sum /etc/localtime
+abcdefabcdefabcdefabcdefabcdefab /etc/localtime
+&gt; find /usr/share/zoneinfo -type f |xargs md5sum | grep abcdefabcdefabcdefabcdefabcdefab
+abcdefabcdefabcdefabcdefabcdefab /usr/share/zoneinfo/Europe/London
+abcdefabcdefabcdefabcdefabcdefab /usr/share/zoneinfo/posix/Europe/London
+...
+ 
+
+ The duplicates could be filtered using only the official region names "Europe", "America" ... If there are still duplicates, you could take the shortest name :-) 
+ #5 This will get you the time zone name, according to what's in the TZ variable, or localtime file if unset: 
+
+ #! /usr/bin/env python
+
+import time
+
+time.tzset
+print time.tzname

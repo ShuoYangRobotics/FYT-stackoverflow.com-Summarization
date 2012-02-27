@@ -1,0 +1,65 @@
+Question (ID-4154571): sorted() using Generator Expressions Rather Than Lists After seeing the discussion here: Python - generate the time difference I got curious. I also initially thought that a generator is faster than a list, but when it comes to sorted() I don't know. Is there any benefit to sending a generator expression to sorted() rather than a list? Does the generator expression end up being made into a list inside sorted() before sorting anyway? 
+
+ EDIT: It grieves me to only be able to accept one answer, as I feel a lot of responses have helped to clarify the issue. Thanks again to everyone. 
+ Answers (Total-6): #0 There's no way to sort a sequence without knowing all the elements of the sequence, so any generator passed to sorted() is exhausted. 
+ #1 The first thing sorted() does is to convert the data to a list. Basically the first line (after argument validation) of the implementation is 
+
+ newlist = PySequence_List(seq);
+ 
+
+ See also the full source code version 2.7 and version 3.1.2 . 
+
+ Edit : As pointed out in the answer by aaronasterling , the variable newlist is, well, a new list. If the parameter is already a list, it is copied. So a generator expression really has the advantage of using less memory. 
+ #2 Python uses Timsort. Timsort needs to know the total number of elements up front, to compute the minrun parameter. Thus, as Sven reports, the first thing that sorted does when given a generator is to turn it into a list. 
+
+ That said, it would be possible to write an incremental version of Timsort, which consumed values from the generator more slowly - you'd just have to fix minrun before starting, and accept the pain of having some unbalanced merges at the end. Timsort works in two phases. The first phase involves a pass through the whole array, identifying runs and doing insertion sort to make runs where the data is unordered. Both run-finding and insertion sort are inherently incremental. The second phase involves a merge of the sorted runs; that would happen exactly as now. 
+
+ I don't think there would be a lot of point in this, though. Perhaps it would make memory management easier, because rather than having to read from the generator into a constantly-growing array (as i baselessly assume the current implementation does), you could read each run into a small buffer, then only allocate a final-sized buffer once, at the end. However, this would involve having 2N slots of array in memory at once, whereas a growing array can be done with 1.5N if it doubles when it grows. So, probably not a good idea. 
+ #3 There's a huge benefit. Because sorted doesn't affect the passed in sequence, it has to make a copy of it. If it's making a list from the generator expression, then only one list gets made. If a list comprehension is passed in, then first, that gets built and then sorted makes a copy of it to sort. 
+
+ This is reflected in the line 
+
+ newlist = PySequence_List(seq);
+ 
+
+ quoted in Sven Marnach's answer . Essentially, this will unconditionally make a copy of whatever sequence is passed to it. 
+ #4 The easiest way to see which is faster is to use timeit and it tells me that it's faster to pass a list rather than a generator: 
+
+ &gt;&gt;&gt; import random
+&gt;&gt;&gt; randomlist = range(1000)
+&gt;&gt;&gt; random.shuffle(randomlist)
+&gt;&gt;&gt; import timeit
+&gt;&gt;&gt; timeit.timeit("sorted(x for x in randomlist)",setup = "from __main__ import randomlist",number = 10000)
+4.944492386602178
+&gt;&gt;&gt; timeit.timeit("sorted([x for x in randomlist])",setup = "from __main__ import randomlist",number = 10000)
+4.635165083830486
+ 
+
+ And: 
+
+ &gt;&gt;&gt; timeit.timeit("sorted(x for x in xrange(1000,1,-1))",number = 10000)
+1.411807087213674
+&gt;&gt;&gt; timeit.timeit("sorted([x for x in xrange(1000,1,-1)])",number = 10000)
+1.0734657617099401
+ 
+
+ I think this is because when sorted() converts the incoming value to a list it can do this more quickly for something that is already a list than for a generator. The source code seems to confirm this (but this is from reading the comments rather than fully understanding everything that is going on). 
+ #5 
+ I also initially thought that a list
+ comprehension is faster than a list 
+ 
+
+ what do you man faster than a list you mean faster than an explicit for ? for that i will say it depend , the list comprehensible is more like a syntactic sugar , but it very handy when it come to simple loop . 
+
+ 
+ but when it comes to sorted() I don't
+ know. Is there any benefit to sending
+ a generator expression to sorted()
+ rather than a list? 
+ 
+
+ the main difference between List comprehensible and Generator expressions is that the Generator expressions avoid the overhead of generating the entire list at once. Instead, they return a generator object which can be iterated one by one, so the Generator expressions are more likely used to save memory usage. 
+
+ But you have to understand one thing in python it's very hard to tell if one way is faster (optimistic) than an other way just by looking at it, and if you want to do that you should use timeit for benchmarking (and benchmarking it's very complex than just running one timeit in a single machine). 
+
+ Read this for more info about some optimization ways.

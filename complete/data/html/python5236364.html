@@ -1,0 +1,104 @@
+<h3>Question (ID-5236364):</h3><h2>How to parallelize list-comprehension calculations in Python?</h2><p>Both list comprehensions and map-calculations should -- at least in theory -- be relatively easy to parallelize: each calculation inside a list-comprehension could be done independent of the calculation of all the other elements. For example in the expression</p>
+
+<pre><code>[ x*x for x in range(1000) ]
+</code></pre>
+
+<p>each x*x-Calculation could (at least in theory) be done in parallel.</p>
+
+<p>My question is: Is there any Python-Module / Python-Implementation / Python Programming-Trick to parallelize a list-comprehension calculation (in order to use all 16 / 32 / ... cores or distribute the calculation over a Computer-Grid or over a Cloud)?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>As Ken said, no, it can't, but with 2.6's <a href="http://docs.python.org/library/multiprocessing.html">multiprocessing</a> module, it's pretty easy to parallelize computations.</p>
+
+<pre><code>import multiprocessing
+
+try:
+    cpus = multiprocessing.cpu_count()
+except NotImplementedError:
+    cpus = 2   # arbitrary default
+
+
+def square(n):
+    return n * n
+
+pool = multiprocessing.Pool(processes=cpus)
+print pool.map(square, xrange(1000))
+</code></pre>
+
+<p>There are also examples in the <a href="http://docs.python.org/dev/library/multiprocessing.html#examples">documentation</a> that shows how to do this using Managers, which should allow for distributed computations as well. </p>
+<br /><b>#1</b><br /><p>No, because list comprehension itself is a sort of a C-optimized macro. If you pull it out and parallelize it, then it's not a list comprehension, it's just a good old fashioned <a href="http://en.wikipedia.org/wiki/MapReduce" rel="nofollow">MapReduce</a>.</p>
+
+<p>But you can easily parallelize your example. Here's a good tutorial on using MapReduce with Python's parallelization library:</p>
+
+<p><a href="http://mikecvet.wordpress.com/2010/07/02/parallel-mapreduce-in-python/" rel="nofollow">http://mikecvet.wordpress.com/2010/07/02/parallel-mapreduce-in-python/</a></p>
+<br /><b>#2</b><br /><p>Hmmm...</p>
+
+<p>Using the <code>futures.{Thread,Process}PoolExecutor.map(func, *iterables, timeout=None)</code> and <code>futures.as_completed(future_instances, timeout=None)</code> functions from the new 3.2 <a href="http://docs.python.org/py3k/library/concurrent.futures.html" rel="nofollow">concurrent.futures</a> package couldn't help ?</p>
+
+<p>It's also available as a 2.6+ <a href="http://pypi.python.org/pypi/futures/" rel="nofollow">backport</a>.</p>
+
+<p>Regards, Georges</p>
+<br /><b>#3</b><br /><p><em>(possibly off-topic)</em></p>
+
+<h3>On automatical parallelisation of list comprehenstion</h3>
+
+<p>IMHO, <em>effective</em> automatic parallisation of list comprehension would be impossible without additional information (such as those provided using directives in OpenMP), or limiting it to expressions that involve only built-in types/methods.</p>
+
+<p>Unless there is a guarantee that the processing done on each list item has no side effects, there is a possibility that the results will be invalid (or at least different) if done out of order.</p>
+
+<pre><code># Artificial example
+counter = 0
+
+def g(x): # func with side-effect
+    global counter
+    counter = counter + 1
+    return x + counter
+
+vals = [g(i) for i in range(100)] # diff result when not done in order
+</code></pre>
+
+<p>There is also the issue of task distribution. How should the problem space be decomposed? </p>
+
+<p>If the processing of each element forms a task (~ task farm), then when there are many elements each involving trivial calculation, the overheads of managing the tasks will swamps out the performance gains of parallelisation. </p>
+
+<p>One could also take the data decomposition approach where the problem space is divided equally among the available processes. </p>
+
+<p>The fact that list comprehension also works with generators makes this slightly tricky, however this is probably not a show stopper if the overheads of pre-iterating it is acceptable. Of course, there is also a possibility of generators with side-effects which can change the outcome if subsequent items are prematurely iterated. Very unlikely, but possible.</p>
+
+<p>A bigger concern would be load imbalance across processes. There is no guarantee that each element would take the same amount of time to process, so statically partitioned data may result in one process doing most of the work while the idle your time away. </p>
+
+<p>Breaking the list down to smaller chunks and handing them as each child process is available is a good compromise, however, a good selection of chunk size would be application dependent hence not doable without more information from the user.</p>
+
+<h3>Alternatives</h3>
+
+<p>As mentioned in several other answers, there are many approaches and <a href="http://wiki.python.org/moin/ParallelProcessing" rel="nofollow">parallel computing modules/frameworks</a> to choose from depending on one requirements.</p>
+
+<p>Having used only MPI (in C) with no experience using Python for parallel processing, I am not in a position to vouch for any (although, upon a quick scan through,
+<a href="http://docs.python.org/library/multiprocessing.html" rel="nofollow">multiprocessing</a>, <a href="http://luispedro.org/software/jug" rel="nofollow">jug</a>, <a href="http://www.parallelpython.com/" rel="nofollow">pp</a> and <a href="http://pyro.sourceforge.net/" rel="nofollow">pyro</a> stand out).</p>
+
+<p>If a requirement is to stick as close as possible to list comprehension, then <a href="http://luispedro.org/software/jug" rel="nofollow">jug</a> seems to be the closest match. From the <a href="http://packages.python.org/Jug/tutorial.html#example" rel="nofollow">tutorial</a>, distributing tasks across multiple instances can be as simple as:</p>
+
+<pre><code>from jug.task import Task
+from yourmodule import process_data
+tasks = [Task(process_data,infile) for infile in glob('*.dat')]
+</code></pre>
+
+<p>While that does something similar to <code>multiprocessing.Pool.map()</code>, <code>jug</code> can use different backends for synchronising process and storing intermediate results (redis, filesystem, in-memory) which means the processes can span across nodes in a cluster.</p>
+<br /><b>#4</b><br /><p>There is a comprehensive list of parallel packages for Python here:</p>
+
+<p><a href="http://wiki.python.org/moin/ParallelProcessing" rel="nofollow">http://wiki.python.org/moin/ParallelProcessing</a></p>
+
+<p>I'm not sure if any handle the splitting of a list comprehension construct directly, but it should be trivial to formulate the same problem in a non-list comprehension way that can be easily forked to a number of different processors. I'm not familiar with cloud computing parallelization, but I've had some success with mpi4py on multi-core machines and over clusters. The biggest issue that you'll have to think about is whether the communication overhead is going to kill any gains you get from parallelizing the problem. </p>
+
+<p><strong>Edit:</strong> The following might also be of interest:</p>
+
+<p><a href="http://www.mblondel.org/journal/2009/11/27/easy-parallelization-with-data-decomposition/" rel="nofollow">http://www.mblondel.org/journal/2009/11/27/easy-parallelization-with-data-decomposition/</a></p>
+<br /><b>#5</b><br /><p>Not within a list comprehension AFAIK.</p>
+
+<p>You could certainly do it with a traditional for loop and the multiprocessing/threading modules.</p>
+<br /><b>#6</b><br /><p>For shared-memory parallelism, I recommend <a href="http://packages.python.org/joblib/" rel="nofollow">joblib</a>:</p>
+
+<pre><code>from joblib import delayed, Parallel
+
+def square(x): return x*x
+values = Parallel(n_jobs=NUM_CPUS)(delayed(square)(x) for x in range(1000))
+</code></pre>
+<br />

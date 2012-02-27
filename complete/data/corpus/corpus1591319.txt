@@ -1,0 +1,130 @@
+Question (ID-1591319): Python: How can I know which exceptions might be thrown from a method call Is there a way knowing (at coding time) which exceptions to expect when executing python code? 
+I end up catching the base Exception class 90% of the time since I don't know which exception type might be thrown(and don't tell me to read the documentation. many times an exception can be propagated from the deep. and many times the documentation is not updated or correct). Is there some kind of tool to check this ? (like by reading the python code and libs)? 
+ Answers (Total-6): #0 You should only catch exceptions that you will handle. 
+
+ Catching all exceptions by their concrete types is nonsense. You should catch specific exceptions you can and will handle. For other exceptions, you may write a generic catch that catches "base Exception", logs it (use str() function) and terminates your program (or does something else that's appropriate in a crashy situation). 
+
+ If you really gonna handle all exceptions and are sure none of them are fatal (for example, if you're running the code in some kind of a sandboxed environment), then your approach of catching generic BaseException fits your aims. 
+
+ You might be also interested in language exception reference , not a reference for the library you're using. 
+
+ If the library reference is really poor and it doesn't re-throw its own exceptions when catching system ones, the only useful approach is to run tests (maybe add it to test suite, because if something is undocumented, it may change!). Delete a file crucial for your code and check what exception is being thrown. Supply too much data and check what error it yields. 
+
+ You will have to run tests anyway, since, even if the method of getting the exceptions by source code existed, it wouldn't give you any idea how you should handle any of those . Maybe you should be showing error message "File needful.txt is not found!" when you catch IndexError ? Only test can tell. 
+ #1 I guess a solution could be only imprecise because of lack of static typing rules. 
+
+ I'm not aware of some tool that checks exceptions, but you could come up with your own tool matching your needs (a good chance to play a little with static analysis). 
+
+ As a first attempt, you could write a function that builds an AST, finds all Raise nodes, and then tries to figure out common patterns of raising exceptions (e. g. calling a constructor directly) 
+
+ Let x be the following program: 
+
+ x = '''\
+if f(x):
+ raise IOError(errno.ENOENT, 'not found')
+else:
+ e = g(x)
+ raise e
+'''
+ 
+
+ Build the AST using the compiler package: 
+
+ tree = compiler.parse(x)
+ 
+
+ Then define a Raise visitor class: 
+
+ class RaiseVisitor(object):
+ def __init__(self):
+  self.nodes = []
+ def visitRaise(self, n):
+  self.nodes.append(n)
+ 
+
+ And walk the AST collecting Raise nodes: 
+
+ v = RaiseVisitor()
+compiler.walk(tree, v)
+
+&gt;&gt;&gt; print v.nodes
+[
+ Raise(
+  CallFunc(
+   Name('IOError'),
+   [Getattr(Name('errno'), 'ENOENT'), Const('not found')],
+   None, None),
+  None, None),
+ Raise(Name('e'), None, None),
+]
+ 
+
+ You may continue by resolving symbols using compiler symbol tables, analyzing data dependencies, etc. Or you may just deduce, that CallFunc(Name('IOError'), ...) "should definitely mean raising IOError ", which is quite OK for quick practical results :) 
+ #2 The correct tool to solve this problem is unittests. If you are having exceptions raised by real code that the unittests do not raise, then you need more unittests. 
+
+ Consider this 
+
+ def f(duck):
+ try:
+  duck.quack()
+ except ??? could be anything
+ 
+
+ duck can be any object 
+
+ Obviously you can have an AttributeError if duck has no quack, a TypeError if duck has a quack but it is not callable. You have no idea what duck.quack() might raise though, maybe even a DuckError or something 
+
+ Now supposing you have code like this 
+
+ arr[i]=get_something_from_database()
+ 
+
+ If it raises an IndexError you don't know whether it has come from arr[i] or from deep inside the database function. usually it doesn't matter so much where the exception occurred, rather that something went wrong and what you wanted to happen didn't happen. 
+
+ A handy technique is to catch and maybe reraise the exception like this 
+
+ except Exception, e
+ #inspect e, decide what to do
+ raise
+ 
+ #3 I ran into this when using socket, I wanted to find out all the error conditions I would run in to (so rather than trying to create errors and figure out what socket does I just wanted a concise list). Ultimately I ended up grep'ing "/usr/lib64/python2.4/test/test_socket.py" for "raise": 
+
+ $ grep raise test_socket.py
+Any exceptions raised by the clients during their tests
+  raise TypeError, "test_func must be a callable function"
+ raise NotImplementedError, "clientSetUp must be implemented."
+ def raise_error(*args, **kwargs):
+  raise socket.error
+ def raise_herror(*args, **kwargs):
+  raise socket.herror
+ def raise_gaierror(*args, **kwargs):
+  raise socket.gaierror
+ self.failUnlessRaises(socket.error, raise_error,
+ self.failUnlessRaises(socket.error, raise_herror,
+ self.failUnlessRaises(socket.error, raise_gaierror,
+  raise socket.error
+ # Check that setting it to an invalid value raises ValueError
+ # Check that setting it to an invalid type raises TypeError
+ def raise_timeout(*args, **kwargs):
+ self.failUnlessRaises(socket.timeout, raise_timeout,
+ def raise_timeout(*args, **kwargs):
+ self.failUnlessRaises(socket.timeout, raise_timeout,
+ 
+
+ Which is a pretty concise list of errors. Now of course this only works on a case by case basis and depends on the tests being accurate (which they usually are). Otherwise you need to pretty much catch all exceptions, log them and dissect them and figure out how to handle them (which with unit testing wouldn't be to difficult). 
+ #4 normally, you'd need to catch exception only around a few lines of code. You wouldn't want to put your whole main function into the try except clause. for every few line you always should now (or be able easily to check) what kind of exception might be raised. 
+
+ docs have an exhaustive list of built-in exceptions . don't try to except those exception that you're not expecting, they might be handled/expected in the calling code. 
+
+ edit : what might be thrown depends on obviously on what you're doing! accessing random element of a sequence: IndexError , random element of a dict: KeyError , etc. 
+
+ Just try to run those few lines in IDLE and cause an exception. But unittest would be a better solution, naturally. 
+ #5 Noone explained so far, why you can't have a full, 100% correct list of exceptions, so I thought it's worth commenting on. One of the reasons is a first-class function. Let's say that you have a function like this: 
+
+ def apl(f,arg):
+ return f(arg)
+ 
+
+ Now apl can raise any exception that f raises. While there are not many functions like that in the core library, anything that uses list comprehension with custom filters, map, reduce, etc. are affected. 
+
+ The documentation and the source analysers are the only "serious" sources of information here. Just keep in mind what they cannot do.

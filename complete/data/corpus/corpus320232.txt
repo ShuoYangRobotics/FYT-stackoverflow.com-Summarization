@@ -1,0 +1,111 @@
+Question (ID-320232): Ensuring subprocesses are dead on exiting Python program Is there a way to ensure all created subprocess are dead at exit time of a Python program? By subprocess I mean those created with subprocess.Popen(). 
+
+ If not, should I iterate over all of the issuing kills and then kills -9? anything cleaner? 
+ Answers (Total-6): #0 The subprocess.Popen.wait() is the only way to assure that they're dead. Indeed, POSIX OS's require that you wait on your children. Many *nix's will create a "zombie" process: a dead child for which the parent didn't wait. 
+
+ If the child is reasonably well-written, it terminates. Often, children read from PIPE's. Closing the input is a big hint to the child that it should close up shop and exit. 
+
+ If the child has bugs and doesn't terminate, you may have to kill it. You should fix this bug. 
+
+ If the child is a "serve-forever" loop, and is not designed to terminate, you should either kill it or provide some input or message which will force it to terminate. 
+
+ 
+
+ Edit. 
+
+ In standard OS's, you have os.kill( PID, 9 ) . Kill -9 is harsh, BTW. If you can kill them with SIGABRT (6?) or SIGTERM (15) that's more polite. 
+
+ In Windows OS, you don't have an os.kill that works. Look at this ActiveState Recipe for terminating a process in Windows. 
+
+ We have child processes that are WSGI servers. To terminate them we do a GET on a special URL; this causes the child to clean up and exit. 
+ #1 You can use atexit for this, and register any clean up tasks to be run when your program exits. 
+
+ atexit.register(func[, *args[, **kargs]]) 
+
+ In your cleanup process, you can also implement your own wait, and kill it when a your desired timeout occurs. 
+
+ &gt;&gt;&gt; import atexit
+&gt;&gt;&gt; import sys
+&gt;&gt;&gt; import time
+&gt;&gt;&gt; 
+&gt;&gt;&gt; 
+&gt;&gt;&gt;
+&gt;&gt;&gt; def cleanup():
+...  timeout_sec = 5
+...  for p in all_processes: # list of your processes
+...   p_sec = 0
+...   for second in range(timeout_sec):
+...    if p.poll() == None:
+...     time.sleep(1)
+...     p_sec += 1
+...   if p_sec &gt;= timeout_sec:
+...    p.kill() # supported from python 2.6
+...  print 'cleaned up!'
+...
+&gt;&gt;&gt;
+&gt;&gt;&gt; atexit.register(cleanup)
+&gt;&gt;&gt;
+&gt;&gt;&gt; sys.exit()
+cleaned up!
+ 
+
+ Note -- Registered functions won't be run if this process (parent process) is killed. 
+
+ Here's a way to kill a process in windows. Your Popen object has a pid attribute, so you can just call it by success = win_kill(p.pid) (Needs pywin32 installed): 
+
+  def win_kill(pid):
+  '''kill a process by specified PID in windows'''
+  import win32api
+  import win32con
+
+  hProc = None
+  try:
+   hProc = win32api.OpenProcess(win32con.PROCESS_TERMINATE, 0, pid)
+   win32api.TerminateProcess(hProc, 0)
+  except Exception:
+   return False
+  finally:
+   if hProc != None:
+    hProc.Close()
+
+  return True
+ 
+ #2 On *nix's, maybe using process groups can help you out - you can catch subprocesses spawned by your subprocesses as well. 
+
+ if __name__ == "__main__":
+ os.setpgrp() # create new process group, become its leader
+ try:
+ # some code
+ finally:
+ os.killpg(0, signal.SIGKILL) # kill all processes in my group
+ 
+
+ Another consideration is to escalate the signals: from SIGTERM (default signal for kill ) to SIGKILL (a.k.a kill -9 ). Wait a short while between the signals to give the process a chance to exit cleanly before you kill -9 it. 
+ #3 
+ poll( ) 
+ 
+ Check if child process has terminated.
+ Returns returncode attribute. 
+ 
+ #4 
+ Is there a way to ensure all created subprocess are dead at exit time of a Python program? By subprocess I mean those created with subprocess.Popen(). 
+ 
+
+ You could violate encapsulation and test that all Popen processes have terminated by doing 
+
+ subprocess._cleanup()
+print subprocess._active == []
+ 
+
+ 
+ If not, should I iterate over all of the issuing kills and then kills -9? anything cleaner? 
+ 
+
+ You cannot ensure that all subprocesses are dead without going out and killing every survivor. But if you have this problem, it is probably because you have a deeper design problem. 
+ #5 This is what I did for my posix app: 
+
+ When your app exists call the kill() method of this class:
+ http://www.pixelbeat.org/libs/subProcess.py 
+
+ Example use here:
+ http://code.google.com/p/fslint/source/browse/trunk/fslint-gui#608

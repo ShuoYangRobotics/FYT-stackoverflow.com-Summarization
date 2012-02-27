@@ -1,0 +1,123 @@
+Question (ID-2476748): writing 'bits' to c++ file streams How can i write 'one bit' into a file stream or file structure each time? is it possible to write to a queue and then flush it ? is it possible with c# or java?
+this was needed when i try to implement an instance of Huffman codding. i can't write bits into files. so write them to a bitset and then (when compression was completed) write 8-bit piece of it each time (exclude last one). 
+ Answers (Total-7): #0 Buffering the individual bits until you've accumulated a whole byte seems like a good idea: 
+
+ byte b;
+int s;
+
+void WriteBit(bool x)
+{
+ b |= (x ? 1 : 0) &lt;&lt; s;
+ s++;
+
+ if (s == 8)
+ {
+  WriteByte(b);
+  b = 0;
+  s = 0;
+ }
+}
+ 
+
+ You just have to deal with the case when the number of bits to be written is not a multiple of eight. 
+ #1 You can use boost::dynamic_bitset along with std::ostream_iterator to achieve the desired result in a concise manner: 
+
+ #include &lt;fstream&gt;
+#include &lt;iterator&gt;
+#include &lt;boost/dynamic_bitset.hpp&gt;
+
+typedef boost::dynamic_bitset&lt;unsigned char&gt; Bitset;
+
+// To help populate the bitset with literals */
+Bitset&amp; operator&lt;&lt;(Bitset&amp; lhs, bool val) {lhs.push_back(val); return lhs;}
+
+int main()
+{
+ Bitset bitset;
+ bitset&lt;&lt;0&lt;&lt;1&lt;&lt;0&lt;&lt;1&lt;&lt;0&lt;&lt;1&lt;&lt;0&lt;&lt;1
+   &lt;&lt;1&lt;&lt;0&lt;&lt;1&lt;&lt;0;
+
+ std::ofstream os("data.dat", std::ios::binary);
+ std::ostream_iterator&lt;char&gt; osit(os);
+ boost::to_block_range(bitset, osit);
+
+ return 0;
+}
+ 
+
+ I made the block size of my dynamic_bitset 8 bits by specifying unsigned char as the template parameter. You can make the block size bigger by specifying a larger integer type. 
+
+ boost::to_block_range dumps the bitset in blocks to the given output iterator. If there are empty remainder bits in the last block, they'll be padded with zero. 
+
+ When I open data.dat in a hex editor I see: AA 05 . This is on a little endian platform (x64). 
+ #2 Which filesystem are you using? 
+
+ Most likely it stores the length of the file in bytes (are there any that don't?), so it's impossible to have a physical file that is not a whole number of bytes. 
+
+ So if you are writing to the file as a stream of bits, you either have to truncate the last few bits when you are finished, or write out the final byte with what ammounts to junk in the remaining bits. 
+
+ Here's some Python code to get you started 
+
+ class BitFile(file):
+ def __init__(self, filename, mode):
+  super(BitFile, self).__init__(filename, mode)
+  self.bitCount=0
+  self.byte = 0
+
+ def write(self, bit):
+  self.bitCount+=1
+  self.byte = self.byte*2+bit
+  if self.bitCount%8==0:
+   super(BitFile, self).write(chr(self.byte))
+   self.byte=0
+
+ def close(self):
+  if self.bitCount%8!=0:
+   super(BitFile, self).write(chr(self.byte))
+  super(BitFile, self).close()  
+
+with BitFile("bitfile.bin","w") as bf:
+ bf.write(1)
+ bf.write(1)
+ bf.write(1)
+ bf.write(0)
+ bf.write(0)
+ bf.write(0)
+ bf.write(0)
+ bf.write(0)
+ bf.write(1)
+ 
+ #3 You can't really. I'm pretty sure the problem is not with the language or the filesystem, but a hardware issue. Processors are designed to work with bytes. Probably the closest you can do is write your last byte over and over again, right padded with zeros, changing them as you go, one at a time. 
+
+ so to write bits '11011', you could do the following (python example, but any language should have facilities to do this: 
+
+ f.write(chr(0b10000000))
+f.flush()
+f.seek(-1)
+f.write(chr(0b11000000))
+f.flush()
+f.seek(-1)
+f.write(chr(0b11000000))
+f.flush()
+f.seek(-1)
+f.write(chr(0b11010000))
+f.flush()
+f.seek(-1)
+f.write(chr(0b11011000)) 
+f.flush()
+ 
+
+ You weren't hoping to get some sort of performance gain from this were you? 
+ #4 I would recommend allocating a rather large buffer (4096 bytes at least) and flush that off to disk whenever it fills up. Using a one-byte buffer usually causes bad performance. 
+ #5 I did this once for huffman decoding and ended up writing the bits as chars and thus handling everything internally as a plain old C string. 
+
+ That way you don't have to worry about the trailing byte and it's human readable as well. Also checking bits is is easier since its just a matter of addressing the char array ( binbuf[123] == '1' ) instead of having to fiddle with bits. Not the most optimized solution, but it solved my problem neatly. 
+
+ The obvious drawback is that this representation uses more memory. 
+ #6 The issue here is that many platforms do not have direct bit access. They group bits into a minimal package, often times the byte or word . Also, the protocol for stream devices does not facilitate transmission of individual bits. 
+
+ The common method to deal with individual bits is to pack them into the smallest portable and (addressable) accessible unit. The unused bits are usually set to zero. This can be accomplished with binary arithmetic operations (OR, AND, EXCLUSIVE-OR, NOT, etc.). 
+
+ With modern processors, bit twiddling slows down the machine and the performance. Memory is cheap and with large addressing spaces, justification for bit packing has become more difficult. Generally, bit packing is reserved for hardware oriented operations (and also transmission protocols). For example, if a processor's word capacity is 16 bits, the processor can probably handle 16 words faster than 16 bit manipulations in one word. 
+
+ Also, keep in mind that writing to and from memory is often faster than I/O from streams. Efficient systems buffer data in memory before transmitting the data. You may want to consider this technique in your designs. Reducing I/O operations will improve the performance of your program.

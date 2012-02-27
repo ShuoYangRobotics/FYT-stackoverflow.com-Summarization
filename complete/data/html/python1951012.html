@@ -1,0 +1,75 @@
+<h3>Question (ID-1951012):</h3><h2>Python - Things I shouldn't be doing?</h2><p>I've got a few questions about best practices in Python. Not too long ago I would do something like this with my code:</p>
+
+<pre><code>...
+junk_block = "".join(open("foo.txt","rb").read().split())
+...
+</code></pre>
+
+<p>I don't do this anymore because I can see that it makes code harder to read, but would the code run slower if I split the statements up like so:</p>
+
+<pre><code>f_obj = open("foo.txt", "rb")
+f_data = f_obj.read()
+f_data_list = f_data.split()
+junk_block = "".join(f_data_list)
+</code></pre>
+
+<p>I also noticed that there's nothing keeping you from doing an 'import' within a function block, is there any reason why I should do that? </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>As long as you're inside a function (<strong>not</strong> at module top level), assigning intermediate results to local barenames has an essentially-negligible cost (at module top level, assigning to the "local" barenames implies churning on a dict -- the module's <code>__dict__</code> -- and is measurably costlier than it would be within a function; the remedy is never to have "substantial" code at module top level... always stash substantial code within a function!-).</p>
+
+<p>Python's general philosophy includes "flat is better than nested" -- and that includes highly "nested" expressions.  Looking at your original example...:</p>
+
+<pre><code>junk_block = "".join(open("foo.txt","rb").read().split())
+</code></pre>
+
+<p>presents another important issues: when is that file getting closed?  In CPython today, you need not worry -- reference counting in practice does ensure timely closure.  But most other Python implementations (Jython on the JVM, IronPython on .NET, PyPy on all sorts of backends, pynie on Parrot, Unladen Swallow on LLVM if and when it matures per its published roadmap, ...) do <strong>not</strong> guarantee the use of reference counting -- many garbage collection strategies may be involved, with all sort of other advantages.</p>
+
+<p>Without any guarantee of reference counting (and even in CPython it's always been deemed an implementation artifact, <strong>not</strong> part of the language semantics!), you might be exhausting resources, by executing such "open but no close" code in a tight loop -- garbage collection is triggered by scarcity of memory, and does not consider other limited resources such as file descriptors.  Since 2.6 (and 2.5, with an "import from the future"), Python has a great solution via the RAII ("resource acquisition is initialization") approach supported by the <code>with</code> statement:</p>
+
+<pre><code>with open("foo.txt","rb") as f:
+  junk_block = "".join(f.read().split())
+</code></pre>
+
+<p>is the least-"unnested" way that will ensure timely closure of the file across all compliant versions of Python.  The stronger semantics make it preferable.</p>
+
+<p>Beyond ensuring the correct, and prudent;-), semantics, there's not that much to choose between nested and flattened versions of an expression such as this.  Given the task "remove all runs of whitespace from the file's contents", I would be tempted to benchmark alternative approaches based on <code>re</code> and on the <code>.translate</code> method of strings (the latter, esp. in Python 2.*, is often the fastest way to delete all characters from a certain set!), before settling on the "split and rejoin" approach if it proves to be faster -- but that's really a rather different issue;-).</p>
+<br /><b>#1</b><br /><p>First of all, there's not really a reason you <em>shouldn't</em> use the first example - it'd quite readable in that it's concise about what it does. No reason to break it up since it's just a linear combination of calls.</p>
+
+<p>Second, <code>import</code> within a function block is useful if there's a particular library function that you only need within that function - since the scope of an imported symbol is only the block within which it is imported, if you only ever use something once, you can just import it where you need it and not have to worry about name conflicts in other functions. This is especially handy with <code>from X import Y</code> statements, since Y won't be qualified by its containing module name and thus might conflict with a similarly named function in a different module being used elsewhere.</p>
+<br /><b>#2</b><br /><p>from <a href="http://www.python.org/dev/peps/pep-0008/" rel="nofollow">PEP 8</a> (which is worth reading anyway)</p>
+
+<blockquote>
+  <p>Imports are always put at the top of the file, just after any module comments and docstrings, and before module globals and constants</p>
+</blockquote>
+<br /><b>#3</b><br /><p>That line has the same result as this:</p>
+
+<p>junk_block = open("foo.txt","rb").read().replace(' ', '')</p>
+
+<p>In your example you are splitting the words of the text into a list of words, and then you are joining them back together with no spaces. The above example instead uses the str.replace() method.</p>
+
+<p>The differences:</p>
+
+<p>Yours builds a file object into memory, builds a string into memory by reading it, builds a list into memory by splitting the string, builds a new string by joining the list.</p>
+
+<p>Mine builds a file object into memory, builds a string into memory by reading it, builds a new string into memory by replacing spaces.</p>
+
+<p>You can see a bit less RAM is used in the new variation but more processor is used. RAM is more valuable in some cases and so memory waste is frowned upon when it can be avoided.</p>
+
+<p>Most of the memory will be garbage collected immediately but multiple users at the same time will hog RAM.</p>
+<br /><b>#4</b><br /><p>If you want to know if your second code fragment is slower, the quick way to find out would be to just use <a href="http://docs.python.org/library/timeit.html" rel="nofollow">timeit</a>. I wouldn't expect there to be that much difference though, since they seem pretty equivalent. </p>
+
+<p>You should also ask if a performance difference actually matters in the code in question. Often readability is of more value than performance.</p>
+
+<p>I can't think of any good reasons for importing a module in a function, but sometimes you just don't know you'll need to do something until you see the problem. I'll have to leave it to others to point out a constructive example of that, if it exists.</p>
+<br /><b>#5</b><br /><p>I think the two codes are readable. I (and that's just a question of personal style) will probably use the first, adding a coment line, something like: "Open the file and convert the data inside into a list"</p>
+
+<p>Also, there are times when I use the second, maybe not so separated, but something like</p>
+
+<pre><code>f_data = open("foo.txt", "rb").read()
+f_data_list = f_data.split()
+junk_block = "".join(f_data_list)
+</code></pre>
+
+<p>But then I'm giving more entity to each operation, which could be important in the flow of the code. I think it's important you are confortable and don't think that the code is difficult to understand in the future.</p>
+
+<p>Definitly, the code will not be (at least, much) slower, as the only "overload" you're making is to asing the results to values.</p>
+<br />

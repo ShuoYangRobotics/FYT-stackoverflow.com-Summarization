@@ -1,0 +1,99 @@
+Question (ID-656933): Communicating with a running python daemon I wrote a small Python application that runs as a daemon. It utilizes threading and queues. 
+
+ I'm looking for general approaches to altering this application so that I can communicate with it while it's running. Mostly I'd like to be able to monitor its health. 
+
+ In a nutshell, I'd like to be able to do something like this: 
+
+ python application.py start # launches the daemon
+ 
+
+ Later, I'd like to be able to come along and do something like: 
+
+ python application.py check_queue_size # return info from the daemonized process
+ 
+
+ To be clear, I don't have any problem implementing the Django-inspired syntax. What I don't have any idea how to do is to send signals to the daemonized process (start), or how to write the daemon to handle and respond to such signals. 
+
+ Like I said above, I'm looking for general approaches. The only one I can see right now is telling the daemon constantly log everything that might be needed to a file, but I hope there's a less messy way to go about it. 
+
+ UPDATE: Wow, a lot of great answers. Thanks so much. I think I'll look at both Pyro and the web.py/Werkzeug approaches, since Twisted is a little more than I want to bite off at this point. The next conceptual challenge, I suppose, is how to go about talking to my worker threads without hanging them up. 
+
+ Thanks again. 
+ Answers (Total-7): #0 What about having it run an http server? 
+
+ It seems crazy but running a simple web server for administrating your
+server requires just a few lines using web.py 
+
+ You can also consider creating a unix pipe. 
+ #1 Use werkzeug and make your daemon include an HTTP-based WSGI server. 
+
+ Your daemon has a collection of small WSGI apps to respond with status information. 
+
+ Your client simply uses urllib2 to make POST or GET requests to localhost:somePort. Your client and server must agree on the port number (and the URL's). 
+
+ This is very simple to implement and very scalable. Adding new commands is a trivial exercise. 
+
+ Note that your daemon does not have to respond in HTML (that's often simple, though). Our daemons respond to the WSGI-requests with JSON-encoded status objects. 
+ #2 Yet another approach: use Pyro (Python remoting objects). 
+
+ Pyro basically allows you to publish Python object instances as services that can be called remotely. I have used Pyro for the exact purpose you describe, and I found it to work very well. 
+
+ By default, a Pyro server daemon accepts connections from everywhere. To limit this, either use a connection validator (see documentation), or supply host='127.0.0.1' to the Daemon constructor to only listen for local connections. 
+
+ Example code taken from the Pyro documentation: 
+
+ Server 
+
+ 
+import Pyro.core
+
+class JokeGen(Pyro.core.ObjBase):
+  def __init__(self):
+    Pyro.core.ObjBase.__init__(self)
+  def joke(self, name):
+    return "Sorry "+name+", I don't know any jokes."
+
+Pyro.core.initServer()
+daemon=Pyro.core.Daemon()
+uri=daemon.connect(JokeGen(),"jokegen")
+
+print "The daemon runs on port:",daemon.port
+print "The object's uri is:",uri
+
+daemon.requestLoop()
+ 
+
+ Client 
+
+ 
+import Pyro.core
+
+# you have to change the URI below to match your own host/port.
+jokes = Pyro.core.getProxyForURI("PYROLOC://localhost:7766/jokegen")
+
+print jokes.joke("Irmen")
+ 
+
+ Another similar project is RPyC . I have not tried RPyC. 
+ #3 I would use twisted with a named pipe or just open up a socket. Take a look at the echo server and client examples . You would need to modify the echo server to check for some string passed by the client and then respond with whatever requested info. 
+
+ Because of Python's threading issues you are going to have trouble responding to information requests while simultaneously continuing to do whatever the daemon is meant to do anyways. Asynchronous techniques or forking another processes are your only real option. 
+ #4 # your server
+
+from twisted.web import xmlrpc, server
+from twisted.internet import reactor
+
+class MyServer(xmlrpc.XMLRPC):
+
+ def xmlrpc_monitor(self, params):  
+  return server_related_info
+
+if __name__ == '__main__':
+ r = MyServer()
+ reactor.listenTCP(8080, Server.Site(r))
+ reactor.run()
+ 
+
+ client can be written using xmlrpclib, check example code here . 
+ #5 You could associate it with Pyro ( http://pyro.sourceforge.net/ ) the Python Remote Object. It lets you remotely access python objects. It's easily to implement, has low overhead, and isn't as invasive as Twisted. 
+ #6 Assuming you're under *nix, you can send signals to a running program with kill from a shell (and analogs in many other environments). To handle them from within python check out the signal module.

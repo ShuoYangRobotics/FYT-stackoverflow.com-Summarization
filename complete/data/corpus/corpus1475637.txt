@@ -1,0 +1,84 @@
+Question (ID-1475637): How do you bind a language (python, for example) to another (say, C++)? I'm far from a python expert but I hear this one all the time, about its C/C++ bindings. How does this concept work, and how does Python (and Java) bind to C-based APIs like OpenGL? This stuff has always been a mystery to me. 
+ Answers (Total-6): #0 Interpreters Written in C89 with Reflection, Who Knew? 
+
+ 
+
+ I have a feeling you are looking for an explanation of the mechanism and not a link to the API or instructions on how to code it. So, as I understand it . . . 
+
+ The main interpreter is typically written in C and is dynamically linked. In a dynamically linked environment, even C89 has a certain amount of reflective behavior. In particular, the dlopen(3) and dlsym(3) calls will load a dynamic (typically ELF) library and look up the address of a symbol named by a string. Give that address, the interpreter can call a function. Even if statically linked, the interpreter can know the address of C functions whose names are compiled into it. 
+
+ So then, it's just a simple matter of having the interpreted code tell the interpreter to call a particular native function in a particular native library. 
+
+ The mechanism can be modular. An extension library for the interpreter, written in the script, can itself invoke the bare hooks for dlopen(3) and dlsym(3) and hook up to a new library that the interpreter never knew about. 
+
+ For passing simple objects by value, a few prototype functions will typically allow various calls. But for structured data objects (imagine stat(2)) the wrapper module needs to know the layout of the data. At some point, either when packaging the extension module or when installing it, a C interface module includes the appropriate header files and in conjunction with handwritten code constructs an interface object. This is why you may need to install something like libsqlite3-dev even if you already had sqlite3 on your system; only the -dev package has the .h files needed to recompile the linkage code. 
+
+ I suppose we could sum this up by saying: "it's done with brute force and ignorance" . :-) 
+ #1 The main general concept is known as FFI , "Foreign Function Interface" -- for Java it's JNI, for Python it's the "Python C API", for Perl it's XS, etc, etc, but I think it's important to give you the general term of art to help you research it more thoroughly. 
+
+ Given a FFI, you can write (e.g.) C programs that respect it directly, and/or you can have code generators that produce such C code from metainformation they receive and/or introspect from code written in other languages (often with some help, e.g., to drive the SWIG code generator you typically decorate the info that's in a .h C header file with extra info that's SWIG-specific to get a better wrapper). 
+
+ There are also special languages such as Cython , an "extended subset" of Python that's geared towards easy generation of FFI code while matching much of Python's syntax and semantics -- may often be the easiest way for mostly-Python programmers to write a Python extension module that compiles down to speedy machine code and maybe uses some existing C-callable libraries. 
+
+ The ctypes approach is different from the traditional FFI approaches, though it self-describes as a "foreign function library for Python" -- it relies on the foreign code being available in a DLL (or equivalent, such as an .so dynamic library in Linux), and generates and executes code at run-time to reach into such dynamically loaded C code (typically all done via explicit programming in Python -- I don't know of ctypes wrappers based on introspection and ctypes-code generation, yet). Handy to avoid having to install anything special for simple tasks of accessing existing DLLs with Python, but I think it doesn't scale up as well as the FFI "linker-based" approaches (as it requires more runtime exertion, etc, etc). I don't know of any other implementation of such an approach, targeting other languages, beyond ctypes for Python (I imagine some do exist, given today's prevalence of DLL and .so packaging, and would be curious to learn about them). 
+ #2 Generally these languages have a way to load extensions written in C. The Java interface is called JNI (Java Native Interface). Python has comprehensive documentation about its extension interface. 
+
+ Another option for Python is the ctypes module which allows you to work with dynamically loadable C libraries without having to write custom extension code. 
+ #3 The concepts below can be generalized relatively easily, however I'm going to refer specifically to C and Python a lot for clarity. 
+
+ Calling C from Python 
+
+ This can work because most lower level languages/architectures/operating systems have well-defined Application Binary Interfaces which specify all the low-level details of how applications interact with each other and the operating system. As an example here is the ABI for x86-64(AMD64): AMD64 System V Application Binary Interface . It specifies all the details of things like calling conventions for functions and linking against C object files. 
+
+ With this information, it's up to the language implementors to 
+
+ 
+ Implement the ABI of the language
+you wish to call into 
+ Provide an interface via the
+language/library to access the
+implementation 
+ 
+
+ (1) is actually almost gotten for free in most languages due to the sole fact their interpreters/compilers are coded in C, which obviously supports the C ABI :). This is also why there is difficulty in calling C code from implementations of languages not coded in C, for example IronPython (Python implementation in C#) and PyPy (Python implementation in Python) do not have particularly good support for calling C code, though I believe there has been some work in regard to this in IronPython. 
+
+ So to make this concrete, let's assume we have CPython (The standard implementation of Python, done in C). We get (1) for free since our interpreter is written in C and we can access C libraries from our interpreter in the same way we would from any other C program (dlopen,LoadLibrary, whatever). Now we need to offer a way for people writing in our language to access these facilities. Python does this via The Python C/C++ API or ctypes . Whenever a programmer writes code using these APIs, we can execute the appropriate library loading/calling code to call into the libraries. 
+
+ Calling Python from C 
+
+ This direction is actually a bit simpler to explain. Continuing from the previous example, our interpreter, CPython is nothing more than a program written in C, so it can export functions and be compiled as a library/linked against by any program we want to write in C. CPython exports a set of C functions for accessing/running Python program and we can just call these functions to run Python code from our application. For example one of the functions exported by the CPython library is: 
+
+ PyObject* PyRun_StringFlags(const char *str, int start, PyObject *globals, PyObject *locals, PyCompilerFlags *flags)¶
+ 
+
+ 
+ Return value: New reference. 
+ 
+ Execute Python source code from str in
+ the context specified by the
+ dictionaries globals and locals with
+ the compiler flags specified by flags.
+ The parameter start specifies the
+ start token that should be used to
+ parse the source code. 
+ 
+
+ We can literally execute Python code by passing this function a string containing valid Python code (and some other details necessary for execution.) See Embedding Python in another application for details. 
+ #4 For Perl, there are two ways to call C++ subroutines: 
+
+ 
+ Perl XS (eXternal Subroutine) (See also Wiki ) - allows calling subroutines from other languages (mainly, but not exclusively, C) from Perl by compiling C code into modules usable from Perl. 
+ SWIG (Simplified wrapper and interface generator) is a software development tool that connects programs written in C and C++ with a variety of high-level / scripting languages including Perl, PHP, Python, Tcl and Ruby ( though it seems SWIG's origins are bindings with Python ). 
+
+ This is a paper that goes into details of how SWIG works , if it was your interest to understand what happens under the hood. 
+ 
+ #5 There are basically two ways of integrating c/c++ with python: 
+
+ 
+ extending: accessing c/c++ from python 
+ embedding: accessing the python interpreter from c/c++ 
+ 
+
+ What you mention is the first case. Its usually achieved by writing wrapper functions that serves as glue code between the different languages that converts the function arguments and data types to match the needed language. Usually a tool called SWIG is used to generate this glue code. 
+
+ For an extensive explanation, see this tutorial .

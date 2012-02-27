@@ -1,0 +1,160 @@
+<h3>Question (ID-8730119):</h3><h2>Retrieveing JSON objects from a text file (using Python)</h2><p>I have thousands of text files containing multiple JSON objects, but unfortunately there is no delimiter between the objects. Objects are stored as dictionaries and some of their fields are themselves objects. Each object might have a variable number of nested objects. Concretely, an object might look like this:</p>
+
+<pre><code>{field1: {}, field2: "some value", field3: {}, ...} 
+</code></pre>
+
+<p>and hundreds of such objects are concatenated without a delimiter in a text file. This means that I can neither use <code>json.load()</code> nor <code>json.loads()</code>.</p>
+
+<p>Any suggestion on how I can solve this problem. Is there a known parser to do this?</p>
+
+<p><strong>SOLUTION:</strong> I ended up adopting the solution suggested by Till Backhaus, because it was the fastest. I first implemented the solutions suggesting replacing <code>'}{'</code> with <code>'},{'</code> and that worked fine (I din't use regex though), but because many of the files had thousands of objects, it was really slow. The solution using JSONDecoder was really fast. Thank you to all for the discussion and solutions. I learned a lot in this hour reading and trying your suggestions. </p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>This decodes your "list" of JSON Objects from a string:</p>
+
+<pre><code>from json import JSONDecoder
+
+def loads_invalid_obj_list(s):
+    decoder = JSONDecoder()
+    s_len = len(s)
+
+    objs = []
+    end = 0
+    while end != s_len:
+        obj, end = decoder.raw_decode(s, idx=end)
+        objs.append(obj)
+
+    return objs
+</code></pre>
+
+<p>The bonus here is that you play nice with the parser. Hence it keeps telling you <em>exactly</em> where it found an error.</p>
+
+<p><strong>Examples</strong></p>
+
+<pre><code>&gt;&gt;&gt; loads_invalid_obj_list('{}{}')
+[{}, {}]
+
+&gt;&gt;&gt; loads_invalid_obj_list('{}{\n}{')
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "decode.py", line 9, in loads_invalid_obj_list
+    obj, end = decoder.raw_decode(s, idx=end)
+  File     "/System/Library/Frameworks/Python.framework/Versions/2.7/lib/python2.7/json/decoder.py", line 376, in raw_decode
+    obj, end = self.scan_once(s, idx)
+ValueError: Expecting object: line 2 column 2 (char 5)
+</code></pre>
+
+<h2>Clean Solution (added later)</h2>
+
+<pre><code>import json
+import re
+
+#shameless copy paste from json/decoder.py
+FLAGS = re.VERBOSE | re.MULTILINE | re.DOTALL
+WHITESPACE = re.compile(r'[ \t\n\r]*', FLAGS)
+
+class ConcatJSONDecoder(json.JSONDecoder):
+    def decode(self, s, _w=WHITESPACE.match):
+        s_len = len(s)
+
+        objs = []
+        end = 0
+        while end != s_len:
+            obj, end = self.raw_decode(s, idx=_w(s, end).end())
+            end = _w(s, end).end()
+            objs.append(obj)
+        return objs
+</code></pre>
+
+<p><strong>Examples</strong></p>
+
+<pre><code>&gt;&gt;&gt; print json.loads('{}', cls=ConcatJSONDecoder)
+[{}]
+
+&gt;&gt;&gt; print json.load(open('file'), cls=ConcatJSONDecoder)
+[{}]
+
+&gt;&gt;&gt; print json.loads('{}{} {', cls=ConcatJSONDecoder)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "/System/Library/Frameworks/Python.framework/Versions/2.7/lib/python2.7/json/__init__.py", line 339, in loads
+    return cls(encoding=encoding, **kw).decode(s)
+  File "decode.py", line 15, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, end).end())
+  File "/System/Library/Frameworks/Python.framework/Versions/2.7/lib/python2.7/json/decoder.py", line 376, in raw_decode
+    obj, end = self.scan_once(s, idx)
+ValueError: Expecting object: line 1 column 5 (char 5)
+</code></pre>
+<br /><b>#1</b><br /><p>Why don't you load the file as string, replace all }{ with },{ and surround the whole thing with []? Something like:</p>
+
+<pre><code>re.sub('\}\s*?\{', '\}, \{', string_read_from_a_file)
+</code></pre>
+
+<p>Or simple string replace if you are sure you always have }{ without whitespaces in between.</p>
+
+<p>In case you expect }{ to occur in strings as well, you could also split on }{ and evaluate each fragment with json.load, in case you get an error, the fragment wasn't complete and you have to add the next to the first one and so forth.</p>
+<br /><b>#2</b><br /><h2>Solution</h2>
+
+<p>As far as I know <code>}{</code> does not appear in valid JSON, so the following should be perfectly safe when trying to get strings for separate objects that were concatenated (<code>txt</code> is the content of your file). <strong>It does not require any import</strong> (even of <code>re</code> module) to do that:</p>
+
+<pre><code>retrieved_strings = map(lambda x: '{'+x+'}', txt.strip('{}').split('}{'))
+</code></pre>
+
+<p>or if you prefer list comprehensions (as David Zwicker mentioned in the comments), you can use it like that:</p>
+
+<pre><code>retrieved_strings = ['{'+x+'}' for x in txt.strip('{}').split('}{'))]
+</code></pre>
+
+<p>It will result in <code>retrieved_strings</code> being a list of strings, each containing separate JSON object. See proof here: <a href="http://ideone.com/Purpb" rel="nofollow">http://ideone.com/Purpb</a></p>
+
+<h2>Example</h2>
+
+<p>The following string:</p>
+
+<pre><code>'{field1:"a",field2:"b"}{field1:"c",field2:"d"}{field1:"e",field2:"f"}'
+</code></pre>
+
+<p>will be turned into:</p>
+
+<pre><code>['{field1:"a",field2:"b"}', '{field1:"c",field2:"d"}', '{field1:"e",field2:"f"}']
+</code></pre>
+
+<p>as proven in <a href="http://ideone.com/Purpb" rel="nofollow">the example I mentioned</a>.</p>
+<br /><b>#3</b><br /><p>How about something like this:</p>
+
+<pre><code>import re
+import json
+
+jsonstr = open('test.json').read()
+
+p = re.compile( '}\s*{' )
+jsonstr = p.sub( '}\n{', jsonstr )
+
+jsonarr = jsonstr.split( '\n' )
+
+for jsonstr in jsonarr:
+   jsonobj = json.loads( jsonstr )
+   print json.dumps( jsonobj )
+</code></pre>
+<br /><b>#4</b><br /><p>Sebastian Blask has the right idea, but there's no reason to use regexes for such a simple change.</p>
+
+<pre><code>objs = json.loads("[%s]"%(open('your_file.name').read().replace('}{', '},{')))
+</code></pre>
+
+<p>Or, more legibly</p>
+
+<pre><code>raw_objs_string = open('your_file.name').read() #read in raw data
+raw_objs_string = raw_objs_string.replace('}{', '},{') #insert a comma between each object
+objs_string = '[%s]'%(raw_objs_string) #wrap in a list, to make valid json
+objs = json.loads(objs_string) #parse json
+</code></pre>
+<br /><b>#5</b><br /><p>Suppose you added a [ to the start of the text in a file, and used a version of json.load() which, when it detected the error of finding a { instead of an expected comma (or hits the end of the file), spit out the just-completed object?</p>
+<br /><b>#6</b><br /><p>How about reading through the file incrementing a counter every time a { is found and decrementing it when you come across a }.  When your counter reaches 0 you'll know that you've come to the end of the first object so send that through json.load and start counting again.  Then just repeat to completion.  </p>
+<br /><b>#7</b><br /><p>Replace a file with that junk in it:</p>
+
+<pre class="lang-sh prettyprint-override"><code>$ sed -i -e 's;}{;}, {;g' foo
+</code></pre>
+
+<p>Do it on the fly in Python:</p>
+
+<pre><code>junkJson.replace('}{', '}, {')
+</code></pre>
+<br />

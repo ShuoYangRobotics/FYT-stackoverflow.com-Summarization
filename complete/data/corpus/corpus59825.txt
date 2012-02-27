@@ -1,0 +1,143 @@
+Question (ID-59825): How to retrieve an element from a set without removing it? Suppose the following: 
+
+ &gt;&gt;&gt;s = set([1, 2, 3])
+ 
+
+ How do I get a value (any value) out of s without doing s.pop()? I want to leave the item in the set until I am sure I can remove it - something I can only be sure of after an asynchronous call to another host. 
+
+ Quick and dirty: 
+
+ &gt;&gt;&gt;elem = s.pop()
+&gt;&gt;&gt;s.add(elem)
+ 
+
+ But do you know of a better way? Ideally in constant time. 
+ Answers (Total-7): #0 Two gross options, but they don't requiring copying the whole set: 
+
+ for e in s:
+ break
+# e is now an element from s
+ 
+
+ Or... 
+
+ e = iter(s).next() # was s.__iter__(s).next() 
+     # - thanks to J.F. Sebastian for better syntax!
+ 
+
+ But in general, sets don't support indexing or slicing. 
+ #1 Since you want a random element, this will also work: 
+
+ &gt;&gt;&gt; import random
+&gt;&gt;&gt; s = set([1,2,3])
+&gt;&gt;&gt; random.sample(s, 1)
+[2]
+ 
+
+ The documentation doesn't seem to mention performance of random.sample . From a really quick empirical test with a huge list and a huge set, it seems to be constant time for a list but not for the set. Also, iteration over a set isn't random; the order is undefined but predictable: 
+
+ &gt;&gt;&gt; list(set(range(10))) == range(10)
+True
+ 
+
+ If randomness is important and you need a bunch of elements in constant time (large sets), I'd use random.sample and convert to a list first: 
+
+ &gt;&gt;&gt; lst = list(s) # once, O(len(s))?
+...
+&gt;&gt;&gt; e = random.sample(lst, 1)[0] # constant time
+ 
+ #2 Another option is to use a dictionary with values you don't care about. E.g., 
+
+ 
+poor_man_set = {}
+poor_man_set[1] = None
+poor_man_set[2] = None
+poor_man_set[3] = None
+...
+ 
+
+ You can treat the keys as a set except that they're just an array: 
+
+ 
+keys = poor_man_set.keys()
+print "Some key = %s" % keys[0]
+ 
+
+ A side effect of this choice is that your code will be backwards compatible with older, pre- set versions of Python. It's maybe not the best answer but it's another option. 
+
+ Edit: You can even do something like this to hide the fact that you used a dict instead of an array or set: 
+
+ 
+poor_man_set = {}
+poor_man_set[1] = None
+poor_man_set[2] = None
+poor_man_set[3] = None
+poor_man_set = poor_man_set.keys()
+ 
+ #3 To provide some timing figures behind the different approaches, consider the following code.
+ The get() is my custom addition to Python's setobject.c, being just a pop() without removing the element. 
+
+ from timeit import *
+
+stats = ["for i in xrange(1000): iter(s).next() ",
+   "for i in xrange(1000): \n\tfor x in s: \n\t\tbreak",
+   "for i in xrange(1000): s.add(s.pop()) ",
+   "for i in xrange(1000): s.get()   "]
+
+for stat in stats:
+ t = Timer(stat, setup="s=set(range(100))")
+ try:
+  print "Time for %s:\t %f"%(stat, t.timeit(number=1000))
+ except:
+  t.print_exc()
+ 
+
+ The output is: 
+
+ $ ./test_get.py
+Time for for i in xrange(1000): iter(s).next() :  0.433080
+Time for for i in xrange(1000):
+  for x in s:
+    break: 0.148695
+Time for for i in xrange(1000): s.add(s.pop()) :  0.317418
+Time for for i in xrange(1000): s.get()   :  0.146673
+ 
+
+ This means that the for/break solution is the fastest (sometimes faster than the custom get() solution). 
+ #4 Why not just iterate over the set in a regular for loop and make the call back from the asynchronous call remove from the set if successful 
+
+ for i in fooSet:
+ asyncCall(callback, fooSet, i)
+
+def callback(successful, fooSet, i):
+ if successful:
+  fooSet.remove(i)
+ 
+
+ Or, if the majority of the time the call is successful, just pop() the stack anyway and make the call back re-add the element if it fails. 
+
+ try:
+ i = fooSet.pop():
+ asyncCall(callback, fooSet, i)
+catch KeyError:
+ # no more elements
+
+def callback(successful, fooSet, i):
+ if not successful:
+  fooSet.add(i)
+ 
+ #5 Least code would be: 
+
+ &gt;&gt;&gt; s = set([1, 2, 3])
+&gt;&gt;&gt; list(s)[0]
+1
+ 
+
+ Obviously this would create a new list which contains each member of the set, so not great if your set is very large. 
+ #6 I use a utility function I wrote. Its name is somewhat misleading because it kind of implies it might be a random item or something like that. 
+
+ def anyitem(iterable):
+ try:
+  return iter(iterable).next()
+ except StopIteration:
+  return None

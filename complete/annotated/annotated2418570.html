@@ -1,0 +1,152 @@
+<h3>Question ( ID-2418570 ) : </h3><h2>Testing <span style="background-color:yellow;">warnings</span> <span style="background-color:yellow;">with</span> <span style="background-color:yellow;">doctest</span> </h2><p>I 'd like to use <span style="background-color:yellow;">doctests</span> to test the presence of certain <span style="background-color:yellow;">warnings.</span> For example , suppose I have the following module : </p>
+<pre><code>from warnings import warn
+
+class Foo(object):
+    """
+    Instantiating Foo always gives a warning:
+
+    >>> foo = Foo()
+    testdocs.py:14: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+    >>> 
+    """
+
+    def __init__(self):
+        warn("Boo!", UserWarning)
+</code></pre>
+<p>If I run python -m <span style="background-color:yellow;">doctest</span> testdocs.py to run the <span style="background-color:yellow;">doctest</span> in my class and make sure that the <span style="background-color:yellow;">warning</span> is printed , I get : </p>
+<pre><code>testdocs.py:14: UserWarning: Boo!
+  warn("Boo!", UserWarning)
+**********************************************************************
+File "testdocs.py", line 7, in testdocs.Foo
+Failed example:
+    foo = Foo()
+Expected:
+    testdocs.py:14: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+Got nothing
+**********************************************************************
+1 items had failures:
+   1 of   1 in testdocs.Foo
+***Test Failed*** 1 failures.
+</code></pre>
+<p>It looks like the <span style="background-color:yellow;">warning</span> is getting printed but not captured or noticed by <span style="background-color:yellow;">doctest.</span> I 'm guessing that this is because <span style="background-color:yellow;">warnings</span> are printed to sys.stderr instead of sys.stdout . But this happens even <span style="background-color:yellow;">when</span> I say sys.stderr = sys.stdout at the end of my module . </p>
+<p>So is there any <span style="background-color:yellow;">way</span> to use <span style="background-color:yellow;">doctests</span> to test for <span style="background-color:yellow;">warnings</span> ? I can find no mention of this one <span style="background-color:yellow;">way</span> or the other in the documentation or in my Google searching . </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>The issue you 're facing is that <span style="background-color:yellow;">warnings.warn</span> ( ) calls <span style="background-color:yellow;">warnings.showwarning</span> ( ) , <span style="background-color:yellow;">which</span> <span style="background-color:yellow;">writes</span> the result of <span style="background-color:yellow;">warnings.formatwarning</span> ( ) to a file , defaulting to sys.stderr . </p>
+<p>( See : http : //docs.python.org/library/warnings.html # <span style="background-color:yellow;">warnings.showwarning</span> ) </p>
+<p>If you 're using Python 2.6 , you can use the <span style="background-color:yellow;">warnings.catch_warnings</span> ( ) context manager to easily modify how <span style="background-color:yellow;">warnings</span> are handled , including temporarily replacing the implementation of <span style="background-color:yellow;">warnings.showwarning</span> ( ) to <span style="background-color:yellow;">write</span> to sys.stdout instead. That <span style="background-color:yellow;">would</span> be the Right Way to handle something like this . </p>
+<p>( See : http : //docs.python.org/library/warnings.html # available-context-managers ) </p>
+<p>If you <span style="background-color:yellow;">want</span> a quick and dirty hack , throw together a decorator that redirects sys.stderr to sys.stdout : </p>
+<pre><code>def stderr_to_stdout(func):
+    def wrapper(*args):
+        stderr_bak = sys.stderr
+        sys.stderr = sys.stdout
+        try:
+            return func(*args)
+        finally:
+            sys.stderr = stderr_bak
+    return wrapper
+</code></pre>
+<p>Then you can call a decorated <span style="background-color:yellow;">function</span> in your <span style="background-color:yellow;">doctest</span> : </p>
+<pre><code>from warnings import warn
+from utils import stderr_to_stdout
+
+class Foo(object):
+    """
+    Instantiating Foo always gives a warning:
+
+    >>> @stderr_to_stdout
+    ... def make_me_a_foo():
+    ...     Foo()
+    ...
+    >>> make_me_a_foo()
+    testdocs.py:18: UserWarning: 
+      warn("Boo!", UserWarning)
+    >>>
+    """ 
+    def __init__(self):
+        warn("Boo!", UserWarning)
+</code></pre>
+<p>Which passes : </p>
+<pre><code>$ python -m doctest testdocs.py -v
+Trying:
+    @stderr_to_stdout
+    def make_me_a_foo():
+        Foo()
+Expecting nothing
+ok
+Trying:
+    make_me_a_foo()
+Expecting:
+    testdocs.py:18: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+ok
+[...]
+2 passed and 0 failed.
+</code></pre>
+<br /><b># 1 </b><br /><p>This is n't the most elegant <span style="background-color:yellow;">way</span> to do it , but it <span style="background-color:yellow;">works</span> for me : </p>
+<pre><code>from warnings import warn
+
+class Foo(object):
+    """
+    Instantiating Foo always gives a warning:
+
+    >>> import sys; sys.stderr = sys.stdout
+    >>> foo = Foo() # doctest:+ELLIPSIS
+    /.../testdocs.py:14: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+    """
+
+    def __init__(self):
+        warn("Boo!", UserWarning)
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
+</code></pre>
+<p>This presumably <span style="background-color:yellow;">wo</span> n't <span style="background-color:yellow;">work</span> on Windows , though , since the path reported in the UserWarning output must start <span style="background-color:yellow;">with</span> a slash the <span style="background-color:yellow;">way</span> I 've <span style="background-color:yellow;">written</span> this test. You may be able to figure out some better incantation of the ELLIPSIS directive , but I could not . </p>
+<br /><b># 2 </b><br /><p>The Testing Warnings sections of the Python documentation is dedicated to this topic. However , to summarize , you have two options : </p>
+<h2>( A ) Use the catch_warnings context manager </h2>
+<p>This is recommended course in the official documentation. However , the catch_warnings context manager only came into existence <span style="background-color:yellow;">with</span> Python 2.6 . </p>
+<pre><code>import warnings
+
+def fxn():
+    warnings.warn("deprecated", DeprecationWarning)
+
+with warnings.catch_warnings(record=True) as w:
+    # Cause all warnings to always be triggered.
+    warnings.simplefilter("always")
+    # Trigger a warning.
+    fxn()
+    # Verify some things
+    assert len(w) == 1
+    assert issubclass(w[-1].category, DeprecationWarning)
+    assert "deprecated" in str(w[-1].message)
+</code></pre>
+<h2>( B ) Upgrade Warnings to Errors </h2>
+<p>If the <span style="background-color:yellow;">warning</span> has n't been seen before&mdash ; and thus <span style="background-color:yellow;">was</span> registered in the <span style="background-color:yellow;">warnings</span> registry&mdash ; then you can set <span style="background-color:yellow;">warnings</span> to raise exceptions and catch it . </p>
+<pre><code>import warnings
+
+
+def fxn():
+    warnings.warn("deprecated", DeprecationWarning)
+
+
+if __name__ == '__main__':
+    warnings.simplefilter("error", DeprecationWarning)
+
+    try:
+        fxn()
+    except DeprecationWarning:
+        print "Pass"
+    else:
+        print "Fail"
+    finally:
+        warnings.simplefilter("default", DeprecationWarning)
+</code></pre>
+<br /><b># 3 </b><br /><p>docs suggest that you could pass -Wd <span style="background-color:yellow;">when</span> running <span style="background-color:yellow;">doctest</span> to always trigger <span style="background-color:yellow;">warnings</span> . </p>
+<br /><b># 4 </b><br /><p>Perhaps you could try mocking ( patch print ! ) the troublesome bit. I admit this <span style="background-color:yellow;">would</span> add some clutter to the docstring but it might <span style="background-color:yellow;">worth</span> a go . </p>
+<p>If you <span style="background-color:yellow;">wish</span> to use that approach <span style="background-color:yellow;">while</span> retaining the current syntax , perhaps you could try implementing a custom <span style="background-color:yellow;">wrapper</span> for <span style="background-color:yellow;">doctest</span> that generates the missing code and then executes the fixed tests. If possible , that 's probably best to be avoided though . </p>
+<p>Alternatively you could just <span style="background-color:yellow;">whip</span> up a totally custom <span style="background-color:yellow;">doctest</span> runner but I suppose you <span style="background-color:yellow;">would</span> prefer to avoid this. : ) </p>
+<br /><b># 5 </b><br /><p>This is one example of <span style="background-color:yellow;">why</span> <span style="background-color:yellow;">doctests</span> are not appropriate for all tests. If you have inline examples in your docstrings and they need to be tested , that 's one thing , but as you 've discovered there are behaviors you <span style="background-color:yellow;">want</span> to test for that are n't best done <span style="background-color:yellow;">with</span> string matching. And cases <span style="background-color:yellow;">where</span> you do n't need to have the docstring cluttered up <span style="background-color:yellow;">with</span> all the test mechanics . </p>
+<br />

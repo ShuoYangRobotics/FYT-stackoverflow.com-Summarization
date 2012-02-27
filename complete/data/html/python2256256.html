@@ -1,0 +1,94 @@
+<h3>Question (ID-2256256):</h3><h2>Options for read-only binary flat-file storage using Python</h2><p>I have been tasked with setting up a flat-file SKU database for use on embedded devices with limited storage and processor speed.</p>
+
+<p>Basically the data I need to store consists of the following:</p>
+
+<p>SKU
+Description
+Location
+Price
+Qty</p>
+
+<p>The file will consist of several million records.</p>
+
+<p>The most important considerations are storage space and retrieval time.  Records will only need to be retrieved by SKU and it will be read-only, so the file can be sorted by SKU.</p>
+
+<p>I would like to access this data with Python.  So my questions comes down to this.</p>
+
+<p>Are there existing Python libraries that can provide this functionality for me, or do I need to roll my own?</p>
+
+<p>If the answer comes down to roll my own, does anyone have a suggestions, or good references for doing so?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>How about <a href="http://www.sqlite.org/" rel="nofollow">SQLite</a> with Python bindings? It has a little more than you need, but it's standard software and well-tested.</p>
+<br /><b>#1</b><br /><p>The old way would be to use a simple key/value data table like gdbm module. Python comes with support for that, but it's not built into the default Python installation on my machine.</p>
+
+<p>In general, use SQLite. As others wrote, it comes standard with Python, and it's used in a lot of embedded systems already.</p>
+
+<p>If the records are fixed length then you can use the bisect module. The file size / the record size gives the number of records in the file. The bisect search will do an O(log(n)) lookup in the file, and you'll need to write an adapter to test for equality. While I haven't tested it, here's a sketch:</p>
+
+<pre><code>import bisect
+
+RECORD_SIZE = 50
+
+class MatchFirst10Chars(object):
+    def __init__(self, word):
+        self.word = word
+    def __lt__(self, other):
+        return self.word &lt; other[:10]
+
+class FileLookup(object):
+    def __init__(self, f):
+        self.f = f
+        f.seek(0, 2)
+        self.size = f.tell() // RECORD_SIZE
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, i):
+        self.f.seek(i*RECORD_SIZE)
+        return self.f.read(RECORD_SIZE)
+
+
+SKU = "123-56-89 "
+f = open("data_file")
+fl = FileLookup(f)
+i = bisect.bisect(fl, MatchFirst10Chars(SKU))
+</code></pre>
+
+<p>You could additionally gzip the file and seek on a gzip'ped file, but that's a tradeoff for space vs. time that you'll have to test.</p>
+<br /><b>#2</b><br /><p>How about <a href="http://code.google.com/p/h5py/" rel="nofollow">HDF</a>? If you don't need SQL and require fast access to your data, there's nothing faster... in Python... for numerical or structured data.</p>
+
+<p>Take a look at the <a href="http://wiki.python.org/moin/DatabaseInterfaces" rel="nofollow">DatabaseInterfaces</a> section on the <a href="http://www.python.org/" rel="nofollow">Python</a> wiki. It's comprehensive. There are a couple of "pure" Python options listed (like <a href="http://pythonweb.org/projects/snakesql/" rel="nofollow">SnakeSQL</a>), which are a tad nicer to deploy. And, of course, there's always <a href="http://www.jcea.es/programacion/pybsddb.htm" rel="nofollow">Berkeley DB</a> and the like, which are super lean &amp; raw.</p>
+
+<p>Honestly, SQLite will probably work fine for you. If you really need to eek out more performance, then you'd be looking at a record-based format like BDB.</p>
+<br /><b>#3</b><br /><p>May I suggest <a href="http://cr.yp.to/cdb.html" rel="nofollow">cdb</a>? (Python bindings: <a href="http://pypi.python.org/pypi/python-cdb/" rel="nofollow">python-cdb</a>.)</p>
+
+<p>It's a format used for read-only data, like you have; it's basically 256 giant hash tables, each able to have a different number of buckets. The cool thing about cdb is that the file doesn't need to be loaded into memory; it's structured in a way that you can do lookups by just <code>mmap</code>ing in the bits you need.</p>
+
+<p>The <a href="http://cr.yp.to/cdb/cdb.txt" rel="nofollow">cdb spec</a> is a good read, not least because the lines are formatted to create a uniform right margin. :-D</p>
+<br /><b>#4</b><br /><p>A simple solution is <a href="http://docs.python.org/library/pickle.html" rel="nofollow">CPickle</a>. You can also find <a href="http://stackoverflow.com/questions/890485/python-how-do-i-write-a-list-to-file-and-then-pull-it-back-into-memory-dict-rep">similar questions</a> on SO.</p>
+<br /><b>#5</b><br /><p>A variation of Andrew Dalke's answer (so you can still use binary search to locate the SKU quickly) which may reduce the space requirements would be to have fixed sized records at the start of the file (one per SKU) and then all the Descriptions and Locations (as null terminated strings say)</p>
+
+<p>You get to save space by not having to pad out the locations and descriptions to fixed length. Also you can save space if there are lots of duplicate locations</p>
+
+<p>Here is an example:
+say you have</p>
+
+<pre><code>SKU         16 bytes
+Description Variable length
+Location    Variable length
+Price       4 bytes (up to $42949672.95)
+Quantity    4 bytes (up to 4294967295)
+
+
+
+ offset          SKU        desc_off   loc_off      Price      Quantity
+0x00000000 SKU0000000000001 0x01f78a40 0x01f78a47  0x000003e8  0x000f4240
+0x00000020 SKU0000000000002 0x01f78a53 0x01f78a59    ...
+...
+... # 999998 more records
+...
+0x01f78a40 Widget\x00
+0x01f78a47 Head office\x00
+0x01f78a53 Table\x00
+0x01f78a59 Warehouse\x00
+</code></pre>
+<br />

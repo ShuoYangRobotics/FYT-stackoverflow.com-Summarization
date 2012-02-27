@@ -1,0 +1,187 @@
+<h3>Question ( ID-2036236 ) : </h3><h2>Tips on how to parse custom file format </h2><p>Sorry <span style="background-color:yellow;">about</span> the vague title , but I really do n't know how to describe this problem concisely . </p>
+<p>I 've created <span style="background-color:yellow;">a</span> ( more or less ) simple domain-specific language that I will to use to specify what validation rules to <span style="background-color:yellow;">apply</span> to different entities ( generally forms submitted from <span style="background-color:yellow;">a</span> web page ) . I 've included <span style="background-color:yellow;">a</span> sample <span style="background-color:yellow;">at</span> the bottom of this post of what the language looks like . </p>
+<p>My problem is that I have no idea how to begin parsing this language into <span style="background-color:yellow;">a</span> form I can use ( I will be using Python to do the parsing ) . My goal is to end up with <span style="background-color:yellow;">a</span> list of rules/filters ( <span style="background-color:yellow;">as</span> strings , including <span style="background-color:yellow;">arguments</span> , e.g. 'cocoa ( 99 ) ' ) that should be <span style="background-color:yellow;">applied</span> ( in order ) to each object/entity ( <span style="background-color:yellow;">also</span> <span style="background-color:yellow;">a</span> string , e.g. 'chocolate ' , 'chocolate.lindt ' , etc. ) . </p>
+<p>I 'm not sure what technique to use to start with , or even what techniques exist for problems like this. What do you think is the best way of going <span style="background-color:yellow;">about</span> this ? I 'm not looking for <span style="background-color:yellow;">a</span> complete solution , just <span style="background-color:yellow;">a</span> general nudge in the right direction . </p>
+<p>Thanks . </p>
+<p>Sample file of language : </p>
+<pre><code># Comments start with the '#' character and last until the end of the line
+# Indentation is significant (as in Python)
+
+
+constant NINETY_NINE = 99       # Defines the constant `NINETY_NINE` to have the value `99`
+
+
+*:      # Applies to all data
+    isYummy             # Everything must be yummy
+
+chocolate:              # To validate, say `validate("chocolate", object)`
+    sweet               # chocolate must be sweet (but not necessarily chocolate.*)
+
+    lindt:              # To validate, say `validate("chocolate.lindt", object)`
+        tasty           # Applies only to chocolate.lindt (and not to chocolate.lindt.dark, for e.g.)
+
+        *:              # Applies to all data under chocolate.lindt
+            smooth      # Could also be written smooth()
+            creamy(1)   # Level 1 creamy
+        dark:           # dark has no special validation rules
+            extraDark:
+                melt            # Filter that modifies the object being examined
+                c:bitter        # Must be bitter, but only validated on client
+                s:cocoa(NINETY_NINE)    # Must contain 99% cocoa, but only validated on server. Note constant
+        milk:
+            creamy(2)   # Level 2 creamy, overrides creamy(1) of chocolate.lindt.* for chocolate.lindt.milk
+            creamy(3)   # Overrides creamy(2) of previous line (all but the last specification of a given rule are ignored)
+
+
+
+ruleset food:       # To define a chunk of validation rules that can be expanded from the placeholder `food` (think macro)
+    caloriesWithin(10, 2000)        # Unlimited parameters allowed
+    edible
+    leftovers:      # Nested rules allowed in rulesets
+        stale
+
+# Rulesets may be nested and/or include other rulesets in their definition
+
+
+
+chocolate:              # Previously defined groups can be re-opened and expanded later
+    ferrero:
+        hasHazelnut
+
+
+
+cake:
+    tasty               # Same rule used for different data (see chocolate.lindt)
+    isLie
+    ruleset food        # Substitutes with rules defined for food; cake.leftovers must now be stale
+
+
+pasta:
+    ruleset food        # pasta.leftovers must also be stale
+
+
+
+
+# Sample use (in JavaScript):
+
+# var choc = {
+#   lindt: {
+#       cocoa: {
+#           percent: 67,
+#           mass:    '27g'
+#       }
+#   }
+#   // Objects/groups that are ommitted (e.g. ferrro in this example) are not validated and raise no errors
+#   // Objects that are not defined in the validation rules do not raise any errors (e.g. cocoa in this example)
+# };
+# validate('chocolate', choc);
+
+# `validate` called isYummy(choc), sweet(choc), isYummy(choc.lindt), smooth(choc.lindt), creamy(choc.lindt, 1), and tasty(choc.lindt) in that order
+# `validate` returned an array of any validation errors that were found
+
+# Order of rule validation for objects:
+# The current object is initially the object passed in to the validation function (second argument).
+# The entry point in the rule group hierarchy is given by the first argument to the validation function.
+# 1. First all rules that apply to all objects (defined using '*') are applied to the current object,
+#    starting with the most global rules and ending with the most local ones.
+# 2. Then all specific rules for the current object are applied.
+# 3. Then a depth-first traversal of the current object is done, repeating steps 1 and 2 with each object found as the current object
+# When two rules have equal priority, they are applied in the order they were defined in the file.
+
+
+
+# No need to end on blank line
+</code></pre>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>First off , if you want to learn <span style="background-color:yellow;">about</span> parsing , then write your own recursive descent <span style="background-color:yellow;">parser.</span> The language you 've defined only requires <span style="background-color:yellow;">a</span> handful of productions. I suggest using Python 's <span style="background-color:yellow;">tokenize</span> library to spare yourself the boring task of converting <span style="background-color:yellow;">a</span> stream of bytes into <span style="background-color:yellow;">a</span> stream of <span style="background-color:yellow;">tokens</span> . </p>
+<p>For practical parsing options , read on.. . </p>
+<p>A quick <span style="background-color:yellow;">and</span> dirty solution is to use python itself : </p>
+<pre><code>NINETY_NINE = 99       # Defines the constant `NINETY_NINE` to have the value `99`
+
+rules = {
+  '*': {     # Applies to all data
+    'isYummy': {},      # Everything must be yummy
+
+    'chocolate': {        # To validate, say `validate("chocolate", object)`
+      'sweet': {},        # chocolate must be sweet (but not necessarily chocolate.*)
+
+      'lindt': {          # To validate, say `validate("chocolate.lindt", object)`
+        'tasty':{}        # Applies only to chocolate.lindt (and not to chocolate.lindt.dark, for e.g.)
+
+        '*': {            # Applies to all data under chocolate.lindt
+          'smooth': {}  # Could also be written smooth()
+          'creamy': 1   # Level 1 creamy
+        },
+# ...
+    }
+  }
+}
+</code></pre>
+<p>There <span style="background-color:yellow;">are</span> several ways to pull off this trick , e.g. , here 's <span style="background-color:yellow;">a</span> cleaner ( <span style="background-color:yellow;">albeit</span> somewhat unusual ) <span style="background-color:yellow;">approach</span> using classes : </p>
+<pre><code>class _:
+    class isYummy: pass
+
+    class chocolate:
+        class sweet: pass
+
+        class lindt:
+            class tasty: pass
+
+            class _:
+                class smooth: pass
+                class creamy: level = 1
+# ...
+</code></pre>
+<p>As <span style="background-color:yellow;">an</span> intermediate step to <span style="background-color:yellow;">a</span> full <span style="background-color:yellow;">parser</span> , you can use the " batteries-included " Python <span style="background-color:yellow;">parser</span> , which parses Python syntax <span style="background-color:yellow;">and</span> returns <span style="background-color:yellow;">an</span> AST. The AST is very deep with lots of ( IMO ) unnecessary levels. You can filter these down to <span style="background-color:yellow;">a</span> much simpler structure by culling <span style="background-color:yellow;">any</span> nodes that have only one child. With this <span style="background-color:yellow;">approach</span> you can do something like this : </p>
+<pre><code>import parser, token, symbol, pprint
+
+_map = dict(token.tok_name.items() + symbol.sym_name.items())
+
+def clean_ast(ast):
+    if not isinstance(ast, list):
+        return ast
+    elif len(ast) == 2: # Elide single-child nodes.
+        return clean_ast(ast[1])
+    else:
+        return [_map[ast[0]]] + [clean_ast(a) for a in ast[1:]]
+
+ast = parser.expr('''{
+
+'*': {     # Applies to all data
+  isYummy: _,    # Everything must be yummy
+
+  chocolate: {        # To validate, say `validate("chocolate", object)`
+    sweet: _,        # chocolate must be sweet (but not necessarily chocolate.*)
+
+    lindt: {          # To validate, say `validate("chocolate.lindt", object)`
+      tasty: _,        # Applies only to chocolate.lindt (and not to chocolate.lindt.dark, for e.g.)
+
+      '*': {            # Applies to all data under chocolate.lindt
+        smooth: _,  # Could also be written smooth()
+        creamy: 1   # Level 1 creamy
+      }
+# ...
+    }
+  }
+}
+
+}''').tolist()
+pprint.pprint(clean_ast(ast))
+</code></pre>
+<p>This <span style="background-color:yellow;">approach</span> does have its limitations. The final AST is still <span style="background-color:yellow;">a</span> bit noisy , <span style="background-color:yellow;">and</span> the language you define has to be interpretable <span style="background-color:yellow;">as</span> valid python code. For instance , you could n't support this.. . </p>
+<pre><code>*:
+    isYummy
+</code></pre>
+<p>...because this syntax does n't parse <span style="background-color:yellow;">as</span> python code. Its big <span style="background-color:yellow;">advantage</span> , however , is that you control the AST conversion , so it is impossible to inject <span style="background-color:yellow;">arbitrary</span> Python code . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>If your goal is to learn <span style="background-color:yellow;">about</span> parsing , I 'd highly recommend <span style="background-color:yellow;">an</span> OO style library like PyParsing . They <span style="background-color:yellow;">are</span> not <span style="background-color:yellow;">as</span> fast <span style="background-color:yellow;">as</span> the more sophisticated <span style="background-color:yellow;">antler</span> , lex , yac options , but you get started with the parsing right <span style="background-color:yellow;">away</span> . </p>
+<br /><b># <span style="background-color:yellow;">2</span> </b><br /><p>Again not teaching you <span style="background-color:yellow;">about</span> parsing , but your format is so close to legal YAML that you might want to just redefine your language <span style="background-color:yellow;">as</span> <span style="background-color:yellow;">a</span> subset of YAML <span style="background-color:yellow;">and</span> use <span style="background-color:yellow;">a</span> standard YAML <span style="background-color:yellow;">parser</span> . </p>
+<br /><b># <span style="background-color:yellow;">3</span> </b><br /><p>The language you 've shown <span style="background-color:yellow;">an</span> example for is probably too complex to write <span style="background-color:yellow;">a</span> simple ( <span style="background-color:yellow;">and</span> bug-free ) parsing fuction for. I 'd suggest reading up on parsing techniques such <span style="background-color:yellow;">as</span> recursive-descent or table-driven parsing such <span style="background-color:yellow;">as</span> LL ( <span style="background-color:yellow;">1</span> ) , LL ( k ) , etc . </p>
+<p>But that may be too general <span style="background-color:yellow;">and/or</span> complicated. It might be easier to simplify your rules language to something simple like delimited text . </p>
+<p>For example , something like </p>
+<p><span style="background-color:yellow;">chocolate</span> : <span style="background-color:yellow;">sweet</span> <span style="background-color:yellow;">chocolate.lindt</span> : <span style="background-color:yellow;">tasty</span> <span style="background-color:yellow;">chocolate.lindt.</span> * : <span style="background-color:yellow;">smooth,creamy</span> ( <span style="background-color:yellow;">1</span> ) </p>
+<p>This would be easier to parse <span style="background-color:yellow;">and</span> could be done without formal <span style="background-color:yellow;">parsers</span> . </p>
+<br /><b># 4 </b><br /><p>There <span style="background-color:yellow;">are</span> libraries <span style="background-color:yellow;">and</span> tools to make parsing easier. One of the more well known is lex / yacc. There 's <span style="background-color:yellow;">a</span> python library called ' lex ' <span style="background-color:yellow;">and</span> <span style="background-color:yellow;">a</span> tutorial on using it . </p>
+<br /><b># 5 </b><br /><p>As 'Marcelo Cantos ' suggested you can use python dict , benefit is that you do not have to parse <span style="background-color:yellow;">any</span> thing , you can use same rules on server side <span style="background-color:yellow;">as</span> python dict <span style="background-color:yellow;">and</span> on client side using javascript objects , <span style="background-color:yellow;">and</span> can pass them from server to client or viceversa <span style="background-color:yellow;">as</span> JSON . </p>
+<p>If you really want to do parsing yourself see this http : //nedbatchelder.com/text/python-parsers.html </p>
+<p>but I <span style="background-color:yellow;">am</span> not sure you will be easily <span style="background-color:yellow;">able</span> to parse <span style="background-color:yellow;">a</span> indented language . </p>
+<br /><b># 6 </b><br /><p>what is the motivation for the customized file structure ? Would it be possible to remodel your data into <span style="background-color:yellow;">a</span> better known structure like XML ? If so you could use one of <span style="background-color:yellow;">a</span> multitude to parse your file. Using <span style="background-color:yellow;">an</span> <span style="background-color:yellow;">accepted</span> parsing tool may save you <span style="background-color:yellow;">a</span> lot of time debugging , <span style="background-color:yellow;">and</span> it may make your file more readable if that is <span style="background-color:yellow;">a</span> consideration </p>
+<br />

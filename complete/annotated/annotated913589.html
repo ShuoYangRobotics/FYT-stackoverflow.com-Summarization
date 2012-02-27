@@ -1,0 +1,111 @@
+<h3>Question ( ID-913589 ) : </h3><h2>Django <span style="background-color:yellow;">forms</span> , inheritance and order of <span style="background-color:yellow;">form</span> fields </h2><p>I 'm using Django <span style="background-color:yellow;">forms</span> in my website and would like to control the order of the fields . </p>
+<p>Here 's how I define my <span style="background-color:yellow;">forms</span> : </p>
+<pre><code>class edit_form(forms.Form):
+    summary = forms.CharField()
+    description = forms.CharField(widget=forms.TextArea)
+
+
+class create_form(edit_form):
+    name = forms.CharField()
+</code></pre>
+<p>The name is immutable and should only be listed when the entity is created. I use inheritance to add consistency and DRY principles. What happens which is not erroneous , in fact totally expected , is that the name field is listed last in the view/html but I 'd like the name field to be on top of summary and description. I do realize that I could easily fix it by copying summary and description into <span style="background-color:yellow;">create_form</span> and loose the inheritance but I 'd like to know if this is possible . </p>
+<p>Why ? Imagine you 've got 100 fields in <span style="background-color:yellow;">edit_form</span> and have to add 10 fields on the top in <span style="background-color:yellow;">create_form</span> - copying and maintaining the two <span style="background-color:yellow;">forms</span> would n't look so sexy then. ( This is not my case , I 'm just making up an example ) </p>
+<p>So , how can I override this behavior ? </p>
+<p>Edit : </p>
+<p>Apparently there 's no proper way to do this without going through nasty hacks ( fiddling with .field attribute ) . The .field attribute is a SortedDict ( one of Django 's internal datastructures ) which does n't provide any way to reorder <span style="background-color:yellow;">key</span> : value pairs. It does how-ever provide a way to insert items at a given index but that would move the items from the class members and into the constructor. This method would work , but make the code less readable. The only other way I see fit is to modify the framework itself which is less-than-optimal in most situations . </p>
+<p>In short the code would become something like this : </p>
+<pre><code>class edit_form(forms.Form):
+    summary = forms.CharField()
+    description = forms.CharField(widget=forms.TextArea)
+
+
+class create_form(edit_form):
+    def __init__(self,*args,**kwargs):
+        forms.Form.__init__(self,*args,**kwargs)
+
+        self.fields.insert(0,'name',forms.CharField())
+</code></pre>
+<p>That shut me up : ) </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>I had this same problem and I found another technique for reordering fields in the Django CookBook : </p>
+<pre><code>class edit_form(forms.Form):
+    summary = forms.CharField()
+    description = forms.CharField(widget=forms.TextArea)
+
+
+class create_form(edit_form):
+    name = forms.CharField()
+
+    def __init__(self, *args, **kwargs):
+        super(edit_form, self).__init__(*args, **kwargs)
+        self.fields.keyOrder = ['name', 'summary', 'description']
+</code></pre>
+<br /><b># 1 </b><br /><p>I used the solution posted by Selene but found that it removed all fields which were n't assigned to <span style="background-color:yellow;">keyOrder.</span> The <span style="background-color:yellow;">form</span> that I 'm subclassing has a lot of fields so this did n't work very well for me. I coded up this function to solve the problem using akaihola 's answer , but if you want it to work like Selene 's all you need to do is set <span style="background-color:yellow;">throw_away</span> to True . </p>
+<pre><code>def order_fields(form, field_list, throw_away=False):
+    """
+    Accepts a form and a list of dictionary keys which map to the
+    form's fields. After running the form's fields list will begin
+    with the fields in field_list. If throw_away is set to true only
+    the fields in the field_list will remain in the form.
+
+    example use:
+    field_list = ['first_name', 'last_name']
+    order_fields(self, field_list)
+    """
+    if throw_away:
+        form.fields.keyOrder = field_list
+    else:
+        for field in field_list[::-1]:
+            form.fields.insert(0, field, form.fields.pop(field))
+</code></pre>
+<p>This is how I 'm using it in my own code : </p>
+<pre><code>class NestableCommentForm(ExtendedCommentSecurityForm):
+    # TODO: Have min and max length be determined through settings.
+    comment = forms.CharField(widget=forms.Textarea, max_length=100)
+    parent_id = forms.IntegerField(widget=forms.HiddenInput, required=False)
+
+    def __init__(self, *args, **kwargs):
+        super(NestableCommentForm, self).__init__(*args, **kwargs)
+        order_fields(self, ['comment', 'captcha'])
+</code></pre>
+<br /><b># 2 </b><br /><p>See the notes in this SO question on the way Django 's internals keep track of field order ; the answers include suggestions on how to " reorder " fields to your liking ( in the end it boils down to messing with the .fields attribute ) . </p>
+<br /><b># 3 </b><br /><p>Like Selenes answer , just a short comment - guess it is a typo and that the call to super should be : </p>
+<pre><code>super(create_form, self).__init__(*args, **kwargs)
+</code></pre>
+<p>and not : </p>
+<pre><code>super(edit_form, self).__init__(*args, **kwargs)
+</code></pre>
+<br /><b># 4 </b><br /><p>You could also create a <span style="background-color:yellow;">decorator</span> to order fields ( inspired by Joshua 's solution ) : </p>
+<pre><code>def order_fields(*field_list):
+    def decorator(form):
+        original_init = form.__init__
+        def init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)        
+            for field in field_list[::-1]:
+                self.fields.insert(0, field, self.fields.pop(field))
+        form.__init__ = init
+        return form            
+    return decorator
+</code></pre>
+<p>This will ensure that all the fields passed to the <span style="background-color:yellow;">decorator</span> come first . You can use it like this : </p>
+<pre><code>@order_fields('name')
+class CreateForm(EditForm):
+    name = forms.CharField()
+</code></pre>
+<br /><b># 5 </b><br /><p>Alternate methods for changing the field order : </p>
+<p>Pop-and-insert : </p>
+<pre><code>self.fields.insert(0, 'name', self.fields.pop('name'))
+</code></pre>
+<p>Pop-and-append : </p>
+<pre><code>self.fields['summary'] = self.fields.pop('summary')
+self.fields['description'] = self.fields.pop('description')
+</code></pre>
+<p>Pop-and-append-all : </p>
+<pre><code>for key in ('name', 'summary', 'description'):
+    self.fields[key] = self.fields.pop(key)
+</code></pre>
+<p>Ordered-copy : </p>
+<pre><code>self.fields = SortedDict( [ (key, self.fields[key])
+                            for key in ('name', 'summary' ,'description') ] )
+</code></pre>
+<p>But Selene 's approach from the Django CookBook still feels clearest of all . </p>
+<br />

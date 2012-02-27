@@ -1,0 +1,93 @@
+<h3>Question ( ID-8466726 ) : </h3><h2>Django circular model reference </h2><p>I 'm starting to work on a small soccer league management website ( mostly for learning purposes ) and ca n't wrap my mind around a Django models relationship. For simplicity , let 's say I have 2 types of objects - <span style="background-color:yellow;">Player</span> and <span style="background-color:yellow;">Team.</span> Naturally , a player belongs to one team so that 's a ForeignKey ( <span style="background-color:yellow;">Team</span> ) in the <span style="background-color:yellow;">Player</span> model . So I go : </p>
+<pre><code>class Team(models.Model):
+    name = models.CharField()
+class Player(models.Model):
+    name = models.CharField()
+    team = models.ForeignKey(Team)
+</code></pre>
+<p>Then I want each team to have a <span style="background-color:yellow;">captain</span> which would be one of the players so that would be a ForeignKey ( <span style="background-color:yellow;">Player</span> ) in the <span style="background-color:yellow;">Team</span> model. But that would create a circular dependency . Granted my Django experience is limited , but it seems like a simple problem , though I ca n't figure out what I 'm doing wrong conceptually . </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>as you can see in the docs , for exactly this reason it is possible to specify the foreign model as a string . </p>
+<pre><code>team = models.ForeignKey('Team')
+</code></pre>
+<br /><b># 1 </b><br /><p>You could use the full application label in the foreign key to the model not yet defined , and use related_name to avoid name conflict : </p>
+<pre><code>class Team(models.Model):
+    captain = models.ForeignKey('myapp.Player', related_name="team_captain")
+
+class Player(models.Model):
+    team = models.ForeignKey(Team)
+</code></pre>
+<br /><b># 2 </b><br /><p>Here is another way to tackle this problem . Instead of creating a circular dependency , I created an additional table that stores the relationship between players and teams. So in the end it looks like this : </p>
+<pre><code>class Team(Model):
+    name = CharField(max_length=50)
+
+    def get_captain(self):
+        return PlayerRole.objects.get(team=self).player
+
+class Player(Model):
+    first_name = CharField(max_length=50)
+    last_name = CharField(max_length=50, blank=True)
+
+    def get_team(self):
+        return PlayerRole.objects.get(player=self).team
+
+PLAYER_ROLES = (
+    ("Regular", "Regular"),
+    ("Captain", "Captain")
+    )
+
+class PlayerRole(Model):
+    player = OneToOneField(Player, primary_key=True)
+    team = ForeignKey(Team, null=True)
+    role = CharField(max_length=20, choices=PLAYER_ROLES, default=PLAYER_ROLES[0][0])
+    class Meta:
+        unique_together = ("player", "team")
+</code></pre>
+<p>It might be slightly less efficient in terms of storage than the suggested workaround , but it avoids the circular dependency and keeps the DB structure clean and clear . Comments are welcome . </p>
+<br /><b># 3 </b><br /><p>Neither of the answers here are really that great - creating circular references is never a good idea. Imagine if your database crashed and you had to create it from scratch - how would you create player before team is created , and vice versa ? Look a question here : ForeignKey field with primary relationship one I asked a few days ago. Put a Boolean on <span style="background-color:yellow;">Player</span> that specifies the <span style="background-color:yellow;">captain</span> , and put some pre-save hooks that validate every team must have one-and-only-one <span style="background-color:yellow;">captain</span> . </p>
+<br /><b># 4 </b><br /><p>Although there is nothing wrong with having two references to the same model , perhaps there is a better way to solve this particular problem . </p>
+<p>Add a boolean to the <span style="background-color:yellow;">Team</span> model to identify a player + team combination as <span style="background-color:yellow;">captain</span> : </p>
+<pre><code>class Team(models.Model):
+  player = models.ForeignKey(Player)
+  name = models.CharField(max_length=50)
+  is_captain = models.BooleanField(default=False)
+</code></pre>
+<p>To search for a team 's <span style="background-color:yellow;">captain</span> : </p>
+<p><span style="background-color:yellow;">Team.objects.filter</span> ( <span style="background-color:yellow;">is_captain</span> = True ) </p>
+<p>Personally I do n't like this method because the search semantics do n't make sense ( ie , a " team " is not a " <span style="background-color:yellow;">captain</span> " ) . </p>
+<p>The other approach is to identify each player 's position : </p>
+<pre><code>class Player(models.Model):
+   name = models.CharField(max_length=50)
+   position = models.IntegerField(choices=((1,'Captain'),(2,'Goal Keeper'))
+   jersey = models.IntegerField()
+
+   def is_captain(self):
+     return self.position == 1
+
+class Team(models.Model):
+   name = models.CharField(max_length=50)
+   player = models.ForeignKey(Player)
+
+   def get_captain(self):
+      return self.player if self.player.position == 1 else None
+</code></pre>
+<p>This makes a bit more sense when you search : </p>
+<p><span style="background-color:yellow;">Player.objects.filter</span> ( position = 1 ) ( return all <span style="background-color:yellow;">captains</span> ) </p>
+<p><span style="background-color:yellow;">Team.objects.get</span> ( pk = 1 ) .get_captain ( ) ( return the <span style="background-color:yellow;">captain</span> for this team ) </p>
+<p>In either case , however you have to do some pre save checks to make sure there is only one player for a particular position . </p>
+<br /><b># 5 </b><br /><p>Have a <span style="background-color:yellow;">Captain</span> table that has player/team columns along with your other tables , and make <span style="background-color:yellow;">captain</span> a method of <span style="background-color:yellow;">Team</span> : </p>
+<pre><code>class Team(models.Model):
+    name = models.CharField()
+    def captain(self):
+      [search Captain table]
+      return thePlayer
+
+class Player(models.Model):
+    name = models.CharField()
+    team = models.ForeignKey(Team)
+
+class Captain(models.Model):
+    player = models.ForeignKey(Player)
+    team = models.ForeignKey(Team)
+</code></pre>
+<p>You 'd have to check that you never have more than one <span style="background-color:yellow;">captain</span> in the same team though... But you do n't have any circular references that way. You could also end up with a <span style="background-color:yellow;">captain</span> who is n't in the team he 's flagged as <span style="background-color:yellow;">captain</span> of. So there 's a few gotchas this way . </p>
+<br />

@@ -1,0 +1,123 @@
+<h3>Question (ID-1110153):</h3><h2>What is the most efficent way to store a list in the Django models?</h2><p>Currently I have a lot of python objects in my code similar to the following:</p>
+
+<pre><code>class MyClass():
+  def __init__(self, name, friends):
+      self.myName = name
+      self.myFriends = [str(x) for x in friends]
+</code></pre>
+
+<p>Now I want to turn this into a Django model, where self.myName is a string field, and self.myFriends is a list of strings.</p>
+
+<pre><code>from django.db import models
+
+class myDjangoModelClass():
+    myName = models.CharField(max_length=64)
+    myFriends = ??? # what goes here?
+</code></pre>
+
+<p>Since the list is such a common data structure in python, I sort of expected there to be a Django model field for it. I know I can use a ManyToMany or OneToMany relationship, but I was hoping to avoid that extra indirection in the code.</p>
+
+<p><strong>Edit:</strong></p>
+
+<p>I added this <a href="http://stackoverflow.com/questions/1126642/how-would-you-inherit-from-and-override-the-django-model-classes-to-create-a-list">related question</a>, which people may find useful.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Would not this relationship be better expressed as a one-to-many foreign key relationship to a <code>Friends</code> table?  I understand that <code>myFriends</code> are just strings but I would think that a better design would be to create a <code>Friend</code> model and have <code>MyClass</code> contain a foreign key realtionship to the resulting table.</p>
+<br /><b>#1</b><br /><h2><strong>"Premature optimization is the root of all evil."</strong></h2>
+
+<p>With that firmly in mind, let's do this! Once your apps hit a certain point, denormalizing data is very common. Done correctly, it can save numerous expensive database lookups at the cost of a little more housekeeping.</p>
+
+<p>To return a <code>list</code> of friend names we'll need to create a custom Django Field class that will return a list when accessed.</p>
+
+<p><a href="http://www.davidcramer.net/code/181/custom-fields-in-django.html" rel="nofollow">David Cramer posted an guide to creating a SeperatedValueField on his blog</a>. Here is the code:</p>
+
+<pre><code>from django.db import models
+
+class SeparatedValuesField(models.TextField):
+    __metaclass__ = models.SubfieldBase
+
+    def __init__(self, *args, **kwargs):
+        self.token = kwargs.pop('token', ',')
+        super(SeparatedValuesField, self).__init__(*args, **kwargs)
+
+    def to_python(self, value):
+        if not value: return
+        if isinstance(value, list):
+            return value
+        return value.split(self.token)
+
+    def get_db_prep_value(self, value):
+        if not value: return
+        assert(isinstance(value, list) or isinstance(value, tuple))
+        return self.token.join([unicode(s) for s in value])
+
+    def value_to_string(self, obj):
+        value = self._get_val_from_obj(obj)
+</code></pre>
+
+<p>The logic of this code deals with serializing and deserializing values from the database to Python and visa-versa. Now can import and use our custom field in the model class:</p>
+
+<pre><code>from django.db import models
+from custom.fields import SeparatedValuesField 
+
+class Person(models.Model):
+    name = models.CharField(max_length=64)
+    friends = SeparatedValuesField()
+</code></pre>
+<br /><b>#2</b><br /><p>Remember that this eventually has to end up in a relational database. So using relations really <em>is</em> the common way to solve this problem. If you absolutely insist on storing a list in the object itself, you could make it for example comma-separated, and store it in a string, and then provide accessor functions that split the string into a list. With that, you will be limited to a maximum number of strings, and you will lose efficient queries.</p>
+<br /><b>#3</b><br /><pre><code>class Course(models.Model):
+   name = models.CharField(max_length=256)
+   students = models.ManyToManyField(Student)
+
+class Student(models.Model):
+   first_name = models.CharField(max_length=256)
+   student_number = models.CharField(max_length=128)
+   # other fields, etc...
+
+   friends = models.ManyToManyField('self')
+</code></pre>
+<br /><b>#4</b><br /><p>You can store virtually any object using a Django Pickle Field, ala this snippet:</p>
+
+<p><a href="http://www.djangosnippets.org/snippets/513/" rel="nofollow">http://www.djangosnippets.org/snippets/513/</a></p>
+<br /><b>#5</b><br /><p>Using one-to-many relation (FK from Friend to parent class) will make your app more scalable (as you can trivially extend the Friend object with additional attributes beyond the simple name). And thus this is the best way </p>
+<br /><b>#6</b><br /><p>In general, to store a list in Django, you could just JSON-serialize it. The "list" would be stored in your Django model like so:</p>
+
+<pre><code>class MyModel(models.Model):
+    myList = models.TextField(null=True) # JSON-serialized (text) version of your list
+</code></pre>
+
+<p>In your view/controller code:</p>
+
+<p><strong>Storing the list in the database:</strong></p>
+
+<pre><code>import simplejson as json
+...
+...
+
+myModel = MyModel()
+listIWantToStore = [1,2,3,4,5,'hello']
+myModel.myList = json.dumps(listIWantToStore)
+myModel.save()
+</code></pre>
+
+<p><strong>Retrieving the list from the database:</strong></p>
+
+<pre><code>jsonDec = json.decoder.JSONDecoder()
+myPythonList = jsonDec.decode(myModel.myList)
+</code></pre>
+
+<p><strong>Conceptually, here's what's going on:</strong></p>
+
+<pre><code>&gt;&gt;&gt; myList = [1,2,3,4,5,'hello']
+&gt;&gt;&gt; import simplejson as json
+&gt;&gt;&gt; myJsonList = json.dumps(myList)
+&gt;&gt;&gt; myJsonList
+'[1, 2, 3, 4, 5, "hello"]'
+&gt;&gt;&gt; myJsonList.__class__
+&lt;type 'str'&gt;
+&gt;&gt;&gt; jsonDec = json.decoder.JSONDecoder()
+&gt;&gt;&gt; myPythonList = jsonDec.decode(myJsonList)
+&gt;&gt;&gt; myPythonList
+[1, 2, 3, 4, 5, u'hello']
+&gt;&gt;&gt; myPythonList.__class__
+&lt;type 'list'&gt;
+</code></pre>
+<br />

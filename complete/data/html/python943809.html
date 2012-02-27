@@ -1,0 +1,73 @@
+<h3>Question (ID-943809):</h3><h2>String manipulation in Cython</h2><p>I have code that does some very CPU-intensive string manipulations and I was looking for ways to improve performance.</p>
+
+<p>(EDIT: I'm doing stuff like finding longest common substring, running lots of regular expressions which might be better expressed as state machines in c, stripping comments from HTML, stuff like that.)</p>
+
+<p>I am currently looking into porting some of the code to <a href="http://www.cython.org/" rel="nofollow">Cython</a> after hearing many good things about it. However, it seems that the main focus of Cython is numerical calculations and working with strings is barely documented.</p>
+
+<p>Unicode might also be a big issue. </p>
+
+<p>My questions are:</p>
+
+<ol>
+<li>Should I even bother with Cython for string stuff? Does anyone have experience with this type of processing in cython and can share?</li>
+<li>Am I missing something in the Cython docs? Does anyone know of a tutorial/reference/documentation about working with strings in Cython?</li>
+</ol>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Am I right in thinking it's currently implemented in CPython?</p>
+
+<p>Have you tried profiling your code yet to identify exactly <em>what</em> is slow about it? First step in trying to improve something should always be identifying what exaclty is wrong :-)</p>
+<br /><b>#1</b><br /><p>I voted up the 'profile it' answer, but wanted to add this: where possible the best optimisation you can make is to use Python standard libraries or built-in functions to perform the tasks you want. These are typically implemented in C and will provide performance broadly equivalent to any extension, including extensions written in Cython. If your algorithms are performing character by character loops in Python then those should be the first things to go, if possible.</p>
+
+<p>But if you have algorithms that can't be reworked in terms of built-ins or other existing standard libraries, Cython seems like a reasonable approach. It just compiles pseudo-Python down to native code and is as suited to string operations as any other operation, really. But I'm not convinced you will see a great benefit from using Cython if you just hand it idiomatic Python code. The maximum benefit will come if you are able to rewrite some or all of each algorithm in C so that low-level operations are not constantly translating variables across the Python/C barrier.</p>
+
+<p>Finally, Unicode - you've implied it might be 'a big issue' but haven't specified how you're using it. Cython will presumably produce C code that calls the relevant Python APIs that handle Unicode so the functionality is unlikely to be limited. However handling Unicode strings in C is non-trivial and may mean that the idea of rewriting some of your algorithms in C for better performance isn't worth the effort. A lot of classic string algorithms simply won't work on many Unicode encodings, which aren't 'strings' in the traditional sense of having 1 unit of storage per character.</p>
+<br /><b>#2</b><br /><p>"Ridiculously easy" is a very relative term. "Getting started" is just that. Writing robust extensions in C requires very careful attention to things like reference counting, memory allocation/freeing, and error handling. Cython does much of that for you.</p>
+
+<p>A non-unicode string in Cython is either a Python str object, or it's an array of char, as in C. What Cython-specific documentation do you think that you need?</p>
+
+<p>I recommend that you try Cython for yourself. BUT before you do that, I strongly recommend that you examine your Python code for inefficiencies. Sometimes you can get big speedups ridiculously easily.</p>
+
+<p>For example, compressing runs of space characters ... using</p>
+
+<pre><code>re.sub(' +', ' ', s) # one space in pattern
+</code></pre>
+
+<p>means that in the presumably not uncommon case where a run has a length of 1, it will be replacing a space with a space. If all the runs have length 1, it will create a new replacement string when it could easily just increment (or not decrement, or whatever) the reference count of the input string and pass that back.</p>
+
+<pre><code>re.sub('  +', ' ', s) # two spaces in pattern
+</code></pre>
+
+<p>produces exactly the same results and may run faster ... let's see:</p>
+
+<p>All runs length 1: It runs at 3.4 times the speed. Not shown: the longer the input string, the better it gets.</p>
+
+<pre><code>\python26\python -mtimeit -s"s='now is the winter of our discontent'; import re; x = re.compile(' +').sub" "x(' ', s)"
+100000 loops, best of 3: 8.26 usec per loop
+
+\python26\python -mtimeit -s"s='now is the winter of our discontent'; import re; x = re.compile('  +').sub" "x(' ', s)"
+100000 loops, best of 3: 2.41 usec per loop
+</code></pre>
+
+<p>With one run having length 2, the speed ratio is 2.5. With all runs having length 2, the speed ratio is 1.2. All things considered, not a bad return on an investment of 1 keystroke.</p>
+<br /><b>#3</b><br /><p>This is a very interesting issue. Cython at it's core is a tool to integrate python with C data types. It doesn't supply any functionality to assist in dealing with strings, probably because there isn't as much demand for that as there is for specific Numpy functionality.</p>
+
+<p>Having said that, you could well use Cython to interface with existing C/C++ libraries designed to handle the types of problems you describe. For processing HTML/XML you might want to look into <a href="http://xmlsoft.org/" rel="nofollow">libxml</a> for example. However there are (of course) <a href="http://codespeak.net/lxml/" rel="nofollow">ready-made python bindings</a> already available for just that. I've used lxml extensively for processing HTML and it does all I need and does it <em>fast</em>, plus it handles unicode pretty well.</p>
+
+<p>In your case I would imagine a combination of lxml and custom made C functions would be best. For example you could "easily" make a fast function for finding longest substrings in C, as that could be done at the byte level (recall that a string in C is just a char*, which is an array of bytes). Then you could map those back to python (which Cython will make real easy for you) and carry on in unicode abstracted heaven :). Certainly not trivial, but may be worth the effort if your app's performance relies on it.</p>
+
+<p>Then there are of course nice (albeit non-trivial) approaches to working with unicode in C/C++. <a href="http://evanjones.ca/unicode-in-c.html" rel="nofollow">This article</a> by Evan Jones may help you decide if it's worth the effort.</p>
+<br /><b>#4</b><br /><p>Just for completeness, what I ended up doing is just write (some of) the string manipulation code in C.</p>
+
+<p>As it turns out, it's <a href="http://en.wikibooks.org/wiki/Python%5FProgramming/Extending%5Fwith%5FC" rel="nofollow">ridiculously easy</a> to get started writing c extensions to python. Unicode strings are just arrays of Py_UNICODE, which is an int or a short depending on the python build.</p>
+
+<p>I got a x20 improvement converting code like</p>
+
+<pre><code>s = re.sub(r' +', ' ', s)
+</code></pre>
+
+<p>to c. I got similar improvements with more complicated regexps, but the c code becomes crazy complex very quickly.</p>
+
+<p>Overall, my throughput went up 20% after the rewrite. I am now looking for more things to rewrite...</p>
+<br /><b>#5</b><br /><p>Note that Cython actually has support for CPython's Py_UNICODE type, so, for example, you can directly iterate over unicode strings or compare characters at C speed. See</p>
+
+<p><a href="http://docs.cython.org/src/tutorial/strings.html" rel="nofollow">http://docs.cython.org/src/tutorial/strings.html</a></p>
+<br />

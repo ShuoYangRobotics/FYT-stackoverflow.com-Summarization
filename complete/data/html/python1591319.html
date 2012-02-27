@@ -1,0 +1,131 @@
+<h3>Question (ID-1591319):</h3><h2>Python: How can I know which exceptions might be thrown from a method call</h2><p>Is there a way knowing (at coding time) which exceptions to expect when executing python code? 
+I end up catching the base Exception class 90% of the time since I don't know which exception type might be thrown(and don't tell me to read the documentation. many times an exception can be propagated from the deep. and many times the documentation is not updated or correct). Is there some kind of tool to check this ? (like by reading the python code and libs)?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You should only catch exceptions that you will handle.</p>
+
+<p>Catching all exceptions by their concrete types is nonsense.  You should catch specific exceptions you <em>can</em> and <em>will</em> handle.  For other exceptions, you may write a generic catch that catches "base Exception", logs it (use <code>str()</code> function) and terminates your program (or does something else that's appropriate in a crashy situation).</p>
+
+<p>If you really gonna handle <em>all</em> exceptions and are sure none of them are fatal (for example, if you're running the code in some kind of a sandboxed environment), then your approach of catching generic BaseException fits your aims.</p>
+
+<p>You might be also interested in <a href="http://docs.python.org/library/exceptions.html#exceptions.BaseException" rel="nofollow">language exception reference</a>, not a reference for the library you're using.</p>
+
+<p>If the library reference is really poor and it doesn't re-throw its own exceptions when catching system ones, <strong>the only useful approach is to run tests</strong> (maybe add it to test suite, because if something is undocumented, it may change!).  Delete a file crucial for your code and check what exception is being thrown.  Supply too much data and check what error it yields.</p>
+
+<p>You will have to run tests anyway, since, even <strong>if the method of getting the exceptions by source code existed, it wouldn't give you any idea how you should handle any of those</strong>.  Maybe you should be showing error message "File needful.txt is not found!" when you catch <code>IndexError</code>?  Only test can tell.</p>
+<br /><b>#1</b><br /><p>I guess a solution could be only imprecise because of lack of static typing rules.</p>
+
+<p>I'm not aware of some tool that checks exceptions, but you could come up with your own tool matching your needs (a good chance to play a little with static analysis).</p>
+
+<p>As a first attempt, you could write a function that builds an AST, finds all <code>Raise</code> nodes, and then tries to figure out common patterns of raising exceptions (e. g. calling a constructor directly)</p>
+
+<p>Let <code>x</code> be the following program:</p>
+
+<pre><code>x = '''\
+if f(x):
+    raise IOError(errno.ENOENT, 'not found')
+else:
+    e = g(x)
+    raise e
+'''
+</code></pre>
+
+<p>Build the AST using the <code>compiler</code> package:</p>
+
+<pre><code>tree = compiler.parse(x)
+</code></pre>
+
+<p>Then define a <code>Raise</code> visitor class:</p>
+
+<pre><code>class RaiseVisitor(object):
+    def __init__(self):
+        self.nodes = []
+    def visitRaise(self, n):
+        self.nodes.append(n)
+</code></pre>
+
+<p>And walk the AST collecting <code>Raise</code> nodes:</p>
+
+<pre><code>v = RaiseVisitor()
+compiler.walk(tree, v)
+
+&gt;&gt;&gt; print v.nodes
+[
+    Raise(
+        CallFunc(
+            Name('IOError'),
+            [Getattr(Name('errno'), 'ENOENT'), Const('not found')],
+            None, None),
+        None, None),
+    Raise(Name('e'), None, None),
+]
+</code></pre>
+
+<p>You may continue by resolving symbols using compiler symbol tables, analyzing data dependencies, etc. Or you may just deduce, that <code>CallFunc(Name('IOError'), ...)</code> "should definitely mean raising <code>IOError</code>", which is quite OK for quick practical results :)</p>
+<br /><b>#2</b><br /><p>The correct tool to solve this problem is unittests. If you are having exceptions raised by real code that the unittests do not raise, then you need more unittests.</p>
+
+<p>Consider this</p>
+
+<pre><code>def f(duck):
+    try:
+        duck.quack()
+    except ??? could be anything
+</code></pre>
+
+<p>duck can be any object</p>
+
+<p>Obviously you can have an <code>AttributeError</code> if duck has no quack, a <code>TypeError</code> if duck has a quack but it is not callable. You have no idea what <code>duck.quack()</code> might raise though, maybe even a <code>DuckError</code> or something</p>
+
+<p>Now supposing you have code like this</p>
+
+<pre><code>arr[i]=get_something_from_database()
+</code></pre>
+
+<p>If it raises an <code>IndexError</code> you don't know whether it has come from arr[i] or from deep inside the database function. usually it doesn't matter so much where the exception occurred, rather that something went wrong and what you wanted to happen didn't happen.</p>
+
+<p>A handy technique is to catch and maybe reraise the exception like this</p>
+
+<pre><code>except Exception, e
+    #inspect e, decide what to do
+    raise
+</code></pre>
+<br /><b>#3</b><br /><p>I ran into this when using socket, I wanted to find out all the error conditions I would run in to (so rather than trying to create errors and figure out what socket does I just wanted a concise list). Ultimately I ended up grep'ing "/usr/lib64/python2.4/test/test_socket.py" for "raise":</p>
+
+<pre><code>$ grep raise test_socket.py
+Any exceptions raised by the clients during their tests
+        raise TypeError, "test_func must be a callable function"
+    raise NotImplementedError, "clientSetUp must be implemented."
+    def raise_error(*args, **kwargs):
+        raise socket.error
+    def raise_herror(*args, **kwargs):
+        raise socket.herror
+    def raise_gaierror(*args, **kwargs):
+        raise socket.gaierror
+    self.failUnlessRaises(socket.error, raise_error,
+    self.failUnlessRaises(socket.error, raise_herror,
+    self.failUnlessRaises(socket.error, raise_gaierror,
+        raise socket.error
+    # Check that setting it to an invalid value raises ValueError
+    # Check that setting it to an invalid type raises TypeError
+    def raise_timeout(*args, **kwargs):
+    self.failUnlessRaises(socket.timeout, raise_timeout,
+    def raise_timeout(*args, **kwargs):
+    self.failUnlessRaises(socket.timeout, raise_timeout,
+</code></pre>
+
+<p>Which is a pretty concise list of errors. Now of course this only works on a case by case basis and depends on the tests being accurate (which they usually are). Otherwise you need to pretty much catch all exceptions, log them and dissect them and figure out how to handle them (which with unit testing wouldn't be to difficult).</p>
+<br /><b>#4</b><br /><p>normally, you'd need to catch exception only around a few lines of code. You wouldn't want to put your whole <code>main</code> function into the <code>try except</code> clause. for every few line you always should now (or be able easily to check) what kind of exception might be raised.</p>
+
+<p>docs have an exhaustive <a href="http://docs.python.org/3.1/library/exceptions.html" rel="nofollow">list of built-in exceptions</a>. don't try to except those exception that you're not expecting, they might be handled/expected in the calling code.</p>
+
+<p><strong>edit</strong>: what might be thrown depends on obviously on what you're doing! accessing random element of a sequence: <code>IndexError</code>, random element of a dict: <code>KeyError</code>, etc.</p>
+
+<p>Just try to run those few lines in IDLE and cause an exception. But unittest would be a better solution, naturally.</p>
+<br /><b>#5</b><br /><p>Noone explained so far, why you can't have a full, 100% correct list of exceptions, so I thought it's worth commenting on. One of the reasons is a first-class function. Let's say that you have a function like this:</p>
+
+<pre><code>def apl(f,arg):
+   return f(arg)
+</code></pre>
+
+<p>Now <code>apl</code> can raise any exception that <code>f</code> raises. While there are not many functions like that in the core library, anything that uses list comprehension with custom filters, map, reduce, etc. are affected.</p>
+
+<p>The documentation and the source analysers are the only "serious" sources of information here. Just keep in mind what they cannot do.</p>
+<br />

@@ -1,0 +1,312 @@
+Question (ID-122277): How do you translate this regular-expression idiom from Perl into Python? I switched from Perl to Python about a year ago and haven't looked back. There is only one idiom that I've ever found I can do more easily in Perl than in Python: 
+
+ if ($var =~ /foo(.+)/) {
+ # do something with $1
+} elsif ($var =~ /bar(.+)/) {
+ # do something with $1
+} elsif ($var =~ /baz(.+)/) {
+ # do something with $1
+}
+ 
+
+ The corresponding Python code is not so elegant since the if statements keep getting nested: 
+
+ m = re.search(r'foo(.+)', var)
+if m:
+ # do something with m.group(1)
+else:
+ m = re.search(r'bar(.+)', var)
+ if m:
+ # do something with m.group(1)
+ else:
+ m = re.search(r'baz(.+)', var)
+ if m:
+  # do something with m.group(2)
+ 
+
+ Does anyone have an elegant way to reproduce this pattern in Python? I've seen anonymous function dispatch tables used, but those seem kind of unwieldy to me for a small number of regular expressions... 
+ Answers (Total-10): #0 Using named groups and a dispatch table: 
+
+ r = re.compile(r'(?P&lt;cmd&gt;foo|bar|baz)(?P&lt;data&gt;.+)')
+
+def do_foo(data):
+ ...
+
+def do_bar(data):
+ ...
+
+def do_baz(data):
+ ...
+
+dispatch = {
+ 'foo': do_foo,
+ 'bar': do_bar,
+ 'baz': do_baz,
+}
+
+
+m = r.match(var)
+if m:
+ dispatch[m.group('cmd')](m.group('data'))
+ 
+
+ With a little bit of introspection you can auto-generate the regexp and the dispatch table. 
+ #1 I'd suggest this, as it uses the least regex to accomplish your goal. It is still functional code, but no worse then your old Perl. 
+
+ import re
+var = "barbazfoo"
+
+m = re.search(r'(foo|bar|baz)(.+)', var)
+if m.group(1) == 'foo':
+ print m.group(1)
+ # do something with m.group(1)
+elif m.group(1) == "bar":
+ print m.group(1)
+ # do something with m.group(1)
+elif m.group(1) == "baz":
+ print m.group(2)
+ # do something with m.group(2)
+ 
+ #2 Yeah, it's kind of annoying. Perhaps this will work for your case. 
+
+ 
+import re
+
+class ReCheck(object):
+ def __init__(self):
+  self.result = None
+ def check(self, pattern, text):
+  self.result = re.search(pattern, text)
+  return self.result
+
+var = 'bar stuff'
+m = ReCheck()
+if m.check(r'foo(.+)',var):
+ print m.result.group(1)
+elif m.check(r'bar(.+)',var):
+ print m.result.group(1)
+elif m.check(r'baz(.+)',var):
+ print m.result.group(1)
+ 
+
+ EDIT: Brian correctly pointed out that my first attempt did not work. Unfortunately, this attempt is longer. 
+ #3 Alternatively, something not using regular expressions at all: 
+
+ prefix, data = var[:3], var[3:]
+if prefix == 'foo':
+ # do something with data
+elif prefix == 'bar':
+ # do something with data
+elif prefix == 'baz':
+ # do something with data
+else:
+ # do something with var
+ 
+
+ Whether that is suitable depends on your actual problem. Don't forget, regular expressions aren't the swiss army knife that they are in Perl; Python has different constructs for doing string manipulation. 
+ #4 def find_first_match(string, *regexes):
+ for regex, handler in regexes:
+  m = re.search(regex, string):
+  if m:
+   handler(m)
+   return
+ else:
+  raise ValueError
+
+find_first_match(
+ foo, 
+ (r'foo(.+)', handle_foo), 
+ (r'bar(.+)', handle_bar), 
+ (r'baz(.+)', handle_baz))
+ 
+
+ To speed it up, one could turn all regexes into one internally and create the dispatcher on the fly. Ideally, this would be turned into a class then. 
+ #5 r"""
+This is an extension of the re module. It stores the last successful
+match object and lets you access it's methods and attributes via
+this module.
+
+This module exports the following additional functions:
+ expand Return the string obtained by doing backslash substitution on a
+   template string.
+ group Returns one or more subgroups of the match.
+ groups Return a tuple containing all the subgroups of the match.
+ start Return the indices of the start of the substring matched by
+   group.
+ end  Return the indices of the end of the substring matched by group.
+ span Returns a 2-tuple of (start(), end()) of the substring matched
+   by group.
+
+This module defines the following additional public attributes:
+ pos   The value of pos which was passed to the search() or match()
+    method.
+ endpos  The value of endpos which was passed to the search() or
+    match() method.
+ lastindex The integer index of the last matched capturing group.
+ lastgroup The name of the last matched capturing group.
+ re   The regular expression object which as passed to search() or
+    match().
+ string  The string passed to match() or search().
+"""
+
+import re as re_
+
+from re import *
+from functools import wraps
+
+__all__ = re_.__all__ + [ "expand", "group", "groups", "start", "end", "span",
+  "last_match", "pos", "endpos", "lastindex", "lastgroup", "re", "string" ]
+
+last_match = pos = endpos = lastindex = lastgroup = re = string = None
+
+def _set_match(match=None):
+ global last_match, pos, endpos, lastindex, lastgroup, re, string
+ if match is not None:
+  last_match = match
+  pos = match.pos
+  endpos = match.endpos
+  lastindex = match.lastindex
+  lastgroup = match.lastgroup
+  re = match.re
+  string = match.string
+ return match
+
+@wraps(re_.match)
+def match(pattern, string, flags=0):
+ return _set_match(re_.match(pattern, string, flags))
+
+
+@wraps(re_.search)
+def search(pattern, string, flags=0):
+ return _set_match(re_.search(pattern, string, flags))
+
+@wraps(re_.findall)
+def findall(pattern, string, flags=0):
+ matches = re_.findall(pattern, string, flags)
+ if matches:
+  _set_match(matches[-1])
+ return matches
+
+@wraps(re_.finditer)
+def finditer(pattern, string, flags=0):
+ for match in re_.finditer(pattern, string, flags):
+  yield _set_match(match)
+
+def expand(template):
+ if last_match is None:
+  raise TypeError, "No successful match yet."
+ return last_match.expand(template)
+
+def group(*indices):
+ if last_match is None:
+  raise TypeError, "No successful match yet."
+ return last_match.group(*indices)
+
+def groups(default=None):
+ if last_match is None:
+  raise TypeError, "No successful match yet."
+ return last_match.groups(default)
+
+def groupdict(default=None):
+ if last_match is None:
+  raise TypeError, "No successful match yet."
+ return last_match.groupdict(default)
+
+def start(group=0):
+ if last_match is None:
+  raise TypeError, "No successful match yet."
+ return last_match.start(group)
+
+def end(group=0):
+ if last_match is None:
+  raise TypeError, "No successful match yet."
+ return last_match.end(group)
+
+def span(group=0):
+ if last_match is None:
+  raise TypeError, "No successful match yet."
+ return last_match.span(group)
+
+del wraps # Not needed past module compilation
+ 
+
+ For example: 
+
+ if gre.match("foo(.+)", var):
+ # do something with gre.group(1)
+elif gre.match("bar(.+)", var):
+ # do something with gre.group(1)
+elif gre.match("baz(.+)", var):
+ # do something with gre.group(1)
+ 
+ #6 With thanks to this other SO question : 
+
+ import re
+
+class DataHolder:
+ def __init__(self, value=None, attr_name='value'):
+  self._attr_name = attr_name
+  self.set(value)
+ def __call__(self, value):
+  return self.set(value)
+ def set(self, value):
+  setattr(self, self._attr_name, value)
+  return value
+ def get(self):
+  return getattr(self, self._attr_name)
+
+input = u'test bar 123'
+save_match = DataHolder(attr_name='match')
+if save_match(re.search('foo (\d+)', input)):
+ print "Foo"
+ print save_match.match.group(1)
+elif save_match(re.search('bar (\d+)', input)):
+ print "Bar"
+ print save_match.match.group(1)
+elif save_match(re.search('baz (\d+)', input)):
+ print "Baz"
+ print save_match.match.group(1)
+ 
+ #7 Here's the way I solved this issue: 
+
+ matched = False;
+
+m = re.match("regex1");
+if not matched and m:
+ #do something
+ matched = True;
+
+m = re.match("regex2");
+if not matched and m:
+ #do something else
+ matched = True;
+
+m = re.match("regex3");
+if not matched and m:
+ #do yet something else
+ matched = True;
+ 
+
+ Not nearly as clean as the original pattern. However, it is simple, straightforward and doesn't require extra modules or that you change the original regexs. 
+ #8 how about using a dictionary? 
+
+ match_objects = {}
+
+if match_objects.setdefault( 'mo_foo', re_foo.search( text ) ):
+ # do something with match_objects[ 'mo_foo' ]
+
+elif match_objects.setdefault( 'mo_bar', re_bar.search( text ) ):
+ # do something with match_objects[ 'mo_bar' ]
+
+elif match_objects.setdefault( 'mo_baz', re_baz.search( text ) ):
+ # do something with match_objects[ 'mo_baz' ]
+
+...
+ 
+
+ however, you must ensure there are no duplicate match_objects dictionary keys ( mo_foo, mo_bar, ... ), best by giving each regular expression its own name and naming the match_objects keys accordingly, otherwise match_objects.setdefault() method would return existing match object instead of creating new match object by running re_xxx.search( text ). 
+ #9 Thanks guys, these are all pretty good solutions. I guess I sort of wish that Python had a "global" groups() function that did what Perl's $1, $2, $3 variables do. 
+
+ I know it's not so Pythonic, but Python has bent the rules a bit in other modules like fileinput which keeps a global state in Perl-ish fashion, and is very convenient for text-processing scripts. 
+
+ Ah well, basically I should just take what Thomas says to heart about regular expressions not being the Swiss Army Knife of Python. Which is a good thing.

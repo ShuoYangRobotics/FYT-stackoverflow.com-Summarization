@@ -1,0 +1,126 @@
+<h3>Question (ID-2234303):</h3><h2>Emulate floating point string conversion behaviour of Linux on Windows</h2><p>I've encountered an annoying problem in outputting a floating point number. When I format 11.545 with a precision of 2 decimal points on Windows it outputs "11.55", as I would expect. However, when I do the same on Linux the output is "11.54"!</p>
+
+<p>I originally encountered the problem in Python, but further investigation showed that the difference is in the underlying C runtime library. (The architecture is x86-x64 in both cases.) Running the following line of C produces the different results on Windows and Linux, same as it does in Python.</p>
+
+<pre><code>printf("%.2f", 11.545);
+</code></pre>
+
+<p>To shed more light on this I printed the number to 20 decimal places (<code>"%.20f"</code>):</p>
+
+<pre><code>Windows: 11.54500000000000000000
+Linux:   11.54499999999999992895
+</code></pre>
+
+<p>I know that 11.545 cannot be stored precisely as a binary number. So what appears to be happening is that Linux outputs the number it's actually stored with the best possible precision, while Windows outputs the simplest decimal representation of it, ie. tries to guess what the user most likely meant.</p>
+
+<p>My question is: <em>is there any (reasonable) way to emulate the Linux behaviour on Windows?</em></p>
+
+<p>(While the Windows behaviour is certainly the intuitive one, in my case I actually need to compare the output of a Windows program with that of a Linux program and the Windows one is the only one I can change. By the way, I tried to look at the Windows source of <code>printf</code>, but the actual function that does the float->string conversion is <code>_cfltcvt_l</code> and its source doesn't appear to be available.)</p>
+
+<p><strong>EDIT:</strong> the plot thickens! The theory about this being caused by an imprecise representation might be wrong, because <strong>0.125</strong> does have an exact binary representation and it's still different when output with <code>'%.2f' % 0.125</code>:</p>
+
+<pre><code>Windows: 0.13
+Linux:   0.12
+</code></pre>
+
+<p>However, <code>round(0.125, 2)</code> returns 0.13 on both Windows and Linux.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>First of all it sounds like Windows has it <strike>wrong</strike> right in this case (not that this really matters).  The C Standard requires that the value output by <code>%.2f</code> is <em>rounded to the appropriate number of digits</em>.  The best known algorithm for this is <a href="http://netlib.sandia.gov/fp/index.html" rel="nofollow">dtoa</a> implemented by <a href="http://www.cs.sandia.gov/~dmgay/" rel="nofollow">David M. Gay</a>.  You can probably port this to Windows or find a native implementation.</p>
+
+<p>If you haven't already read <em>"How to Print Floating-Point Numbers Accurately"</em> by Steele and White, find a copy and read it.  It is definitely an enlightening read.  Make sure to find the original from the late 70's.  I think that I purchased mine from ACM or IEEE at some point.</p>
+<br /><b>#1</b><br /><p>I don't think Windows is doing anything especially clever (like trying to reinterpret the float in base 10) here:  I'd guess that it's simply computing the first 17 significant digits accurately (which would give '11.545000000000000') and then tacking extra zeros on the end to make up the requested number of places after the point.</p>
+
+<p>As others have said, the different results for 0.125 come from Windows using round-half-up and Linux using round-half-to-even.</p>
+
+<p>Note that for Python 3.1 (and Python 2.7, when it appears), the result of formatting a float will be platform independent (except possibly on unusual platforms).</p>
+<br /><b>#2</b><br /><p>The decimal module gives you access to several rounding modes:</p>
+
+<pre><code>import decimal
+
+fs = ['11.544','11.545','11.546']
+
+def convert(f,nd):
+    # we want 'nd' beyond the dec point
+    nd = f.find('.') + nd
+    c1 = decimal.getcontext().copy()
+    c1.rounding = decimal.ROUND_HALF_UP
+    c1.prec = nd
+    d1 = c1.create_decimal(f)
+    c2 = decimal.getcontext().copy()
+    c2.rounding = decimal.ROUND_HALF_DOWN
+    c2.prec = nd   
+    d2 = c2.create_decimal(f)
+    print d1, d2
+
+for f in fs:
+    convert(f,2)
+</code></pre>
+
+<p>You can construct a decimal from an int or a string. In your case feed it a string with more digits than you want and truncate by setting context.prec. </p>
+
+<p>Here is a link to a pymotw post w/ a detailed overview of the decimal module:</p>
+
+<p><a href="http://broadcast.oreilly.com/2009/08/pymotw-decimal---fixed-and-flo.html" rel="nofollow">http://broadcast.oreilly.com/2009/08/pymotw-decimal---fixed-and-flo.html</a></p>
+<br /><b>#3</b><br /><p>Consider comparing floating point numbers with some tolerance/epsilon instead. This is much more robust than trying to match exactly.</p>
+
+<p>What I mean is, except saying that two floats are equal when:</p>
+
+<pre><code>f1 == f2
+</code></pre>
+
+<p>Say they're equal when:</p>
+
+<pre><code>fabs(f1 - f2) &lt; eps
+</code></pre>
+
+<p>For some small <code>eps</code>. More details on this issue can be found <a href="http://www.cygnus-software.com/papers/comparingfloats/comparingfloats.htm" rel="nofollow">here</a>.</p>
+<br /><b>#4</b><br /><p>You could try subtracting (or adding for a negative number) a small delta that will have no effect on the rounding for numbers far enough away from the precision.</p>
+
+<p>For example, if you're rounding with <code>%.2f</code>, try this version on Windows:</p>
+
+<pre><code>printf("%.2f", 11.545 - 0.001);
+</code></pre>
+
+<p>Floating point numbers are notoriously problematic if you don't know what's happening under the covers. In that case, your best bet is to write (or use) a decimal type library to alleviate the problems.</p>
+
+<hr>
+
+<p>The example program:</p>
+
+<pre><code>#include &lt;stdio.h&gt;
+int main (void) {
+    printf("%.20f\n", 11.545);
+    printf("%.2f\n", 11.545);
+    printf("%.2f\n", 11.545 + 0.001);
+    return 0;
+}
+</code></pre>
+
+<p>outputs this in my Cygwin environment:</p>
+
+<pre><code>11.54499999999999992895
+11.54
+11.55
+</code></pre>
+
+<p>which is okay for your specific case (it's going the wrong way but should hopefully apply in the other direction as well: you need to test it) but you should check your entire possible input range if you want to be certain this will work for all your cases.</p>
+
+<hr>
+
+<p><em>Update:</em></p>
+
+<p>Evgeny, based on your comment:</p>
+
+<blockquote>
+  <p>It works for this specific case, but not as a general solution. For instance if the number I want to format is 0.545 instead of 11.545 then '%.2f' % (0.545 - 0.001) returns "0.54", while '%.2f' % 0.545 on Linux correctly returns "0.55".</p>
+</blockquote>
+
+<p>that's why I said you would have to check the entire range to see if it would work, and why I stated a decimal data type would be preferable.</p>
+
+<p>If you want decimal accuracy, that's what you'll have to do. But you might want to consider the cases in that range where Linux goes the other way too (as per your comment) - there may be situation where Linux and Windows disagree in the opposite direction to what you've found - a decimal type probably won't solve that.</p>
+
+<p>You may need to make your comparison tools a little more intelligent inasmuch as they can ignore a difference of 1 in the final fractional place.</p>
+<br /><b>#5</b><br /><p>You may be able to do subtract a tiny amount from the value to force the rounding down</p>
+
+<pre><code>print "%.2f"%(11.545-1e-12)
+</code></pre>
+<br />

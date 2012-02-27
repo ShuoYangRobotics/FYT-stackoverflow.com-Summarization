@@ -1,0 +1,131 @@
+Question (ID-4026238): What is C#'s version of the GIL? In the current implementation of CPython, there is an object known as the "GIL" or "Global Interpreter Lock". It is essentially a mutex that prevents two Python threads from executing Python code at the same time. This prevents two threads from being able to corrupt the state of the Python interpreter, but also prevents multiple threads from really executing together. Essentially, if I do this: 
+
+ # Thread A
+some_list.append(3)
+# Thread B
+some_list.append(4)
+ 
+
+ I can't corrupt the list, because at any given time, only one of those threads are executing, since they must hold the GIL to do so. Now, the items in the list might be added in some indeterminate order, but the point is that the list isn't corrupted, and two things will always get added. 
+
+ So, now to C#. C# essentially faces the same problem as Python, so, how does C# prevent this? I'd also be interested in hearing Java's story, if anyone knows it. 
+
+ 
+
+ Clarification: I'm interested in what happens without explicit locking statements, especially to the VM. I am aware that locking primitives exist for both Java &amp; C# - they exist in Python as well: The GIL is not used for multi-threaded code, other than to keep the interpreter sane. I am interested in the direct equivalent of the above, so, in C#, if I can remember enough... :-) 
+
+ List&lt;String&gt; s;
+// Reference to s is shared by two threads, which both execute this:
+s.Add("hello");
+// State of s?
+// State of the VM? (And if sane, how so?)
+ 
+
+ Here's another example: 
+
+ class A
+{
+ public String s;
+}
+// Thread A &amp; B
+some_A.s = some_other_value;
+
+// some_A's state must change: how does it change?
+// Is the VM still in good shape afterwards?
+ 
+
+ I'm not looking to write bad C# code, I understand the lock statements. Even in Python, the GIL doesn't give you magic-multi-threaded code: you must still lock shared resources. But the GIL prevents Python's "VM" from being corrupted - it is this behavior that I'm interested in. 
+ Answers (Total-6): #0 Most other languages that support threading don't have an equivalent of the Python GIL; they require you to use mutexes, either implicitly or explicitly. 
+ #1 Using lock, you would do this: 
+
+ lock(some_list)
+{
+ some_list.Add(3);
+}
+ 
+
+ and in thread 2: 
+
+ lock(some_list)
+{
+ some_list.Add(4);
+}
+ 
+
+ The lock statement ensures that the object inside the lock statement, some_list in this case, can only be accessed by a single thread at a time. See http://msdn.microsoft.com/en-us/library/c5kehkcz(VS.80).aspx for more information. 
+ #2 C# does not have an equivalent of GIL to Python. 
+
+ 
+ Though they face the same issue, their design goals make them
+ different. 
+ 
+ With GIL, CPython ensures that suche operations as appending a list
+ from two threads is simple. Which also
+ means that it would allow only one
+ thread to run at any time. This
+ makes lists and dictionaries thread safe . Though this makes the job
+ simpler and intuitive , it makes it
+ harder to exploit the multithreading
+ advantage on multicores. 
+ 
+ With no GIL, C# does the opposite. It ensures that the burden of integrity is on the developer of the
+ program but allows you to take
+ advantage of running multiple threads
+ simultaneously. 
+ 
+
+ As per one of the discussion - 
+
+ 
+ The GIL in CPython is purely a design choice of having 
+  a big lock vs a lock per object
+  and synchronisation to make sure that objects are kept in a coherent state.
+  This consist of a trade off - Giving up the full power of
+ multithreading. 
+ 
+ It has been that most problems do not suffer from this disadvantage 
+  and there are libraries which help you exclusively solve this issue when
+ required. 
+  That means for a certain class of problems, the burden to utilize the
+ multicore is 
+  passed to developer so that rest can enjoy the more simpler, intuitive
+ approach. 
+ 
+
+ Note: Other implementation like IronPython do not have GIL. 
+ #3 It may be instructive to look at the documentation for the Java equivalent of the class you're discussing: 
+
+ 
+ Note that this implementation is not synchronized. If multiple threads access an ArrayList instance concurrently, and at least one of the threads modifies the list structurally, it must be synchronized externally. (A structural modification is any operation that adds or deletes one or more elements, or explicitly resizes the backing array; merely setting the value of an element is not a structural modification.) This is typically accomplished by synchronizing on some object that naturally encapsulates the list. If no such object exists, the list should be "wrapped" using the Collections.synchronizedList method. This is best done at creation time, to prevent accidental unsynchronized access to the list: 
+
+ List list = Collections.synchronizedList(new ArrayList(...));
+ 
+ 
+ The iterators returned by this class's iterator and listIterator methods are fail-fast : if the list is structurally modified at any time after the iterator is created, in any way except through the iterator's own remove or add methods, the iterator will throw a ConcurrentModificationException . Thus, in the face of concurrent modification, the iterator fails quickly and cleanly, rather than risking arbitrary, non-deterministic behavior at an undetermined time in the future. 
+ 
+ Note that the fail-fast behavior of an iterator cannot be guaranteed as it is, generally speaking, impossible to make any hard guarantees in the presence of unsynchronized concurrent modification. Fail-fast iterators throw ConcurrentModificationException on a best-effort basis. Therefore, it would be wrong to write a program that depended on this exception for its correctness: the fail-fast behavior of iterators should be used only to detect bugs . 
+ 
+ #4 Most complex datastructures(for example lists) can be corrupted when used without locking in multiple threads. 
+
+ Since changes of references are atomic, a reference always stays a valid reference. 
+
+ But there is a problem when interacting with security critical code. So any datastructures used by critical code most be one of the following: 
+
+ 
+ Inaccessible from untrusted code, and locked/used correctly by trusted code 
+ Immutable (String class) 
+ Copied before use (valuetype parameters) 
+ Written in trusted code and uses internal locking to guarantee a safe state 
+ 
+
+ For example critical code cannot trust a list accessible from untrusted code. If it gets passed in a List, it has to create a private copy, do it's precondition checks on the copy, and then operate on the copy. 
+ #5 I'm going to take a wild guess at what the question really means... 
+
+ In Python data structures in the interpreter get corrupted because Python is using a form of reference counting. 
+
+ Both C# and Java use garbage collection and in fact they do use a global lock when doing a full heap collection. 
+
+ Data can be marked and moved between "generations" without a lock. But to actually clean it up everything must come to a stop. Hopefully a very short stop, but a full stop. 
+
+ Here is an interesting link on CLR garbage collection as of 2007: 
+ http://vineetgupta.spaces.live.com/blog/cns!8DE4BDC896BEE1AD!1104.entry

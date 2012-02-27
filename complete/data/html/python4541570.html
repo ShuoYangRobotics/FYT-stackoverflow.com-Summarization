@@ -1,0 +1,94 @@
+<h3>Question (ID-4541570):</h3><h2>What is the best way to keep an almost static data for web application?</h2><p>I'm building a web application in python. A part of this application is working with the data that can be described as follows:</p>
+
+<pre><code>Symbol     Begin Date      End Date
+AAPL       Jan-1-1985      Dec-27-2010
+...
+</code></pre>
+
+<p>The data is somewhat static - it will be periodically updated, that is: new entries may be added, and the "End Date" field can be updated for all entries.</p>
+
+<p>Now, the question: given the more-or-less static nature of the dataset, what is the best way of storing it and working with it? "Working" means fetching random lines, hopefully more than few times per second.</p>
+
+<p>I can do it with XML file, with SQL DB or SQLite, with JSON object file and some kind of python object in memory.</p>
+
+<p>What are the cons and pros of different solutions? I'll be thankful for explanations and for the edge cases (such as 'until 10times/sec XML file is the best, after that SQL DB).</p>
+
+<p><em>Update: Thanks for all the answers! Just a smallish update: currently the set is around 3K lines. It may grow to, say, 15K lines in a year. Access pattern: updates are regular, once a day, for the complete set; so both adding lines and updating end date will be done at once. Fetching a random line is indeed by the symbol, could be done few times a second.</em></p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I would generate a Python source file every time the data changes, and have that file primarily consisting of a dictionary. This assumes that lookup is by symbol, and that the data readily fit into memory.</p>
+
+<pre><code>data = {
+  "AAPL":       ("Jan-1-1985",      "Dec-27-2010"),
+...
+}
+</code></pre>
+
+<p>To bulk-update the end date, use pprint.pprint, overwriting the entire file.</p>
+
+<p><strong>Edit</strong>: To illustrate how such a file can be written, here is a script that fills it out with random data</p>
+
+<pre><code>import random, string, pprint
+
+def randsym():
+    res =[]
+    for i in range(4):
+        res.append(random.choice(string.uppercase))
+    return ''.join(res)
+
+months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+days = range(1,29)
+years = range(1980,2010)
+def randdate():
+    return "%s-%s-%s" % (random.choice(months),
+                         random.choice(days),
+                         random.choice(years))
+
+data = {}
+for i in range(15000):
+    data[randsym()] = (randdate(), "Dec-27-2010")
+
+with open("data.py", "w") as f:
+    f.write("data=")
+    f.write(pprint.pformat(data))
+</code></pre>
+
+<p>To access the data, do <code>from data import data</code>.</p>
+<br /><b>#1</b><br /><p>Since your data is highly structured, XML is not useful. CSV and JSON are reasonably fast and easy to edit for your purpose. However, if you value consistency (i.e. the data must not ever ever be wrong because it's updated while being read), you'll need to use <a href="http://stackoverflow.com/questions/489861/locking-a-file-in-python">file locking</a> to ensure that. Unless you ever need only a subset of data and your application does not run on more than one machine in parallel, I don't see a rationale for a database.</p>
+<br /><b>#2</b><br /><p>Getting random lines by symbol and its not a lot of data? You need some kind of indexing. Store it in a python dict read from the source (a csv file?) when you start the web app, and restart the web app when the data changes.</p>
+
+<p>Getting random lines by line number and its not a lot of data? Store it in a python list of tuples read from the source (a csv file?) when you start the web app, and restart the web app when the data changes.</p>
+
+<p>This assumes the web app is read-only, and updates to the data are done outside the app manually. Kick the server to notice the change.</p>
+<br /><b>#3</b><br /><p>Even being almost static, you may want to sort, search and filter - so it is not only about storing. Almost any read-many-write-once solution will make you happy, including:</p>
+
+<ul>
+<li>SQLite</li>
+<li>MySQL</li>
+<li>Key/value databases</li>
+</ul>
+
+<p>Indexes and other performance enhancements depends on your dataset properties, like cardinality, number of records, etc. Are you going to split load among multiple machines in the future? I would go with a database even for small datasets, just to be more future-proof, unless its an ad hoc application.</p>
+<br /><b>#4</b><br /><p>I would avoid XML since it will require more parsing and its advantages don't benefit tables. Also, I would avoid dictionaries if you need more than a one-to-one mapping (ie. AAPL comes up twice or more). If the sets of data are relatively small, I would suggest CSV since it is ridiculously easy to use as a list:</p>
+
+<pre><code>import csv
+
+myList = []
+myReader = csv.reader(open("your_file.csv", "rb"))
+for row in reader:
+    myList.append(row)
+...do stuff...
+myWriter = csv.writer(open("your_file.csv", "wb"))
+myWriter.writerows(myList)
+</code></pre>
+
+<p>If you need pure speed, efficiency, and scalability, there is no parallel to SQL, whatever form you choose. Between various forms of SQL (MySQL, MSSQL, Postgre, etc.) the differences are relatively small compared with the difference between SQL in general and CSV or XML.</p>
+
+<p>I said "relatively small" for CSV because there is no hard and fast rule that I can give you. It depends on a whole host of factors, but anything above a few MB will probably be noticably faster through SQL on many systems.</p>
+<br /><b>#5</b><br /><p>My take on the problem:
+SQL  It scales, most of the work is handled for you.  If you understand SQL it is probably (98%) <em>the</em> way to go.</p>
+
+<p>CSV Files: These get ugly on a HDD once you are dealing with more than a few (12 ish) accesses per second. HOWEVER- if the data is of reasonable size consider using a ramdrive, you can separate the data into files, and access them at <em>blazing</em> speeds.  Lots of small files, no problem.  But you will need to make sure that any data that needs to be saved is saved on real magnetic storage, or an SSD.  CSV files on an SSD you might be looking at 1000 accesses/second if the data is small enough.
+With some good naming of files and small enough dataset this can be a viable option.</p>
+
+<p>Plenty of <em>ifs</em> here but blazing speeds are a trade-off for crazy scalability, and having data consistency handled for you.</p>
+<br />

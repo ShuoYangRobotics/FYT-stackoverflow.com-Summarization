@@ -1,0 +1,125 @@
+Question (ID-1190206): Threading in Python What's the best approach to writing multi-threaded applications in Python, I'm aware of the basic concurrency mechanisms provided by the language and also of Stackless Python . What would you recommend and why? 
+ Answers (Total-8): #0 You've already gotten a fair variety of answers, from "fake threads" all the way to external frameworks, but I've seen nobody mention Queue.Queue -- the "secret sauce" of CPython threading. 
+
+ To expand: as long as you don't need to overlap pure-Python CPU-heavy processing (in which case you need multiprocessing -- but it comes with its own Queue implementation, too, so you can with some needed cautions apply the general advice I'm giving;-), Python's built-in threading will do... but it will do it much better if you use it advisedly , e.g., as follows. 
+
+ "Forget" shared memory, supposedly the main plus of threading vs multiprocessing -- it doesn't work well, it doesn't scale well, never has, never will. Use shared memory only for data structures that are set up once before you spawn sub-threads and never changed afterwards -- for everything else, make a single thread responsible for that resource, and communicate with that thread via Queue . 
+
+ Devote a specialized thread to every resource you'd normally think to protect by locks: a mutable data structure or cohesive group thereof, a connection to an external process (a DB, an XMLRPC server, etc), an external file, etc, etc. Get a small thread pool going for general purpose tasks that don't have or need a dedicated resource of that kind -- don't spawn threads as and when needed, or the thread-switching overhead will overwhelm you. 
+
+ Communication between two threads is always via Queue.Queue -- a form of message passing, the only sane foundation for multiprocessing (besides transactional-memory, which is promising but for which I know of no production-worthy implementations except In Haskell). 
+
+ Each dedicated thread managing a single resource (or small cohesive set of resources) listens for requests on a specific Queue.Queue instance. Threads in a pool wait on a single shared Queue.Queue (Queue is solidly threadsafe and won't fail you in this). 
+
+ Threads that just need to queue up a request on some queue (shared or dedicated) do so without waiting for results, and move on. Threads that eventually DO need a result or confirmation for a request queue a pair (request, receivingqueue) with an instance of Queue.Queue they just made, and eventually, when the response or confirmation is indispensable in order to proceed, they get (waiting) from their receivingqueue. Be sure you're ready to get error-responses as well as real responses or confirmations (Twisted's deferred s are great at organizing this kind of structured response, BTW!). 
+
+ You can also use Queue to "park" instances of resources which can be used by any one thread but never be shared among multiple threads at one time (DB connections with some DBAPI compoents, cursors with others, etc) -- this lets you relax the dedicated-thread requirement in favor of more pooling (a pool thread that gets from the shared queue a request needing a queueable resource will get that resource from the apppropriate queue, waiting if necessary, etc etc). 
+
+ Twisted is actually a good way to organize this minuet (or square dance as the case may be), not just thanks to deferreds but because of its sound, solid, highly scalable base architecture: you may arrange things to use threads or subprocesses only when truly warranted, while doing most things normally considered thread-worthy in a single event-driven thread. 
+
+ But, I realize Twisted is not for everybody -- the "dedicate or pool resources, use Queue up the wazoo, never do anything needing a Lock or, Guido forbid, any synchronization procedure even more advanced, such as semaphore or condition" approach can still be used even if you just can't wrap your head around async event-driven methodologies, and will still deliver more reliability and performance than any other widely-applicable threading approach I've ever stumbled upon. 
+ #1 In order of complexity: 
+
+ 
+ Use the threading module . Pros: It's really easy to run any function (any callable in fact) in its own thread. Sharing data is if not easy (locks are never easy :), at least simple. Cons: As mentioned by Juergen Python threads cannot actually concurrently access state in the interpreter (there's one big lock, the infamous Global Interpreter Lock .) What that means in practice is that threads are useful for I/O bound tasks (networking, writing to disk, and so on), but not at all useful for doing concurrent computation. 
+ Use the multiprocessing module. In the simple use case this looks exactly like using threading except each task is run in its own process not its own thread. (Almost literally: If you take Eli's example , and replace threading with multiprocessing , Thread , with Process , and Queue (the module) with multiprocessing.Queue , it should run just fine.) Pros: Actual concurrency for all tasks (no Global Interpreter Lock), scales to multiple processors, can even scale to multiple machines . Cons: Processes are slower than threads. Data sharing between processes is trickier than with threads. Memory is not implicitly shared. You either have to explicitly share it or you have to pickle variables and send them back and forth. This is safer, but harder. (If it matters increasingly the Python developers seem to be pushing people in this direction.) 
+ Use an event model, such as Twisted . Pros: You get extremely fine control over priority, over what executes when. Cons: Even with a good library, asynchronous programming is usually harder than threaded programming, hard both in terms of understanding what's supposed to happen and in terms of debugging what actually is happening. 
+ 
+
+ In all cases I'm assuming you already understand many of the issues involved with multitasking, specifically the tricky issue of how to share data between tasks. If for some reason you don't know when and how to use locks and conditions you have to start with those. Multitasking code is full of subtleties and gotchas, and it's really best to have a good understanding of concepts before you start. 
+ #2 It depends on what you're trying to do, but I'm partial to just using the threading module in the standard library because it makes it really easy to take any function and just run it in a separate thread. 
+
+ from threading import Thread
+
+def f():
+ ...
+
+def g(arg1, arg2, arg3=None):
+ ....
+
+Thread(target=f).start()
+Thread(target=g, args=[5, 6], kwargs={"arg3": 12}).start()
+ 
+
+ And so on. I often have a producer/consumer setup using a synchronized queue provided by the Queue module 
+
+ from Queue import Queue
+from threading import Thread
+
+q = Queue()
+def consumer():
+ while True:
+  print sum(q.get())
+
+def producer(data_source):
+ for line in data_source:
+  q.put( map(int, line.split()) )
+
+Thread(target=producer, args=[SOME_INPUT_FILE_OR_SOMETHING]).start()
+for i in range(10):
+ Thread(target=consumer).start()
+ 
+ #3 Kamaelia is a python framework for building applications with lots of communicating processes. 
+
+ 
+  Kamaelia - Concurrency made useful, fun 
+ 
+ In Kamaelia you build systems from simple components that talk to each other . This speeds development, massively aids maintenance and also means you build naturally concurrent software . It's intended to be accessible by any developer, including novices. It also makes it fun :) 
+ 
+ What sort of systems? Network servers, clients, desktop applications, pygame based games, transcode systems and pipelines, digital TV systems, spam eradicators, teaching tools, and a fair amount more :) 
+ 
+
+Here's a video from Pycon 2009. It starts by comparing Kamaelia to Twisted and Parallel Python and then gives a hands on demonstration of Kamaelia.
+
+ Easy Concurrency with Kamaelia - Part 1 (59:08) 
+ Easy Concurrency with Kamaelia - Part 2 (18:15) 
+ #4 Regarding Kamaelia, the answer above doesn't really cover the benefit here. Kamaelia's approach provides a unified interface, which is pragmatic not perfect, for dealing with threads, generators &amp; processes in a single system for concurrency. 
+
+ Fundamentally it provides a metaphor of a running thing which has inboxes, and outboxes. You send messages to outboxes, and when wired together, messages flow from outboxes to inboxes. This metaphor/API remains the same whether you're using generators, threads or processes, or speaking to other systems. 
+
+ The "not perfect" part is due to syntactic sugar not being added as yet for inboxes and outboxes (though this is under discussion) - there is a focus on safety/usability in the system. 
+
+ Taking the producer consumer example using bare threading above, this becomes this in Kamaelia: 
+
+ Pipeline(Producer(), Consumer() )
+ 
+
+ In this example it doesn't matter if these are threaded components or otherwise, the only difference is between them from a usage perspective is the baseclass for the component. Generator components communicate using lists, threaded components using Queue.Queues and process based using os.pipes. 
+
+ The reason behind this approach though is to make it harder to make hard to debug bugs. In threading - or any shared memory concurrency you have, the number one problem you face is accidentally broken shared data updates. By using message passing you eliminate one class of bugs. 
+
+ If you use bare threading and locks everywhere you're generally working on the assumption that when you write code that you won't make any mistakes. Whilst we all aspire to that, it's very rare that will happen. By wrapping up the locking behaviour in one place you simplify where things can go wrong. (Context handlers help, but don't help with accidental updates outside the context handler) 
+
+ Obviously not every piece of code can be written as message passing and shared style which is why Kamaelia also has a simple software transactional memory (STM), which is a really neat idea with a nasty name - it's more like version control for variables - ie check out some variables, update them and commit back. If you get a clash you rinse and repeat. 
+
+ Relevant links: 
+
+ 
+ Europython 09 tutorial 
+ Monthly releases 
+ Mailing list 
+ Examples 
+ Example Apps 
+ Reusable components (generator &amp; thread) 
+ 
+
+ Anyway, I hope that's a useful answer. FWIW, the core reason behind Kamaelia's setup is to make concurrency safer &amp; easier to use in python systems, without the tail wagging the dog. (ie the big bucket of components 
+
+ I can understand why the other Kamaelia answer was modded down, since even to me it looks more like an ad than an answer. As the author of Kamaelia it's nice to see enthusiasm though I hope this contains a bit more relevant content :-) 
+
+ And that's my way of saying, please take the caveat that this answer is by definition biased, but for me, Kamaelia's aim is to try and wrap what is IMO best practice. I'd suggest trying a few systems out, and seeing which works for you. (also if this is inappropriate for stack overflow, sorry - I'm new to this forum :-) 
+ #5 I would use the Microthreads (Tasklets) of Stackless Python, if I had to use threads at all. 
+
+ A whole online game (massivly multiplayer) is build around Stackless and its multithreading principle -- since the original is just to slow for the massivly multiplayer property of the game. 
+
+ Threads in CPython are widely discouraged. One reason is the GIL -- a global interpreter lock -- that serializes threading for many parts of the execution. My experiance is, that it is really difficult to create fast applications this way. My example codings where all slower with threading -- with one core (but many waits for input should have made some performance boosts possible). 
+
+ With CPython, rather use seperate processes if possible. 
+ #6 If you really want to get your hands dirty, you can try using generators to fake coroutines . It probably isn't the most efficient in terms of work involved, but coroutines do offer you very fine control of co-operative multitasking rather than pre-emptive multitasking you'll find elsewhere. 
+
+ One advantage you'll find is that by and large, you will not need locks or mutexes when using co-operative multitasking, but the more important advantage for me was the nearly-zero switching speed between "threads". Of course, Stackless Python is said to be very good for that as well; and then there's Erlang, if it doesn't have to be Python. 
+
+ Probably the biggest disadvantage in co-operative multitasking is the general lack of workaround for blocking I/O. And in the faked coroutines, you'll also encounter the issue that you can't switch "threads" from anything but the top level of the stack within a thread. 
+
+ After you've made an even slightly complex application with fake coroutines, you'll really begin to appreciate the work that goes into process scheduling at the OS level. 
+ #7 there is no "best approach" to concurrency. Which approach you try depends on many factors. Are you i/o blocked a lot (threading)? Are you trying to spread the load across multiple processor cores (multiprocessing)? etc etc...

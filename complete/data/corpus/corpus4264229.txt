@@ -1,0 +1,192 @@
+Question (ID-4264229): No speed gains from Cython I am trying to define a function that contains an inner loop for simulating an integral. The problem is speed. Evaluating the function once can take up to 30 seconds on my machine. Since my ultimate goal is to minimize this function, some extra speed would be nice. As such, I have tried to get Cython to work for me, but I must be making a severe mistake (likely many of them!). Following the Cython documentation, I have tried to type my variables. After doing so, the code is just as slow as pure Python. This seems strange. Here is my code: 
+
+ import numpy as np 
+cimport cython
+cimport numpy as np
+import minuit
+
+data = np.genfromtxt('q6data.csv', usecols = np.arange(1, 24, 1), delimiter = ',') 
+
+cdef int ns = 1000     # Number of simulation draws
+cdef int K  = 5     # Number of observed characteristics, including   constant
+cdef int J  = len(data[:,1])  # Number of products, including outside
+cdef double tol = 0.0001   # Inner GMM loop tolerance
+nu = np.random.normal(0, 1, (6, ns)) # ns random deviates
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+
+
+def S(np.ndarray[double, ndim=1] delta, double s1, double s2, double s3, double s4, double s5, double a):
+ """Computes the simulated integrals, one for each good.
+ Parameters: delta is an array of length J containing mean product specific utility levels
+ Returns: Numpy array with length J."""
+ cdef np.ndarray[double, ndim=2] mu_ij = np.dot((data[:,2:7]*np.array([s1, s2, s3, s4, s5])), nu[1:K+1,:])
+ cdef np.ndarray[double, ndim=2] mu_y = a * np.log(np.exp(data[:,21].reshape(J,1) + data[:,22].reshape(J,1)*nu[0,:].reshape(1, ns)) - data[:,7].reshape(J,1))
+ cdef np.ndarray[double, ndim=2] V = delta.reshape(J,1) + mu_ij + mu_y
+ cdef np.ndarray[double, ndim=2] exp_vi = np.exp(V)
+ cdef np.ndarray[double, ndim=2] P_i = (1.0 / np.sum(exp_vi[np.where(data[:,1] == 71)], 0)) * exp_vi[np.where(data[:,1] == 71)] 
+ cdef int yrs = 19
+ cdef int yr
+ for yr in xrange(yrs):
+  P_yr = (1.0 / np.sum(exp_vi[np.where(data[:,1]== (yr + 72))], 0)) * exp_vi[np.where(data[:,1] == (yr + 72))]
+  P_i = np.concatenate((P_i, P_yr)) 
+ cdef np.ndarray[double, ndim=1] S = np.zeros(dtype = "d", shape = J)
+ cdef int j
+ for j in xrange(ns):
+  S += P_i[:,j]
+ return (1.0 / ns) * S
+
+def d_infty(np.ndarray[double, ndim=1] x, np.ndarray[double, ndim=1] y):
+ """Sup norm."""
+ return np.max(np.abs(x - y)) 
+
+def T(np.ndarray[double, ndim=1] delta_exp, double s1, double s2, double s3, double s4, double s5, double a):
+ """The contraction operator. This function takes the parameters and the exponential
+ of the starting value of delta and returns the fixed point.""" 
+ cdef int iter = 0
+ cdef int maxiter = 200
+ cdef int i
+ for i in xrange(maxiter): 
+  delta1_exp = delta_exp * (data[:, 8] / S(np.log(delta_exp), s1, s2, s3, s4, s5, a))     
+  print i
+  if d_infty(delta_exp, delta1_exp) &lt; tol:          
+   break
+  delta_exp = delta1_exp
+ return np.log(delta1_exp)
+
+
+def Q(double s1, double s2, double s3, double s4, double s5, double a):
+ """GMM objective function.""" 
+ cdef np.ndarray[double, ndim=1] delta0_exp = np.exp(data[:,10])              
+ cdef np.ndarray[double, ndim=1] delta1 = T(delta0_exp, s1, s2, s3, s4, s5, a)
+ delta1[np.where(data[:,10]==0)] = np.zeros(len(np.where(data[:,10]==0)))   
+ cdef np.ndarray[double, ndim=1] xi = delta1 - (np.dot(data[:,2:7], np.linalg.lstsq(data[:,2:7], delta1)[0])) 
+ cdef np.ndarray[double, ndim=2] g_J = xi.reshape(J,1) * data[:,11:21]
+ cdef np.ndarray[double, ndim=1] G_J = (1.0 / J) * np.sum(g_J, 0) 
+ return np.sqrt(np.dot(G_J, G_J))
+ 
+
+ I have profiled the code, and it seems to be the function S, the integral simulator, that is killing performance. Anyways, I would have expected at least some speed gains from typing my variables. Since it produced no gains, I am led to believe that I am making some fundamental mistakes. Does anybody see a glaring error in the Cython code that could lead to this result? Any tips would be great... this has kept me up late for too many nights. 
+
+ Oh, and since I am very new to programming there is surely a lot of bad style and a lot of things slowing the code down. If you have the time, feel free to set me straight on these points as well. 
+ Answers (Total-7): #0 Cython doesn't offer automatic performance gains, you have to know its internals and check the generated C code. 
+
+ In particular if you want to improve loops performances, you have to avoid calling Python functions in them, which you happen to do a lot in this case (all the np. calls are Python calls, slicing, and probably other things). 
+
+ See this page for general guidelines about performance optimization with Cython (the -a switch really is handy when optimizing) and this one for specificities when optimizing numpy code. 
+ #1 Cython can produce an html file to help with this: 
+
+ cython -a MODULE.py
+ 
+
+ This shows each line of source code colored white through various shades of yellow. The darker the yellow color, the more dynamic Python behaviour is still being performed on that line. For each line that contains some yellow, you need to add more static typing declarations. 
+
+ When I'm doing this, I like to split parts of my source code that I'm having trouble with onto many separate lines, one for each expression or operator, to get the most granular view. 
+
+ Without this, it's easy to overlook some static type declarations of variables, function calls or operators. (e.g. the indexing operator x[y] is still a fully-dynamic Python operation unless you declare otherwise) 
+ #2 You could definitely speed up your code by using more of Numpy's capabilities. 
+
+ For instance: 
+
+ cdef np.ndarray[double, ndim=1] S = np.zeros(dtype = "d", shape = J)
+cdef int j
+for j in xrange(ns):
+ S += P_i[:,j]
+ 
+
+ would be much faster and legible as 
+
+ S = P_i.sum(axis=1)
+ 
+
+ You also repeat some calculations, which thus take twice more time than necessary. For instance 
+
+ np.where(data[:,1]== (yr + 72))
+ 
+
+ could be calculated only once and stored in a variable that you could reuse. 
+
+ You also perform a lot of reshaping and slicing: it could help to have your variables be in a simpler format from the beginning on. If possible, your code would be much clearer, and optimizations could be much more obvious. 
+ #3 Will a profiler help you figure out which part is slow? I like to run programs using the standard library profiler: 
+
+ python -O -m cProfile -o profile.out MYAPP.py
+ 
+
+ and then view the output from that in the 'RunSnakeRun' GUI: 
+
+ runsnake profile.out
+ 
+
+ A RunSnakeRun can be installed from here:
+ http://www.vrplumber.com/programming/runsnakerun/ 
+
+ 
+ #4 Taking the advice given here, I have spent more time profiling the above code. To hopefully clean things up a bit I defined 
+
+ I have profiled the code a bit more and have a better idea of which pieces are the slowest. I additionally defined 
+
+ X = data[:, 2:7]
+m_y = data[:, 21].reshape(J,1)
+sigma_y = 1.0
+price = data[:, 7].reshape(J, 1)
+shares_data = data[:,8]
+ 
+
+ Then it is the following lines that are eating up most of the total time. 
+
+ mu_ij = np.dot((X*np.array([s1, s2, s3, s4, s5])), nu[1:K+1,:])
+mu_y = a * np.log(np.exp(m_y + sigma_y*nu[0,:].reshape(1,ns)) - price)
+V = delta.reshape(J,1) + mu_ij + mu_y
+exp_vi = np.exp(V)
+P_i = (1.0 / np.sum(exp_vi[np.where(data[:,1]==71)], 0)) * exp_vi[np.where(data[:,1]==71)] 
+for yr in xarange(19):
+ P_yr = (1.0 / np.sum(exp_vi[np.where(data[:,1]==yr)], 0)) * exp_vi[np.where(data[:,1]==yr)]
+P_i = np.concatenate((P_i, P_yr))
+ 
+
+ I get the impression this is an overly cumbersome way to achieve my goal. I was hoping somebody might be able to provide some advice on how to speed these lines up. Maybe there are Numpy capabilities I am missing? If this problem is not sufficiently well specified for you to be helpful, I would be happy to provide more details on the context of my problem. Thanks! 
+ #5 Splitting data only , after your comment on 28 Nov: 
+
+ import sys
+import time
+import numpy as np
+
+def splitdata( data, n, start=1971 ):
+ """ split data into n pieces, where col 1 == start .. start + n """
+  # not fancy, fast enough for small n
+ split = n * [None]
+ for j in range(n):
+  split[j] = data[ data[:,1] == start + j ]
+ return split # [ arrays: col1 0, col1 1 ... ]
+
+#...........................................................................
+N = 2237
+ncol = 21
+start = 1971
+n = 20
+seed = 1
+exec "\n".join( sys.argv[1:] ) # run this.py N= ...
+np.set_printoptions( 2, threshold=100, suppress=True ) # .2f
+np.random.seed(seed)
+
+print "N=%d ncol=%d n=%d" % (N, ncol, n)
+data = np.random.uniform( start, start + n, (N,ncol) )
+data[:,1] = data[:,1].round()
+t0 = time.time()
+
+split = splitdata( data, n, start ) # n pieces
+
+print "time: %.0f us splitdata" % ((time.time() - t0) * 1e6)
+for y, yeardata in enumerate(split):
+ print "%d %d %g" % (start + y, len(yeardata), yeardata[:,0].sum())
+ 
+
+ --> 
+
+ time: 27632 us splitdata # old mac ppc
+1971 69 136638
+1972 138 273292
+...
+ 
+ #6 The "fundamental mistake" is that you expect good performance in long loops from Python. It's an interpreted language, and switching between implementations and ctyping does nothing to this. There are a few numeric Python libraries for fast computing, mosly written in C. For example, if you already use numpy for arrays, why not you go further and use scipy for your advanced math? It will increase both readability and speed.

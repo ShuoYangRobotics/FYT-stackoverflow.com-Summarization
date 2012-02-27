@@ -1,0 +1,99 @@
+Question (ID-2580497): Database on the fly with scripting languages I have a set of .csv files that I want to process. It would be far easier to process it with SQL queries. I wonder if there is some way to load a .csv file and use SQL language to look into it with a scripting language like python or ruby. Loading it with something similar to ActiveRecord would be awesome. 
+
+ The problem is that I don't want to have to run a database somewhere prior to running my script. I souldn't have additionnal installations needed outside of the scripting language and some modules. 
+
+ My question is which language and what modules should I use for this task. I looked around and can't find anything that suits my need. Is it even possible? 
+ Answers (Total-7): #0 There's sqlite3 , included into python. With it you can create a database ( on memory ) and add rows to it, and perform SQL queries. 
+
+ If you want neat ActiveRecord-like functionality you should add an external ORM, like sqlalchemy . That's a separate download though 
+
+ Quick example using sqlalchemy: 
+
+ from sqlalchemy import create_engine, Column, String, Integer, MetaData, Table
+from sqlalchemy.orm import mapper, create_session
+import csv
+CSV_FILE = 'foo.csv'
+engine = create_engine('sqlite://') # memory-only database
+
+table = None
+metadata = MetaData(bind=engine)
+with open(CSV_FILE) as f:
+ # assume first line is header
+ cf = csv.DictReader(f, delimiter=',')
+ for row in cf:
+  if table is None:
+   # create the table
+   table = Table('foo', metadata, 
+    Column('id', Integer, primary_key=True),
+    *(Column(rowname, String()) for rowname in row.keys()))
+   table.create()
+  # insert data into the table
+  table.insert().values(**row).execute()
+
+class CsvTable(object): pass
+mapper(CsvTable, table)
+session = create_session(bind=engine, autocommit=False, autoflush=True)
+ 
+
+ Now you can query the database, filtering by any field, etc. 
+
+ Suppose you run the code above on this csv: 
+
+ name,age,nickname
+nosklo,32,nosklo
+Afila Tun,32,afilatun
+Foo Bar,33,baz
+ 
+
+ That will create and populate a table in memory with fields name , age , nickname . You can then query the table: 
+
+ for r in session.query(CsvTable).filter(CsvTable.age == '32'):
+ print r.name, r.age, r.nickname
+ 
+
+ That will automatically create and run a SELECT query and return the correct rows. 
+
+ Another advantage of using sqlalchemy is that, if you decide to use another, more powerful database in the future, you can do so pratically without changing the code. 
+ #1 Use a DB in a library like SQLite . 
+There are Python and Ruby versions . 
+
+ Load your CSV into table, there might be modules/libraries to help you here too. Then SQL away. 
+ #2 Looked at Perl and and Text::CSV and DBI? There are many modules on CPAN to do exactly this. Here is an example (from HERE ): 
+
+ #!/usr/bin/perl
+use strict;
+use warnings;
+use DBI;
+
+# Connect to the database, (the directory containing our csv file(s))
+
+my $dbh = DBI-&gt;connect("DBI:CSV:f_dir=.;csv_eol=\n;");
+
+# Associate our csv file with the table name 'prospects'
+
+$dbh-&gt;{'csv_tables'}-&gt;{'prospects'} = { 'file' =&gt; 'prospects.csv'};
+
+# Output the name and contact field from each row
+
+my $sth = $dbh-&gt;prepare("SELECT * FROM prospects WHERE name LIKE 'G%'");
+$sth-&gt;execute();
+while (my $row = $sth-&gt;fetchrow_hashref) {
+  print("name = ", $row-&gt;{'Name'}, " contact = ", $row-&gt;{'Contact'}. "\n");
+}
+$sth-&gt;finish();
+
+name = Glenhuntly Pharmacy contact = Paul
+name = Gilmour's Shoes contact = Ringo
+ 
+
+ Just type perldoc DBI and perldoc Text::CSV at the command prompt for more. 
+ #3 CSV files are not databases--they have no indices--and any SQL simulation you imposed upon them would amount to little more than searching through the entire thing over and over again. 
+ #4 You could use either scripting language to parse the CSV file and store the data into SQLite , which just uses a single file for storage. From there you have it in a database and can run queries against it. 
+
+ Alternatively, on windows you can setup an ODBC data source as a CSV file. But it may be difficult to automate this. 
+ #5 PHP FlatfileDB available here is a very good option if you are building a web app 
+ #6 I used nosklo's solution (thanks!) but I already had a primary key (passed in as pk_col) within the column line (first line of csv). So I thought I'd share my modification. I used a ternary. 
+
+ table = Table(tablename, metadata,
+ *((Column(pk_col, Integer, primary_key=True)) if rowname == pk_col else (Column(rowname, String())) for rowname in row.keys()))
+table.create()

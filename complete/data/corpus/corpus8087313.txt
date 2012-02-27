@@ -1,0 +1,216 @@
+Question (ID-8087313): How to randomly delete a number of lines from a big file? I have a big text file of 13 GB with 158,609,739 lines and I want to randomly select 155,000,000 lines. 
+
+ I have tried to scramble the file and then cut the 155000000 first lines, but it's seem that my ram memory (16GB) isn't enough big to do this. The pipelines i have tried are: 
+
+ shuf file | head -n 155000000
+sort -R file | head -n 155000000
+ 
+
+ Now instead of selecting lines, I think is more memory efficient delete 3,609,739 random lines from the file to get a final file of 155000000 lines. 
+ Answers (Total-7): #0 As you copy each line of the file to the output, assess its probability that it should be deleted. The first line should have a 3,609,739/158,609,739 chance of being deleted. If you generate a random number between 0 and 1 and that number is less than that ratio, don't copy it to the output. Now the odds for the second line are 3,609,738/158,609,738; if that line is not deleted, the odds for the third line are 3,609,738/158,609,737. Repeat until done. 
+
+ Because the odds change with each line processed, this algorithm guarantees the exact line count. Once you've deleted 3,609,739 the odds go to zero; if at any time you would need to delete every remaining line in the file, the odds go to one. 
+ #1 You could always pre-generate which line numbers (a list of 3,609,739 random numbers selected without replacement) you plan on deleting, then just iterate through the file and copy to another, skipping lines as necessary. As long as you have space for a new file this would work. 
+
+ You could select the random numbers with random.sample 
+E.g., 
+
+ random.sample(xrange(158609739), 3609739)
+ 
+ #2 I believe you're looking for "Algorithm S" from section 3.4.2 of Knuth (D. E. Knuth, The Art of Computer Programming. Volume 2: Seminumerical Algorithms, second edition. Addison-Wesley, 1981) . 
+
+ You can see several implementations at http://rosettacode.org/wiki/Knuth%27s_algorithm_S 
+
+ The Perlmonks list has some Perl implementations of Algorithm S and Algorithm R that might also prove useful. 
+
+ These algorithms rely on there being a meaningful interpretation of floating point numbers like 3609739/158609739, 3609738/158609738, etc. which might not have sufficient resolution with a standard Float datatype, unless the Float datatype is implemented using numbers of double precision or larger. 
+ #3 Here's a possible solution using Python: 
+
+ import random
+
+skipping = random.sample(range(158609739), 3609739)
+
+input = open(input)
+output = open(output, 'w')
+
+for i, line in enumerate(input):
+ if i in skipping:
+  continue
+ output.write(line)
+
+input.close()
+output.close()
+ 
+
+ Here's another using Mark's method: 
+
+ import random
+
+lines_in_file = 158609739
+lines_left_in_file = lines_in_file
+lines_to_delete = lines_in_file - 155000000
+
+input = open(input)
+output = open(output, 'w')
+
+try:
+ for line in input:
+  current_probability = lines_to_delete / lines_left_in_file
+  lines_left_in_file -= 1
+  if random.random &lt; current_probability:
+   lines_to_delete -= 1
+   continue
+  output.write(line)
+except ZeroDivisionError:
+ print("More than %d lines in the file" % lines_in_file)
+finally:
+ input.close()
+ output.close()
+ 
+ #4 Proof of Mark Ransom's Answer 
+
+ Let's use numbers easier to think about (at least for me!): 
+
+ 
+ 10 items 
+ delete 3 of them 
+ 
+
+ First time through the loop we will assume that the first three items get deleted -- here's what the probabilities look like: 
+
+ 
+ first item: 3 / 10 = 30% 
+ second item: 2 / 9 = 22% 
+ third item: 1 / 8 = 12% 
+ fourth item: 0 / 7 = 0 % 
+ fifth item: 0 / 6 = 0 % 
+ sixth item: 0 / 5 = 0 % 
+ seventh item: 0 / 4 = 0 % 
+ eighth item: 0 / 3 = 0 % 
+ ninth item: 0 / 2 = 0 % 
+ tenth item: 0 / 1 = 0 % 
+ 
+
+ As you can see, once it hits zero, it stays at zero. But what if nothing is getting deleted? 
+
+ 
+ first item: 3 / 10 = 30% 
+ second item: 3 / 9 = 33% 
+ third item: 3 / 8 = 38% 
+ fourth item: 3 / 7 = 43% 
+ fifth item: 3 / 6 = 50% 
+ sixth item: 3 / 5 = 60% 
+ seventh item: 3 / 4 = 75% 
+ eighth item: 3 / 3 = 100% 
+ ninth item: 2 / 2 = 100% 
+ tenth item: 1 / 1 = 100% 
+ 
+
+ So even though the probability varies per line, overall you get the results you are looking for. I went a step further and coded a test in Python for one million iterations as a final proof to myself -- remove seven items from a list of 100: 
+
+ # python 3.2
+from __future__ import division
+from stats import mean # http://pypi.python.org/pypi/stats
+import random
+
+counts = dict()
+for i in range(100):
+ counts[i] = 0
+
+removed_failed = 0
+
+for _ in range(1000000):
+ to_remove = 7
+ from_list = list(range(100))
+ removed = 0
+ while from_list:
+  current = from_list.pop()
+  probability = to_remove / (len(from_list) + 1)
+  if random.random() &lt; probability:
+   removed += 1
+   to_remove -= 1
+   counts[current] += 1
+ if removed != 7:
+  removed_failed += 1
+
+print(counts[0], counts[1], counts[2], '...',
+  counts[49], counts[50], counts[51], '...',
+  counts[97], counts[98], counts[99])
+print("remove failed: ", removed_failed)
+print("min: ", min(counts.values()))
+print("max: ", max(counts.values()))
+print("mean: ", mean(counts.values()))
+ 
+
+ and here's the results from one of the several times I ran it (they were all similar): 
+
+ 70125 69667 70081 ... 70038 70085 70121 ... 70047 70040 70170
+remove failed: 0
+min: 69332
+max: 70599
+mean: 70000.0
+ 
+
+ A final note: Python's random.random() is [0.0, 1.0) (doesn't include 1.0 as a possibility). 
+ #5 I wrote this code before seeing that Darren Yin has expressed its principle. 
+
+ I've modified my code to take the use of name skipping (I didn't dare to choose kangaroo ...) and of keyword continue from Ethan Furman whose code's principle is the same too. 
+
+ I defined default arguments for the parameters of the function in order that the function can be used several times without having to make re-assignement at each call. 
+
+ import random
+import os.path
+
+def spurt(ff,skipping):
+ for i,line in enumerate(ff):
+  if i in skipping:
+   print 'line %d excluded : %r' % (i,line)
+   continue
+  yield line
+
+def randomly_reduce_file(filepath,nk = None,
+       d = {0:'st',1:'nd',2:'rd',3:'th'},spurt = spurt,
+       sample = random.sample,splitext = os.path.splitext):
+
+ # count of the lines of the original file
+ with open(filepath) as f: nl = sum(1 for _ in f)
+
+ # asking for the number of lines to keep, if not given as argument
+ if nk is None:
+  nk = int(raw_input(' The file has %d lines.'
+       ' How many of them do you '
+       'want to randomly keep ? : ' % nl))
+
+ # transfer of the lines to keep,
+ # from one file to another file with different name
+ if nk&lt;nl:
+  with open(filepath,'rb') as f,\
+    open('COPY'.join(splitext(filepath)),'wb') as g:
+   g.writelines( spurt(f,sample(xrange(0,nl),nl-nk) ) )
+   # sample(xrange(0,nl),nl-nk) is the list
+   # of the counting numbers of the lines to be excluded 
+ else:
+  print ' %d is %s than the number of lines (%d) in the file\n'\
+    ' no operation has been performed'\
+    % (nk,'the same' if nk==nl else 'greater',nl)
+ 
+ #6 With the $RANDOM variable you can get a random number between 0 and 32,767. 
+
+ With this, you could read in each line, and see if $RANDOM is less than 155,000,000 / 158,609,739 * 32,767 (which is 32,021), and if so, let the line through. 
+
+ Of course, this wouldn't give you exactly 150,000,000 lines, but pretty close to it depending on the normality of the random number generator. 
+
+ EDIT: Here is some code to get you started: 
+
+ #!/bin/bash
+while read line; do
+ if (( $RANDOM &lt; 32021 ))
+ then
+ echo $line
+ fi
+done
+ 
+
+ Call it like so: 
+
+ thatScript.sh &lt;inFile.txt &gt;outFile.txt

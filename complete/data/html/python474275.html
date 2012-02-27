@@ -1,0 +1,116 @@
+<h3>Question (ID-474275):</h3><h2>Partial evaluation for parsing</h2><p>I'm working on a macro system for Python (<a href="http://stackoverflow.com/questions/454648/pythonic-macro-syntax">as discussed here</a>) and one of the things I've been considering are units of measure.  Although units of measure could be implemented without macros or via static macros (e.g. defining all your units ahead of time), I'm toying around with the idea of allowing syntax to be extended dynamically at runtime.</p>
+
+<p>To do this, I'm considering using a sort of partial evaluation on the code at compile-time.  If parsing fails for a given expression, due to a macro for its syntax not being available, the compiler halts evaluation of the function/block and generates the code it already has with a stub where the unknown expression is.  When this stub is hit at runtime, the function is recompiled against the current macro set.  If this compilation fails, a parse error would be thrown because execution can't continue.  If the compilation succeeds, the new function replaces the old one and execution continues.</p>
+
+<p>The biggest issue I see is that you can't find parse errors until the affected code is run.  However, this wouldn't affect many cases, e.g. group operators like [], {}, (), and `` still need to be paired (requirement of my tokenizer/list parser), and top-level syntax like classes and functions wouldn't be affected since their "runtime" is really load time, where the syntax is evaluated and their objects are generated.</p>
+
+<p>Aside from the implementation difficulty and the problem I described above, what problems are there with this idea?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Here are a few possible problems:</p>
+
+<ul>
+<li>You may find it difficult to provide the user with helpful error messages in case of a problem.  This seems likely, as any compilation-time syntax error could be just a syntax extension.</li>
+<li>Performance hit.</li>
+</ul>
+
+<p>I was trying to find some discussion of the pluses, minuses, and/or implementation of dynamic parsing in Perl 6, but I couldn't find anything appropriate.  However, you may find this quote from Nicklaus Wirth (designer of Pascal and other languages) interesting:</p>
+
+<blockquote>
+  <p>The phantasies of computer scientists
+  in the 1960s knew no bounds. Spurned
+  by the success of automatic syntax
+  analysis and parser generation, some
+  proposed the idea of the flexible, or
+  at least extensible language. The
+  notion was that a program would be
+  preceded by syntactic rules which
+  would then guide the general parser
+  while parsing the subsequent program.
+  A step further: The syntax rules would
+  not only precede the program, but they
+  could be interspersed anywhere
+  throughout the text. For example, if
+  someone wished to use a particularly
+  fancy private form of for statement,
+  he could do so elegantly, even
+  specifying different variants for the
+  same concept in different sections of
+  the same program. The concept that
+  languages serve to communicate between
+  humans had been completely blended
+  out, as apparently everyone could now
+  define his own language on the fly.
+  The high hopes, however, were soon
+  damped by the difficulties encountered
+  when trying to specify, what these
+  private constructions should mean. As
+  a consequence, the intreaguing idea of
+  extensible languages faded away rather
+  quickly.</p>
+</blockquote>
+
+<p><em>Edit</em>: Here's Perl 6's <a href="http://svn.pugscode.org/pugs/docs/Perl6/Spec/S06-routines.pod" rel="nofollow">Synopsis 6: Subroutines</a>, unfortunately in markup form because I couldn't find an updated, formatted version; search within for "macro".  Unfortunately, it's not <em>too</em> interesting, but you may find some things relevant, like Perl 6's one-pass parsing rule, or its syntax for abstract syntax trees.  The approach Perl 6 takes is that a macro is a function that executes immediately after its arguments are parsed and returns either an AST or a string; Perl 6 continues parsing as if the source actually contained the return value.  There is mention of generation of error messages, but they make it seem like if macros return ASTs, you can do alright.</p>
+<br /><b>#1</b><br /><p>Pushing this one step further, you could do "lazy" parsing and always only parse enough to evaluate the next statement. Like some kind of just-in-time parser. Then syntax errors could become normal runtime errors that just raise a normal Exception that could be handled by surrounding code:</p>
+
+<pre><code>def fun():
+   not implemented yet
+
+try:
+  fun()
+except:
+  pass
+</code></pre>
+
+<p>That would be an interesting effect, but if it's useful or desirable is a different question. Generally it's good to know about errors even if you don't call the code at the moment.</p>
+
+<p>Macros would not be evaluated until control reaches them and naturally the parser would already know all previous definitions. Also the macro definition could maybe even use variables and data that the program has calculated so far (like adding some syntax for all elements in a previously calculated list). But this is probably a bad idea to start writing self-modifying programs for things that could usually be done as well directly in the language. This could get confusing...</p>
+
+<p>In any case you should make sure to parse code only once, and if it is executed a second time use the already parsed expression, so that it doesn't lead to performance problems.</p>
+<br /><b>#2</b><br /><p>Another thing I've considered is making this the default behavior across the board, but allow languages (meaning a set of macros to parse a given language) to throw a parse error at compile-time.  Python 2.5 in my system, for example, would do this.</p>
+
+<p>Instead of the stub idea, simply recompile functions that couldn't be handled completely at compile-time when they're executed.  This will also make self-modifying code easier, as you can modify the code and recompile it at runtime.</p>
+<br /><b>#3</b><br /><p>Here are some ideas from my master's thesis, which may or may not be helpful.
+The thesis was about robust parsing of natural language.
+The main idea: given a context-free grammar for a language, try to parse a given 
+text (or, in your case, a python program). If parsing failed, you will have a partially generated parse tree. Use the tree structure to suggest new grammar rules that will better cover the parsed text.
+I could send you my thesis, but unless you read Hebrew this will probably not be useful.</p>
+
+<p>In a nutshell:
+I used a <a href="http://en.wikipedia.org/wiki/Bottom-up_parser" rel="nofollow">bottom-up</a> <a href="http://en.wikipedia.org/wiki/Chart_parser" rel="nofollow">chart parser</a>. This type of parser generates edges for productions from the grammar. Each edge is marked with the part of the tree that was consumed. Each edge gets a score according to how close it was to full coverage, for example: </p>
+
+<pre><code>S -&gt; NP . VP
+</code></pre>
+
+<p>Has a score of one half (We succeeded in covering the NP but not the VP).
+The highest-scored edges suggest a new rule (such as X->NP).
+In general, a chart parser is less efficient than a common LALR or LL parser (the types usually used for programming languages) - O(n^3) instead of O(n) complexity, but then again you are trying something more complicated than just parsing an existing language.
+If you can do something with the idea, I can send you further details.
+I believe looking at natural language parsers may give you some other ideas.</p>
+<br /><b>#4</b><br /><p>You'll probably need to delimit the bits of input text with unknown syntax, so that the rest of the syntax tree can be resolved, apart from some character sequences nodes which will be expanded later. Depending on your top level syntax, that may be fine. </p>
+
+<p>You may find that the parsing algorithm and the lexer and the interface between them all need updating, which might rule out most compiler creation tools.</p>
+
+<p>(The more usual approach is to use string constants for this purpose, which can be parsed to a little interpreter at run time).</p>
+<br /><b>#5</b><br /><p>I don't think your approach would work very well. Let's take a simple example written in pseudo-code:</p>
+
+<pre><code>define some syntax M1 with definition D1
+if _whatever_:
+    define M1 to do D2
+else:
+    define M1 to do D3
+code that uses M1
+</code></pre>
+
+<p>So there is one example where, if you allow syntax redefinition at runtime, you have a problem (since by your approach the code that uses M1 would be compiled by definition D1). Note that verifying if syntax redefinition occurs is undecidable. An over-approximation could be computed by some kind of typing system or some other kind of static analysis, but Python is not well known for this :D.</p>
+
+<p>Another thing that bothers me is that your solution does not 'feel' right. I find it evil to store source code you can't parse just because you may be able to parse it at runtime.</p>
+
+<p>Another example that jumps to mind is this:</p>
+
+<pre><code>...function definition fun1 that calls fun2...
+define M1 (at runtime)
+use M1
+...function definition for fun2
+</code></pre>
+
+<p>Technically, when you use M1, you cannot parse it, so you need to keep the rest of the program (including the function definition of fun2) in source code. When you run the entire program, you'll see a call to fun2 that you cannot call, even if it's defined.</p>
+<br />

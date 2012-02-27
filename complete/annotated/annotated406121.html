@@ -1,0 +1,200 @@
+<h3>Question ( ID-406121 ) : </h3><h2>Flattening a shallow <span style="background-color:yellow;">list</span> in Python </h2><p>On a Django project , I was hoping to <span style="background-color:yellow;">flatten</span> a shallow <span style="background-color:yellow;">list</span> with a nested <span style="background-color:yellow;">list</span> comprehension , like this : </p>
+<pre><code>[image for image in menuitem.image_set.all() for menuitem in list_of_menuitems]
+</code></pre>
+<p>But I get in trouble of the NameError variety there , because the name 'menuitem ' is not defined . After googling and looking around on Stack Overflow , I got the desired <span style="background-color:yellow;">results</span> with a reduce statement : </p>
+<pre><code>reduce(list.__add__, map(lambda x: list(x), [mi.image_set.all() for mi in list_of_menuitems]))
+</code></pre>
+<p>( Note , I need that <span style="background-color:yellow;">list</span> ( <span style="background-color:yellow;">x</span> ) call there because <span style="background-color:yellow;">x</span> is a Django QuerySet object. ) </p>
+<p>But the reduce method is fairly unreadable. So my question is : </p>
+<p>Is there a simple way to <span style="background-color:yellow;">flatten</span> this <span style="background-color:yellow;">list</span> with a <span style="background-color:yellow;">list</span> comprehension , or failing that , what would you all consider to be the best way to <span style="background-color:yellow;">flatten</span> a shallow <span style="background-color:yellow;">list</span> like this , balancing performance and readability . </p>
+<p>Update : Thanks to everyone who contributed to this question. Here is a summary of what I learned. I 'm also making this a community wiki in case others want to <span style="background-color:yellow;">add</span> to or correct these observations . </p>
+<p>My original reduce statement is redundant and is better written this way : </p>
+<pre><code>>>> reduce(list.__add__, (list(mi.image_set.all()) for mi in list_of_menuitems))
+</code></pre>
+<p>This is the correct syntax for a nested <span style="background-color:yellow;">list</span> comprehension ( Brilliant summary dF ! ) : </p>
+<pre><code>>>> [image for mi in list_of_menuitems for image in mi.image_set.all()]
+</code></pre>
+<p>But neither of these methods are as efficient as using <span style="background-color:yellow;">itertools.chain</span> : </p>
+<pre><code>>>> from itertools import chain
+>>> list(chain(*[mi.image_set.all() for mi in h.get_image_menu()]))
+</code></pre>
+<p>And as @ cdleary notes , it 's probably better style to avoid * <span style="background-color:yellow;">operator</span> magic by using <span style="background-color:yellow;">chain.from_iterable</span> like so : </p>
+<pre><code>>>> chain = itertools.chain.from_iterable([[1,2],[3],[5,89],[],[6]])
+>>> print(list(chain))
+>>> [1, 2, 3, 5, 89, 6]
+</code></pre>
+<br /><h3>Answers ( Total-9 ) : </h3><b># 0 </b><br /><p>If you 're just looking to iterate over a <span style="background-color:yellow;">flattened</span> version of the data structure and do n't need an indexable sequence , consider <span style="background-color:yellow;">itertools.chain</span> and company . </p>
+<pre><code>>>> list_of_menuitems = [['image00', 'image01'], ['image10'], []]
+>>> import itertools
+>>> chain = itertools.chain(*list_of_menuitems)
+>>> print(list(chain))
+['image00', 'image01', 'image10']
+</code></pre>
+<p>It will work on anything that 's iterable , which should include Django 's iterable QuerySet s , which it appears that you 're using in the question . </p>
+<p>Edit : This is probably as good as a reduce anyway , because reduce will have the same overhead copying the items into the <span style="background-color:yellow;">list</span> that 's being extended. <span style="background-color:yellow;">chain</span> will only incur this ( same ) overhead if you run <span style="background-color:yellow;">list</span> ( <span style="background-color:yellow;">chain</span> ) at the end . </p>
+<p>Meta-Edit : Actually , it 's less overhead than the question 's proposed solution , because you throw away the temporary <span style="background-color:yellow;">lists</span> you create when you extend the original with the temporary . </p>
+<p>Edit : As J.F. Sebastian says <span style="background-color:yellow;">itertools.chain.from_iterable</span> avoids the unpacking and you should use that to avoid * magic , but the <span style="background-color:yellow;">timeit</span> app shows negligible performance difference . </p>
+<br /><b># 1 </b><br /><p>@ S.Lott : You inspired me to write a <span style="background-color:yellow;">timeit</span> app . </p>
+<p>I figured it would also vary based on the number of partitions ( number of iterators within the container <span style="background-color:yellow;">list</span> ) -- your comment did n't mention how many partitions there were of the thirty items. This plot is <span style="background-color:yellow;">flattening</span> a thousand items in every run , with varying number of partitions. The items are evenly distributed among the partitions . </p>
+<p></p>
+<p>Code ( Python 2.6 ) : </p>
+<pre><code>#!/usr/bin/env python2.6
+
+"""Usage: %prog item_count"""
+
+from __future__ import print_function
+
+import collections
+import itertools
+import operator
+from timeit import Timer
+import sys
+
+import matplotlib.pyplot as pyplot
+
+def itertools_flatten(iter_lst):
+    return list(itertools.chain(*iter_lst))
+
+def itertools_iterable_flatten(iter_iter):
+    return list(itertools.chain.from_iterable(iter_iter))
+
+def reduce_flatten(iter_lst):
+    return reduce(operator.add, map(list, iter_lst))
+
+def reduce_lambda_flatten(iter_lst):
+    return reduce(operator.add, map(lambda x: list(x), [i for i in iter_lst]))
+
+def comprehension_flatten(iter_lst):
+    return list(item for iter_ in iter_lst for item in iter_)
+
+METHODS = ['itertools', 'itertools_iterable', 'reduce', 'reduce_lambda',
+           'comprehension']
+
+def _time_test_assert(iter_lst):
+    """Make sure all methods produce an equivalent value.
+    :raise AssertionError: On any non-equivalent value."""
+    callables = (globals()[method + '_flatten'] for method in METHODS)
+    results = [callable(iter_lst) for callable in callables]
+    if not all(result == results[0] for result in results[1:]):
+        raise AssertionError
+
+def time_test(partition_count, item_count_per_partition, test_count=10000):
+    """Run flatten methods on a list of :param:`partition_count` iterables.
+    Normalize results over :param:`test_count` runs.
+    :return: Mapping from method to (normalized) microseconds per pass.
+    """
+    iter_lst = [[dict()] * item_count_per_partition] * partition_count
+    print('Partition count:    ', partition_count)
+    print('Items per partition:', item_count_per_partition)
+    _time_test_assert(iter_lst)
+    test_str = 'flatten(%r)' % iter_lst
+    result_by_method = {}
+    for method in METHODS:
+        setup_str = 'from test import %s_flatten as flatten' % method
+        t = Timer(test_str, setup_str)
+        per_pass = test_count * t.timeit(number=test_count) / test_count
+        print('%20s: %.2f usec/pass' % (method, per_pass))
+        result_by_method[method] = per_pass
+    return result_by_method
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        raise ValueError('Need a number of items to flatten')
+    item_count = int(sys.argv[1])
+    partition_counts = []
+    pass_times_by_method = collections.defaultdict(list)
+    for partition_count in xrange(1, item_count):
+        if item_count % partition_count != 0:
+            continue
+        items_per_partition = item_count / partition_count
+        result_by_method = time_test(partition_count, items_per_partition)
+        partition_counts.append(partition_count)
+        for method, result in result_by_method.iteritems():
+            pass_times_by_method[method].append(result)
+    for method, pass_times in pass_times_by_method.iteritems():
+        pyplot.plot(partition_counts, pass_times, label=method)
+    pyplot.legend()
+    pyplot.title('Flattening Comparison for %d Items' % item_count)
+    pyplot.xlabel('Number of Partitions')
+    pyplot.ylabel('Microseconds')
+    pyplot.show()
+</code></pre>
+<p>Edit : Decided to make it community wiki . </p>
+<p>Note : METHODS should probably be accumulated with a decorator , but I figure it 'd be easier for people to read this way . </p>
+<br /><b># 2 </b><br /><p>You almost have it ! The way to do nested <span style="background-color:yellow;">list</span> comprehensions is to put the for statements in the same order as they would go in regular nested for statements . </p>
+<p>Thus , this </p>
+<pre><code>for inner_list in outer_list:
+    for item in inner_list:
+        ...
+</code></pre>
+<p>corresponds to </p>
+<pre><code>[... for inner_list in outer_list for item in inner_list]
+</code></pre>
+<p>So you want </p>
+<pre><code>[image for menuitem in list_of_menuitems for image in menuitem.image_set.all()]
+</code></pre>
+<br /><b># 3 </b><br /><p>Performance Results. Revised . </p>
+<pre><code>import itertools
+def itertools_flatten( aList ):
+    return list( itertools.chain(*aList) )
+
+from operator import add
+def reduce_flatten1( aList ):
+    return reduce(add, map(lambda x: list(x), [mi for mi in aList]))
+
+def reduce_flatten2( aList ):
+    return reduce(list.__add__, map(list, aList))
+
+def comprehension_flatten( aList ):
+    return list(y for x in aList for y in x)
+</code></pre>
+<p>I <span style="background-color:yellow;">flattened</span> a 2-level <span style="background-color:yellow;">list</span> of 30 items 1000 times </p>
+<pre><code>itertools_flatten     0.00554
+comprehension_flatten 0.00815
+reduce_flatten2       0.01103
+reduce_flatten1       0.01404
+</code></pre>
+<p>Reduce is always a poor choice . </p>
+<br /><b># 4 </b><br /><p>In Python 2.6 , using <span style="background-color:yellow;">chain.from_iterable</span> ( ) : </p>
+<pre><code>>>> from itertools import chain
+>>> list(chain.from_iterable(mi.image_set.all() for mi in h.get_image_menu()))
+</code></pre>
+<p>It avoids creating of intermediate <span style="background-color:yellow;">list</span> . </p>
+<br /><b># 5 </b><br /><p>This solution works for arbitrary nesting depths - not just the " <span style="background-color:yellow;">list</span> of <span style="background-color:yellow;">lists</span> " depth that some ( all ? ) of the other solutions are limited to : </p>
+<pre><code>def flatten(x):
+    result = []
+    for el in x:
+        if hasattr(el, "__iter__") and not isinstance(el, basestring):
+            result.extend(flatten(el))
+        else:
+            result.append(el)
+    return result
+</code></pre>
+<p>It 's the recursion which allows for arbitrary depth nesting - until you hit the maximum recursion depth , of course.. . </p>
+<br /><b># 6 </b><br /><p>Here is the correct solution using <span style="background-color:yellow;">list</span> comprehensions ( they 're backward in the question ) : </p>
+<pre><code>>>> join = lambda it: (y for x in it for y in x)
+>>> list(join([[1,2],[3,4,5],[]]))
+[1, 2, 3, 4, 5]
+</code></pre>
+<p>In your case it would be </p>
+<pre><code>[image for menuitem in list_of_menuitems for image in menuitem.image_set.all()]
+</code></pre>
+<p>or you could use join and say </p>
+<pre><code>join(menuitem.image_set.all() for menuitem in list_of_menuitems)
+</code></pre>
+<p>In either case , the gotcha was the nesting of the for loops . </p>
+<br /><b># 7 </b><br /><p>Off the top of my head , you can <span style="background-color:yellow;">eliminate</span> the lambda : </p>
+<pre><code>reduce(list.__add__, map(list, [mi.image_set.all() for mi in list_of_menuitems]))
+</code></pre>
+<p>Or even <span style="background-color:yellow;">eliminate</span> the map , since you 've already got a <span style="background-color:yellow;">list-comp</span> : </p>
+<pre><code>reduce(list.__add__, [list(mi.image_set.all()) for mi in list_of_menuitems])
+</code></pre>
+<p>You can also just express this as a sum of <span style="background-color:yellow;">lists</span> : </p>
+<pre><code>sum([list(mi.image_set.all()) for mi in list_of_menuitems], [])
+</code></pre>
+<br /><b># 8 </b><br /><p>What about : </p>
+<pre><code>from operator import add
+reduce(add, map(lambda x: list(x.image_set.all()), [mi for mi in list_of_menuitems]))
+</code></pre>
+<p>But , Guido is recommending against performing too much in a single line of code since it reduces readability. There is minimal , if any , performance gain by performing what you want in a single line vs. multiple lines . </p>
+<br />

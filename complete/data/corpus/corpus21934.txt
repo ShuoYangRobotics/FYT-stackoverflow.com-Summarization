@@ -1,0 +1,66 @@
+Question (ID-21934): Why Java and Python garbage collection methods are different? Python uses reference count method to handle object life time. So an object has no more used and it will be immediately destroyed. 
+
+ But, in Java, GC(garbage collector) destroys objects which are no more used at specific time. 
+
+ Why Java choose this strategy and what is benefit from this? 
+
+ Is this better than Python approach? 
+ Answers (Total-9): #0 There are drawbacks of using reference counting. One of the most mentioned is circular references: Suppose A references B, B references C and C references B. If A were to drop its reference to B, both B and C will still have a reference count of 1 and won't be deleted with traditional reference counting. CPython (reference counting is not part of python itself, but part of the C implementation thereof) catches circular references with a separate garbage collection routine that it runs periodically... 
+
+ Another drawback: Reference counting can make execution slower. Each time an object is referenced and dereferenced, the interpreter/VM must check to see if the count has gone down to 0 (and then deallocate if it did). Garbage Collection does not need to do this. 
+
+ Also, Garbage Collection can be done in a separate thread (though it can be a bit tricky). On machines with lots of RAM and for processes that use memory only slowly, you might not want to be doing GC at all! Reference counting would be a bit of a drawback there in terms of performance... 
+ #1 Actually reference counting and the strategies used by the Sun JVM are all different types of garbage collection algorithms. 
+
+ There are two broad approaches for tracking down dead objects: tracing and reference counting. In tracing the GC starts from the "roots" - things like stack references, and traces all reachable (live) objects. Anything that can't be reached is considered dead. In reference counting each time a reference is modified the object's involved have their count updated. Any object whose reference count gets set to zero is considered dead. 
+
+ With basically all GC implementations there are trade offs but tracing is usually good for high through put (i.e. fast) operation but has longer pause times (larger gaps where the UI or program may freeze up). Reference counting can operate in smaller chunks but will be slower overall. It may mean less freezes but poorer performance overall. 
+
+ Additionally a reference counting GC requires a cycle detector to clean up any objects in a cycle that won't be caught by their reference count alone. Perl 5 didn't have a cycle detector in its GC implementation and could leak memory that was cyclic. 
+
+ Research has also been done to get the best of both worlds (low pause times, high throughput):
+ http://cs.anu.edu.au/~Steve.Blackburn/pubs/papers/urc-oopsla-2003.pdf 
+ #2 Darren Thomas gives a good answer. However, one big difference between the Java and Python approaches is that with reference counting in the common case (no circular references) objects are cleaned up immediately rather than at some indeterminate later date. 
+
+ For example, I can write sloppy, non-portable code in CPython such as 
+
+ def parse_some_attrs(fname):
+ return open(fname).read().split("~~~")[2:4]
+ 
+
+ and the file descriptor for that file I opened will be cleaned up immediately because as soon as the reference to the open file goes away, the file is garbage collected and the file descriptor is freed. Of course, if I run Jython or IronPython or possibly PyPy, then the garbage collector won't necessarily run until much later; possibly I'll run out of file descriptors first and my program will crash. 
+
+ So you SHOULD be writing code that looks like 
+
+ def parse_some_attrs(fname):
+ with open(fname) as f:
+  return f.read().split("~~~")[2:4]
+ 
+
+ but sometimes people like to rely on reference counting to always free up their resources because it can sometimes make your code a little shorter. 
+
+ I'd say that the best garbage collector is the one with the best performance, which currently seems to be the Java-style generational garbage collectors that can run in a separate thread and has all these crazy optimizations, etc. The differences to how you write your code should be negligible and ideally non-existent. 
+ #3 I think the article " Java theory and practice: A brief history of garbage collection " from IBM should help explain some of the questions you have. 
+ #4 Garbage collection is faster (more time efficient) than reference counting, if you have enough memory. For example, a copying gc traverses the "live" objects and copies them to a new space, and can reclaim all the "dead" objects in one step by marking a whole memory region. This is very efficient, if you have enough memory. Generational collections use the knowledge that "most objects die young"; often only a few percent of objects have to be copied. 
+
+ [This is also the reason why gc can be faster than malloc/free] 
+
+ Reference counting is much more space efficient than garbage collection, since it reclaims memory the very moment it gets unreachable. This is nice when you want to attach finalizers to objects (e.g. to close a file once the File object gets unreachable). A reference counting system can work even when only a few percent of the memory is free. But the management cost of having to increment and decrement counters upon each pointer assignment cost a lot of time, and some kind of garbage collection is still needed to reclaim cycles. 
+
+ So the trade-off is clear: if you have to work in a memory-constrained environment, or if you need precise finalizers, use reference counting. If you have enough memory and need the speed, use garbage collection. 
+ #5 The latest Sun Java VM actually have multiple GC algorithms which you can tweak. The Java VM specifications intentionally omitted specifying actual GC behaviour to allow different (and multiple) GC algorithms for different VMs. 
+
+ For example, for all the people who dislike the "stop-the-world" approach of the default Sun Java VM GC behaviour, there are VM such as IBM's WebSphere Real Time which allows real-time application to run on Java. 
+
+ Since the Java VM spec is publicly available, there is (theoretically) nothing stopping anyone from implementing a Java VM that uses CPython's GC algorithm. 
+ #6 Reference counting is particularly difficult to do efficiently in a multi-threaded environment. I don't know how you'd even start to do it without getting into hardware assisted transactions or similar (currently) unusual atomic instructions. 
+
+ Reference counting is easy to implement. JVMs have had a lot of money sunk into competing implementations, so it shouldn't be surprising that they implement very good solutions to very difficult problems. However, it's becoming increasingly easy to target your favourite language at the JVM. 
+ #7 Late in the game, but I think one significant rationale for RC in python is its simplicity. See this email by Alex Martelli , for example. 
+
+ (I could not find a link outside google cache, the email date from 13th october 2005 on python list). 
+ #8 One big disadvantage of Java's tracing GC is that from time to time it will "stop the world" and freeze the application for a relatively long time to do a full GC. If the heap is big and the the object tree complex, it will freeze for a few seconds. Also each full GC visits the whole object tree over and over again, something that is probably quite innefficient. Another drawback of the way Java does GC is that you have to tell the jvm what heap size you want (if the default is not good enough); the JVM derives from that value serveral thresholds that will trigger the GC process when there is too much garbage stacking up in the heap. 
+
+ I presume that this is actualy the main cause of the jerky feeling of Android (based on Java), even on the most expensive cellphones, in comparision with the smoothness of iOS (based on ObjectiveC, and using RC). 
+
+ I'd love to see a jvm option to enable RC memory management, and maybe keeping GC only to run as a last resort when there is no more memory left.

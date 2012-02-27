@@ -1,0 +1,92 @@
+<h3>Question (ID-1309123):</h3><h2>Fast string to integer conversion in Python</h2><p>A simple problem, really: you have one billion (1e+9) unsigned 32-bit integers stored as decimal ASCII strings in a TSV (tab-separated values) file. Conversion using <code>int()</code> is horribly slow compared to other tools working on the same dataset. Why? And more importantly: how to make it faster?</p>
+
+<p>Therefore the question: what is the fastest way possible to convert a string to an integer, in Python?</p>
+
+<p>What I'm really thinking about is some semi-hidden Python functionality that could be (ab)used for this purpose, not unlike Guido's use of <code>array.array</code> in his <a href="http://www.python.org/doc/essays/list2str/" rel="nofollow">"Optimization Anecdote"</a>.</p>
+
+<p><strong>Sample data</strong> (with tabs expanded to spaces)</p>
+
+<pre><code>38262904        "pfv"              2002-11-15T00:37:20+00:00
+12311231        "tnealzref"        2008-01-21T20:46:51+00:00
+26783384        "hayb"             2004-02-14T20:43:45+00:00
+812874          "qevzasdfvnp"      2005-01-11T00:29:46+00:00
+22312733        "bdumtddyasb"      2009-01-17T20:41:04+00:00
+</code></pre>
+
+<p>The time it takes reading the data is irrelevant here, processing the data is the bottleneck.</p>
+
+<p><strong>Microbenchmarks</strong></p>
+
+<p>All of the following are interpreted languages. The host machine is running 64-bit Linux.</p>
+
+<p>Python 2.6.2 with IPython 0.9.1, ~214k conversions per second (100%):</p>
+
+<pre><code>In [1]: strings = map(str, range(int(1e7)))
+
+In [2]: %timeit map(int, strings);
+10 loops, best of 3: 4.68 s per loop
+</code></pre>
+
+<p>REBOL 3.0 Version 2.100.76.4.2, ~231kcps (108%):</p>
+
+<pre><code>&gt;&gt; strings: array n: to-integer 1e7 repeat i n [poke strings i mold (i - 1)]
+== "9999999"
+
+&gt;&gt; delta-time [map str strings [to integer! str]]
+== 0:00:04.328675
+</code></pre>
+
+<p>REBOL 2.7.6.4.2 (15-Mar-2008), ~523kcps (261%):</p>
+
+<p>As John noted in the comments, this version does <em>not</em> build a list of converted integers, so the speed-ratio given is relative to Python's 4.99s runtime of <code>for str in strings: int(str)</code>.</p>
+
+<pre><code>&gt;&gt; delta-time: func [c /local t] [t: now/time/precise do c now/time/precise - t]
+
+&gt;&gt; strings: array n: to-integer 1e7 repeat i n [poke strings i mold (i - 1)]
+== "9999999"
+
+&gt;&gt; delta-time [foreach str strings [to integer! str]]
+== 0:00:01.913193
+</code></pre>
+
+<p>KDB+ 2.6t 2009.04.15, ~2016kcps (944%):</p>
+
+<pre><code>q)strings:string til "i"$1e7
+
+q)\t "I"$strings
+496
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I might suggest that for raw speed, Python isn't the right tool for this task. A hand-coded C implementation will beat Python easily.</p>
+<br /><b>#1</b><br /><p>You will get some percentage of speed by ensuring only "local" variables are used in your tightest of loops. The <code>int</code> function is a global, so looking it up will be more expensive than a local.</p>
+
+<p>Do you really need all billion numbers in memory at all times. Consider using some iterators to give you only a few values at a time A billion numbers will take a bit of storage. Appending these to a list, one at a time, is going to require several large reallocations. </p>
+
+<p>Get your looping out of Python entirely if possible. The map function here can be your friend. I'm not sure how your data is stored. If it is a single number per line, you could reduce the code to</p>
+
+<pre><code>values = map(int, open("numberfile.txt"))
+</code></pre>
+
+<p>If there are multiple values per line that are white space separated, dig into the itertools to keep the looping code out of Python. This version has the added benefit of creating a number iterator, so you can spool only one or several numbers out of the file at a time, instead of one billion in one shot.</p>
+
+<pre><code>numfile = open("numberfile.txt")
+valIter = itertools.imap(int, itertools.chain(itertools.imap(str.split, numfile)))
+</code></pre>
+<br /><b>#2</b><br /><p>The following most simplistic C extension already improves heavily on the builtin, managing to convert over three times as many strings per second (650kcps vs 214kcps):</p>
+
+<pre><code>static PyObject *fastint_int(PyObject *self, PyObject *args) {
+    char *s; unsigned r = 0;
+    if (!PyArg_ParseTuple(args, "s", &amp;s)) return NULL;
+    for (r = 0; *s; r = r * 10 + *s++ - '0');
+    return Py_BuildValue("i", r);
+}
+</code></pre>
+
+<p>This obviously does not cater for integers of arbitrary length and various other special cases, but that's no problem in our scenario.</p>
+<br /><b>#3</b><br /><p>As others have said you could code up your own C module to do the parsing/conversion for you.  Then you could simply import that and call on it.  You might be able to use Pyrex or its Cython derivative to generate your C from your Python (by adding a few type constraining hints to the Python).</p>
+
+<p>You can read more about <a href="http://cython.org/" rel="nofollow">Cython</a> and see if that will help.</p>
+
+<p>Another question that comes to mind though ... what are you going to be doing with these billion integers?  Is it possible that you might load them as strings, search for them as strings and perform a lazy conversion as necessary?  Or could you parallelize the conversion and the other computations using <code>threading</code> or <code>multiprocessing</code> modules and Queues?  (Have one or more threads/processes performing the conversion and feeding a Queue from which your processing engine fetches them).  In other words would a producer/consumer design alleviate the problem?</p>
+<br /><b>#4</b><br /><p>Agree with Greg; Python, as an interpreted language, is generally slow. You could try compiling the source code on-the-fly with the <a href="http://psyco.sourceforge.net/" rel="nofollow">Psyco library</a> or coding the app in a lower level language such C/C++.</p>
+<br /><b>#5</b><br /><p>It may not be an option for you, but I would look real hard at using a binary file rather than text. Does it change often? If not, you could pre-process it.</p>
+<br />

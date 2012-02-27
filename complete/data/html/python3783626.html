@@ -1,0 +1,211 @@
+<h3>Question (ID-3783626):</h3><h2>Regular expression to parse a commented configuration file</h2><p>Edit: I'm really just curious as to how I can get this regex to work. Please don't tell me there are easier ways to do it. That's obvious! :P</p>
+
+<p>I'm writing a regular expression (using Python) to parse lines in a configuration file. Lines could look like this:</p>
+
+<pre><code>someoption1 = some value # some comment
+# this line is only a comment
+someoption2 = some value with an escaped \# hash
+someoption3 = some value with a \# hash # some comment
+</code></pre>
+
+<p>The idea is that anything after a hash symbol is considered to be a comment, except if the hash is escaped with a slash.</p>
+
+<p>I'm trying to use a regex to break each line into its individual pieces: leading whitespace, left side of the assignment, right side of the assignment, and comment. For the first line in the example, the breakdown would be:</p>
+
+<ul>
+<li>Whitespace: ""</li>
+<li>Assignment left: "someoption1 ="</li>
+<li>Assignment right: " some value "</li>
+<li>Comment "# some comment"</li>
+</ul>
+
+<p>This is the regex I have so far:</p>
+
+<pre><code>^(\s)?(\S+\s?=)?(([^\#]*(\\\#)*)*)?(\#.*)?$
+</code></pre>
+
+<p>I'm terrible with regex, so feel free to tear it apart!</p>
+
+<p>Using Python's <code>re.findAll()</code>, this is returning:</p>
+
+<ul>
+<li>0th index: the whitespace, as it should be</li>
+<li>1st index: the left side of the assignment</li>
+<li>2nd index: The right side of the assignment, up to the first hash, whether escaped or not (which is incorrect)</li>
+<li>5th index: The first hash, whether escaped or not, and anything after it (which is incorrect)</li>
+</ul>
+
+<p>There's probably something fundamental about regular expressions that I'm missing. If somebody can solve this I'll be forever grateful...</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I would use this regular expression in multiline mode:</p>
+
+<pre><code>^\s*([a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*((?:[^\\#]|\\.)+)
+</code></pre>
+
+<p>This allows any character to be escaped (<code>\\.</code>). If you just want to allow the <code>#</code>, use <code>\\#</code> instead.</p>
+<br /><b>#1</b><br /><p>I've left a comment about the purpose of this question, but supposing this question is purely about regular expressions, I'll still give the answer a shot.</p>
+
+<p>Assuming you're dealing with input one line at a time, I would go about this as a two-pass phase. This means you'll have 2 regular expressions.</p>
+
+<ol>
+<li>Something along the lines of <code>(.*?(?&lt;!\\))#(.*)</code>: split at first <code>#</code> not preceeded by <code>\</code> (see documentation on negative lookbehind);</li>
+<li>Assignment statement expression parsing.</li>
+</ol>
+<br /><b>#2</b><br /><p>The reason your regular expression isn't matching as you want is because of the greedy matching behaviour of regular expressions: each part will match the longest substring such that the rest of the string can still be matched with the remainder of the regular expression</p>
+
+<p>What this means in the case of one of your lines with an escaped # is:</p>
+
+<ul>
+<li>The <code>[^\#]*</code> (there's no need to escape # btw) will match everything before the first hash, <em>including the backslash before it</em></li>
+<li>The <code>(\\\#)*</code> won't match anything, as the string at this point starts with a #</li>
+<li>The final <code>(\#.*)</code> will match the rest of the string</li>
+</ul>
+
+<p>A simple example to emphasise this potentially unintuitive behaviour: in the regular expression <code>(a*)(ab)?(b*)</code>, the <code>(ab)?</code> will never match anything</p>
+
+<p>I believe this regular expression (based on the original one) should work: <code>^\s*(\S+\s*=([^\\#]|\\#?)*)?(#.*)?$</code></p>
+<br /><b>#3</b><br /><p>Of the 5 solutions presented thus far, only Gumbo's actually works. Here is my solution, which also works and is heavily commented:</p>
+
+
+
+<pre class="lang-py prettyprint-override"><code>import re
+
+def fn(line):
+    match = re.search(
+        r"""^          # Anchor to start of line
+        (\s*)          # $1: Zero or more leading ws chars
+        (?:            # Begin group for optional var=value.
+          (\S+)        # $2: Variable name. One or more non-spaces.
+          (\s*=\s*)    # $3: Assignment operator, optional ws
+          (            # $4: Everything up to comment or EOL.
+            [^#\\]*    # Unrolling the loop 1st normal*.
+            (?:        # Begin (special normal*)* construct.
+              \\.      # special is backslash-anything.
+              [^#\\]*  # More normal*.
+            )*         # End (special normal*)* construct.
+          )            # End $4: Value.
+        )?             # End group for optional var=value.
+        ((?:\#.*)?)    # $5: Optional comment.
+        $              # Anchor to end of line""", 
+        line, re.MULTILINE | re.VERBOSE)
+    return match.groups()
+
+print (fn(r" # just a comment"))
+print (fn(r" option1 = value"))
+print (fn(r" option2 = value # no escape == IS a comment"))
+print (fn(r" option3 = value \# 1 escape == NOT a comment"))
+print (fn(r" option4 = value \\# 2 escapes == IS a comment"))
+print (fn(r" option5 = value \\\# 3 escapes == NOT a comment"))
+print (fn(r" option6 = value \\\\# 4 escapes == IS a comment"))
+</code></pre>
+
+<p>The above script produces the following (correct) output: (tested with Python 3.0.1)</p>
+
+
+
+<pre class="lang-py prettyprint-override"><code>(' ', None, None, None, '# just a comment')
+(' ', 'option1', ' = ', 'value', '')
+(' ', 'option2', ' = ', 'value ', '# no escape == IS a comment')
+(' ', 'option3', ' = ', 'value \\# 1 escape == NOT a comment', '')
+(' ', 'option4', ' = ', 'value \\\\', '# 2 escapes == IS a comment')
+(' ', 'option5', ' = ', 'value \\\\\\# 3 escapes == NOT a comment', '')
+(' ', 'option6', ' = ', 'value \\\\\\\\', '# 4 escapes == IS a comment')
+</code></pre>
+
+<p>Note that this solution uses Jeffrey Friedl's "Unrolling the loop efficiency technique (which eliminates slow alternation). It also uses no lookaround at all and is very fast. <a href="http://rads.stackoverflow.com/amzn/click/0596528124" rel="nofollow" title="This is, hands down, the most useful book I have ever read!">Mastering Regular Expressions (3rd edition)</a> is a <em>must read</em> for anyone claiming to "know" regular expressions. (And when I say "know", I mean in the Neo "<em>I know Kung-Fu!</em>" sense :)</p>
+<br /><b>#4</b><br /><p>I wouldn't use a regex for this at all, for the same reason I wouldn't try kill a fly with a thermo-nuclear warhead.</p>
+
+<p>Assuming you're reading a line in at a time, just:</p>
+
+<ul>
+<li>if the first character is a <code>#</code>, set comment to the whole line and empty the line.</li>
+<li>otherwise, find the first occurrence of <code>#</code> not immediately after <code>\</code>, set the comment to that plus the rest of the line and set the line to everything before that.</li>
+<li>replace all occurrences of <code>\#</code> in the line with <code>#</code>.</li>
+</ul>
+
+<p>That's it, you now have a proper line and a comment section. Use regexes to split up the new line section by all means.</p>
+
+<p>For example:</p>
+
+<pre><code>import re
+
+def fn(line):
+    # Split line into non-comment and comment.
+
+    comment = ""
+    if line[0] == "#":
+        comment = line
+        line = ""
+    else:
+        idx = re.search (r"[^\\]#", line)
+        if idx != None:
+            comment = line[idx.start()+1:]
+            line = line[:idx.start()+1]
+
+    # Split non-comment into key and value.
+
+    idx = re.search (r"=", line)
+    if idx == None:
+        key = line
+        val = ""
+    else:
+        key = line[:idx.start()]
+        val = line[idx.start()+1:]
+    val = val.replace ("\\#", "#")
+
+    return (key.strip(),val.strip(),comment.strip())
+
+print fn(r"someoption1 = some value # some comment")
+print fn(r"# this line is only a comment")
+print fn(r"someoption2 = some value with an escaped \# hash")
+print fn(r"someoption3 = some value with a \# hash # some comment")
+</code></pre>
+
+<p>produces:</p>
+
+<pre><code>('someoption1', 'some value', '# some comment')
+('', '', '# this line is only a comment')
+('someoption2', 'some value with an escaped # hash', '')
+('someoption3', 'some value with a # hash', '# some comment')
+</code></pre>
+
+<hr>
+
+<p>If you <em>must</em> use a regex (against my advice), your specific problem lies here:</p>
+
+<pre><code>[^\#]
+</code></pre>
+
+<p>This (assuming you meant the properly escaped <code>r"[^\\#]"</code>) will attempt to match any character other than either <code>\</code> or <code>#</code>, not the sequence <code>\#</code> as you desire. You can use negative look-behinds to do it but I always say that, once a regular expression becomes unreadable to a moron in a hurry, it's better to revert to procedural code :-)</p>
+
+<hr>
+
+<p>On reflection, a better way to do it is with a multi-level split (so the regex doesn't have to get too hideous by handling missing fields), as follows:</p>
+
+<pre><code>def fn(line):
+    line = line.strip()                            # remove spaces
+    first = re.split (r"\s*(?&lt;!\\)#\s*", line, 1)  # get non-comment/comment
+    if len(first) == 1: first.append ("")          # ensure we have a comment
+    first[0] = first[0].replace("\\#","#")         # unescape non-comment
+
+    second = re.split (r"\s*=\s*", first[0], 1)    # get key and value
+    if len(second) == 1: second.append ("")        # ensure we have a value
+    second.append (first[1])                       # create 3-tuple
+    return second                                  # and return it
+</code></pre>
+
+<p>This uses the negative look-ahead to correctly match the comment separator then separates the non-comment bit into key and value. Spaces are handled correctly in this one as well, yielding:</p>
+
+<pre><code>['someoption1', 'some value', 'some comment']
+['', '', 'this line is only a comment']
+['someoption2', 'some value with an escaped # hash', '']
+['someoption3', 'some value with a # hash', 'some comment']
+</code></pre>
+<br /><b>#5</b><br /><p>Try breaking it down into 2 steps:</p>
+
+<ol>
+<li><p>Escape processing to recognise true comments (first # not preceded by \ (hint: "negative lookbehind")), remove true comments, then replace <code>r"\#"</code> by <code>"#"</code></p></li>
+<li><p>Process the comment-free remainder.</p></li>
+</ol>
+
+<p>BIG HINT: use re.VERBOSE with comments</p>
+<br />

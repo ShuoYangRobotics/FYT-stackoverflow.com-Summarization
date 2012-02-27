@@ -1,0 +1,108 @@
+Question (ID-324214): What is the fastest way to parse large XML docs in Python? I am currently the following code based on Chapter 12.5 of the Python Cookbook: 
+
+ from xml.parsers import expat
+
+class Element(object):
+ def __init__(self, name, attributes):
+  self.name = name
+  self.attributes = attributes
+  self.cdata = ''
+  self.children = []
+ def addChild(self, element):
+  self.children.append(element)
+ def getAttribute(self,key):
+  return self.attributes.get(key)
+ def getData(self):
+  return self.cdata
+ def getElements(self, name=''):
+  if name:
+   return [c for c in self.children if c.name == name]
+  else:
+   return list(self.children)
+
+class Xml2Obj(object):
+ def __init__(self):
+  self.root = None
+  self.nodeStack = []
+ def StartElement(self, name, attributes):
+  element = Element(name.encode(), attributes)
+  if self.nodeStack:
+   parent = self.nodeStack[-1]
+   parent.addChild(element)
+  else:
+   self.root = element
+  self.nodeStack.append(element)
+ def EndElement(self, name):
+  self.nodeStack.pop()
+ def CharacterData(self,data):
+  if data.strip():
+   data = data.encode()
+   element = self.nodeStack[-1]
+   element.cdata += data
+ def Parse(self, filename):
+  Parser = expat.ParserCreate()
+  Parser.StartElementHandler = self.StartElement
+  Parser.EndElementHandler = self.EndElement
+  Parser.CharacterDataHandler = self.CharacterData
+  ParserStatus = Parser.Parse(open(filename).read(),1)
+  return self.root
+ 
+
+ I am working with XML docs about 1 GB in size. Does anyone know a faster way to parse these? 
+ Answers (Total-6): #0 I looks to me as if you do not need any DOM capabilities from your program. I would second the use of the (c)ElementTree library. If you use the iterparse function of the cElementTree module, you can work your way through the xml and deal with the events as they occur. 
+
+ Note however, Fredriks advice on using cElementTree iterparse function : 
+
+ 
+ to parse large files, you can get rid of elements as soon as you’ve processed them: 
+ 
+
+ 
+for event, elem in iterparse(source):
+ if elem.tag == "record":
+  ... process record elements ...
+  elem.clear()
+ 
+
+ 
+ The above pattern has one drawback; it does not clear the root element, so you will end up with a single element with lots of empty child elements. If your files are huge, rather than just large, this might be a problem. To work around this, you need to get your hands on the root element. The easiest way to do this is to enable start events, and save a reference to the first element in a variable: 
+ 
+
+ 
+# get an iterable
+context = iterparse(source, events=("start", "end"))
+
+# turn it into an iterator
+context = iter(context)
+
+# get the root element
+event, root = context.next()
+
+for event, elem in context:
+ if event == "end" and elem.tag == "record":
+  ... process record elements ...
+  root.clear()
+ 
+
+ The lxml.iterparse() does not allow this. 
+ #1 I recommend you to use lxml , it's a python binding for the libxml2 library which is really fast. 
+
+ In my experience, libxml2 and expat have very similar performance. But I prefer libxml2 (and lxml for python) because it seems to be more actively developed and tested. Also libxml2 has more features. 
+
+ lxml is mostly API compatible with xml.etree.ElementTree . And there is good documentation in its web site. 
+ #2 Have you tried The cElementTree Module? 
+
+ cElementTree is included with Python 2.5 and later, as xml.etree.cElementTree. Refer the benchmarks . 
+
+ 
+ #3 If your application is performance-sensitive and likely to encounter large files (like you said, > 1GB) then I'd strongly advise against using the code you're showing in your question for the simple reason that it loads the entire document into RAM . I would encourage you to rethink your design (if at all possible) to avoid holding the whole document tree in RAM at once. Not knowing what your application's requirements are, I can't properly suggest any specific approach, other than the generic piece of advice to try to use an "event-based" design. 
+ #4 Registering callbacks slows down the parsing tremendously. [EDIT]This is because the (fast) C code has to invoke the python interpreter which is just not as fast as C. Basically, you're using the C code to read the file (fast) and then build the DOM in Python (slow).[/EDIT] 
+
+ Try to use xml.etree.ElementTree which is implemented 100% in C and which can parse XML without any callbacks to python code. 
+
+ After the document has been parsed, you can filter it to get what you want. 
+
+ If that's still too slow and you don't need a DOM another option is to read the file into a string and use simple string operations to process it. 
+ #5 Apparently PyRXP is really fast. 
+
+ They claim it is the fastest parser - but cElementTree isn't in their stats list.

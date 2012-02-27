@@ -1,0 +1,168 @@
+Question (ID-1651154): Why are default arguments evaluated at definition time in Python? I had a very difficult time with understanding the root cause of a problem in an algorithm. Then, by simplifying the functions step by step I found out that evaluation of default arguments in Python doesn't behave as I expected. 
+
+ The code is as follows: 
+
+ class Node(object):
+ def __init__(self, children = []):
+  self.children = children
+ 
+
+ The problem is that every instance of Node class shares the same children attribute, if the attribute is not given explicitly, such as: 
+
+ &gt;&gt;&gt; n0 = Node()
+&gt;&gt;&gt; n1 = Node()
+&gt;&gt;&gt; id(n1.children)
+Out[0]: 25000176
+&gt;&gt;&gt; id(n0.children)
+Out[0]: 25000176
+ 
+
+ I don't understand the logic of this design decision? Why did Python designers decide that default arguments are to be evaluated at definition time? This seems very counter-intuitive to me. 
+ Answers (Total-8): #0 The alternative would be quite heavyweight -- storing "default argument values" in the function object as "thunks" of code to be executed over and over again every time the function is called without a specified value for that argument -- and would make it much harder to get early binding (binding at def time), which is often what you want. For example, in Python as it exists: 
+
+ def ack(m, n, _memo={}):
+ key = m, n
+ if key not in _memo:
+ if m==0: v = n + 1
+ elif n==0: v = ack(m-1, 1)
+ else: v = ack(m-1, ack(m, n-1))
+ _memo[key] = v
+ return _memo[key]
+ 
+
+ ...writing a memoized function like the above is quite an elementary task. Similarly: 
+
+ for i in range(len(buttons)):
+ buttons[i].onclick(lambda i=i: say('button %s', i))
+ 
+
+ ...the simple i=i , relying on the early-binding (definition time) of default arg values, is a trivially simple way to get early binding. So, the current rule is simple, straightforward, and lets you do all you want in a way that's extremely easy to explain and understand: if you want late binding of an expression's value, evaluate that expression in the function body; if you want early binding, evaluate it as the default value of an arg. 
+
+ The alternative, forcing late binding for both situation, would not offer this flexibility, and would force you to go through hoops (such as wrapping your function into a closure factory) every time you needed early binding, as in the above examples -- yet more heavy-weight boilerplate forced on the programmer by this hypothetical design decision (beyond the "invisible" ones of generating and repeatedly evaluating thunks all over the place). 
+
+ In other words, "There should be one, and preferably only one, obvious way to do it [1]": when you want late binding, there's already a perfectly obvious way to achieve it (since all of the function's code is only executed at call time, obviously everything evaluated there is late-bound); having default-arg evaluation produce early binding gives you an obvious way to achieve early binding as well (a plus!-) rather than giving TWO obvious ways to get late binding and no obvious way to get early binding (a minus!-). 
+
+ [1]: "Although that way may not be obvious at first unless you're Dutch." 
+ #1 The issue is this. 
+
+ It's too expensive to evaluate a function as an initializer every time the function is called . 
+
+ 
+ 0 is a simple literal. Evaluate it once, use it forever. 
+ int is a function (like list) that would have to be evaluated each time it's required as an initializer. 
+ 
+
+ The construct [] is literal, like 0 , that means "this exact object". 
+
+ The problem is that some people hope that it to means list as in "evaluate this function for me, please, to get the object that is the initializer". 
+
+ It would be a crushing burden to add the necessary if statement to do this evaluation all the time. It's better to take all arguments as literals and not do any additional function evaluation as part of trying to do a function evaluation. 
+
+ Also, more fundamentally, it's technically impossible to implement argument defaults as function evaluations. 
+
+ Consider, for a moment the recursive horror of this kind of circularity. Let's say that instead of default values being literals, we allow them to be functions which are evaluated each time a parameter's default values are required. 
+
+ [This would parallel the way collections.defaultdict works.] 
+
+ def aFunc( a=another_func ):
+ return a*2
+
+def another_func( b=aFunc ):
+ return b*3
+ 
+
+ What is the value of another_func() ? To get the default for b , it must evaluate aFunc , which requires an eval of another_func . Oops. 
+ #2 The workaround for this, discussed here (and very solid), is: 
+
+ class Node(object):
+ def __init__(self, children = None):
+  self.children = [] if children is None else children
+ 
+
+ As for why look for an answer from von Löwis, but it's likely because the function definition makes a code object due to the architecture of Python, and there might not be a facility for working with reference types like this in default arguments. 
+ #3 Of course in your situation it is difficult to understand. But you must see, that evaluating default args every time would lay a heavy runtime burden on the system. 
+
+ Also you should know, that in case of container types this problem may occur -- but you could circumvent it by making the thing explicit: 
+
+ def __init__(self, children = None):
+ if children is None:
+  children = []
+ self.children = children
+ 
+ #4 This comes from python's emphasis on syntax and execution simplicity. a def statement occurs at a certain point during execution. When the python interpreter reaches that point, it evaluates the code in that line, and then creates a code object from the body of the function, which will be run later, when you call the function. 
+
+ It's a simple split between function declaration and function body. The declaration is executed when it is reached in the code. The body is executed at call time. Note that the declaration is executed every time it is reached, so you can create multiple functions by looping. 
+
+ funcs = []
+for x in xrange(5):
+ def foo(x=x, lst=[]):
+  lst.append(x)
+  return lst
+ funcs.append(foo)
+for func in funcs:
+ print "1: ", func()
+ print "2: ", func()
+ 
+
+ Five separate functions have been created, with a separate list created each time the function declaration was executed. On each loop through funcs , the same function is executed twice on each pass through, using the same list each time. This gives the results: 
+
+ 1: [0]
+2: [0, 0]
+1: [1]
+2: [1, 1]
+1: [2]
+2: [2, 2]
+1: [3]
+2: [3, 3]
+1: [4]
+2: [4, 4]
+ 
+
+ Others have given you the workaround, of using param=None, and assigning a list in the body if the value is None, which is fully idiomatic python. It's a little ugly, but the simplicity is powerful, and the workaround is not too painful. 
+
+ Edited to add: For more discussion on this, see effbot's article here: http://effbot.org/zone/default-values.htm , and the language reference, here: http://docs.python.org/reference/compound%5Fstmts.html#function 
+ #5 I thought this was counterintuitive too, until I learned how Python implements default arguments. 
+
+ A function's an object. At load time, Python creates the function object, evaluates the defaults in the def statement, puts them into a tuple, and adds that tuple as an attribute of the function named func_defaults . Then, when a function is called, if the call doesn't provide a value, Python grabs the default value out of func_defaults . 
+
+ For instance: 
+
+ &gt;&gt;&gt; class C():
+  pass
+
+&gt;&gt;&gt; def f(x=C()):
+  pass
+
+&gt;&gt;&gt; f.func_defaults
+(&lt;__main__.C instance at 0x0298D4B8&gt;,)
+ 
+
+ So all calls to f that don't provide an argument will use the same instance of C , because that's the default value. 
+
+ As far as why Python does it this way: well, that tuple could contain functions that would get called every time a default argument value was needed. Apart from the immediately obvious problem of performance, you start getting into a universe of special cases, like storing literal values instead of functions for non-mutable types to avoid unnecessary function calls. And of course there are performance implications galore. 
+
+ The actual behavior is really simple. And there's a trivial workaround, in the case where you want a default value to be produced by a function call at runtime: 
+
+ def f(x = None):
+ if x == None:
+  x = g()
+ 
+ #6 Python function definitions are just code, like all the other code; they're not "magical" in the way that some languages are. For example, in Java you could refer "now" to something defined "later": 
+
+ public static void foo() { bar(); }
+public static void main(String[] args) { foo(); }
+public static void bar() {}
+ 
+
+ but in Python 
+
+ def foo(): bar()
+foo() # boom! "bar" has no binding yet
+def bar(): pass
+foo() # ok
+ 
+
+ So, the default argument is evaluated at the moment that that line of code is evaluated! 
+ #7 Because if they had, then someone would post a question asking why it wasn't the other way around :-p 
+
+ Suppose now that they had. How would you implement the current behaviour if needed? It's easy to create new objects inside a function, but you cannot "uncreate" them (you can delete them, but it's not the same).

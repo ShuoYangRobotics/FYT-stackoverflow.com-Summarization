@@ -1,0 +1,693 @@
+Question (ID-2897297): Speed up bitstring/bit operations in Python? I wrote a prime number generator using Sieve of Eratosthenes and Python 3.1. The code runs correctly and gracefully at 0.32 seconds on ideone.com to generate prime numbers up to 1,000,000. 
+
+ # from bitstring import BitString
+
+def prime_numbers(limit=1000000):
+ '''Prime number generator. Yields the series
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ... 
+ using Sieve of Eratosthenes.
+ '''
+ yield 2
+ sub_limit = int(limit**0.5) 
+ flags = [False, False] + [True] * (limit - 2) 
+#  flags = BitString(limit)
+ # Step through all the odd numbers
+ for i in range(3, limit, 2):  
+  if flags[i] is False:
+#  if flags[i] is True:
+   continue
+  yield i
+  # Exclude further multiples of the current prime number
+  if i &lt;= sub_limit:
+   for j in range(i*3, limit, i&lt;&lt;1):
+    flags[j] = False
+#    flags[j] = True
+ 
+
+ The problem is, I run out of memory when I try to generate numbers up to 1,000,000,000. 
+
+  flags = [False, False] + [True] * (limit - 2) 
+MemoryError
+ 
+
+ As you can imagine, allocating 1 billion boolean values ( 1 byte 4 or 8 bytes (see comment) each in Python) is really not feasible, so I looked into bitstring . I figured, using 1 bit for each flag would be much more memory-efficient. However, the program's performance dropped drastically - 24 seconds runtime, for prime number up to 1,000,000. This is probably due to the internal implementation of bitstring. 
+
+ You can comment/uncomment the three lines to see what I changed to use BitString, as the code snippet above. 
+
+ My question is, is there a way to speed up my program, with or without bitstring? 
+
+ Edit: Please test the code yourself before posting. I can't accept answers that run slower than my existing code, naturally. 
+
+ Edit again: 
+
+ I've compiled a list of benchmarks on my machine. 
+ Answers (Total-10): #0 There are a couple of small optimizations for your version. By reversing the roles of True and False, you can change " if flags[i] is False: " to " if flags[i]: ". And the starting value for the second range statement can be i*i instead of i*3 . Your original version takes 0.166 seconds on my system. With those changes, the version below takes 0.156 seconds on my system. 
+
+ def prime_numbers(limit=1000000):
+ '''Prime number generator. Yields the series
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ...
+ using Sieve of Eratosthenes.
+ '''
+ yield 2
+ sub_limit = int(limit**0.5)
+ flags = [True, True] + [False] * (limit - 2)
+ # Step through all the odd numbers
+ for i in range(3, limit, 2):
+  if flags[i]:
+   continue
+  yield i
+  # Exclude further multiples of the current prime number
+  if i &lt;= sub_limit:
+   for j in range(i*i, limit, i&lt;&lt;1):
+    flags[j] = True
+ 
+
+ This doesn't help your memory issue, though. 
+
+ Moving into the world of C extensions, I used the development version of gmpy . (Disclaimer: I'm one of the maintainers.) The development version is called gmpy2 and supports mutable integers called xmpz. Using gmpy2 and the following code, I have a running time of 0.140 seconds. Running time for a limit of 1,000,000,000 is 158 seconds. 
+
+ import gmpy2
+
+def prime_numbers(limit=1000000):
+ '''Prime number generator. Yields the series
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ...
+ using Sieve of Eratosthenes.
+ '''
+ yield 2
+ sub_limit = int(limit**0.5)
+ # Actual number is 2*bit_position + 1.
+ oddnums = gmpy2.xmpz(1)
+ current = 0
+ while True:
+  current += 1
+  current = oddnums.bit_scan0(current)
+  prime = 2 * current + 1
+  if prime &gt; limit:
+   break
+  yield prime
+  # Exclude further multiples of the current prime number
+  if prime &lt;= sub_limit:
+   for j in range(2*current*(current+1), limit&gt;&gt;1, prime):
+    oddnums.bit_set(j)
+ 
+
+ Pushing optimizations, and sacrificing clarity, I get running times of 0.107 and 123 seconds with the following code: 
+
+ import gmpy2
+
+def prime_numbers(limit=1000000):
+ '''Prime number generator. Yields the series
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ...
+ using Sieve of Eratosthenes.
+ '''
+ yield 2
+ sub_limit = int(limit**0.5)
+ # Actual number is 2*bit_position + 1.
+ oddnums = gmpy2.xmpz(1)
+ f_set = oddnums.bit_set
+ f_scan0 = oddnums.bit_scan0
+ current = 0
+ while True:
+  current += 1
+  current = f_scan0(current)
+  prime = 2 * current + 1
+  if prime &gt; limit:
+   break
+  yield prime
+  # Exclude further multiples of the current prime number
+  if prime &lt;= sub_limit:
+   list(map(f_set,range(2*current*(current+1), limit&gt;&gt;1, prime)))
+ 
+
+ Edit: Based on this exercise, I modified gmpy2 to accept xmpz.bit_set(iterator) . Using the following code, the run time for all primes less 1,000,000,000 is 56 seconds for Python 2.7 and 74 seconds for Python 3.2. (As noted in the comments, xrange is faster than range .) 
+
+ import gmpy2
+
+try:
+ range = xrange
+except NameError:
+ pass
+
+def prime_numbers(limit=1000000):
+ '''Prime number generator. Yields the series
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ...
+ using Sieve of Eratosthenes.
+ '''
+ yield 2
+ sub_limit = int(limit**0.5)
+ oddnums = gmpy2.xmpz(1)
+ f_scan0 = oddnums.bit_scan0
+ current = 0
+ while True:
+  current += 1
+  current = f_scan0(current)
+  prime = 2 * current + 1
+  if prime &gt; limit:
+   break
+  yield prime
+  if prime &lt;= sub_limit:
+   oddnums.bit_set(iter(range(2*current*(current+1), limit&gt;&gt;1, prime)))
+ 
+
+ Edit #2: One more try! I modified gmpy2 to accept xmpz.bit_set(slice) . Using the following code, the run time for all primes less 1,000,000,000 is about 40 seconds for both Python 2.7 and Python 3.2. 
+
+ from __future__ import print_function
+import time
+import gmpy2
+
+def prime_numbers(limit=1000000):
+ '''Prime number generator. Yields the series
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ...
+ using Sieve of Eratosthenes.
+ '''
+ yield 2
+ sub_limit = int(limit**0.5)
+ flags = gmpy2.xmpz(1)
+ # pre-allocate the total length
+ flags.bit_set((limit&gt;&gt;1)+1)
+ f_scan0 = flags.bit_scan0
+ current = 0
+ while True:
+  current += 1
+  current = f_scan0(current)
+  prime = 2 * current + 1
+  if prime &gt; limit:
+   break
+  yield prime
+  if prime &lt;= sub_limit:
+   flags.bit_set(slice(2*current*(current+1), limit&gt;&gt;1, prime))
+
+start = time.time()
+result = list(prime_numbers(1000000000))
+print(time.time() - start)
+ 
+
+ Edit #3: I've updated gmpy2 to properly support slicing at the bit level of an xmpz. No change in performance but a much nice API. I have done a little tweaking and I've got the time down to about 37 seconds. 
+
+ from __future__ import print_function
+import time
+import gmpy2
+
+def prime_numbers(limit=1000000):
+ '''Prime number generator. Yields the series
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ...
+ using Sieve of Eratosthenes.
+ '''
+ sub_limit = int(limit**0.5)
+ flags = gmpy2.xmpz(1)
+ flags[(limit&gt;&gt;1)+1] = True
+ f_scan0 = flags.bit_scan0
+ current = 0
+ prime = 2
+ while prime &lt;= sub_limit:
+  yield prime
+  current += 1
+  current = f_scan0(current)
+  prime = 2 * current + 1
+  flags[2*current*(current+1):limit&gt;&gt;1:prime] = True
+ while prime &lt;= limit:
+  yield prime
+  current += 1
+  current = f_scan0(current)
+  prime = 2 * current + 1
+
+start = time.time()
+result = list(prime_numbers(1000000000))
+print(time.time() - start)
+ 
+ #1 OK, so this is my second answer, but as speed is of the essence I thought that I had to mention the bitarray module - even though it's bitstring 's nemesis :). It's ideally suited to this case as not only is it a C extension (and so faster than pure Python has a hope of being), but it also supports slice assignments. It's not yet available for Python 3 though. 
+
+ I haven't even tried to optimise this, I just rewrote the bitstring version. On my machine I get 0.16 seconds for primes under a million. 
+
+ For a billion, it runs perfectly well and completes in 2 minutes 31 seconds. 
+
+ import bitarray
+
+def prime_bitarray(limit=1000000):
+ yield 2
+ flags = bitarray.bitarray(limit)
+ flags.setall(False)
+ sub_limit = int(limit**0.5)
+ for i in xrange(3, limit, 2):
+  if not flags[i]:
+   yield i
+   if i &lt;= sub_limit:
+    flags[3*i:limit:i*2] = True
+ 
+ #2 Okay, here's a (near complete) comprehensive benchmarking I've done tonight to see which code runs the fastest. Hopefully someone will find this list useful. I omitted anything that takes more than 30 seconds to complete on my machine. 
+
+ I would like to thank everyone that put in an input. I've gained a lot of insight from your efforts, and I hope you have too. 
+
+ My machine: AMD ZM-86, 2.40 Ghz Dual-Core, with 4GB of RAM. This is a HP Touchsmart Tx2 laptop. Note that while I may have linked to a pastebin, I benchmarked all of the following on my own machine. 
+
+ I will add the gmpy2 benchmark once I am able to build it. 
+
+ All of the benchmarks are tested in Python 2.6 x86 
+
+ 
+ Returning a list of prime numbers n up to 1,000,000: ( Using Python
+ generators) 
+ 
+ Sebastian's numpy generator version (updated) - 121 ms @ 
+ 
+ Mark's Sieve + Wheel - 154 ms 
+ 
+ Robert's version with slicing - 159 ms 
+ 
+ My improved version with slicing 
+ - 205 ms 
+ 
+ Numpy generator with enumerate - 249 ms @ 
+ 
+ Mark's Basic Sieve - 317 ms 
+ 
+ casevh's improvement on my original
+ solution - 343 ms 
+ 
+ My modified numpy generator solution - 407 ms 
+ 
+ My original method in the
+ question - 409 ms 
+ 
+ Bitarray Solution - 414 ms @ 
+ 
+ Pure Python with bytearray - 1394 ms @ 
+ 
+ Scott's BitString solution - 6659
+ ms @ 
+ 
+ '@' means this method is capable of generating up to n &lt; 1,000,000,000 on
+ my machine setup. 
+ 
+ In addition, if you don't need the
+ generator and just want the whole list
+ at once: 
+ 
+ numpy solution from RosettaCode -
+ 32 ms @ 
+ 
+ (The numpy solution is also capable of generating up to 1 billion, which took 61.6259 seconds. I suspect the memory was swapped once, hence the double time.) 
+ 
+ #3 Related question. 
+ Fastest way to list all primes below N in python 
+
+ Hi, i am too looking for a code in python to generate primes up to 10* 9 as fast as i can, which is difficult because of the memory problem. up to now i came up with this to generate primes up to 10 *6 &amp; 10*7 (0,171s &amp; 1,764s respectively in my old machine), which seems to be slightly faster(at least in my computer) than "My improved version with slicing" from previous post,probably because i use n//i-i +1 (see below)instead of the analogous len(flags[i2::i&lt;&lt;1]) in the other code. please correct me if i am wrong. Any suggestion for improvement are very welcome. 
+
+ def primes(n):
+ """ Returns a list of primes &lt; n """
+ sieve = [True] * n
+ for i in xrange(3,int(n**0.5)+1,2):
+  if sieve[i]:
+   sieve[i*i::2*i]=[False]*((n-i*i-1)/(2*i)+1)
+ return [2] + [i for i in xrange(3,n,2) if sieve[i]]
+ 
+
+ In one of his codes Xavier uses flags[i2::i&lt;&lt;1] and len(flags[i2::i&lt;&lt;1]), i computed the size explicit using the fact that between i*i..n we have (n-i*i)//2*i multiples of 2*i because we want to count i*i also we sum 1 so len(sieve[i*i::2*i]) equal (n-i*i)//(2*i) +1 This make the code faster. A basic generator based on the code above would be: 
+
+ def primesgen(n):
+ """ Generates all primes &lt;= n """
+ sieve = [True] * n
+ yield 2
+ for i in xrange(3,int(n**0.5)+1,2):
+  if sieve[i]:
+   yield i
+   sieve[i*i::2*i] = [False]*((n-i*i-1)/(2*i)+1)
+ for i in xrange(i+2,n,2):
+  if sieve[i]: yield i
+ 
+
+ with a bit of modification one can write a slightly slower version of the code above that start with a sieve half of the size sieve = [True] * (n//2) and works for the same n. not sure how that you reflect in the memory issue. As an example of implementation here is the
+modified version of the numpy rosetta code (maybe faster) starting with a sieve half of the size. 
+
+ import numpy
+def primesfrom3to(n):
+ """ Returns a array of primes, 3 &lt;= p &lt; n """
+ sieve = numpy.ones(n/2, dtype=numpy.bool)
+ for i in xrange(3,int(n**0.5)+1,2):
+  if sieve[i/2]: sieve[i*i/2::i] = False
+ return 2*numpy.nonzero(sieve)[0][1::]+1
+ 
+
+ A Faster &amp; more memory-wise generator would be: 
+
+ import numpy
+def primesgen1(n):
+""" Input n&gt;=6, Generates all primes &lt; n """
+sieve1 = numpy.ones(n/6+1, dtype=numpy.bool)
+sieve5 = numpy.ones(n/6 , dtype=numpy.bool)
+sieve1[0] = False
+yield 2; yield 3;
+for i in xrange(int(n**0.5)/6+1):
+ if sieve1[i]:
+  k=6*i+1; yield k;
+  sieve1[ ((k*k)/6) ::k] = False
+  sieve5[(k*k+4*k)/6::k] = False
+ if sieve5[i]:
+  k=6*i+5; yield k;
+  sieve1[ ((k*k)/6) ::k] = False
+  sieve5[(k*k+2*k)/6::k] = False
+for i in xrange(i+1,n/6):
+  if sieve1[i]: yield 6*i+1
+  if sieve5[i]: yield 6*i+5
+if n%6 &gt; 1:
+ if sieve1[i+1]: yield 6*(i+1)+1
+ 
+
+ or with a bit more code: 
+
+ import numpy
+def primesgen(n):
+ """ Input n&gt;=30, Generates all primes &lt; n """
+ size = n/30 + 1
+ sieve01 = numpy.ones(size, dtype=numpy.bool)
+ sieve07 = numpy.ones(size, dtype=numpy.bool)
+ sieve11 = numpy.ones(size, dtype=numpy.bool)
+ sieve13 = numpy.ones(size, dtype=numpy.bool)
+ sieve17 = numpy.ones(size, dtype=numpy.bool)
+ sieve19 = numpy.ones(size, dtype=numpy.bool)
+ sieve23 = numpy.ones(size, dtype=numpy.bool)
+ sieve29 = numpy.ones(size, dtype=numpy.bool)
+ sieve01[0] = False
+ yield 2; yield 3; yield 5;
+ for i in xrange(int(n**0.5)/30+1):
+  if sieve01[i]:
+   k=30*i+1; yield k;
+   sieve01[  (k*k)/30::k] = False
+   sieve07[(k*k+ 6*k)/30::k] = False
+   sieve11[(k*k+10*k)/30::k] = False
+   sieve13[(k*k+12*k)/30::k] = False
+   sieve17[(k*k+16*k)/30::k] = False
+   sieve19[(k*k+18*k)/30::k] = False
+   sieve23[(k*k+22*k)/30::k] = False
+   sieve29[(k*k+28*k)/30::k] = False
+  if sieve07[i]:
+   k=30*i+7; yield k;
+   sieve01[(k*k+ 6*k)/30::k] = False
+   sieve07[(k*k+24*k)/30::k] = False
+   sieve11[(k*k+16*k)/30::k] = False
+   sieve13[(k*k+12*k)/30::k] = False
+   sieve17[(k*k+ 4*k)/30::k] = False
+   sieve19[  (k*k)/30::k] = False
+   sieve23[(k*k+22*k)/30::k] = False
+   sieve29[(k*k+10*k)/30::k] = False
+  if sieve11[i]:
+   k=30*i+11; yield k;
+   sieve01[  (k*k)/30::k] = False
+   sieve07[(k*k+ 6*k)/30::k] = False
+   sieve11[(k*k+20*k)/30::k] = False
+   sieve13[(k*k+12*k)/30::k] = False
+   sieve17[(k*k+26*k)/30::k] = False
+   sieve19[(k*k+18*k)/30::k] = False
+   sieve23[(k*k+ 2*k)/30::k] = False
+   sieve29[(k*k+ 8*k)/30::k] = False
+  if sieve13[i]:
+   k=30*i+13; yield k;
+   sieve01[(k*k+24*k)/30::k] = False
+   sieve07[(k*k+ 6*k)/30::k] = False
+   sieve11[(k*k+ 4*k)/30::k] = False
+   sieve13[(k*k+18*k)/30::k] = False
+   sieve17[(k*k+16*k)/30::k] = False
+   sieve19[  (k*k)/30::k] = False
+   sieve23[(k*k+28*k)/30::k] = False
+   sieve29[(k*k+10*k)/30::k] = False
+  if sieve17[i]:
+   k=30*i+17; yield k;
+   sieve01[(k*k+ 6*k)/30::k] = False
+   sieve07[(k*k+24*k)/30::k] = False
+   sieve11[(k*k+26*k)/30::k] = False
+   sieve13[(k*k+12*k)/30::k] = False
+   sieve17[(k*k+14*k)/30::k] = False
+   sieve19[  (k*k)/30::k] = False
+   sieve23[(k*k+ 2*k)/30::k] = False
+   sieve29[(k*k+20*k)/30::k] = False
+  if sieve19[i]:
+   k=30*i+19; yield k;
+   sieve01[  (k*k)/30::k] = False
+   sieve07[(k*k+24*k)/30::k] = False
+   sieve11[(k*k+10*k)/30::k] = False
+   sieve13[(k*k+18*k)/30::k] = False
+   sieve17[(k*k+ 4*k)/30::k] = False
+   sieve19[(k*k+12*k)/30::k] = False
+   sieve23[(k*k+28*k)/30::k] = False
+   sieve29[(k*k+22*k)/30::k] = False
+  if sieve23[i]:
+   k=30*i+23; yield k;
+   sieve01[(k*k+24*k)/30::k] = False
+   sieve07[(k*k+ 6*k)/30::k] = False
+   sieve11[(k*k+14*k)/30::k] = False
+   sieve13[(k*k+18*k)/30::k] = False
+   sieve17[(k*k+26*k)/30::k] = False
+   sieve19[  (k*k)/30::k] = False
+   sieve23[(k*k+ 8*k)/30::k] = False
+   sieve29[(k*k+20*k)/30::k] = False
+  if sieve29[i]:
+   k=30*i+29; yield k;
+   sieve01[  (k*k)/30::k] = False
+   sieve07[(k*k+24*k)/30::k] = False
+   sieve11[(k*k+20*k)/30::k] = False
+   sieve13[(k*k+18*k)/30::k] = False
+   sieve17[(k*k+14*k)/30::k] = False
+   sieve19[(k*k+12*k)/30::k] = False
+   sieve23[(k*k+ 8*k)/30::k] = False
+   sieve29[(k*k+ 2*k)/30::k] = False
+ for i in xrange(i+1,n/30):
+   if sieve01[i]: yield 30*i+1
+   if sieve07[i]: yield 30*i+7
+   if sieve11[i]: yield 30*i+11
+   if sieve13[i]: yield 30*i+13
+   if sieve17[i]: yield 30*i+17
+   if sieve19[i]: yield 30*i+19
+   if sieve23[i]: yield 30*i+23
+   if sieve29[i]: yield 30*i+29
+ i += 1
+ mod30 = n%30
+ if mod30 &gt; 1:
+  if sieve01[i]: yield 30*i+1
+ if mod30 &gt; 7:
+  if sieve07[i]: yield 30*i+7
+ if mod30 &gt; 11:
+  if sieve11[i]: yield 30*i+11
+ if mod30 &gt; 13:
+  if sieve13[i]: yield 30*i+13
+ if mod30 &gt; 17:
+  if sieve17[i]: yield 30*i+17
+ if mod30 &gt; 19:
+  if sieve19[i]: yield 30*i+19
+ if mod30 &gt; 23:
+  if sieve23[i]: yield 30*i+23
+ 
+
+ Ps: If you have any suggestions about how to speed up this code, anything from change order of operations to pre-computing anything, please comment. 
+ #4 One speed improvement you can make using bitstring is to use the 'set' method when you exclude multiples of the current number. 
+
+ So the vital section becomes 
+
+ for i in range(3, limit, 2):
+ if flags[i]:
+  yield i
+  if i &lt;= sub_limit:
+   flags.set(1, range(i*3, limit, i*2)) 
+ 
+
+ On my machine this runs about 3 times faster than the original. 
+
+ My other thought was to use the bitstring to represent only the odd numbers. You could then find the unset bits using flags.findall([0]) which returns a generator. Not sure if that would be much faster (finding bit patterns isn't terribly easy to do efficiently). 
+
+ [Full disclosure: I wrote the bitstring module, so I've got some pride at stake here!] 
+
+ 
+
+ As a comparison I've also taken the guts out of the bitstring method so that it's doing it in the same way, but without range checking etc. I think this gives a reasonable lower limit for pure Python that works for a billion elements (without changing the algorithm, which I think is cheating!) 
+
+ def prime_pure(limit=1000000):
+ yield 2
+ flags = bytearray((limit + 7) // 8)
+ sub_limit = int(limit**0.5)
+ for i in xrange(3, limit, 2):
+  byte, bit = divmod(i, 8)
+  if not flags[byte] &amp; (128 &gt;&gt; bit):
+   yield i
+   if i &lt;= sub_limit:
+    for j in xrange(i*3, limit, i*2):
+     byte, bit = divmod(j, 8)
+     flags[byte] |= (128 &gt;&gt; bit)
+ 
+
+ On my machine this runs in about 0.62 seconds for a million elements, which means it's about a quarter of the speed of the bitarray answer. I think that's quite reasonable for pure Python. 
+ #5 Here's a version that I wrote a while back; it might be interesting to compare with yours for speed. It doesn't do anything about the space problems, though (in fact, they're probably worse than with your version). 
+
+ from math import sqrt
+
+def basicSieve(n):
+ """Given a positive integer n, generate the primes &lt; n."""
+ s = [1]*n
+ for p in xrange(2, 1+int(sqrt(n-1))):
+  if s[p]:
+   a = p*p
+   s[a::p] = [0] * -((a-n)//p)
+ for p in xrange(2, n):
+  if s[p]:
+   yield p 
+ 
+
+ I have faster versions, using a wheel, but they're much more complicated. Original source is here . 
+
+ Okay, here's the version using a wheel. wheelSieve is the main entry point. 
+
+ from math import sqrt
+from bisect import bisect_left
+
+def basicSieve(n):
+ """Given a positive integer n, generate the primes &lt; n."""
+ s = [1]*n
+ for p in xrange(2, 1+int(sqrt(n-1))):
+  if s[p]:
+   a = p*p
+   s[a::p] = [0] * -((a-n)//p)
+ for p in xrange(2, n):
+  if s[p]:
+   yield p
+
+class Wheel(object):
+ """Class representing a wheel.
+
+ Attributes:
+  primelimit -&gt; wheel covers primes &lt; primelimit.
+  For example, given a primelimit of 6
+  the wheel primes are 2, 3, and 5.
+  primes -&gt; list of primes less than primelimit
+  size -&gt; product of the primes in primes; the modulus of the wheel
+  units -&gt; list of units modulo size
+  phi -&gt; number of units
+
+ """
+ def __init__(self, primelimit):
+  self.primelimit = primelimit
+  self.primes = list(basicSieve(primelimit))
+
+  # compute the size of the wheel
+  size = 1
+  for p in self.primes:
+   size *= p
+  self.size = size
+
+  # find the units by sieving
+  units = [1] * self.size
+  for p in self.primes:
+   units[::p] = [0]*(self.size//p)
+  self.units = [i for i in xrange(self.size) if units[i]]
+
+  # number of units
+  self.phi = len(self.units)
+
+ def to_index(self, n):
+  """Compute alpha(n), where alpha is an order preserving map
+  from the set of units modulo self.size to the nonnegative integers.
+
+  If n is not a unit, the index of the first unit greater than n
+  is given."""
+  return bisect_left(self.units, n % self.size) + n // self.size * self.phi
+
+ def from_index(self, i):
+  """Inverse of to_index."""
+
+  return self.units[i % self.phi] + i // self.phi * self.size
+
+def wheelSieveInner(n, wheel):
+ """Given a positive integer n and a wheel, find the wheel indices of
+ all primes that are less than n, and that are units modulo the
+ wheel modulus.
+ """
+
+ # renaming to avoid the overhead of attribute lookups
+ U = wheel.units
+ wS = wheel.size
+ # inverse of unit map
+ UI = dict((u, i) for i, u in enumerate(U))
+ nU = len(wheel.units)
+
+ sqroot = 1+int(sqrt(n-1)) # ceiling of square root of n
+
+ # corresponding index (index of next unit up)
+ sqrti = bisect_left(U, sqroot % wS) + sqroot//wS*nU
+ upper = bisect_left(U, n % wS) + n//wS*nU
+ ind2 = bisect_left(U, 2 % wS) + 2//wS*nU
+
+ s = [1]*upper
+ for i in xrange(ind2, sqrti):
+  if s[i]:
+   q = i//nU
+   u = U[i%nU]
+   p = q*wS+u
+   u2 = u*u
+   aq, au = (p+u)*q+u2//wS, u2%wS
+   wp = p * nU
+   for v in U:
+    # eliminate entries corresponding to integers
+    # congruent to p*v modulo p*wS
+    uvr = u*v%wS
+    m = aq + (au &gt; uvr)
+    bot = (m + (q*v + u*v//wS - m) % p) * nU + UI[uvr]
+    s[bot::wp] = [0]*-((bot-upper)//wp)
+ return s
+
+def wheelSieve(n, wheel=Wheel(10)):
+ """Given a positive integer n, generate the list of primes &lt;= n."""
+ n += 1
+ wS = wheel.size
+ U = wheel.units
+ nU = len(wheel.units)
+ s = wheelSieveInner(n, wheel)
+ return (wheel.primes[:bisect_left(wheel.primes, n)] +
+   [p//nU*wS + U[p%nU] for p in xrange(bisect_left(U, 2 % wS)
+    + 2//wS*nU, len(s)) if s[p]])
+ 
+
+ As to what a wheel is: well, you know that (apart from 2), all primes are odd, so most sieves miss out all the even numbers. Similarly, you can go a bit further and notice that all primes (except 2 and 3) are congruent to 1 or 5 modulo 6 (== 2 * 3), so you can get away with only storing entries for those numbers in your sieve. The next step up is to note that all primes (except 2, 3 and 5) are congruent to one of 1, 7, 11, 13, 17, 19, 23, 29 (modulo 30) (here 30 == 2*3*5), and so on. 
+ #6 Python's integer types can be of arbitrary size, so you shouldn't need a clever bitstring library to represent a set of bits, just a single number. 
+
+ Here's the code. It handles a limit of 1,000,000 with ease, and can even handle 10,000,000 without complaining too much: 
+
+ def multiples_of(n, step, limit):
+ bits = 1 &lt;&lt; n
+ old_bits = bits
+ max = 1 &lt;&lt; limit
+ while old_bits &lt; max:
+  old_bits = bits
+  bits += bits &lt;&lt; step
+  step *= 2
+ return old_bits
+
+def prime_numbers(limit=10000000):
+ '''Prime number generator. Yields the series                  
+ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29 ...                    
+ using Sieve of Eratosthenes.                      
+ '''
+ yield 2
+ sub_limit = int(limit**0.5)
+ flags = ((1 &lt;&lt; (limit - 2)) - 1) &lt;&lt; 2
+ # Step through all the odd numbers                     
+ for i in xrange(3, limit, 2):
+  if not (flags &amp; (1 &lt;&lt; i)):
+   continue
+  yield i
+  # Exclude further multiples of the current prime number               
+  if i &lt;= sub_limit:
+   flags &amp;= ~multiples_of(i * 3, i &lt;&lt; 1, limit)
+ 
+
+ The multiples_of function avoids the cost of setting every single multiple individually. It sets the initial bit, shifts it by the initial step ( i &lt;&lt; 1 ) and adds the result to itself. It then doubles the step, so that the next shift copies both bits, and so on until it reaches the limit. This sets all the multiples of a number up to the limit in O(log(limit)) time. 
+ #7 One option you may want to look at is just compiling a C/C++ module so you have direct access to the bit-twiddling features. AFAIK you could write something of that nature and only return the results on completion of the calculations performed in C/C++. Now that I'm typing this you may also look at numpy which does store arrays as native C for speed. I don't know if that will be any faster than the bitstring module, though! 
+ #8 Another really stupid option, but that can be of help if you really need a large list of primes number available very fast. Say, if you need them as a tool to answer project Euler's problems (if the problem is just optimizing your code as a mind game it's irrelevant). 
+
+ Use any slow solution to generate list and save it to a python source file, says primes.py that would just contain: 
+
+ primes = [ a list of a million primes numbers here ]
+ 
+
+ Now to use them you just have to do import primes and you get them with minimal memory footprint at the speed of disk IO. Complexity is number of primes :-) 
+
+ Even if you used a poorly optimized solution to generate this list, it will only be done once and it does not matter much. 
+
+ You could probably make it even faster using pickle/unpickle, but you get the idea... 
+ #9 You could use a segmented Sieve of Eratosthenes. The memory used for each segment is reused for the next segment.

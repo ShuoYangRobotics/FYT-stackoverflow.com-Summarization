@@ -1,0 +1,150 @@
+Question (ID-269676): How can I Cause a Deadlock in MySQL for Testing Purposes I want to make my Python library working with MySQLdb be able to detect deadlocks and try again. I believe I've coded a good solution, and now I want to test it. 
+
+ Any ideas for the simplest queries I could run using MySQLdb to create a deadlock condition would be? 
+
+ system info: 
+
+ 
+ MySQL 5.0.19 
+ Client 5.1.11 
+ Windows XP 
+ Python 2.4 / MySQLdb 1.2.1 p2 
+ 
+ Answers (Total-6): #0 You want something along the following lines. 
+
+ parent.py 
+
+ import subprocess
+c1= subprocess.Popen( ["python", "child.py", "1"], stdin=subprocess.PIPE, stdout=subprocess.PIPE )
+c2= subprocess.Popen( ["python", "child.py", "2"], stdin=subprocess.PIPE, stdout=subprocess.PIPE )
+out1, err1= c1.communicate( "to 1: hit it!" )
+print " 1:", repr(out1)
+print "*1:", repr(err1)
+out2, err2= c2.communicate( "to 2: ready, set, go!" )
+print " 2:", repr(out2)
+print "*2:", repr(err2)
+out1, err1= c1.communicate()
+print " 1:", repr(out1)
+print "*1:", repr(err1)
+out2, err2= c2.communicate()
+print " 2:", repr(out2)
+print "*2:", repr(err2)
+c1.wait()
+c2.wait()
+ 
+
+ child.py 
+
+ import yourDBconnection as dbapi2
+
+def child1():
+ print "Child 1 start"
+ conn= dbapi2.connect( ... )
+ c1= conn.cursor()
+ conn.begin() # turn off autocommit, start a transaction
+ ra= c1.execute( "UPDATE A SET AC1='Achgd' WHERE AC1='AC1-1'" )
+ print ra
+ print "Child1", raw_input()
+ rb= c1.execute( "UPDATE B SET BC1='Bchgd' WHERE BC1='BC1-1'" )
+ print rb
+ c1.close()
+ print "Child 1 finished"
+
+def child2():
+ print "Child 2 start"
+ conn= dbapi2.connect( ... )
+ c1= conn.cursor()
+ conn.begin() # turn off autocommit, start a transaction
+ rb= c1.execute( "UPDATE B SET BC1='Bchgd' WHERE BC1='BC1-1'" )
+ print rb
+ print "Child2", raw_input()
+ ra= c1.execute( "UPDATE A SET AC1='Achgd' WHERE AC1='AC1-1'" )
+ print ta
+ c1.close()
+ print "Child 2 finish"
+
+try:
+ if sys.argv[1] == "1":
+  child1()
+ else:
+  child2()
+except Exception, e:
+ print repr(e)
+ 
+
+ Note the symmetry. Each child starts out holding one resource. Then they attempt to get someone else's held resource. You can, for fun, have 3 children and 3 resources for a really vicious circle. 
+
+ Note that difficulty in contriving a situation in which deadlock occurs. If your transactions are short -- and consistent -- deadlock is very difficult to achieve. Deadlock requires (a) transaction which hold locks for a long time AND (b) transactions which acquire locks in an inconsistent order. I have found it easiest to prevent deadlocks by keeping my transactions short and consistent. 
+
+ Also note the non-determinism. You can't predict which child will die with a deadlock and which will continue after the other died. Only one of the two need to die to release needed resources for the other. Some RDBMS's claim that there's a rule based on number of resources held blah blah blah, but in general, you'll never know how the victim was chosen. 
+
+ Because of the two writes being in a specific order, you sort of expect child 1 to die first. However, you can't guarantee that. It's not deadlock until child 2 tries to get child 1's resources -- the sequence of who acquired first may not determine who dies. 
+
+ Also note that these are processes, not threads. Threads -- because of the Python GIL -- might be inadvertently synchronized and would require lots of calls to time.sleep( 0.001 ) to give the other thread a chance to catch up. Processes -- for this -- are slightly simpler because they're fully independent. 
+ #1 I'm not familar with Python, so excuse my incorrect language If I'm saying this wrong... but open two sessions (in separate windows, or from separate Python processes - from separate boxes would work ... ) Then ... 
+
+ . In Session A: 
+
+  Begin Transaction 
+  Insert TableA() Values()...
+ 
+
+ . Then In Session B: 
+
+ Begin Transaction
+ Insert TableB() Values()... 
+ Insert TableA() Values() ...
+ 
+
+ . Then go back to session A 
+
+ Insert TableB() Values () ...
+ 
+
+ You'll get a deadlock... 
+ #2 Not sure if either above is correct.
+Check out this: 
+
+ http://www.xaprb.com/blog/2006/08/08/how-to-deliberately-cause-a-deadlock-in-mysql/ 
+ #3 you can always run LOCK TABLE tablename from another session (mysql CLI for instance). That might do the trick. 
+
+ It will remain locked until you release it or disconnect the session. 
+ #4 @s.lott 
+
+ Looks promising but here's what I get when I run it: 
+
+ 1: 'Child 1 start\r\n0\r\nChild1 to 1: hit it!\r\n0\r\nChild 1 finished\r\n'
+*1: None
+ 2: 'Child 1 start\r\n0\r\nChild1 to 2: ready, set, go!\r\n0\r\nChild 1 finished
+\r\n'
+*2: None
+ 1: ''
+*1: None
+ 2: ''
+*2: None
+ 
+
+ (I couldn't comment this on your post since there's no formatting in comments) 
+ #5 Here's some pseudocode for how i do it in PHP: 
+
+ Script 1: 
+
+ START TRANSACTION;
+INSERT INTO table &lt;anything you want&gt;;
+SLEEP(5);
+UPDATE table SET field = 'foo';
+COMMIT;
+ 
+
+ Script 2: 
+
+ START TRANSACTION;
+UPDATE table SET field = 'foo';
+SLEEP(5);
+INSERT INTO table &lt;anything you want&gt;;
+COMMIT;
+ 
+
+ Execute script 1 and then immediately execute script 2 in another terminal. You'll get a deadlock if the database table already has some data in it (In other words, it starts deadlocking after the second time you try this). 
+
+ Note that if mysql won't honor the SLEEP() command, use Python's equivalent in the application itself.

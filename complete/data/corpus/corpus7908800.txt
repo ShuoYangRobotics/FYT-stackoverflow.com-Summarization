@@ -1,0 +1,196 @@
+Question (ID-7908800): Generating random numbers under very specific constraints I am faced with the following programming problem. I need to generate n (a, b) tuples for which the sum of all a 's is a given A and sum of all b 's is a given B and for each tuple the ratio of a / b is in the range (c_min, c_max) . A / B is within the same range, too. I am also trying to make sure there is no bias in the result other than what is introduced by the constraints and the a / b values are more-or-less uniformly distributed in the given range. 
+
+ Some clarifications and meta-constraints: 
+
+ 
+ A , B , c_min , and c_max are given. 
+ The ratio A / B is in the (c_min, c_max) range. This has to be so if the problem is to have a solution given the other constraints. 
+ a and b are &gt;0 and non-integer. 
+ 
+
+ I am trying to implement this in Python but ideas in any language (English included) are much appreciated. 
+ Answers (Total-6): #0 Start by generating as many identical tuples, n, as you need: 
+
+ (A/n, B/n) 
+
+ Now pick two tuples at random. Make a random change to the a value of one, and a compensating change to the a value of the other, keeping everything within the given constraints. Put the two tuples back. 
+
+ Now pick another random pair. This times twiddle with the b values. 
+
+ Lather, rinse repeat. 
+ #1 I think the simplest thing is to 
+
+ 
+ Use your favorite method to throw n-1 values such that \sum_i=0,n-1 a_i &lt; A , and set a_n to get the right total. There are several SO question about doing that, though I've never seen a answer I'm really happy with yet. Maybe I'll write a paper or something. 
+ Get the n-1 b 's by throwing the c_i uniformly on the allowed range, and set final b to get the right total and check on the final c (I think it must be OK, but I haven't proven it yet). 
+ 
+
+ Note that since we have 2 hard constrains we should expect to throw 2n-2 random numbers, and this method does exactly that (on the assumption that you can do step 1 with n-1 throws. 
+ #2 We look for tuples a_i and b_i such that 
+
+ 
+ (a_1, ... a_n) and (b_1, ... b_n) have a distribution which is invariant under permutation of indices (what you would call "unbiased") 
+ the ratios a_i / b_i are uniformly distributed on [cmin, cmax] 
+ sum(a_i) = A, sum(b_i) = B 
+ 
+
+ If c_min and c_max are not too ill conditioned (ie they are not very close to another), and n is not very large, the following works: 
+
+ 
+ Generate a_i "uniformly" such that sum a_i = A : 
+ 
+ Draw n samples aa_i ( i = 1..n ) from some distribution (eg. uniform) 
+ Divide them by their sum and multiply by A: a_i = A * aa_i / sum(aa_i) has desired properties. 
+ 
+ Generate b_i such that sum b_i = B by the same method. 
+ If there exists i such that a_i / b_i is not in the interval [cmin, cmax] , throw away all the a_i and b_i and try again from the beginning. 
+ 
+
+ It doesn't scale well with n , because the set of a_i and b_i satisfying the constraints gets more and more narrow as n increases (and so you reject more candidates). 
+
+ To be honest, I don't see any other simple solution. If n gets large and cmin ~ cmax , then you will have to use a sledgehammer (eg. MCMC) to generate samples from your distribution, unless there is some trick we did not see. 
+
+ 
+
+ If you really want to use MCMC algorithms, note that you can change cmin to cmin * B / A (likewise for cmax ) and assume A == B == 1 . The problem is then to draw uniformly on the product of two unit n-simplices (u_1...u_n, v_1...v_n) such that 
+
+ u_i / v_i \in [cmin, cmax].
+ 
+
+ So you have to use a MCMC algorithm (Metropolis-Hastings seems more suited) on the product of two unit n-simplices with the density 
+
+ f(u_1, ..., u_n, v_1, ..., v_n) = \prod indicator_{u_i/v_i \in [cmin, cmax]}
+ 
+
+ which is definitely doable (albeit involved). 
+ #3 Blocked Gibbs sampling is pretty simple and converges to the right distribution (this is along the lines of what Alexandre is proposing). 
+
+ 
+ For all i, initialize a i = A / n and b i = B / n. 
+ Select i ≠ j uniformly at random. With probability 1/2, update a i and a j with uniform random values satisfying the constraints. The rest of the time, do the same for b i and b j . 
+ Repeat Step 2 as many times as seems to be necessary for your application. I have no idea what the convergence rate is. 
+ 
+ #4 So here's what I think from mathematical point of view. We have sequences a_i and b_i such that sum of a_i is A and sum of b_i is B . Furthermore A/B is in (x,y) and so is a_i/b_i for each i . Furthermore you want a_i/b_i to be uniformly distributed in (x,y) . 
+
+ So do it starting from the end. Choose c_i from (x,y) such that they are uniformly distributed. Then we want to have the following equality a_i/b_i = c_i , so a_i = b_i*c_i . 
+
+ Therefore we only need to find b_i . But we have the following system of linear equations: 
+
+ A = (sum)b_i*c_i
+B = (sum)b_i
+ 
+
+ where b_i are variables. Solve it (some fancy linear algebra tricks) and you're done! 
+
+ Note that for large enough n this system will have lots of solutions. They will be dependent on some parameters which you can choose randomly. 
+
+ 
+
+ Enough of the theoretical approach, let's see some practical solution. 
+
+ // EDIT 1: Here's some hard core Python code :D 
+
+ import random
+min = 0.0
+max = 10.0
+A = 500.0
+B = 100.0
+
+def generate(n):
+ C = [min + i*(max-min)/(n+1) for i in range(1, n+1)]
+ Y = [0]
+ for i in range(1,n-1):
+  # This line should be changed in order to always get positive numbers
+  # It should be relatively easy to figure out some good random generator
+  Y.append(random.random())
+ val = A - C[0]*B
+ for i in range(1, n-1):
+  val -= Y[i] * (C[i] - C[0])
+ val /= (C[n-1] - C[0])
+ Y.append(val)
+ val = B
+ for i in range(1, n):
+  val -= Y[i]
+ Y[0] = val
+ result = []
+ for i in range(0, n):
+  result.append([ Y[i]*C[i], Y[i] ])
+ return result
+ 
+
+ The result is a list of pairs (X,Y) satisfying your conditions with the exception that they may be negative (see the random generator line in code) i.e. the first and the last pair may contain negative numbers. 
+
+ // EDIT 2: 
+
+ Too ensure that they are positive you may try something like 
+
+ Y.append(random.random() * B / n)
+ 
+
+ instead of 
+
+ Y.append(random.random())
+ 
+
+ I'm not sure though. 
+
+ // EDIT 3: 
+
+ In order to have better results try something like this: 
+
+ avrg = B / n
+ran = avrg / 20
+for i in range(1, n-1):
+ Y.append(random.gauss(avrg, ran))
+ 
+
+ instead of 
+
+ for i in range(1, n-1):
+ Y.append(random.random())
+ 
+
+ This will make all b_i to be near B / n . Unfortunetly the last term will still sometimes jump high. I'm sorry, but there is no way to avoid this (mathematics) since the last and the first terms depend on the others. For small n (~100) it looks good though. Unfortunetly some negative values may appear. 
+
+ The choice of a correct generator is not so simple if you additionally want b_i to be uniformly distributed. 
+ #5 Lots of good ideas here. Thanks! Rossum 's idea seemed the most straightforward implementation-wise so I went for it. Here is the code for posterity: 
+
+ c_min = 0.25
+c_max = 0.75
+a_sum = 100.0
+b_sum = 200.0
+n = 1000 
+
+a = [a_sum / n] * n
+b = [b_sum / n] * n
+
+while not good_enough(a, b):
+ i, j = random.sample(range(n), 2)
+ li, ui = c_min * b[i] - a[i], c_max * b[i] - a[i]
+ lj, uj = a[j] - c_min * b[j], a[j] - c_max * b[j]
+ llim = max((li, uj))
+ ulim = min((ui, lj))
+ q = random.uniform(llim, ulim)
+ a[i] += q
+ a[j] -= q
+
+ i, j = random.sample(range(n), 2)
+ li, ui = a[i] / c_max - b[i], a[i] / c_min - b[i]
+ lj, uj = b[j] - a[j] / c_max, b[j] - a[j] / c_min
+ llim = max((li, uj))
+ ulim = min((ui, lj))
+ q = random.uniform(llim, ulim)
+ b[i] += q
+ b[j] -= q
+ 
+
+ The good_enough(a, b) function can be a lot of things. I tried: 
+
+ 
+ Standard deviation, which is hit or miss, as you don't know what is a good enough value. 
+ Kurtosis, where a large negative value would be nice. However, it is relatively slow to calculate and is undefined with the seed values of (a_sum / n, b_sum / n) (though that's trivial to fix). 
+ Skewness, where a value close to 0 is desirable. But it has the same drawbacks as kurtosis. 
+ A number of iterations proportional to n . 2n sometimes wasn't enough, n ^ 2 is a little bit of overkill and is, well, exponential. 
+ 
+
+ Ideally, a heuristic using a combination of skewness and kurtosis would be best but I settled for making sure each value has been changed from the initial (again, as rossum suggested in a comment). Though there is no theoretical guarantee that the loop will complete, it seemed to work well enough for me.

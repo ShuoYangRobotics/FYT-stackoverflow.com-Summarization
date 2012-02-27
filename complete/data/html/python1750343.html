@@ -1,0 +1,157 @@
+<h3>Question (ID-1750343):</h3><h2>Fastest way to search 1GB+ a string of data for the first occurence of a pattern in Python</h2><p>There's a 1 Gigabyte string of arbitrary data which you can assume to be equivalent to something like:</p>
+
+<pre><code>1_gb_string=os.urandom(1*gigabyte)
+</code></pre>
+
+<p>We will be searching this string, <code>1_gb_string</code>, for an infinite number of fixed width, 1 kilobyte patterns, <code>1_kb_pattern</code>. Every time we search the pattern will be different. So caching opportunities are not apparent. The same 1 gigabyte string will be searched over and over. Here is a simple generator to describe what's happening:</p>
+
+<pre><code>def findit(1_gb_string):
+    1_kb_pattern=get_next_pattern()
+    yield 1_gb_string.find(1_kb_pattern)
+</code></pre>
+
+<p>Note that only the first occurrence of the pattern needs to be found. After that, no other major processing should be done.</p>
+
+<p>What can I use that's faster than python's bultin find for matching 1KB patterns against 1GB or greater data strings?</p>
+
+<p>(I am already aware of how to split up the string and searching it in parallel, so you can disregard that basic optimization.)</p>
+
+<p>Update: Please bound memory requirements to 16GB.</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>As you clarify that long-ish preprocessing is acceptable, I'd suggest a variant of <a href="http://en.wikipedia.org/wiki/Rabin-karp" rel="nofollow">Rabin-Karp</a>: "an algorithm of choice for multiple pattern search", as wikipedia puts it.</p>
+
+<p>Define a "rolling hash" function, i.e., one such that, when you know the hash for <code>haystack[x:x+N]</code>, computing the hash for <code>haystack[x+1:x+N+1]</code> is O(1).  (Normal hashing functions such as Python's built-in <code>hash</code> do not have this property, which is why you have to write your own, otherwise the preprocessing becomes <em>exhaustingly</em> long rather than merely long-ish;-).  A polynomial approach is fruitful, and you could use, say, 30-bit hash results (by masking if needed, i.e., you can do the computation w/more precision and just store the masked 30 bits of choice).  Let's call this rolling hash function RH for clarity.</p>
+
+<p>So, compute 1G of RH results as you roll along the haystack 1GB string; if you just stored these it would give you an array H of 1G 30-bit values (4GB) mapping index-in-haystack->RH value. But you want the reverse mapping, so use instead an array A of 2**30 entries (1G entries) that for each RH value gives you all the indices of interest in the haystack (indices at which that RH value occurs); for each entry you store the index of the first possibly-interesting haystack index into another array B of 1G indices into the haystack which is ordered to keep all indices into haystack with identical RH values ("collisions" in hashing terms) adjacent.  H, A and B both have 1G entries of 4 bytes each, so 12GB total.</p>
+
+<p>Now for each incoming 1K needle, compute its RH, call it k, and use it as an index into A; A[k] gives you the first index b into B at which it's worth comparing. So, do:</p>
+
+<pre><code>ib = A[k]
+b = B[ib]
+while b &lt; len(haystack) - 1024:
+  if H[b] != k: return "not found"
+  if needle == haystack[b:b+1024]: return "found at", b
+  ib += 1
+  b = B[ib]
+</code></pre>
+
+<p>with a good RH you should have few collisions, so the while should execute very few times until returning one way or another.  So each needle-search should be really really fast.</p>
+<br /><b>#1</b><br /><p>There are a number of string matching algorithms use in the field of genetics to find substrings.  You might try <a href="http://cat.inist.fr/?aModele=afficheN&amp;cpsidt=13397373" rel="nofollow">this paper</a> or <a href="http://www.springerlink.com/content/3g5316143gr25124/" rel="nofollow">this paper</a></p>
+<br /><b>#2</b><br /><p>Are you willing to spend a significant time preprocessing the string?</p>
+
+<p>If you are, what you can do is build a list of n-grams with offsets.</p>
+
+<p>Suppose your alphabet is hex bytes and you are using 1-grams. </p>
+
+<p>Then for 00-ff, you can create a dictionary that looks like this(perlese, sorry)</p>
+
+<pre><code>$offset_list{00} = @array_of_offsets
+$offset_list{01} = #...etc
+</code></pre>
+
+<p>where you walk down the string and build the @array_of_offsets from all points where bytes happen. You can do this for arbitrary n-grams. </p>
+
+<p>This provides a "start point for search" that you can use to walk. </p>
+
+<p>Of course, the downside is that you have to preprocess the string, so that's your tradeoff.</p>
+
+<p>edit:</p>
+
+<p><hr></p>
+
+<p>The basic idea here is to match prefixes. This may bomb out badly if the information is super-similar, but if it has a fair amount of divergence between n-grams, you should be able to match prefixes pretty well.</p>
+
+<p>Let's quantify divergence, since you've not discussed the kind of info you're analyzing. For the purposes of this algorithm, we can characterize divergence as a distance function: you need a <em>decently</em> high <a href="http://en.wikipedia.org/wiki/Hamming%5Fdistance" rel="nofollow">Hamming distance</a>. If the hamming distance between n-grams is, say, 1, the above idea won't work. But if it's n-1, the above algorithm will be much easier.</p>
+
+<p>To improve on my algorithm, let's build an algorithm that does some successive elimination of possibilities:</p>
+
+<p>We can invoke <a href="http://en.wikipedia.org/wiki/Entropy%5F%28information%5Ftheory%29" rel="nofollow">Shannon Entropy</a> to define information of a given n-gram. Take your search string and successively build a prefix based upon the first m characters. When the entropy of the m-prefix is 'sufficiently high', use it later.</p>
+
+<ol>
+<li>Define p to be an m-prefix of the search string</li>
+<li>Search your 1 GB string and create an array of offsets that match p.</li>
+<li>Extend the m-prefix to be some k-prefix, k > m, entropy of k-prefix higher than m-prefix.</li>
+<li>Keep the elements offset array defined above, such that they match the k-prefix string. Discard the non-matching elements.</li>
+<li>Goto 4 until the entire search string is met. </li>
+</ol>
+
+<p>In a sense, this is like reversing Huffman encoding.</p>
+<br /><b>#3</b><br /><p>As far as I know, standard find algorithm is naive algorithm with complexity about n*m comparisons, because
+it checks patterns against every possible offset. There are some more effective algoithms, requiring about n+m comparisons.
+If your string is not a natural language string, you can try 
+<a href="http://en.wikipedia.org/wiki/Knuth-Morris-Pratt%5Falgorithm" rel="nofollow">Knuth–Morris–Pratt algorithm</a> .  Boyer–Moore search algorithm is fast and simple enough too.</p>
+<br /><b>#4</b><br /><p>With infinite memory, you can hash every 1k string along with its position in the 1 GB file.</p>
+
+<p>With less than infinite memory, you will be bounded by how many memory pages you touch when searching.</p>
+<br /><b>#5</b><br /><p>I don't know definitively if the <code>find()</code> method for strings is faster than the <code>search()</code> method provided by Python's <code>re</code> (regular expressions) module, but there's only one way to find out.</p>
+
+<p>If you're just searching a string, what you want is this:</p>
+
+<pre><code>import re
+def findit(1_gb_string):
+    yield re.search(1_kb_pattern, 1_gb_string)
+</code></pre>
+
+<p>However, if you really only want the first match, you might be better off using <code>finditer()</code>, which returns an iterator, and with such large operations might actually be better.</p>
+<br /><b>#6</b><br /><p><a href="http://www.youtube.com/watch?v=V5hZoJ6uK-s" rel="nofollow">http://www.youtube.com/watch?v=V5hZoJ6uK-s</a>
+Will be of most value to you.  Its an MIT lecture on Dynamic Programming</p>
+<br /><b>#7</b><br /><p>If the patterns are fairly random, you can precompute the location of n-prefixes of strings.</p>
+
+<p>Instead of going over all options for n-prefixes, just use the actual ones in the 1GB string - there will be less than 1Gig of those. Use as big a prefix as fits in your memory, I don't have 16GB RAM to check but a prefix of 4 could work (at least in a memory-efficient data structures), if not try 3 or even 2.</p>
+
+<p>For a random 1GB string and random 1KB patterns, you should get a few 10s of locations per prefix if you use 3-byte prefixes, but 4-byte prefixes should get you an average of 0 or 1 , so lookup should be fast.</p>
+
+<p><strong>Precompute Locations</strong></p>
+
+<pre><code>def find_all(pattern, string):
+  cur_loc = 0
+  while True:
+     next_loc = string.find(pattern, cur_loc)
+     if next_loc &lt; 0: return
+     yield next_loc
+     cur_loc = next_loc+1
+
+big_string = ...
+CHUNK_SIZE = 1024
+PREFIX_SIZE = 4
+precomputed_indices = {}
+for i in xrange(len(big_string)-CHUNK_SIZE):
+  prefix = big_string[i:i+PREFIX_SIZE]
+  if prefix not in precomputed_indices:
+    precomputed_indices[prefix] = tuple(find_all(prefix, big_string))
+</code></pre>
+
+<p><strong>Look up a pattern</strong></p>
+
+<pre><code>def find_pattern(pattern):
+  prefix = pattern[:PREFIX_SIZE]
+  # optimization - big prefixes will result in many misses
+  if prefix not in precomputed_indices:
+    return -1
+  for loc in precomputed_indices[prefix]:
+    if big_string[loc:loc+CHUNK_SIZE] == pattern:
+        return loc
+  return -1
+</code></pre>
+<br /><b>#8</b><br /><p>Someone hinted at a possible way to index this thing if you have abundant RAM (or possibly even disk/swap) available.</p>
+
+<p>Imagine if you performed a simple 32-bit CRC on a 1K block extending from each character in the original Gig string.  This would result in 4bytes of checksum data for each byte offset from the beginning of the data.</p>
+
+<p>By itself this might give a modest improvement in search speed.  The checksum of each 1K search target could be checked against each CRC ... which each collision tested for a true match.  That should still be a couple orders of magnitude faster than a normal linear search.</p>
+
+<p>That, obviously, costs us 4GB of RAM for he CRC array (plus the original Gig for the original data and a little more overhead for the environment and our program).</p>
+
+<p>If we have ~16GB we could sort the checksums and store a list of offsets where each is found.  That becomes an indexed search (average of about 16 probes per target search ... worst case around 32 or 33 (might be a fence post there).</p>
+
+<p>It's possible that a 16BG file index would still give better performance than a linear checksum search and it would almost certainly be better than a linear raw search (unless you have extremely slow filesystems/storage).</p>
+
+<p>(Adding):  I should clarify that this strategy is only beneficial given that you've described a need to do many searches on the same one gigabyte data blob.</p>
+
+<p>You might use a threaded approach to building the index (while reading it as well as having multiple threads performing the checksumming). You might also offload the indexing into separate processes or a cluster of nodes (particularly if you use a file-based index --- the ~16GB option described above). With a simple 32-bit CRC you might be able to perform the checksums/indexing as fast as your reader thread can get the data (but we are talking about 1024 checksums for each 1K of data so perhaps not).</p>
+
+<p>You might further improve performance by coding a Python module in C for actually performing the search ... and/or possibly for performing the checksumming/indexing.</p>
+
+<p>The development and testing of such C extensions entail other trade-offs, obviously enough.  It sounds like this would have near zero re-usability.</p>
+<br /><b>#9</b><br /><p>One efficient but complex way is <a href="http://www.ddj.com/architect/184405504" rel="nofollow">full-text indexing with the Burrows-Wheeler transform</a>. It involves performing a BWT on your source text, then using a small index on that to quickly find any substring in the text that matches your input pattern.</p>
+
+<p>The time complexity of this algorithm is roughly O(n) with the length of the string you're matching - and independent of the length of the input string! Further, the size of the index is not much larger than the input data, and with compression can even be reduced below the size of the source text.</p>
+<br />

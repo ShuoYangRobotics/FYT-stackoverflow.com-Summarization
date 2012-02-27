@@ -1,0 +1,146 @@
+Question (ID-2760652): how to kill (or avoid) zombie processes with subprocess module When I kick off a python script from within another python script using the subprocess module, a zombie process is created when the subprocess "completes". I am unable to kill this subprocess unless I kill my parent python process. 
+
+ Is there a way to kill the subprocess without killing the parent? I know I can do this by using wait(), but I need to run my script with no_wait(). 
+ Answers (Total-6): #0 Not using Popen.communicate() or call() will result in a zombie process. 
+
+ If you don't need the output of the command, you can use subprocess.call() : 
+
+ &gt;&gt;&gt; import subprocess
+&gt;&gt;&gt; subprocess.call(['grep', 'jdoe', '/etc/passwd'])
+0
+ 
+
+ If the output is important, you should use Popen() and communicate() to get the stdout and stderr. 
+
+ &gt;&gt;&gt; from subprocess import Popen, PIPE
+&gt;&gt;&gt; process = Popen(['ls', '-l', '/tmp'], stdout=PIPE, stderr=PIPE)
+&gt;&gt;&gt; stdout, stderr = process.communicate()
+&gt;&gt;&gt; stderr
+''
+&gt;&gt;&gt; print stdout
+total 0
+-rw-r--r-- 1 jdoe jdoe 0 2010-05-03 17:05 bar
+-rw-r--r-- 1 jdoe jdoe 0 2010-05-03 17:05 baz
+-rw-r--r-- 1 jdoe jdoe 0 2010-05-03 17:05 foo
+ 
+ #1 A zombie process is not a real process; it's just a remaining entry in the process table until the parent process requests the child's return code. The actual process has ended and requires no other resources but said process table entry. 
+
+ We probably need more information about the processes you run in order to actually help more. 
+
+ However, in the case that your Python program knows when the child processes have ended (e.g. by reaching the end of the child stdout data), then you can safely call process.wait() : 
+
+ import subprocess
+
+process= subprocess.Popen( ('ls', '-l', '/tmp'), stdout=subprocess.PIPE)
+
+for line in process.stdout:
+  pass
+
+subprocess.call( ('ps', '-l') )
+process.wait()
+print "after wait"
+subprocess.call( ('ps', '-l') )
+ 
+
+ Example output: 
+
+ $ python so2760652.py
+F S UID PID PPID C PRI NI ADDR SZ WCHAN TTY   TIME CMD
+0 S 501 21328 21326 0 80 0 - 1574 wait pts/2 00:00:00 bash
+0 S 501 21516 21328 0 80 0 - 1434 wait pts/2 00:00:00 python
+0 Z 501 21517 21516 0 80 0 -  0 exit pts/2 00:00:00 ls &lt;defunct&gt;
+0 R 501 21518 21516 0 80 0 - 608 -  pts/2 00:00:00 ps
+after wait
+F S UID PID PPID C PRI NI ADDR SZ WCHAN TTY   TIME CMD
+0 S 501 21328 21326 0 80 0 - 1574 wait pts/2 00:00:00 bash
+0 S 501 21516 21328 0 80 0 - 1467 wait pts/2 00:00:00 python
+0 R 501 21519 21516 0 80 0 - 608 -  pts/2 00:00:00 ps
+ 
+
+ Otherwise, you can keep all the children in a list, and now and then .poll for their return codes. After every iteration, remember to remove from the list the children with return codes different than None (i.e. the finished ones). 
+ #2 I'm not sure what you mean "I need to run my script with no_wait()", but I think this example does what you need. Processes will not be zombies for very long. The parent process will only wait() on them when they are actually already terminated and thus they will quickly unzombify. 
+
+ #!/usr/bin/env python2.6
+import subprocess
+import sys
+import time
+
+children = []
+#Step 1: Launch all the children asynchronously
+for i in range(10):
+ #For testing, launch a subshell that will sleep various times
+ popen = subprocess.Popen(["/bin/sh", "-c", "sleep %s" % (i + 8)])
+ children.append(popen)
+ print "launched subprocess PID %s" % popen.pid
+
+#reverse the list just to prove we wait on children in the order they finish,
+#not necessarily the order they start
+children.reverse()
+#Step 2: loop until all children are terminated
+while children:
+ #Step 3: poll all active children in order
+ children[:] = [child for child in children if child.poll() is None]
+ print "Still running: %s" % [popen.pid for popen in children]
+ time.sleep(1)
+
+print "All children terminated"
+ 
+
+ The output towards the end looks like this: 
+
+ Still running: [29776, 29774, 29772]
+Still running: [29776, 29774]
+Still running: [29776]
+Still running: []
+All children terminated
+ 
+ #3 The python runtime takes responsibility for getting rid of zombie process once their process objects have been garbage collected. If you see the zombie lying around it means you have kept a process object and not called wait, poll or terminate on it. 
+ #4 I'm not entirely sure what you mean by no_wait() . Do you mean you can't block waiting for child processes to finish? Assuming so, I think this will do what you want: 
+
+ os.wait3(os.WNOHANG)
+ 
+ #5 If you simply use subprocess.Popen , you'll be fine - here's how: 
+
+ import subprocess
+
+def spawn_some_children():
+ subprocess.Popen(["sleep", "3"])
+ subprocess.Popen(["sleep", "3"])
+ subprocess.Popen(["sleep", "3"])
+
+def do_some_stuff():
+ spawn_some_children()
+ # do some stuff
+ print "children went out to play, now I can do my job..."
+ # do more stuff
+
+if __name__ == '__main__':
+ do_some_stuff()
+ 
+
+ You can use .poll() on the object returned by Popen to check whether it finished (without waiting). If it returns None , the child is still running. 
+
+ Make sure you don't keep references to the Popen objects - if you do, they will not be garbage collected, so you end up with zombies. Here's an example: 
+
+ import subprocess
+
+def spawn_some_children():
+ children = []
+ children.append(subprocess.Popen(["sleep", "3"]))
+ children.append(subprocess.Popen(["sleep", "3"]))
+ children.append(subprocess.Popen(["sleep", "3"]))
+ return children
+
+def do_some_stuff():
+ children = spawn_some_children()
+ # do some stuff
+ print "children went out to play, now I can do my job..."
+ # do more stuff
+
+ # if children finish while we are in this function,
+ # they will become zombies - because we keep a reference to them
+ 
+
+ In the above example, if you want to get rid of the zombies, you can either .wait() on each of the children or .poll() until the result is not None . 
+
+ Either way is fine - either not keeping references, or using .wait() or .poll() .

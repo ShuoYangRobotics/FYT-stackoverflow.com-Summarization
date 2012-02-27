@@ -1,0 +1,279 @@
+Question (ID-1635827): How would one implement Lazy Evaluation in C? Take for example, 
+
+ The follow python code: 
+
+ def multiples_of_2():
+ i = 0
+ while True:
+ i = i + 2
+ yield i
+ 
+
+ How do we translate this into C code? 
+
+ Edit: I am looking to translate this python code into a similar generator in C, with next() function. What I am not looking for is how to create a function in C to output multiples of 2. Multiples of 2 is merely an example to illustrate the problem of lazy eval generators in C. 
+ Answers (Total-9): #0 You could try to encapsulate this in a struct : 
+
+ typedef struct s_generator {
+ int current;
+ int (*func)(int);
+} generator;
+
+int next(generator* gen) {
+ int result = gen-&gt;current;
+ gen-&gt;current = (gen-&gt;func)(gen-&gt;current);
+ return result;
+}
+ 
+
+ Then you define you multiples with: 
+
+ int next_multiple(int current) { return 2 + current; }
+generator multiples_of_2 = {0, next_multiple};
+ 
+
+ You get the next multiple by calling 
+
+ next(&amp;multiples_of_2);
+ 
+ #1 I found a good article recently on coroutines in C , which describes one method of doing this. It's certainly not for the faint of heart. 
+ #2 The basic approach is to not do it. In Python (and C#) the 'yield' method stores local state between calls, whereas in C/C++ and most other languages the local state stored on the stack is not preserved between calls and this is a fundemental implementation difference. So in C you'd have to store the state between calls in some variable explicitly - either a global variable or a function parameter to your sequence generator. So either: 
+
+ int multiples_of_2() {
+ static int i = 0;
+ i += 2;
+ return i;
+}
+ 
+
+ or 
+
+ int multiples_of_2(int i) {
+ i += 2;
+ return i;
+}
+ 
+
+ depending upon if there's one global sequence or many. 
+
+ I've quickly considered longjmp and GCC computed gotos and other non-standard things, and I can't say I'd recommend any of them for this! In C, do it the C way. 
+ #3 Check out setjmp/longjmp 
+
+ 
+ setjmp.h is a header defined in the C
+ standard library to provide "non-local
+ jumps," or control flow besides the
+ usual subroutine call and return
+ sequence. The paired functions setjmp
+ and longjmp provide this
+ functionality. First setjmp saves the
+ environment of the calling function
+ into a data structure, and then
+ longjmp can use this structure to
+ "jump" back to the point it was
+ created, at the setjmp call. 
+ 
+
+ ( Lua coroutines were implemented that way) 
+ #4 You can pass the argument as a pointer to allow the function to modify it without using the return value: 
+
+ void multiples_of_2(int *i)
+{
+ *i += 2;
+}
+ 
+
+ And call it: 
+
+ int i = 0;
+multiples_of_2(&amp;i);
+ 
+ #5 As Will mentioned, languages like python do the job of storing the state of the stack between successive calls of the generator. Since C does not have this mechanism, you'll have to do it yourself. The "generic" way of doing this is not for the faint-hearted, as Greg pointed out. The traditional C way of doing this would be for you to define and maintain the state yourself and pass it in and out of your method. So: 
+
+ struct multiples_of_two_state {
+  int i;
+  /* all the state you need should go in here */
+};
+
+void multiples_of_two_init(struct multiples_of_two_state *s) {
+ s-&gt;i = 0;
+}
+
+int multiples_of_two_next(struct multiples_of_two_state *s) {
+ s-&gt;i += 2;
+ return s-&gt;i;
+}
+
+/* Usage */
+struct multiples_of_two_state s;
+int result;
+multiples_of_two_init(&amp;s);
+for (int i=0; i&lt;INFINITY; i++) {
+ result = multiples_of_two_next(&amp;s);
+ printf("next is %d", result);
+}
+ 
+ #6 The key is keeping the state of the function between calls. You have a number of options: 
+
+ 
+ Static (or global) state. Means the sequence of calls to the function is not reentrant, i.e. you can't have the function call itself recursively, nor can you have more than one caller running different sequences of calls. 
+ Initialising (and possibly allocating) the state on or before the first call, and passing that to the function on each subsequent call. 
+ Doing clever stuff with setjmp/longjmp, the stack, or modifiable code (there's an article somewhere about currying functions in C that creates an object with the necessary code to call the curried function; a similar technique could create an object with the function's state and the necessary code to save and restore it for each call). ( Edit Found it -- http://asg.unige.ch/site/papers/Dami91a.pdf ) 
+ 
+
+ Greg cites an interesting article, above, that presents a way of using static state with syntax similar to the yield statement. I liked it academically but probably wouldn't use it because of the reentrancy issue, and because I'm still surprised that the infamous Duffy's Device even compiles ;-). 
+
+ In practice, large C programs do want to compute things lazily, e.g. a database server may want to satisfy a SELECT ... LIMIT 10 query by wrapping the plain SELECT query inside something that will yield each row until 10 have been returned, rather than computing the whole result and then discarding most of them. The most C-like technique for this is explicitly create an object for the state, and to call a function with it for each call. For your example, you might see something like: 
+
+ /* Definitions in a library somewhere. */
+typedef int M2_STATE;
+M2_STATE m2_new() { return 0; }
+int m2_empty(M2_STATE s) { return s &lt; INT_MAX; }
+int m2_next(M2_STATE s) { int orig_s = s; s = s + 2; return orig_s; }
+
+/* Caller. */
+M2_STATE s;
+s = m2_new();
+while (!m2_empty(s))
+{
+ int num = m2_next(s);
+ printf("%d\n", num);
+}
+ 
+
+ This seems cumbersome for the multiples of two, but it becomes a useful pattern for more complicated generators. You can make the state more complicated without having to burden all the code that uses your generator with the details. Even better practice is to return an opaque pointer in the new function, and (unless GC is available) provide a function for cleaning up the generator. 
+
+ The big advantage of allocating the state for each new sequence of calls is things like recursive generators. For example, a generator that returns all files under a directory, by calling itself on each subdirectory. 
+
+ char *walk_next(WALK_STATE *s)
+{
+ if (s-&gt;subgenerator)
+ {
+  if (walk_is_empty(s-&gt;subgenerator))
+  {
+   walk_finish(s-&gt;subgenerator);
+   s-&gt;subgenerator = NULL;
+  }
+  else
+   return walk_next(s-&gt;subgenerator);
+ }
+
+ char *name = readdir(s-&gt;dir);
+ if (is_file(name))
+  return name;
+ else if (is_dir(name))
+ {
+  char subpath[MAX_PATH];
+  strcpy(subpath, s-&gt;path);
+  strcat(subpath, name);
+  s-&gt;subgenerator = walk_new(subpath);
+  return walk_next(s-&gt;subgenerator);
+ }
+ closedir(s-&gt;dir);
+ s-&gt;empty = 1;
+ return NULL;
+}
+ 
+
+ (You'll have to excuse my misuse of readdir, et al. and my pretense that C has idiot-proof string support.) 
+ #7 int multiples_of_2() {
+ static int i = 0;
+ i += 2;
+ return i;
+}
+ 
+
+ The static int i behaves like a global variable but is visible only within the contect of multiples_of_2(). 
+ #8 I have implemented my own lazy eval, with respects to solving the hamming's problem. 
+
+ Heres my code for anyone whos interested: 
+
+ #include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+// Hamming problem in C.
+
+typedef struct gen {
+ int tracker;
+ int (*next)(struct gen *g);
+} generator;
+
+int twos_gen(struct gen *g) {
+ g-&gt;tracker = g-&gt;tracker + 2;
+ return g-&gt;tracker;
+}
+
+generator* twos_stream() {
+ generator *g = malloc(sizeof(generator));
+ g-&gt;next = twos_gen;
+ g-&gt;tracker = 0;
+ return g;
+}
+
+int threes_gen(struct gen *g) {
+ g-&gt;tracker = g-&gt;tracker + 3;
+ return g-&gt;tracker;
+}
+
+generator* threes_stream() {
+ generator *g = malloc(sizeof(generator));
+ g-&gt;next = threes_gen;
+ g-&gt;tracker = 0;
+ return g;
+}
+
+int fives_gen(struct gen *g) {
+ g-&gt;tracker = g-&gt;tracker + 5;
+ return g-&gt;tracker;
+}
+
+generator* fives_stream() {
+ generator *g = malloc(sizeof(generator));
+ g-&gt;next = fives_gen;
+ g-&gt;tracker = 0;
+ return g;
+}
+
+int smallest(int a, int b, int c) {
+ if (a &lt; b) {
+ if (c &lt; a) return c;
+ return a;
+ }
+ else {
+ if (c &lt; b) return c;
+ return b;
+ }
+}
+
+int hamming_gen(struct gen *g) {
+ generator* twos = twos_stream();
+ generator* threes = threes_stream();
+ generator* fives = fives_stream();
+
+ int c2 = twos-&gt;next(twos);
+ int c3 = threes-&gt;next(threes);
+ int c5 = fives-&gt;next(fives);
+
+ while (c2 &lt;= g-&gt;tracker) c2 = twos-&gt;next(twos);
+ while (c3 &lt;= g-&gt;tracker) c3 = threes-&gt;next(threes);
+ while (c5 &lt;= g-&gt;tracker) c5 = fives-&gt;next(fives);
+
+ g-&gt;tracker = smallest(c2,c3,c5);
+ return g-&gt;tracker;
+}
+
+generator* hammings_stream() {
+ generator *g = malloc(sizeof(generator));
+ g-&gt;next = hamming_gen;
+ g-&gt;tracker = 0;
+ return g;
+}
+
+int main() {
+ generator* hammings = hammings_stream();
+ int i = 0;
+ while (i&lt;10) {
+ printf("Hamming No: %d\n",hammings-&gt;next(hammings));
+ i++;
+ }
+}

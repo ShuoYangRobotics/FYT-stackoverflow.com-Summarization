@@ -1,0 +1,110 @@
+Question (ID-1272309): Batch output redirection when using start command for GUI app This is the scenario: 
+
+ We have a Python script that starts a Windows batch file and redirects its output to a file. Afterwards it reads the file and then tries to delete it: 
+
+ os.system(C:\batch.bat &gt;C:\temp.txt 2&gt;&amp;1)
+os.remove(C:\temp.txt)
+ 
+
+ In the batch.bat we start a Windows GUI programm like this: 
+
+ start c:\the_programm.exe
+ 
+
+ Thats all in the batch fíle. 
+
+ Now the os.remove() fails with "Permission denied" because the temp.txt is still locked by the system. It seems this is caused by the still runing the_programm.exe (whos output also seems to be redirected to the temp.txt). 
+
+ Any idea how to start the_programm.exe without having the temp.txt locked while it is still running? The Python part is hardly changeable as this is a tool ( BusyB ). 
+
+ In fact I do not need the output of the_programm.exe, so the essence of the question is: How do I decouple the_programm.exe from locking temp.txt for its output? 
+Or: How do I use START or another Windows command to start a program without inheriting the batch output redirection? 
+ Answers (Total-6): #0 This is a bit hacky, but you could try it. It uses the AT command to run the_programm.exe up to a minute in the future (which it computes using the %TIME% environment variable and SET arithmetic). 
+
+ batch.bat: 
+
+ @echo off
+setlocal
+:: store the current time so it does not change while parsing
+set t=%time%
+:: parse hour, minute, second
+set h=%t:~0,2%
+set m=%t:~3,2%
+set s=%t:~6,2%
+:: reduce strings to simple integers
+if "%h:~0,1%"==" " set h=%h:~1%
+if "%m:~0,1%"=="0" set m=%m:~1%
+if "%s:~0,1%"=="0" set s=%s:~1%
+:: choose number of seconds in the future; granularity for AT is one
+:: minute, plus we need a few extra seconds for this script to run
+set x=70
+:: calculate hour and minute to run the program
+set /a x=s + x
+set /a s="x %% 60"
+set /a x=m + x / 60
+set /a m="x %% 60"
+set /a h=h + x / 60
+set /a h="h %% 24"
+:: schedule the program to run
+at %h%:%m% c:\the_programm.exe
+ 
+
+ You can look at the AT /? and SET /? to see what each of these is doing. I left off the /interactive parameter of AT since you commented that "no user interaction is allowed". 
+
+ Caveats: 
+
+ 
+ It appears that %TIME% is always 24-hour time, regardless of locale settings in the control panel, but I don't have any proof of this. 
+ If your system is loaded down and batch.bat takes more than 10 seconds to run, the AT command will be scheduled to run 1 day later. You can recover this manually, using AT {job} /delete , and increase the x=70 to something more acceptable. 
+ 
+
+ The START command, unfortunately, even when given /i to ignore the current environment, seems to pass along the open file descriptors of the parent cmd.exe process. These file descriptors appear to be handed off to subprocesses, even if the subprocesses are redirected to NUL, and are kept open even if intermediate shell processes terminate. You can see this in Process Explorer if you have a batch file which START s another batch file which START s another batch file (etc.) which START s a GUI Windows app. Once the intermediate batch files have terminated, the GUI app will own the file handles, even if it (and the intermediate batch files) were all redirected to NUL . 
+ #1 I don't think Windows will let you delete an open file. Sounds like you're wanting to throw away the program's output; would redirecting to 'nul' instead do what you need? 
+ #2 As I understand it, this is the issue, and what he wants to do: 
+
+ 
+ Make no changes to the python code. 
+ The Python code is written assuming that "temp.txt" is no longer being used when this function returns: 
+
+ os.system(C:\batch.bat >C:\temp.txt 2>&amp;1) 
+ This is in fact not the case because "batch.bat" spawns an interactive GUI program using the "start" command. 
+ 
+
+ How about changing your "batch.bat" file to contain: 
+
+ start c:\the_programm.exe
+pause
+ 
+
+ This will keep the "batch.bat" file running until you hit a key on that window. Once you hit a key, the "os.system" python command will return, and then python will call "os.remove". 
+ #3 Are you closing the file after you're done reading it? The following works at my end: 
+
+ import os
+
+os.system('runbat.bat &gt; runbat.log 2&gt;&amp;1')
+f = open('runbat.log')
+print f.read()
+f.close()
+os.remove('runbat.log')
+ 
+
+ but fails if I remove the f.close() line. 
+ #4 Why capture to a file if you're just deleting it immediately? 
+
+ How about this: 
+
+ os.system(C:\batch.bat &gt;nul 2&gt;&amp;1)
+ 
+
+ EDIT: Oops, I missed your comment about reading the file, I only noticed the code. 
+ #5 Finally I could find a proper solution: 
+
+ I am not using a batch file anymore for starting the_programm.exe, but a Python script: 
+
+ from subprocess import Popen
+
+  if __name__ == '__main__':
+   Popen('C:/the_programm.exe', close_fds=True)
+ 
+
+ The close_fds parameter decouples the file handles from the .exe process! That's it!

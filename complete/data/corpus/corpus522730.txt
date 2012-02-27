@@ -1,0 +1,184 @@
+Question (ID-522730): How can I strip Python logging calls without commenting them out? Today I was thinking about a Python project I wrote about a year back where I used logging pretty extensively. I remember having to comment out a lot of logging calls in inner-loop-like scenarios (the 90% code) because of the overhead ( hotshot indicated it was one of my biggest bottlenecks). 
+
+ I wonder now if there's some canonical way to programmatically strip out logging calls in Python applications without commenting and uncommenting all the time. I'd think you could use inspection/recompilation or bytecode manipulation to do something like this and target only the code objects that are causing bottlenecks . This way, you could add a manipulator as a post-compilation step and use a centralized configuration file, like so: 
+
+ [Leave ERROR and above]
+my_module.SomeClass.method_with_lots_of_warn_calls
+
+[Leave WARN and above]
+my_module.SomeOtherClass.method_with_lots_of_info_calls
+
+[Leave INFO and above]
+my_module.SomeWeirdClass.method_with_lots_of_debug_calls
+ 
+
+ Of course, you'd want to use it sparingly and probably with per-function granularity -- only for code objects that have shown logging to be a bottleneck. Anybody know of anything like this? 
+
+ Note: There are a few things that make this more difficult to do in a performant manner because of dynamic typing and late binding. For example, any calls to a method named debug may have to be wrapped with an if not isinstance(log, Logger) . In any case, I'm assuming all of the minor details can be overcome, either by a gentleman's agreement or some run-time checking. :-) 
+ Answers (Total-9): #0 What about using logging.disable ? 
+
+ I've also found I had to use logging.isEnabledFor if the logging message is expensive to create. 
+ #1 As an imperfect shortcut, how about mocking out logging in specific modules using something like MiniMock ? 
+
+ For example, if my_module.py was: 
+
+ import logging
+class C(object):
+ def __init__(self, *args, **kw):
+  logging.info("Instantiating")
+ 
+
+ You would replace your use of my_module with: 
+
+ from minimock import Mock
+import my_module
+my_module.logging = Mock('logging')
+c = my_module.C()
+ 
+
+ You'd only have to do this once, before the initial import of the module. 
+
+ Getting the level specific behaviour would be simple enough by mocking specific methods, or having logging.getLogger return a mock object with some methods impotent and others delegating to the real logging module. 
+
+ In practice, you'd probably want to replace MiniMock with something simpler and faster; at the very least something which doesn't print usage to stdout! Of course, this doesn't handle the problem of module A importing logging from module B (and hence A also importing the log granularity of B)... 
+
+ This will never be as fast as not running the log statements at all, but should be much faster than going all the way into the depths of the logging module only to discover this record shouldn't be logged after all. 
+ #2 You could try something like this: 
+
+ # Create something that accepts anything
+class Fake(object):
+ def __getattr__(self, key):
+  return self
+ def __call__(self, *args, **kwargs):
+  return True
+
+# Replace the logging module
+import sys
+sys.modules["logging"] = Fake()
+ 
+
+ It essentially replaces (or initially fills in) the space for the logging module with an instance of Fake which simply takes in anything. You must run the above code (just once!) before the logging module is attempted to be used anywhere. Here is a test: 
+
+ import logging
+
+logging.basicConfig(level=logging.DEBUG,
+     format='%(asctime)s %(levelname)-8s %(message)s',
+     datefmt='%a, %d %b %Y %H:%M:%S',
+     filename='/temp/myapp.log',
+     filemode='w')
+logging.debug('A debug message')
+logging.info('Some information')
+logging.warning('A shot across the bows')
+ 
+
+ With the above, nothing at all was logged, as was to be expected. 
+ #3 I'd use some fancy logging decorator, or a bunch of them: 
+
+ def doLogging(logTreshold):
+ def logFunction(aFunc):
+  def innerFunc(*args, **kwargs):
+   if LOGLEVEL &gt;= logTreshold:
+    print "&gt;&gt;Called %s at %s"%(aFunc.__name__, time.strftime("%H:%M:%S"))
+    print "&gt;&gt;Parameters: ", args, kwargs if kwargs else "" 
+   try:
+    return aFunc(*args, **kwargs)
+   finally:
+    print "&gt;&gt;%s took %s"%(aFunc.__name__, time.strftime("%H:%M:%S"))
+  return innerFunc
+ return logFunction
+ 
+
+ All you need is to declare LOGLEVEL constant in each module (or just globally and just import it in all modules) and then you can use it like this: 
+
+ @doLogging(2.5)
+def myPreciousFunction(one, two, three=4):
+ print "I'm doing some fancy computations :-)"
+ return
+ 
+
+ And if LOGLEVEL is no less than 2.5 you'll get output like this: 
+
+ &gt;&gt;Called myPreciousFunction at 18:49:13
+&gt;&gt;Parameters: (1, 2) 
+I'm doing some fancy computations :-)
+&gt;&gt;myPreciousFunction took 18:49:13
+ 
+
+ As you can see, some work is needed for better handling of kwargs, so the default values will be printed if they are present, but that's another question. 
+
+ You should probably use some logger module instead of raw print statements, but I wanted to focus on the decorator idea and avoid making code too long. 
+
+ Anyway - with such decorator you get function-level logging, arbitrarily many log levels, ease of application to new function, and to disable logging you only need to set LOGLEVEL. And you can define different output streams/files for each function if you wish. You can write doLogging as: 
+
+ def doLogging(logThreshold, outStream=sys.stdout):
+  .....
+  print &gt;&gt;outStream, "&gt;&gt;Called %s at %s" etc.
+ 
+
+ And utilize log files defined on a per-function basis. 
+ #4 This is an issue in my project as well--logging ends up on profiler reports pretty consistently. 
+
+ I've used the _ast module before in a fork of PyFlakes ( http://github.com/kevinw/pyflakes ) ... and it is definitely possible to do what you suggest in your question--to inspect and inject guards before calls to logging methods (with your acknowledged caveat that you'd have to do some runtime type checking). See http://pyside.blogspot.com/2008/03/ast-compilation-from-python.html for a simple example. 
+
+ Edit: I just noticed MetaPython on my planetpython.org feed--the example use case is removing log statements at import time. 
+
+ Maybe the best solution would be for someone to reimplement logging as a C module, but I wouldn't be the first to jump at such an...opportunity :p 
+ #5 I've also seen assert used in this fashion. 
+
+ assert logging.warn('disable me with the -O option') == None
+ 
+
+ (I'm guessing that warn always returns none.. if not, you'll get an AssertionError 
+
+ But really that's just a funny way of doing this: 
+
+ if __debug__: logging.warn('disable me with the -O option')
+ 
+
+ When you run a script with that line in it with the -O option, the line will be removed from the optimized .pyo code. If, instead, you had your own variable, like in the following, you will have a conditional that is always executed (no matter what value the variable is), although a conditional should execute quicker than a function call: 
+
+ my_debug = True
+...
+if my_debug: logging.warn('disable me by setting my_debug = False')
+ 
+
+ so if my understanding of debug is correct, it seems like a nice way to get rid of unnecessary logging calls. The flipside is that it also disables all of your asserts, so it is a problem if you need the asserts. 
+ #6 Use pypreprocessor 
+
+ Which can also be found on PYPI (Python Package Index) and be fetched using pip. 
+
+ Here's a basic usage example: 
+
+ from pypreprocessor import pypreprocessor
+
+pypreprocessor.parse()
+
+#define nologging
+
+#ifdef nologging
+...logging code you'd usually comment out manually...
+#endif
+ 
+
+ Essentially, the preprocessor comments out code the way you were doing it manually before. It just does it on the fly conditionally depending on what you define. 
+
+ You can also remove all of the preprocessor directives and commented out code from the postprocessed code by adding 'pypreprocessor.removeMeta = True' between the import and 
+parse() statements. 
+
+ The bytecode output (.pyc) file will contain the optimized output. 
+
+ SideNote: pypreprocessor is compatible with python2x and python3k. 
+
+ Disclaimer: I'm the author of pypreprocessor. 
+ #7 I like the 'if _ debug ' solution except that putting it in front of every call is a bit distracting and ugly. I had this same problem and overcame it by writing a script which automatically parses your source files and replaces logging statements with pass statements (and commented out copies of the logging statements). It can also undo this conversion. 
+
+ I use it when I deploy new code to a production environment when there are lots of logging statements which I don't need in a production setting and they are affecting performance. 
+
+ You can find the script here: http://dound.com/2010/02/python-logging-performance/ 
+ #8 :-) We used to call that a preprocessor and although C's preprocessor had some of those capablities, the "king of the hill" was the preprocessor for IBM mainframe PL/I. It provided extensive language support in the preprocessor (full assignments, conditionals, looping, etc.) and it was possible to write "programs that wrote programs" using just the PL/I PP. 
+
+ I wrote many applications with full-blown sophisticated program and data tracing (we didn't have a decent debugger for a back-end process at that time) for use in development and testing which then, when compiled with the appropriate "runtime flag" simply stripped all the tracing code out cleanly without any performance impact. 
+
+ I think the decorator idea is a good one. You can write a decorator to wrap the functions that need logging. Then, for runtime distribution, the decorator is turned into a "no-op" which eliminates the debugging statements. 
+
+ Jon R

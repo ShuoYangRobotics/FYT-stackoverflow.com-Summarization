@@ -1,0 +1,314 @@
+<h3>Question (ID-3384010):</h3><h2>Learning Python; How can I make this more Pythonic?</h2><p>I am a PHP developer exploring the outside world. I have decided to start learning Python.</p>
+
+<p>The below script is my first attempt at porting a PHP script to Python. Its job is to take tweets from a Redis store. The tweets are coming from Twitter's Streaming API and stored as JSON objects. Then the information needed is extracted and dumped into a CSV file to be imported into MySQL using the <code>LOAD DATA LOCAL INFILE</code> that is hosted on a different server.</p>
+
+<p>So, the question is: Now that I have my first Python script running, how can I make it more Pythonic? Are there any suggestions that you guys have? Make it better? Tricks I should know about? Constructive Criticism? </p>
+
+<p><strong>Update:</strong> Having taken everyone's suggestions thus far, here is the updated version:<br>
+<strong>Update2:</strong> Ran the code through pylint. Now scores a 9.89/10. Any other suggestions?</p>
+
+<pre><code># -*- coding: utf-8 -*-
+"""Redis IO Loop for Tweelay Bot"""
+from __future__ import with_statement
+
+import simplejson
+import re
+import datetime
+import time
+import csv
+import hashlib
+
+# Bot Modules
+import tweelay.red as red
+import tweelay.upload as upload
+import tweelay.openanything as openanything
+
+__version__ = "4"
+
+def process_tweets():
+  """Processes 0-20 tweets from Redis store"""
+  data = []
+  last_id = 0
+  for i in range(20):
+    last = red.pop_tweet()
+    if not last:
+      break
+
+    t = TweetHandler(last)
+    t.cleanup()
+    t.extract()
+
+    if t.get_tweet_id() == last_id:
+      break
+
+    tweet = t.proc()
+    if tweet:
+      data = data + [tweet]
+      last_id = t.get_tweet_id()
+
+    time.sleep(0.01)
+
+  if not data:
+    return False
+
+  ch = CSVHandler(data)
+  ch.pack_csv()
+  ch.uploadr()
+
+  source = "http://bot.tweelay.net/tweets.php"
+  openanything.openAnything(
+    source,
+    etag=None,
+    lastmodified=None,
+    agent="Tweelay/%s (Redis)" % __version__
+    )
+
+class TweetHandler:
+  """Cleans, Builds and returns needed data from Tweet"""
+  def __init__(self, json):
+    self.json = json
+    self.tweet = None
+    self.tweet_id = 0
+    self.j = None
+
+  def cleanup(self):
+    """Takes JSON encoded tweet and cleans it up for processing"""
+    self.tweet = unicode(self.json, "utf-8")
+    self.tweet = re.sub('^s:[0-9]+:["]+', '', self.tweet)
+    self.tweet = re.sub('\n["]+;$', '', self.tweet)
+
+  def extract(self):
+    """Takes cleaned up JSON encoded tweet and extracts the datas we need"""
+    self.j = simplejson.loads(self.tweet)
+
+  def proc(self):
+    """Builds the datas from the JSON object"""
+    try:
+      return self.build()
+    except KeyError:
+      if 'delete' in self.j:
+        return None
+      else:
+        print ";".join(["%s=%s" % (k, v) for k, v in self.j.items()])
+        return None
+
+  def build(self):
+    """Builds tuple from JSON tweet"""
+    return (
+    self.j['user']['id'],
+    self.j['user']['screen_name'].encode('utf-8'),
+    self.j['text'].encode('utf-8'),
+    self.j['id'],
+    self.j['in_reply_to_status_id'],
+    self.j['in_reply_to_user_id'],
+    self.j['created_at'],
+    __version__ )
+
+  def get_tweet_id(self):
+    """Return Tweet ID"""
+    if 'id' in self.j:
+      return self.j['id']
+
+    if 'delete' in self.j:
+      return self.j['delete']['status']['id']
+
+
+class CSVHandler:
+  """Takes list of tweets and saves them to a CSV
+     file to be inserted into MySQL data store"""
+  def __init__(self, data):
+    self.data = data
+    self.file_name = self.gen_file_name()
+
+  def gen_file_name(self):
+    """Generate unique file name"""
+    now = datetime.datetime.now()
+
+    hashr = hashlib.sha1()
+    hashr.update(str(now))
+    hashr.update(str(len(self.data)))
+
+    hash_str = hashr.hexdigest()
+    return hash_str+'.csv'
+
+  def pack_csv(self):
+    """Save tweet data to CSV file"""
+    with open('tmp/'+self.file_name, mode='ab') as ofile:
+      writer = csv.writer(
+        ofile, delimiter=',',
+        quotechar='"',
+        quoting=csv.QUOTE_MINIMAL)
+      writer.writerows(self.data)
+
+  def uploadr(self):
+    """Upload file to remote host"""
+    url = "http://example.com/up.php?filename="+self.file_name
+    uploadr = upload.upload_file(url, 'tmp/'+self.file_name)
+    if uploadr[0] == 200:
+      print "Upload: 200 - ("+str(len(self.data))+")", self.file_name
+      print "-------"
+      #os.remove('tmp/'+self.file_name)
+    else:
+      print "Upload Error:", uploadr[0]
+
+if __name__ == "__main__":
+  while True:
+    process_tweets()
+    time.sleep(1)
+</code></pre>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Instead of:</p>
+
+<pre><code>  i=0
+  end=20
+  last_id=0
+  data=[]
+  while(i&lt;=end):
+    i = i + 1
+    ...
+</code></pre>
+
+<p>code:</p>
+
+<pre><code>  last_id=0
+  data=[]
+  for i in xrange(1, 22):
+    ...
+</code></pre>
+
+<p>Same semantics, more compact and Pythonic.</p>
+
+<p>Instead of</p>
+
+<pre><code>if not last or last == None:
+</code></pre>
+
+<p>do just</p>
+
+<pre><code>if not last:
+</code></pre>
+
+<p>since <code>None</code> is false-ish anyway (so <code>not last</code> is <code>True</code> when <code>last</code> is <code>None).  In general, when you want to check if something is</code>None<code>, code</code>is None<code>, not</code>== None`.</p>
+
+<p>In</p>
+
+<pre><code>  if(j['id'] &lt;&gt; last_id):
+</code></pre>
+
+<p>lose the redundant parentheses and the obsolete <code>&lt;&gt;</code> operator and code instead</p>
+
+<pre><code>  if j['id'] != last_id:
+</code></pre>
+
+<p>and also remove the redundant parentheses from other <code>if</code> statements.</p>
+
+<p>Instead of:</p>
+
+<pre><code>  if len(data) == 0:
+</code></pre>
+
+<p>code:</p>
+
+<pre><code>  if not data:
+</code></pre>
+
+<p>since any empty container is false-ish.</p>
+
+<p>In</p>
+
+<pre><code>hash_str = str(hash.hexdigest())
+</code></pre>
+
+<p>code instead</p>
+
+<pre><code>hash_str = hash.hexdigest()
+</code></pre>
+
+<p>since the method already returns a string, making the <code>str</code> call redundant.</p>
+
+<p>Instead of:</p>
+
+<pre><code>  for item in data:
+    writer.writerow(item)
+</code></pre>
+
+<p>use</p>
+
+<pre><code>  writer.writerows(data)
+</code></pre>
+
+<p>which does the loop on your behalf.</p>
+
+<p>Instead of</p>
+
+<pre><code>  ofile = open('tmp/'+file_name, mode='ab')
+  ...
+  ofile.close()    
+</code></pre>
+
+<p>use (in Python 2.6 or better, or in 2.5 by starting the module with</p>
+
+<pre><code>  from __future__ import with_statement
+</code></pre>
+
+<p>to "import from the future" the <code>with</code> statement feature):</p>
+
+<pre><code>  with open('tmp/'+file_name, mode='ab') as ofile:
+    ...
+</code></pre>
+
+<p>which guarantees to do the close for you (including in cases where an exception might be raised).</p>
+
+<p>Instead of</p>
+
+<pre><code>print "Upload Error: "+uploadr[0]
+</code></pre>
+
+<p>use</p>
+
+<pre><code>print "Upload Error:", uploadr[0]
+</code></pre>
+
+<p>and similarly for other <code>print</code> statements -- the comma inserts a space for you.</p>
+
+<p>I'm sure there are more such little things, but these are a few that "jumped to the eye" as I was scanning your code.</p>
+<br /><b>#1</b><br /><p>Pythonic python does not use integer flow control very much. The idiom is almost always <code>for item in container:</code>. Also, I would use a class to hold a 'User object'. It will be a lot easier to use than simple container types likes lists and dictionaries (And arrange your code into to a more OO style.) You can compile reg-exes before hand for a little more performance. </p>
+
+<pre><code>class MyTweet(object):
+  def __init__(self, data):
+    # ...process json here
+    # ...
+    self.user = user
+
+for data in getTweets():
+  tweet = MyTweet(data)
+</code></pre>
+<br /><b>#2</b><br /><p>Run your code through <a href="http://www.logilab.org/857" rel="nofollow">pylint</a>.</p>
+<br /><b>#3</b><br /><pre><code># Bot Modules
+import red #Simple Redis API functions
+import upload #pycurl script to upload to remote server
+</code></pre>
+
+<p>If your app is going to be used and maintained, its better to pack all these modules in the package.</p>
+<br /><b>#4</b><br /><p>Instead of ....</p>
+
+<pre><code>  i=0
+  end=20
+  last_id=0
+  data=[]
+  while(i&lt;=end):
+    i = i + 1
+</code></pre>
+
+<p>you can use...</p>
+
+<pre><code>for i in range(20):
+</code></pre>
+
+<p>but overall, it's not very clear where this 20 comes from??  magic #?</p>
+<br /><b>#5</b><br /><p>If you have a method that won't fit in the view pane you really want to shorten it. Say 15 lines or so. I see what looks like at least 3 methods: print_tweet, save_csv, and upload_data. It's a bit hard to say exactly what they should be named but there do seem to be three distinct sections of code that you should try to break out. </p>
+<br /><b>#6</b><br /><ol>
+<li>Every <del>method</del> variable name I've ever seen in Python was lowercase with no underscores. (I don't think this is a requirement and may not be standard practice.)</li>
+<li>You should really break up the logic into multiple, single-purpose methods.</li>
+<li>Take 2 a step further and create some classes to encapsulate related methods together.</li>
+</ol>
+<br />

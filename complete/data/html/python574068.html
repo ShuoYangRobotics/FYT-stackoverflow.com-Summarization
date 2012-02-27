@@ -1,0 +1,146 @@
+<h3>Question (ID-574068):</h3><h2>How do YOU deploy your WSGI application? (and why it is the best way)</h2><p>Deploying a WSGI application. There are many ways to skin this cat. I am currently using apache2 with mod-wsgi, but I can see some potential problems with this.</p>
+
+<p>So how can it be done?</p>
+
+<ol>
+<li>Apache Mod-wsgi (the other mod-wsgi's seem to not be worth it)</li>
+<li>Pure Python web server eg paste, cherrypy, Spawning, Twisted.web</li>
+<li>as 2 but with reverse proxy from nginx, apache2 etc, with good static file handling</li>
+<li>Conversion to other protocol such as FCGI with a bridge (eg Flup) and running in a conventional web server.</li>
+</ol>
+
+<p>More?</p>
+
+<p>I want to know how you do it, and why it is the best way to do it. I would absolutely <strong>love</strong> you to bore me with details about the whats and the whys, application specific stuff, etc. I will upvote any non-insane answer.</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>As always: It depends ;-)</p>
+
+<p>When I don't need any apache features I am going with a pure python webserver like paste etc. Which one exactly depends on your application I guess and can be decided by doing some benchmarks. I always wanted to do some but never came to it. I guess Spawning might have some advantages in using non blocking IO out of the box but I had sometimes problems with it because of the patching it's doing. </p>
+
+<p>You are always free to put a varnish in front as well of course.</p>
+
+<p>If an Apache is required I am usually going with solution 3 so that I can keep processes separate. You can also more easily move processes to other servers etc. I simply like to keep things separate.</p>
+
+<p>For static files I am using right now a separate server for a project which just serves static images/css/js. I am using lighttpd as webserver which has great performance (in this case I don't have a varnish in front anymore).</p>
+
+<p>Another useful tool is <a href="http://supervisord.org/" rel="nofollow">supervisord</a> for controlling and monitoring these services.</p>
+
+<p>I am additionally using <a href="http://pypi.python.org/pypi/zc.buildout" rel="nofollow">buildout</a> for managing my deployments and development sandboxes (together with <a href="http://pypi.python.org/pypi/virtualenv" rel="nofollow">virtualenv</a>).</p>
+<br /><b>#1</b><br /><p>The absolute easiest thing to deploy is CherryPy.  Your web application can also become a standalone webserver.  CherryPy is also a fairly fast server considering that it's written in pure Python.  With that said, it's not Apache.  Thus, I find that CherryPy is a good choice for lower volume webapps.</p>
+
+<p>Other than that, I don't think there's any right or wrong answer to this question.  Lots of high-volume websites have been built on the technologies you talk about, and I don't think you can go too wrong any of those ways (although I will say that I agree with mod-wsgi not being up to snuff on every non-apache server).</p>
+
+<p>Also, I've been using <a href="http://code.google.com/p/isapi-wsgi/">isapi_wsgi</a> to deploy python apps under IIS.  It's a less than ideal setup, but it works and you don't always get to choose otherwise when you live in a windows-centric world.</p>
+<br /><b>#2</b><br /><blockquote>
+  <p>I would absolutely love you to bore me with details about the whats and the whys, application specific stuff, etc</p>
+</blockquote>
+
+<p>Ho. Well you asked for it!</p>
+
+<p>Like Daniel I personally use Apache with mod_wsgi. It is still new enough that deploying it in some environments can be a struggle, but if you're compiling everything yourself anyway it's pretty easy. I've found it very reliable, even the early versions. Props to Graham Dumpleton for keeping control of it pretty much by himself.</p>
+
+<p>However for me it's essential that WSGI applications work across all possible servers. There is a bit of a hole at the moment in this area: you have the WSGI standard telling you what a WSGI callable (application) does, but there's no standardisation of deployment; no single way to tell the web server where to find the application. There's also no standardised way to make the server reload the application when you've updated it.</p>
+
+<p>The approach I've adopted is to put:</p>
+
+<ul>
+<li><p>all application logic in modules/packages, preferably in classes</p></li>
+<li><p>all website-specific customisations to be done by subclassing the main Application and overriding members</p></li>
+<li><p>all server-specific deployment settings (eg. database connection factory, mail relay settings) as class __init__() parameters</p></li>
+<li><p>one top-level ‘application.py’ script that initialises the Application class with the correct deployment settings for the current server, then runs the application in such a way that it can work deployed as a CGI script, a mod_wsgi WSGIScriptAlias (or Passenger, which apparently works the same way), or can be interacted with from the command line</p></li>
+<li><p>a helper module that takes care of above deployment issues and allows the application to be reloaded when the modules the application is relying on change</p></li>
+</ul>
+
+<p>So what the application.py looks like in the end is something like:</p>
+
+<pre><code>#!/usr/bin/env python
+
+import os.path
+basedir= os.path.dirname(__file__)
+
+import MySQLdb
+def dbfactory():
+    return MySQLdb.connect(db= 'myappdb', unix_socket= '/var/mysql/socket', user= 'u', passwd= 'p')
+
+def appfactory():
+    import myapplication
+    return myapplication.Application(basedir, dbfactory, debug= False)
+
+import wsgiwrap
+ismain= __name__=='__main__'
+libdir= os.path.join(basedir, 'system', 'lib')
+application= wsgiwrap.Wrapper(appfactory, libdir, 10, ismain)
+</code></pre>
+
+<p>The wsgiwrap.Wrapper checks every 10 seconds to see if any of the application modules in libdir have been updated, and if so does some nasty sys.modules magic to unload them all reliably. Then appfactory() will be called again to get a new instance of the updated application.</p>
+
+<p>(You can also use command line tools such as</p>
+
+<pre><code>./application.py setup
+./application.py daemon
+</code></pre>
+
+<p>to run any setup and background-tasks hooks provided by the application callable — a bit like how distutils works. It also responds to start/stop/restart like an init script.)</p>
+
+<p>Another trick I use is to put the deployment settings for multiple servers (development/testing/production) in the same application.py script, and sniff ‘socket.gethostname()’ to decide which server-specific bunch of settings to use.</p>
+
+<p>At some point I might package wsgiwrap up and release it properly (possibly under a different name). In the meantime if you're interested, you can see a dogfood-development version at <a href="http://www.doxdesk.com/file/software/py/v/wsgiwrap-0.5.py" rel="nofollow">http://www.doxdesk.com/file/software/py/v/wsgiwrap-0.5.py</a>.</p>
+<br /><b>#3</b><br /><h2>TurboGears (2.0)</h2>
+
+<p><a href="http://turbogears.org/2.0/docs/index.html" rel="nofollow">TurboGears 2.0</a> is leaving <em>Beta</em> within the next month (has been in it for plenty of time).  2.0 improves upon 1.0 series and attempts to give you best-of-breed WSGI stack, so it makes some default choices for you, if you want the least fuss.</p>
+
+<p>it has the <code>tg*</code> tools for testing and deployment in 1.x series, but now transformed to <code>paster</code> equivalents in 2.0 series, which shoud seem familiar if you've expermiented with <code>pylons</code>.</p>
+
+<pre>
+tg-admin quickstart —> paster quickstart
+tg-admin info —> paster tginfo
+tg-admin toolbox –> paster toolbox
+tg-admin shell –> paster shell
+tg-admin sql create –> paster setup-app development.ini
+</pre>
+
+<h2>Pylons</h2>
+
+<p>It you'd like to be more flexible in your WSGI stack (choice of ORM, choice of templater, choice of form-ing), Pylons is becoming the consolidated choice.  This would be <em>my recommended choice</em>, since it offers excellent documentation and allows you to experiment with different components.  </p>
+
+<p>It is a pleasure to work with as a result, and works on under Apache (production deployment) or stand-alone (helpful for testing and experimenting stage).</p>
+
+<p>so it follows, you can do both with Pylons:</p>
+
+<ul>
+<li>#2 option for testing stage (<code>python</code> standalone) </li>
+<li>#4 for scalable production purposes (<code>FastCGI</code>, assuming the database you choose can keep up)</li>
+</ul>
+
+<p>The Pylons admin interface is very similar to TurboGears.  Here's a toy <em>standalone</em> example:</p>
+
+<pre>
+$ paster create -t pylons helloworld
+$ cd helloworld
+$ paster serve --reload development.ini</pre>
+
+<p>for production-class deployment, you could refer to the setup guide of <code>Apache + FastCGI + mod_rewrite</code> is available <a href="http://wiki.pylonshq.com/display/pylonscookbook/Production%2BDeployment%2BUsing%2BApache,%2BFastCGI%2Band%2Bmod%5Frewrite" rel="nofollow">here</a>. this would scale up to most needs.</p>
+<br /><b>#4</b><br /><p>I'm using Google App Engine for an application I'm developing. It runs WSGI applications.
+<a href="http://code.google.com/appengine/docs/python/gettingstarted/usingwebapp.html" rel="nofollow">Here's a couple bits of info on it.</a> </p>
+
+<p>This is the first web-app I've ever really worked on, so I don't have a basis for comparison, but if you're a Google fan, you might want to look into it. I've had a lot of fun using it as my framework for learning. </p>
+<br /><b>#5</b><br /><p>Apache httpd + mod_fcgid using web.py (which is a wsgi application).</p>
+
+<p>Works like a charm.</p>
+<br /><b>#6</b><br /><p>Nginx reverse proxy and static file sharing + XSendfile + uploadprogress_module. Nothing beats it for the purpose.</p>
+
+<p>On the WSGI side either Apache + mod_wsgi or cherrypy server. I like to use cherrypy wsgi server for applications on servers with less memory and less requests.</p>
+
+<p>Reasoning:</p>
+
+<p>I've done benchmarks with different tools for different popular solutions.</p>
+
+<p>I have more experience with lower level TCP/IP than web development, especially http implementations. I'm more confident that I can recognize a good http server than I can recognize a good web framework.</p>
+
+<p>I know Twisted much more than Django or Pylons. The http stack in Twisted is still not up to this but it will be there.</p>
+<br /><b>#7</b><br /><p>We are using pure Paste for some of our web services.  It is easy to deploy (with our internal deployment mechanism; we're not using Paste Deploy or anything like that) and it is nice to minimize the difference between production systems and what's running on developers' workstations.  Caveat: we don't expect low latency out of Paste itself because of the heavyweight nature of our requests.  In some crude benchmarking we did we weren't getting <em>fantastic</em> results; it just ended up being moot due to the expense of our typical request handler.  So far it has worked fine.</p>
+
+<p>Static data has been handled by completely separate (and somewhat "organically" grown) stacks, including the use of S3, Akamai, Apache and IIS, in various ways.</p>
+<br /><b>#8</b><br /><p>Apache+mod_wsgi,</p>
+
+<p>Simple, clean. (only four lines of webserver config), easy for other sysadimns to get their head around.</p>
+<br />

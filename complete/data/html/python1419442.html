@@ -1,0 +1,123 @@
+<h3>Question (ID-1419442):</h3><h2>How to Model a Foreign Key in a Reusable Django App?</h2><p>In my django site I have two apps, blog and links. blog has a model blogpost, and links has a model link. There should be a one to many relationship between these two things. There are many links per blogpost, but each link has one and only one blog post. The simple answer is to put a ForeignKey to blogpost in the link model. </p>
+
+<p>That's all well and good, however there is a problem. I want to make the links app reusable. I don't want it to depend upon the blog app. I want to be able to use it again in other sites and perhaps associate links with other non-blogpost apps and models. </p>
+
+<p>A generic foreign key seems like it might be the answer, but not really. I don't want links to be able to associate with any model in my site. Just the one that I explicitly specify. And I know from prior experience that there can be issues using generic foreign keys in terms of database usage because you can't do a select_related over a generic foreign key the way you can with a regular foreign key.</p>
+
+<p>What is the "correct" way to model this relationship?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>If you think the link app will always point to a single app then one approach would be to pass the name of the foreign model as a string containing the application label instead of a class reference (<a href="http://docs.djangoproject.com/en/dev/ref/models/fields/#foreignkey" rel="nofollow">Django docs explanation</a>).</p>
+
+<p>In other words, instead of:</p>
+
+<pre><code>class Link(models.Model):
+    blog_post = models.ForeignKey(BlogPost)
+</code></pre>
+
+<p>do:</p>
+
+<pre><code>from django.conf import setings
+class Link(models.Model):
+    link_model = models.ForeignKey(settings.LINK_MODEL)
+</code></pre>
+
+<p>and in your settings.py:</p>
+
+<pre><code>LINK_MODEL = 'someproject.somemodel'
+</code></pre>
+<br /><b>#1</b><br /><p>I think TokenMacGuy is on the right track.  I would look at how <a href="http://code.google.com/p/django-tagging/" rel="nofollow">django-tagging</a> handles a similar generic relationship using the content type, generic object_id, <a href="http://code.google.com/p/django-tagging/source/browse/trunk/tagging/generic.py" rel="nofollow">and generic.py</a>.  From <a href="http://code.google.com/p/django-tagging/source/browse/trunk/tagging/models.py" rel="nofollow">models.py</a></p>
+
+<pre><code>class TaggedItem(models.Model):
+    """
+    Holds the relationship between a tag and the item being tagged.
+    """
+    tag          = models.ForeignKey(Tag, verbose_name=_('tag'), related_name='items')
+    content_type = models.ForeignKey(ContentType, verbose_name=_('content type'))
+    object_id    = models.PositiveIntegerField(_('object id'), db_index=True)
+    object       = generic.GenericForeignKey('content_type', 'object_id')
+
+    objects = TaggedItemManager()
+
+    class Meta:
+        # Enforce unique tag association per object
+        unique_together = (('tag', 'content_type', 'object_id'),)
+        verbose_name = _('tagged item')
+        verbose_name_plural = _('tagged items')
+</code></pre>
+<br /><b>#2</b><br /><p>Probably you need to use the content types app to link to a model.  You might then arrange for your app to check the settings to do some additional checking to limit which content types it will accept or suggest.</p>
+<br /><b>#3</b><br /><p>I'd go with generic relations. You can do something like select_related, it just require some extra work. But I think it's worth it. </p>
+
+<p>One possible solution for generic select_related-like functionality: </p>
+
+<p><a href="http://bitbucket.org/kmike/django-generic-images/src/tip/generic%5Futils/managers.py" rel="nofollow">http://bitbucket.org/kmike/django-generic-images/src/tip/generic_utils/managers.py</a></p>
+
+<p>(look at GenericInjector manager and it's inject_to method)</p>
+<br /><b>#4</b><br /><p>This question and Van Gale's <a href="http://stackoverflow.com/questions/1419442/how-to-model-a-foreign-key-in-a-reusable-django-app/1419704#1419704">answer</a> lead me to the question, how it could be possible, to limit contenttypes for GFK without the need of defining it via Q objects in the model, so it could be completly reuseable</p>
+
+<p>the solution is based on</p>
+
+<ul>
+<li>django.db.models.get_model</li>
+<li>and the eval built-in, that evaluates a Q-Object from <code>settings.TAGGING_ALLOWED</code>. This is necessary for usage in the admin-interface</li>
+</ul>
+
+<p>My code is quite rough and not fully tested</p>
+
+<p>settings.py</p>
+
+<pre><code>TAGGING_ALLOWED=('myapp.modela', 'myapp.modelb')
+</code></pre>
+
+<p>models.py:</p>
+
+<pre><code>from django.db import models
+from django.db.models import Q
+from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes import generic
+from django.db.models import get_model
+from django.conf import settings as s
+from django.db import IntegrityError
+
+TAGABLE = [get_model(i.split('.')[0],i.split('.')[1]) 
+        for i in s.TAGGING_ALLOWED if type(i) is type('')]
+print TAGABLE
+
+TAGABLE_Q = eval( '|'.join(
+    ["Q(name='%s', app_label='%s')"%(
+        i.split('.')[1],i.split('.')[0]) for i in s.TAGGING_ALLOWED
+    ]
+))
+
+class TaggedItem(models.Model):
+    content_type = models.ForeignKey(ContentType, 
+                    limit_choices_to = TAGABLE_Q)                               
+    object_id = models.PositiveIntegerField()
+    content_object = generic.GenericForeignKey('content_type', 'object_id')
+
+    def save(self, force_insert=False, force_update=False):
+        if self.content_object and not type(
+            self.content_object) in TAGABLE:
+            raise IntegrityError(
+               'ContentType %s not allowed'%(
+                type(kwargs['instance'].content_object)))
+        super(TaggedItem,self).save(force_insert, force_update)
+
+from django.db.models.signals import post_init
+def post_init_action(sender, **kwargs):
+    if kwargs['instance'].content_object and not type(
+        kwargs['instance'].content_object) in TAGABLE:
+        raise IntegrityError(
+           'ContentType %s not allowed'%(
+            type(kwargs['instance'].content_object)))
+
+post_init.connect(post_init_action, sender= TaggedItem)
+</code></pre>
+
+<p>Of course the limitations of the contenttype-framework affect this solution</p>
+
+<pre><code># This will fail
+&gt;&gt;&gt; TaggedItem.objects.filter(content_object=a)
+# This will also fail
+&gt;&gt;&gt; TaggedItem.objects.get(content_object=a)
+</code></pre>
+<br /><b>#5</b><br /><p>Anoher way to solve this is how <a href="http://django-mptt.github.com/django-mptt/models.html" rel="nofollow">django-mptt</a> does this: define only an abstract model in a reusable app(MPTTModel), and require to inherit it with defining some fields (parent=ForeignKey to self, or whatever your app usecase will require)</p>
+<br />

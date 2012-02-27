@@ -1,0 +1,257 @@
+Question (ID-5956783): numpy float: 10x slower than builtin in arithmetic operations? EDIT: 
+
+ I rerun the code under the Windows 7 x64 (Intel Core i7 930 @ 3.8GHz). 
+
+ Again, the code is: 
+
+ from datetime import datetime
+import numpy as np
+
+START_TIME = datetime.now()
+
+# one of the following lines is uncommented before execution
+#s = np.float64(1)
+#s = np.float32(1)
+#s = 1.0
+
+for i in range(10000000):
+ s = (s + 8) * s % 2399232
+
+print(s)
+print('Runtime:', datetime.now() - START_TIME)
+ 
+
+ The timings are: 
+
+ 
+ float64: 16.1s 
+ float32: 16.1s 
+ float: 3.2s 
+ 
+
+ Now both np floats (either 64 or 32) are 5 times slower than the built-in float . Still, a significant difference. I'm trying to figure out where it comes from. 
+
+ EDIT: 
+
+ Thank you for the answers, they help me understand how to deal with this problem. 
+
+ But I still would like to know the precise reason (based on the source code perhaps) why the code below runs 10 times slow with float64 than with float . 
+
+ EDIT: 
+
+ numpy.float64 is 10 times slower than float in arithmetic calculations. It's so bad that even converting to float and back before the calculations makes the program run 3 times faster. Why? Is there anything I can do to fix it? 
+
+ I want to emphasize that my timings are not due to any of the following: 
+
+ 
+ the function calls 
+ the conversion between numpy and python float 
+ the creation of objects 
+ 
+
+ I updated my code to make it clearer where the problem lies. With the new code, it would seem I see a ten-fold performance hit from using numpy data types: 
+
+ from datetime import datetime
+import numpy as np
+
+START_TIME = datetime.now()
+
+# one of the following lines is uncommented before execution
+#s = np.float64(1)
+#s = np.float32(1)
+#s = 1.0
+
+for i in range(10000000):
+ s = (s + 8) * s % 2399232
+
+print(s)
+print('Runtime:', datetime.now() - START_TIME)
+ 
+
+ The timings are: 
+
+ 
+ float64: 34.56s 
+ float32: 35.11s 
+ float: 3.53s 
+ 
+
+ Just for the hell of it, I also tried: 
+
+ from datetime import datetime
+import numpy as np 
+
+ START_TIME = datetime.now()
+
+s = np.float64(1)
+for i in range(10000000):
+ s = float(s)
+ s = (s + 8) * s % 2399232
+ s = np.float64(s)
+
+print(s)
+print('Runtime:', datetime.now() - START_TIME)
+ 
+
+ The execution time is 13.28 s; it's actually 3 times faster to convert the float64 to float and back than to use it as is. Still, the conversion takes its toll, so overall it's more than 3 times slower compared to the pure-python float . 
+
+ My machine is: 
+
+ 
+ Intel Core 2 Duo T9300 (2.5GHz) 
+ WinXP Professional (32-bit) 
+ ActiveState Python 3.1.3.5 
+ Numpy 1.5.1 
+ 
+
+ END OF EDIT 
+
+ ORIGINAL QUESTION: 
+
+ I am getting really weird timings for the following code: 
+
+ import numpy as np
+s = 0
+for i in range(10000000):
+ s += np.float64(1) # replace with np.float32 and built-in float
+ 
+
+ 
+ built-in float: 4.9 s 
+ float64: 10.5 s 
+ float32: 45.0 s 
+ 
+
+ Why is float64 twice slower than float ? And why is float32 5 times slower than float64? 
+
+ Is there any way to avoid the penalty of using np.float64 , and have numpy functions return built-in float instead of float64 ? 
+
+ I found that using numpy.float64 is much slower than Python's float, and numpy.float32 is even slower (even though I'm on a 32-bit machine). 
+
+ numpy.float32 on my 32-bit machine. Therefore, every time I use various numpy functions such as numpy.random.uniform , I convert the result to float32 (so that further operations would be performed at 32-bit precision). 
+
+ Is there any way to set a single variable somewhere in the program or in the command line, and make all numpy functions return float32 instead of float64 ? 
+ Answers (Total-6): #0 Operating with Python objects in a heavy loop like that, whether they are float , np.float32 , is always slow. NumPy is fast for operations on vectors and matrices, because all of the operations are performed on big chunks of data by parts of the library written in C, and not by the Python interpreter. Code run in the interpreter and/or using Python objects is always slow, and using non-native types makes it even slower. That's to be expected. 
+
+ If your app is slow and you need to optimize it, you should try either converting your code to a vector solution that uses NumPy directly, and is fast, or you could use tools such as Cython to create a fast implementation of the loop in C. 
+ #1 CPython floats are allocated in chunks 
+
+ The key problem with comparing numpy scalar allocations to the float type is that CPython always allocates the memory for float and int objects in blocks of size N. 
+
+ Internally, CPython maintains a linked list of blocks each large enough to hold N float objects. When you call float(1) CPython checks if there is space available in the current block; if not it allocates a new block. Once it has space in the current block it simply initializes that space and returns a pointer to it. 
+
+ On my machine each block can hold 41 float objects, so there is some overhead for the first float(1) call but the next 40 run much faster as the memory is allocated and ready. 
+
+ Slow numpy.float32 vs. numpy.float64 
+
+ It appears that numpy has 2 paths it can take when creating a scalar type: fast and slow. This depends on whether the scalar type has a Python base class to which it can defer for argument conversion. 
+
+ For some reason numpy.float32 is hard-coded to take the slower path (defined by the _WORK0 macro) , while numpy.float64 gets a chance to take the faster path (defined by the _WORK1 macro) . Note that scalartypes.c.src is a template which generates scalartypes.c at build time. 
+
+ You can visualize this in Cachegrind. I've included screen captures showing how many more calls are made to construct a float32 vs. float64 : 
+
+ float64 takes the fast path 
+
+ 
+
+ float32 takes the slow path 
+
+ 
+
+ Updated - Which type takes the slow/fast path may depend on whether the OS is 32-bit vs 64-bit. On my test system, Ubuntu Lucid 64-bit, the float64 type is 10 times faster than float32 . 
+ #2 Perhaps, that is why you should use Numpy directly instead of using loops. 
+
+ s1 = np.ones(10000000, dtype=np.float)
+s2 = np.ones(10000000, dtype=np.float32)
+s3 = np.ones(10000000, dtype=np.float64)
+
+np.sum(s1) &lt;-- 17.3 ms
+np.sum(s2) &lt;-- 15.8 ms
+np.sum(s3) &lt;-- 17.3 ms
+ 
+ #3 If you're after fast scalar arithmetic, you should be looking at libraries like gmpy rather than numpy (as others have noted, the latter is optimised more for vector operations rather than scalar ones). 
+ #4 I can confirm the results also. I tried to see what it would look like using all numpy types, and the difference persists. So then, my tests were: 
+
+ def testStandard(length=100000):
+ s = 1.0
+ addend = 8.0
+ modulo = 2399232.0
+ startTime = datetime.now()
+ for i in xrange(length):
+  s = (s + addend) * s % modulo
+ return datetime.now() - startTime
+
+def testNumpy(length=100000):
+ s = np.float64(1.0)
+ addend = np.float64(8.0)
+ modulo = np.float64(2399232.0)
+ startTime = datetime.now()
+ for i in xrange(length):
+  s = (s + addend) * s % modulo
+ return datetime.now() - startTime
+ 
+
+ So at this point, the numpy types are all interacting with each other, but the 10x difference persists (2 sec vs 0.2 sec). 
+
+ If I had to guess, I would say that there are two possible reasons for why the default float types are much faster. The first possibility is that python performs significant optimizations under the hood for dealing with certain numeric operations or looping in general (e.g. loop unrolling). The second possibility is that the numpy types involves an extra layer of abstraction (i.e. having to read from an address). To look into the effects of each, I did a few extra checks. 
+
+ One difference could be the result of python having to take extra steps to resolve the float64 types. Unlike compiled languages that generate efficient tables, python 2.6 (and maybe 3) has a significant cost for resolving things that you'd generally think of as free. Even a simple X.a resolution has to resolve the dot operator EVERY time it is called. (Which is why if you have a loop that calls instance.function() you're better off having a variable "function = instance.function" declared outside the loop). 
+
+ From my understanding, when you use python standard operators, these are fairly similar to using the ones from "import operator." If you substitute add, mul, and mod in for your +, *, and %, you see a static performance hit of about 0.5 sec versus the standard operators (to both cases). This means that by wrapping the operators, the standard python float operations get 3x slower. If you do one further, using operator.add and those variants adds on 0.7 sec approximately (over 1m trials, starting with 2 sec and 0.2 sec respectively). That's verging on the 5x slowness. So basically, if each of these issues happens twice, you're basically at the 10x slower point. 
+
+ So let's assume we're the python interpreter for a moment. Case 1, we do an operation on native types, let's say a+b. Under the hood, we can check the types of a and b and dispatch our addition to python's optimized code. Case 2, we have an operation of two other types (also a+b). Under the hood, we check if they're native types (they're not). We move on to the 'else' case. The else case sends us to something like a. add (b). a. add can then do a dispatch to numpy's optimized code. So at this point we have had additional overhead of an extra branch, one '.' get slots property, and a function call. And we've only got into the addition operation. We then have to use the result to create a new float64 (or alter an existing float64). Meanwhile, the python native code probably cheats by treating its types specially to avoid this sort of overhead. 
+
+ Based on the above examination of the costliness of python function calls and scoping overhead, it would be pretty easy for numpy to incur a 9x penalty just getting to and from its c math functions. I can entirely imagine this process taking many times longer than a simple math operation call. For each operation, the numpy library will have to wade through layers of python to get to its C implementation. 
+
+ So in my opinion, the reason for this is probably captured in this effect: 
+
+ length = 10000000
+class A():
+ X = 10
+startTime = datetime.now()
+for i in xrange(length):
+ x = A.X
+print "Long Way", datetime.now() - startTime
+startTime = datetime.now()
+y = A.X
+for i in xrange(length):
+ x = y
+print "Short Way", datetime.now() - startTime
+ 
+
+ This simple case shows a difference of 0.2 sec vs 0.14 sec (short way faster, obviously). I think what you're seeing is mainly just a bunch of those issues adding up. 
+
+ To avoid this, I can think of a a couple possible solutions that mainly echo what has been said. The first solution is to try to keep your evaluations inside NumPy as much as possible, as Selinap said. A large amount of the losses are probably due to the interfacing. I would look into ways to dispatch your job into numpy or some other numeric library optimized in C (gmpy has been mentioned). The goal should be to push as much into C at the same time as possible, then get the result(s) back. You want to put in big jobs, not lots of small jobs. 
+
+ The second solution, of course, would be to do more of your intermediate and small operations in python if you can. Clearly, using the native objects are going to be faster. They're going to be the first options on all the branch statements and will always have the shortest path to C code. Unless you have a specific need for fixed precision calculation or other issues with the default operators, I don't see why one wouldn't use the straight python functions for many things. 
+ #5 Really strange...I confirm the results in Ubuntu 11.04 32bit, python 2.7.1, numpy 1.5.1 (official packages): 
+
+ import numpy as np
+def testfloat():
+ s = 0
+ for i in range(10000000): 
+  s+= float(1)
+def testfloat32():
+ s = 0
+ for i in range(10000000): 
+  s+= np.float32(1)
+def testfloat64():
+ s = 0
+ for i in range(10000000): 
+  s+= np.float64(1)
+
+%time testfloat()
+CPU times: user 4.66 s, sys: 0.06 s, total: 4.73 s
+Wall time: 4.74 s
+
+%time testfloat64()
+CPU times: user 11.43 s, sys: 0.07 s, total: 11.50 s
+Wall time: 11.57 s
+
+
+%time testfloat32()
+CPU times: user 47.99 s, sys: 0.09 s, total: 48.08 s
+Wall time: 48.23 s
+ 
+
+ I don't see why float32 should be 5 times slower that float64.

@@ -1,0 +1,198 @@
+Question (ID-192649): Can you monkey patch methods on core types in python? Ruby can add methods to the Number class and other core types to get effects like: 
+
+ 
+1.should_equal(1)
+ 
+
+ But it seems like python cannot do this. Is this true? And if so, why? Does it have something to do with the fact that type can't be modified? 
+
+ Update: Rather than talking about different definitions of monkey patching, I would like to just focus on the example above. I have already concluded that it cannot be done as a few of you have answered. But I would like a more detailed explanation of why it cannot be done, and maybe what feature, if available in python, would allow this. 
+
+ To answer some of you: The reason I might want to do this is simply aesthetics/readability. 
+
+ 
+item.price.should_equal(19.99)
+ 
+
+ reads more like English and clearly indicates which is the tested value and which is the expected value, as supposed to: 
+
+ 
+should_equal(item.price, 19.99)
+ 
+
+ This concept is what Rspec and some other Ruby frameworks are based on. 
+ Answers (Total-11): #0 No, you cannot. In Python, all data (classes, methods, functions, etc) defined in C extension modules (including builtins) are immutable. This is because C modules are shared between multiple interpreters in the same process, so monkeypatching them would also affect unrelated interpreters in the same process. 
+
+ However, classes defined in Python code may be monkeypatched because they are local to that interpreter. 
+ #1 What exactly do you mean by Monkey Patch here? There are several slightly different definitions . 
+
+ If you mean, "can you change a class's methods at runtime?", then the answer is emphatically yes: 
+
+ class Foo:
+ pass # dummy class
+
+Foo.bar = lambda self: 42
+
+x = Foo()
+print x.bar()
+ 
+
+ If you mean, "can you change a class's methods at runtime and make all of the instances of that class change after-the-fact ?" then the answer is yes as well. Just change the order slightly: 
+
+ class Foo:
+ pass # dummy class
+
+x = Foo()
+
+Foo.bar = lambda self: 42
+
+print x.bar()
+ 
+
+ But you can't do this for certain built-in classes, like int or float . These classes' methods are implemented in C and there are certain abstractions sacrificed in order to make the implementation easier and more efficient. 
+
+ I'm not really clear on why you would want to alter the behavior of the built-in numeric classes anyway. If you need to alter their behavior, subclass them!! 
+ #2 Python's core types are immutable by design, as other users have pointed out: 
+
+ &gt;&gt;&gt; int.frobnicate = lambda self: whatever()
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: can't set attributes of built-in/extension type 'int'
+ 
+
+ You certainly could achieve the effect you describe by making a subclass, since user-defined types in Python are mutable by default. 
+
+ &gt;&gt;&gt; class MyInt(int):
+... def frobnicate(self):
+...  print 'frobnicating %r' % self
+... 
+&gt;&gt;&gt; five = MyInt(5)
+&gt;&gt;&gt; five.frobnicate()
+frobnicating 5
+&gt;&gt;&gt; five + 8
+13
+ 
+
+ There's no need to make the MyInt subclass public, either; one could just as well define it inline directly in the function or method that constructs the instance. 
+
+ There are certainly a few situations where Python programmers who are fluent in the idiom consider this sort of subclassing the right thing to do. For instance, os.stat() returns a tuple subclass that adds named members, precisely in order to address the sort of readability concern you refer to in your example. 
+
+ &gt;&gt;&gt; import os
+&gt;&gt;&gt; st = os.stat('.')
+&gt;&gt;&gt; st
+(16877, 34996226, 65024L, 69, 1000, 1000, 4096, 1223697425, 1223699268, 1223699268)
+&gt;&gt;&gt; st[6]
+4096
+&gt;&gt;&gt; st.st_size
+4096
+ 
+
+ That said, in the specific example you give, I don't believe that subclassing float in item.price (or elsewhere) would be very likely to be considered the Pythonic thing to do. I can easily imagine somebody deciding to add a price_should_equal() method to item if that were the primary use case; if one were looking for something more general, perhaps it might make more sense to use named arguments to make the intended meaning clearer, as in 
+
+ should_equal(observed=item.price, expected=19.99)
+ 
+
+ or something along those lines. It's a bit verbose, but no doubt it could be improved upon. A possible advantage to such an approach over Ruby-style monkey-patching is that should_equal() could easily perform its comparison on any type, not just int or float . But perhaps I'm getting too caught up in the details of the particular example that you happened to provide. 
+ #3 No, you can't do that in Python. I consider it to be a good thing. 
+ #4 What does should_equal do? Is it a boolean returning True or False ? In that case, it's spelled: 
+
+ item.price == 19.99
+ 
+
+ There's no accounting for taste, but no regular python developer would say that's less readable than your version. 
+
+ Does should_equal instead set some sort of validator? (why would a validator be limited to one value? Why not just set the value and not update it after that?) If you want a validator, this could never work anyway, since you're proposing to modify either a particular integer or all integers. (A validator that requires 18.99 to equal 19.99 will always fail.) Instead, you could spell it like this: 
+
+ item.price_should_equal(19.99)
+ 
+
+ or this: 
+
+ item.should_equal('price', 19.99)
+ 
+
+ and define appropriate methods on item's class or superclasses. 
+ #5 If you really really really want to do a monkey patch in Python, you can do a (sortof) hack with the "import foo as bar" technique. 
+
+ If you have a class such as TelnetConnection, and you want to extend it, subclass it in a separate file and call it something like TelnetConnectionExtended. 
+
+ Then, at the top of your code, where you would normally say: 
+
+ import TelnetConnection
+ 
+
+ change that to be: 
+
+ import TelnetConnectionExtended as TelnetConnection
+ 
+
+ and then everywhere in your code that you reference TelnetConnection will actually be referencing TelnetConnectionExtended. 
+
+ Sadly, this assumes that you have access to that class, and the "as" only operates within that particular file (it's not a global-rename), but I've found it to be useful from time to time. 
+ #6 Here's an example of implementing item.price.should_equal , although I'd use Decimal instead of float in a real program: 
+
+ class Price(float):
+ def __init__(self, val=None):
+  float.__init__(self)
+  if val is not None:
+   self = val
+
+ def should_equal(self, val):
+  assert self == val, (self, val)
+
+class Item(object):
+ def __init__(self, name, price=None):
+  self.name = name
+  self.price = Price(price)
+
+item = Item("spam", 3.99)
+item.price.should_equal(3.99)
+ 
+ #7 def should_equal_def(self, value):
+ if self != value:
+  raise ValueError, "%r should equal %r" % (self, value)
+
+class MyPatchedInt(int):
+ should_equal=should_equal_def
+
+class MyPatchedStr(str):
+ should_equal=should_equal_def
+
+import __builtin__
+__builtin__.str = MyPatchedStr
+__builtin__.int = MyPatchedInt
+
+int(1).should_equal(1)
+str("44").should_equal("44")
+ 
+
+ Have fun ;) 
+ #8 No but you have UserDict UserString and UserList which were made with exactly this in mind. 
+
+ If you google you will find examples for other types, but this are builtin. 
+
+ In general monkey patching is less used in Python than in Ruby. 
+ #9 You can't patch core types in python. 
+However, you could use pipe to write a more human readable code: 
+
+ from pipe import *
+
+@Pipe
+def should_equal(obj, val):
+ if obj==val: return True
+ return False
+
+class dummy: pass
+item=dummy()
+item.value=19.99
+
+print item.value | should_equal(19.99)
+ 
+ #10 It seems what you really wanted to write is: 
+
+ assert item.price == 19.99
+ 
+
+ (Of course comparing floats for equality, or using floats for prices, is a bad idea , so you'd write assert item.price == Decimal(19.99) or whatever numeric class you were using for the price.) 
+
+ You could also use a testing framework like py.test to get more info on failing asserts in your tests.

@@ -1,0 +1,233 @@
+Question (ID-1651487): Python parsing bracketed blocks What would be the best way in python to parse out chunks of text contained in matching brackets? 
+
+ "{ { a } { b } { { { c } } } }" 
+
+ should initially return: 
+
+ [ "{ a } { b } { { { c } } }" ] 
+
+ putting that as an input should return: 
+
+ [ "a", "b", "{ { c } }" ] 
+
+ which should return: 
+
+ [ "{ c }" ] 
+
+ [ "c" ] 
+
+ [] 
+ Answers (Total-7): #0 Pseudocode: 
+
+ For each string in the array:
+ Find the first '{'. If there is none, leave that string alone.
+ Init a counter to 0. 
+ For each character in the string: 
+  If you see a '{', increment the counter.
+  If you see a '}', decrement the counter.
+  If the counter reaches 0, break.
+ Here, if your counter is not 0, you have invalid input (unbalanced brackets)
+ If it is, then take the string from the first '{' up to the '}' that put the
+  counter at 0, and that is a new element in your array.
+ 
+ #1 Or this pyparsing version: 
+
+ &gt;&gt;&gt; from pyparsing import nestedExpr
+&gt;&gt;&gt; txt = "{ { a } { b } { { { c } } } }"
+&gt;&gt;&gt;
+&gt;&gt;&gt; nestedExpr('{','}').parseString(txt).asList()
+[[['a'], ['b'], [[['c']]]]]
+&gt;&gt;&gt;
+ 
+ #2 I'm kind of new to Python, so go easy on me, but here is an implementation that works: 
+
+ def balanced_braces(args):
+ parts = []
+ for arg in args:
+  if '{' not in arg:
+   continue
+  chars = []
+  n = 0
+  for c in arg:
+   if c == '{':
+    if n &gt; 0:
+     chars.append(c)
+    n += 1
+   elif c == '}':
+    n -= 1
+    if n &gt; 0:
+     chars.append(c)
+    elif n == 0:
+     parts.append(''.join(chars).lstrip().rstrip())
+     chars = []
+   elif n &gt; 0:
+    chars.append(c)
+ return parts
+
+t1 = balanced_braces(["{{ a } { b } { { { c } } } }"]);
+print t1
+t2 = balanced_braces(t1)
+print t2
+t3 = balanced_braces(t2)
+print t3
+t4 = balanced_braces(t3)
+print t4
+ 
+
+ Output: 
+
+ ['{ a } { b } { { { c } } }']
+['a', 'b', '{ { c } }']
+['{ c }']
+['c']
+ 
+ #3 Parse using lepl (installable via $ easy_install lepl ): 
+
+ from lepl import Any, Delayed, Node, Space
+
+expr = Delayed()
+expr += '{' / (Any() | expr[1:,Space()[:]]) / '}' &gt; Node
+
+print expr.parse("{{a}{b}{{{c}}}}")[0]
+ 
+
+ Output: 
+
+ 
+Node
+ +- '{'
+ +- Node
+ | +- '{'
+ | +- 'a'
+ | `- '}'
+ +- Node
+ | +- '{'
+ | +- 'b'
+ | `- '}'
+ +- Node
+ | +- '{'
+ | +- Node
+ | | +- '{'
+ | | +- Node
+ | | | +- '{'
+ | | | +- 'c'
+ | | | `- '}'
+ | | `- '}'
+ | `- '}'
+ `- '}'
+ 
+ #4 If you want to use a parser (lepl in this case), but still want the intermediate results rather than a final parsed list, then I think this is the kind of thing you were looking for: 
+
+ &gt;&gt;&gt; nested = Delayed()
+&gt;&gt;&gt; nested += "{" + (nested[1:,...]|Any()) + "}"
+&gt;&gt;&gt; split = (Drop("{") &amp; (nested[:,...]|Any()) &amp; Drop("}"))[:].parse
+&gt;&gt;&gt; split("{{a}{b}{{{c}}}}")
+['{a}{b}{{{c}}}']
+&gt;&gt;&gt; split("{a}{b}{{{c}}}")
+['a', 'b', '{{c}}']
+&gt;&gt;&gt; split("{{c}}")
+['{c}']
+&gt;&gt;&gt; split("{c}")
+['c']
+ 
+
+ That might look opaque at first, but it's fairly simple really :o) 
+
+ nested is a recursive definition of a matcher for nested brackets (the "+" and [...] in the definition keep everything as a single string after it has been matched). Then split says match as many as possible ("[:]") of something that is surrounded by "{" ... "}" (which we discard with "Drop") and contains either a nested expression or any letter. 
+
+ Finally, here's a lepl version of the "all in one" parser that gives a result in the same format as the pyparsing example above, but which (I believe) is more flexible about how spaces appear in the input: 
+
+ &gt;&gt;&gt; with Separator(~Space()[:]):
+...  nested = Delayed()
+...  nested += Drop("{") &amp; (nested[1:] | Any()) &amp; Drop("}") &gt; list
+...
+&gt;&gt;&gt; nested.parse("{{ a }{ b}{{{c}}}}")
+[[['a'], ['b'], [[['c']]]]]
+ 
+ #5 You could also parse them all at once, though I find the {a} to mean "a" rather than ["a"] slightly weird. If I've understood the format correctly: 
+
+ import re
+import sys
+
+
+_mbrack_rb = re.compile("([^{}]*)}") # re.match doesn't have a pos parameter
+def mbrack(s):
+ """Parse matching brackets.
+
+ &gt;&gt;&gt; mbrack("{a}")
+ 'a'
+ &gt;&gt;&gt; mbrack("{{a}{b}}")
+ ['a', 'b']
+ &gt;&gt;&gt; mbrack("{{a}{b}{{{c}}}}")
+ ['a', 'b', [['c']]]
+
+ &gt;&gt;&gt; mbrack("a")
+ Traceback (most recent call last):
+ ValueError: expected left bracket
+ &gt;&gt;&gt; mbrack("{a}{b}")
+ Traceback (most recent call last):
+ ValueError: more than one root
+ &gt;&gt;&gt; mbrack("{a")
+ Traceback (most recent call last):
+ ValueError: expected value then right bracket
+ &gt;&gt;&gt; mbrack("{a{}}")
+ Traceback (most recent call last):
+ ValueError: expected value then right bracket
+ &gt;&gt;&gt; mbrack("{a}}")
+ Traceback (most recent call last):
+ ValueError: unbalanced brackets (found right bracket)
+ &gt;&gt;&gt; mbrack("{{a}")
+ Traceback (most recent call last):
+ ValueError: unbalanced brackets (not enough right brackets)
+ """
+ stack = [[]]
+ i, end = 0, len(s)
+ while i &lt; end:
+ if s[i] != "{":
+  raise ValueError("expected left bracket")
+ elif i != 0 and len(stack) == 1:
+  raise ValueError("more than one root")
+ while i &lt; end and s[i] == "{":
+  L = []
+  stack[-1].append(L)
+  stack.append(L)
+  i += 1
+ stack.pop()
+ stack[-1].pop()
+ m = _mbrack_rb.match(s, i)
+ if m is None:
+  raise ValueError("expected value then right bracket")
+ stack[-1].append(m.group(1))
+ i = m.end(0)
+ while i &lt; end and s[i] == "}":
+  if len(stack) == 1:
+  raise ValueError("unbalanced brackets (found right bracket)")
+  stack.pop()
+  i += 1
+ if len(stack) != 1:
+ raise ValueError("unbalanced brackets (not enough right brackets)")
+ return stack[0][0]
+
+
+def main(args):
+ if args:
+ print &gt;&gt;sys.stderr, "unexpected arguments: %r" % args
+ import doctest
+ r = doctest.testmod()
+ print r
+ return r[0]
+
+if __name__ == "__main__":
+ sys.exit(main(sys.argv[1:]))
+ 
+ #6 Cleaner solution. This will find return the string enclosed in the outermost bracket. If None is returned, there was no match. 
+
+ def findBrackets( aString ):
+ if '{' in aString:
+  match = aString.split('{',1)[1]
+  open = 1
+  for index in xrange(len(match)):
+   if match[index] in '{}':
+   open = (open + 1) if match[index] == '{' else (open - 1)
+   if not open:
+   return match[:index]

@@ -1,0 +1,210 @@
+<h3>Question ( ID-447086 ) : </h3><h2>Python 's <span style="background-color:yellow;">re</span> module - saving state ? </h2><p>One of the biggest annoyances I find in Python is the inability of the <span style="background-color:yellow;">re</span> module to save its state without explicitly doing it in a <span style="background-color:yellow;">match</span> <span style="background-color:yellow;">object.</span> Often , one needs to parse <span style="background-color:yellow;">lines</span> and if they <span style="background-color:yellow;">comply</span> a <span style="background-color:yellow;">certain</span> <span style="background-color:yellow;">regex</span> take out values from them by the same <span style="background-color:yellow;">regex.</span> I would like to write <span style="background-color:yellow;">code</span> like this : </p>
+<pre><code>if re.match('foo (\w+) bar (\d+)', line):
+  # do stuff with .group(1) and .group(2)
+elif re.match('baz whoo_(\d+)', line):
+  # do stuff with .group(1)
+# etc.
+</code></pre>
+<p>But unfortunately it 's impossible to get to the <span style="background-color:yellow;">matched</span> <span style="background-color:yellow;">object</span> of the previous <span style="background-color:yellow;">call</span> to <span style="background-color:yellow;">re.match</span> , so this is written like this : </p>
+<pre><code>m = re.match('foo (\w+) bar (\d+)', line)
+if m:
+  # do stuff with m.group(1) and m.group(2)
+else:
+  m = re.match('baz whoo_(\d+)', line)
+  if m:
+    # do stuff with m.group(1)
+</code></pre>
+<p>Which is rather less <span style="background-color:yellow;">convenient</span> and gets <span style="background-color:yellow;">really</span> unwieldy as the list of elif s grows longer . </p>
+<p>A hackish solution would be to wrap the <span style="background-color:yellow;">re.match</span> and <span style="background-color:yellow;">re.search</span> in my own <span style="background-color:yellow;">objects</span> that keep state somewhere. Has anyone used this ? Are you aware of semi-standard implementations ( in large frameworks or something ) ? </p>
+<p>What other workarounds <span style="background-color:yellow;">can</span> you <span style="background-color:yellow;">recommend</span> ? Or perhaps , am I just misusing the module and <span style="background-color:yellow;">could</span> achieve my needs in a <span style="background-color:yellow;">cleaner</span> way ? </p>
+<p>Thanks in advance </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>You might like this module which implements the wrapper you are looking for . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>Trying out some ideas.. . </p>
+<p>It looks like you would ideally want an expression with side effects. If this were allowed in Python : </p>
+<pre><code>if m = re.match('foo (\w+) bar (\d+)', line):
+  # do stuff with m.group(1) and m.group(2)
+elif m = re.match('baz whoo_(\d+)', line):
+  # do stuff with m.group(1)
+elif ...
+</code></pre>
+<p>... then you would <span style="background-color:yellow;">clearly</span> and <span style="background-color:yellow;">cleanly</span> be expressing your intent. But it 's not. If side effects were allowed in nested functions , you <span style="background-color:yellow;">could</span> : </p>
+<pre><code>m = None
+def assign_m(x):
+  m = x
+  return x
+
+if assign_m(re.match('foo (\w+) bar (\d+)', line)):
+  # do stuff with m.group(1) and m.group(2)
+elif assign_m(re.match('baz whoo_(\d+)', line)):
+  # do stuff with m.group(1)
+elif ...
+</code></pre>
+<p>Now , not only is that getting ugly , but it 's still not valid Python <span style="background-color:yellow;">code</span> -- the nested function 'assign_m ' is n't allowed to modify the <span style="background-color:yellow;">variable</span> m in the outer scope. The best I <span style="background-color:yellow;">can</span> <span style="background-color:yellow;">come</span> up with is <span style="background-color:yellow;">really</span> ugly , using nested <span style="background-color:yellow;">class</span> which is allowed side effects : </p>
+<pre><code># per Brian's suggestion, a wrapper that is stateful
+class m_(object):
+  def match(self, *args):
+    self.inner_ = re.match(*args)
+    return self.inner_
+  def group(self, *args):
+    return self.inner_.group(*args)
+m = m_()
+
+# now 'm' is a stateful regex
+if m.match('foo (\w+) bar (\d+)', line):
+  # do stuff with m.group(1) and m.group(2)
+elif m.match('baz whoo_(\d+)', line):
+  # do stuff with m.group(1)
+elif ...
+</code></pre>
+<p>But that is <span style="background-color:yellow;">clearly</span> overkill . </p>
+<p>You migth <span style="background-color:yellow;">consider</span> using an inner function to allow local scope exits , which allows you to <span style="background-color:yellow;">remove</span> the else nesting : </p>
+<pre><code>def find_the_right_match():
+  # now 'm' is a stateful regex
+  m = re.match('foo (\w+) bar (\d+)', line)
+  if m:
+    # do stuff with m.group(1) and m.group(2)
+    return # <== exit nested function only
+  m = re.match('baz whoo_(\d+)', line)
+  if m:
+    # do stuff with m.group(1)
+    return
+
+find_the_right_match()
+</code></pre>
+<p>This lets you flatten nesting = ( 2 * N-1 ) to nesting = <span style="background-color:yellow;">1</span> , but you may have just moved the side-effects problem around , and the nested functions are very likely to <span style="background-color:yellow;">confuse</span> most Python programmers . </p>
+<p>Lastly , there are side-effect-free ways of dealing with this : </p>
+<pre><code>def cond_with(*phrases):
+  """for each 2-tuple, invokes first item.  the first pair where
+  the first item returns logical true, result is passed to second
+  function in pair.  Like an if-elif-elif.. chain"""
+  for (cond_lambda, then_lambda) in phrases:
+    c = cond_lambda()
+    if c:
+      return then_lambda(c) 
+  return None
+
+
+cond_with( 
+  ((lambda: re.match('foo (\w+) bar (\d+)', line)), 
+      (lambda m: 
+          ... # do stuff with m.group(1) and m.group(2)
+          )),
+  ((lambda: re.match('baz whoo_(\d+)', line)),
+      (lambda m:
+          ... # do stuff with m.group(1)
+          )),
+  ...)
+</code></pre>
+<p>And now the <span style="background-color:yellow;">code</span> barely even looks like Python , let alone understandable to Python programmers ( is that Lisp ? ) . </p>
+<p>I think the moral of this story is that Python is not optimized for this sort of idiom. You <span style="background-color:yellow;">really</span> need to just be a little verbose and live with a large nesting factor of else <span style="background-color:yellow;">conditions</span> . </p>
+<br /><b># 2 </b><br /><p>You <span style="background-color:yellow;">could</span> write a utility <span style="background-color:yellow;">class</span> to do the " save state and <span style="background-color:yellow;">return</span> <span style="background-color:yellow;">result</span> " operation. I do n't think this is that hackish. It 's fairly trivial to implement : </p>
+<pre><code>class Var(object):
+    def __init__(self, val=None): self.val = val
+
+    def set(self, result):
+        self.val = result
+        return result
+</code></pre>
+<p>And then use it as : </p>
+<pre><code>lastMatch = Var()
+
+if lastMatch.set(re.match('foo (\w+) bar (\d+)', line)):
+    print lastMatch.val.groups()
+
+elif lastMatch.set(re.match('baz whoo_(\d+)', line)):
+    print lastMatch.val.groups()
+</code></pre>
+<br /><b># 3 </b><br /><pre><code>class last(object):
+  def __init__(self, wrapped, initial=None):
+    self.last = initial
+    self.func = wrapped
+
+  def __call__(self, *args, **kwds):
+    self.last = self.func(*args, **kwds)
+    return self.last
+
+def test():
+  """
+  >>> test()
+  crude, but effective: (oYo)
+  """
+  import re
+  m = last(re.compile("(oYo)").match)
+  if m("abc"):
+    print("oops")
+  elif m("oYo"): #A
+    print("crude, but effective: (%s)" % m.last.group(1)) #B
+  else:
+    print("mark")
+
+if __name__ == "__main__":
+  import doctest
+  doctest.testmod()
+</code></pre>
+<p><span style="background-color:yellow;">last</span> is also suitable as a decorator . </p>
+<p>Realized that in my effort to make it self-testing and work in 2.5 , 2.6 , and 3.0 that I obscured the <span style="background-color:yellow;">real</span> solution somewhat. The important <span style="background-color:yellow;">lines</span> are marked # A and # B above , where you use the same <span style="background-color:yellow;">object</span> to <span style="background-color:yellow;">test</span> ( name it <span style="background-color:yellow;">match</span> or is_somename ) and <span style="background-color:yellow;">retrieve</span> its <span style="background-color:yellow;">last</span> value. Easy to abuse , but also easy to tweak and , if not pushed too far , get surprisingly <span style="background-color:yellow;">clear</span> <span style="background-color:yellow;">code</span> . </p>
+<br /><b># 4 </b><br /><p>Based on the great answers to this question , I 've <span style="background-color:yellow;">concocted</span> the following mechanism. It appears like a general way to solve the " no assignment in <span style="background-color:yellow;">conditions</span> " limitation of Python. The focus is transparency , implemented by silent delegation : </p>
+<pre><code>class Var(object):
+    def __init__(self, val=None):
+        self._val = val
+
+    def __getattr__(self, attr):
+        return getattr(self._val, attr)
+
+    def __call__(self, arg):
+        self._val = arg
+        return self._val
+
+
+if __name__ == "__main__":
+    import re
+
+    var = Var()
+
+    line = 'foo kwa bar 12'
+
+    if var(re.match('foo (\w+) bar (\d+)', line)):
+        print var.group(1), var.group(2)
+    elif var(re.match('baz whoo_(\d+)', line)):
+        print var.group(1)
+</code></pre>
+<p>In the general <span style="background-color:yellow;">case</span> , this is a thread-safe solution , because you <span style="background-color:yellow;">can</span> <span style="background-color:yellow;">create</span> your own instances of <span style="background-color:yellow;">Var</span> . For more ease-of-use when threading is not an issue , a default <span style="background-color:yellow;">Var</span> <span style="background-color:yellow;">object</span> <span style="background-color:yellow;">can</span> be imported and used. Here 's a module holding the <span style="background-color:yellow;">Var</span> <span style="background-color:yellow;">class</span> : </p>
+<pre><code>class Var(object):
+    def __init__(self, val=None):
+        self._val = val
+
+    def __getattr__(self, attr):
+        return getattr(self._val, attr)
+
+    def __call__(self, arg):
+        self._val = arg
+        return self._val
+
+var = Var()
+</code></pre>
+<p>And here 's the user 's <span style="background-color:yellow;">code</span> : </p>
+<pre><code>from var import Var, var
+import re
+
+line = 'foo kwa bar 12'
+
+if var(re.match('foo (\w+) bar (\d+)', line)):
+    print var.group(1), var.group(2)
+elif var(re.match('baz whoo_(\d+)', line)):
+    print var.group(1)
+</code></pre>
+<p>While not thread-safe , for a lot of simple scripts this provides a useful shortcut . </p>
+<br /><b># 5 </b><br /><p>Probably the simplest solution is to <span style="background-color:yellow;">return</span> early so you <span style="background-color:yellow;">can</span> get back to <span style="background-color:yellow;">creating</span> <span style="background-color:yellow;">variables</span> instead of needing to make an immediate <span style="background-color:yellow;">test</span> . </p>
+<pre><code>def get_results(line):
+    m = re.match('foo (\w+) bar (\d+)', line)
+    if m:
+      # do stuff with .group(1) and .group(2)
+      return result
+    m = re.match('baz whoo_(\d+)', line)
+    if m:
+      # do stuff with .group(1)
+      return other_result
+    # etc.
+</code></pre>
+<p>This way you avoid excessive nesting . </p>
+<br />

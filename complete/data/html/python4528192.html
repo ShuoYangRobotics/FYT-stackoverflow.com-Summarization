@@ -1,0 +1,153 @@
+<h3>Question (ID-4528192):</h3><h2>Database Compression in Python</h2><p>I have hourly logs like</p>
+
+<pre><code>user1:joined
+user2:log out
+user1:added pic
+user1:added comment
+user3:joined
+</code></pre>
+
+<p>I want to compress all the flat files down to one file. There are around 30 million users in the logs and I just want the latest user log for all the logs.</p>
+
+<p>My end result is I want to have a log look like</p>
+
+<pre><code>user1:added comment
+user2:log out
+user3:joined
+</code></pre>
+
+<p>Now my first attempt on a small scale was to just do a dict like</p>
+
+<pre><code>log['user1'] = "added comment"
+</code></pre>
+
+<p>Will doing a dict of 30 million key/val pairs have a giant memory footprint.. Or should I use something like sqllite to store them.. then just put the contents of the sqllite table back into a file?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>If you <a href="http://docs.python.org/library/functions.html#intern" rel="nofollow"><code>intern()</code></a> each log entry then you'll use only one string for each similar log entry regardless of the number of times it shows up, thereby lowering memory usage a lot.</p>
+
+<pre><code>&gt;&gt;&gt; a = 'foo'
+&gt;&gt;&gt; b = 'foo'
+&gt;&gt;&gt; a is b
+True
+&gt;&gt;&gt; b = 'f' + ('oo',)[0]
+&gt;&gt;&gt; a is b
+False
+&gt;&gt;&gt; a = intern('foo')
+&gt;&gt;&gt; b = intern('f' + ('oo',)[0])
+&gt;&gt;&gt; a is b
+True
+</code></pre>
+<br /><b>#1</b><br /><p>You could also process the log lines in <em>reverse</em> -- then use a set to keep track of which users you've seen:</p>
+
+<pre><code>s = set()
+
+# note, this piece is inefficient in that I'm reading all the lines
+# into memory in order to reverse them...  There are recipes out there
+# for reading a file in reverse.
+lines = open('log').readlines()
+lines.reverse()
+
+for line in lines:
+    line = line.strip()
+    user, op = line.split(':')
+    if not user in s:
+         print line
+         s.add(user)
+</code></pre>
+<br /><b>#2</b><br /><p>The various dbm modules (dbm in Python 3, or anydbm, gdbm, dbhash, etc. in Python 2) let you create simple databases of key to value mappings. They are stored on the disk so there is no huge memory impact. And you can store them as logs if you wish to.</p>
+<br /><b>#3</b><br /><p>This sounds like the perfect kind of problem for a Map/Reduce solution. See:</p>
+
+<ul>
+<li><a href="http://en.wikipedia.org/wiki/MapReduce" rel="nofollow">http://en.wikipedia.org/wiki/MapReduce</a></li>
+<li><a href="http://wiki.apache.org/hadoop/" rel="nofollow">Hadoop</a></li>
+</ul>
+
+<p>for example.</p>
+<br /><b>#4</b><br /><p>Its pretty to easy to mock up the data structure to see how much memory it would take.</p>
+
+<p>Something like this where you could change gen_string to generate data that would approximate the messages.  </p>
+
+<pre><code>import random
+from commands import getstatusoutput as gso
+
+def gen_string():
+     return str(random.random())
+
+ d = {}
+ for z in range(10**6):
+     d[gen_string()] = gen_string()
+
+print gso('ps -eo %mem,cmd |grep test.py')[1]
+</code></pre>
+
+<p>On a one gig netbook:</p>
+
+<pre><code>  0.4 vim test.py
+  0.1 /bin/bash -c time python test.py
+ 11.7 /usr/bin/python2.6 test.py
+  0.1 sh -c { ps -eo %mem,cmd |grep test.py; } 2&gt;&amp;1
+  0.0 grep test.py
+
+   real    0m26.325s
+   user    0m25.945s
+   sys     0m0.377s
+</code></pre>
+
+<p>... So its using about 10% of 1 gig for 100,000 records</p>
+
+<p>But it would also depend on how much data redundancy you have ...</p>
+<br /><b>#5</b><br /><p>Thanks to @Ignacio for intern() -</p>
+
+<pre><code>def procLog(logName, userDict):
+    inf = open(logName, 'r')
+    for ln in inf.readlines():
+        name,act = ln.split(':')
+        userDict[name] = intern(act)
+    inf.close()
+    return userDict
+
+def doLogs(logNameList):
+    userDict = {}
+    for logName in logNameList:
+        userDict = procLog(logName, userDict)
+    return userDict
+
+def writeOrderedLog(logName, userDict):
+    keylist = userDict.keys()
+    keylist.sort()
+    outf = open(logName,'w')
+    for k in keylist:
+        outf.write(k + ':' + userDict[k])
+    outf.close()
+
+def main():
+    mylogs = ['log20101214', 'log20101215', 'log20101216']
+    d = doLogs(mylogs)
+    writeOrderedLog('cumulativeLog', d)
+</code></pre>
+
+<p>the question, then, is how much memory this will consume.</p>
+
+<pre><code>def makeUserName():
+    ch = random.choice
+    syl = ['ba','ma','ta','pre','re','cu','pro','do','tru','ho','cre','su','si','du','so','tri','be','hy','cy','ny','quo','po']
+    # 22**5 is about 5.1 million potential names
+    return ch(syl).title() + ch(syl) + ch(syl) + ch(syl) + ch(syl)
+
+ch = random.choice
+states = ['joined', 'added pic', 'added article', 'added comment', 'voted', 'logged out']
+d = {}
+t = []
+for i in xrange(1000):
+    for j in xrange(8000):
+        d[makeUserName()] = ch(states)
+    t.append( (len(d), sys.getsizeof(d)) )
+</code></pre>
+
+<p>which results in</p>
+
+<p><img src="http://i.stack.imgur.com/M4s68.png" alt="alt text"></p>
+
+<p><em>(horizontal axis = number of user names, vertical axis = memory usage in bytes)</em> which is... slightly weird. It looks like a dictionary preallocates quite a lot of memory, then doubles it every time it gets too full?</p>
+
+<p>Anyway, 4 million users takes just under 100MB of RAM - but it actually reallocates around 3 million users, 50MB, so if the doubling holds, you will need about 800MB of RAM to process 24 to 48 million users.</p>
+<br />

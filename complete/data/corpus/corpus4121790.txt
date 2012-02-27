@@ -1,0 +1,136 @@
+Question (ID-4121790): Stack performance in programming languages Just for fun, I tried to compare the stack performance of a couple of programming languages calculating the Fibonacci series using the naive recursive algorithm. The code is mainly the same in all languages, i'll post a java version: 
+
+ public class Fib {
+ public static int fib(int n) {
+ if (n &lt; 2) return 1;
+ return fib(n-1) + fib(n-2);
+ }
+
+ public static void main(String[] args) {
+ System.out.println(fib(Integer.valueOf(args[0])));
+ }
+}
+ 
+
+ Ok so the point is that using this algorithm with input 40 I got these timings: 
+
+ C: 2.796s
+Ocaml: 2.372s
+Python: 106.407s
+Java: 1.336s
+C#(mono): 2.956s
+ 
+
+ They are taken in a Ubuntu 10.04 box using the versions of each language available in the official repositories, on a dual core intel machine. 
+
+ I know that functional languages like ocaml have the slowdown that comes from treating functions as first order citizens and have no problem to explain CPython's running time because of the fact that it's the only interpreted language in this test, but I was impressed by the java running time which is half of the c for the same algorithm! Would you attribute this to the JIT compilation? 
+
+ How would you explain these results? 
+
+ EDIT: thank you for the interesting replies! I recognize that this is not a proper benchmark (never said it was :P) and maybe I can make a better one and post it to you next time, in the light of what we've discussed :) 
+
+ EDIT 2: I updated the runtime of the ocaml implementation, using the optimizing compiler ocamlopt. Also I published the testbed at https://github.com/hoheinzollern/fib-test . Feel free to make additions to it if you want :) 
+ Answers (Total-8): #0 You might want to crank up the optimisation level of your C compiler. With gcc -O3 , that makes a big difference, a drop from 2.015 seconds to 0.766 seconds, a reduction of about 62%. 
+
+ Beyond that, you need to ensure you've tested correctly. You should run each program ten times, remove the outliers (fastest and slowest), then average the other eight. 
+
+ In addition, make sure you're measuring CPU time rather than clock time. 
+
+ Anything less than that, I would not consider a decent statistical analysis and it may well be subject to noise, rendering your results useless. 
+
+ For what it's worth, those C timings above were for seven runs with the outliers taken out before averaging. 
+
+ 
+
+ In fact, this question shows how important algorithm selection is when aiming for high performance. Although recursive solutions are usually elegant, this one suffers from the fault that you duplicate a lot of calculations. The iterative version: 
+
+ int fib(unsigned int n) {
+ int t, a, b;
+ if (n &lt; 2) return 1;
+ a = b = 1;
+ while (n-- &gt;= 2) {
+  t = a + b;
+  a = b;
+  b = t;
+ }
+ return b;
+}
+ 
+
+ further drops the time taken, from 0.766 seconds to 0.078 seconds, a further reduction of 89% and a whopping reduction of 96% from the original code. 
+
+ 
+
+ And, as a final attempt, you should try out the following, which combines a lookup table with calculations beyond a certain point: 
+
+ static int fib(unsigned int n) {
+ static int lookup[] = {
+  1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377,
+  610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657,
+  46368, 75025, 121393, 196418, 317811, 514229, 832040,
+  1346269, 2178309, 3524578, 5702887, 9227465, 14930352,
+  24157817, 39088169, 63245986, 102334155, 165580141 };
+ int t, a, b;
+
+ if (n &lt; sizeof(lookup)/sizeof(*lookup))
+  return lookup[n];
+ a = lookup[sizeof(lookup)/sizeof(*lookup)-2];
+ b = lookup[sizeof(lookup)/sizeof(*lookup)-1];
+ while (n-- &gt;= sizeof(lookup)/sizeof(*lookup)) {
+  t = a + b;
+  a = b;
+  b = t;
+ }
+
+ return b;
+}
+ 
+
+ That reduces the time yet again but I suspect we're hitting the point of diminishing returns here. 
+ #1 You say very little about your configuration (in benchmarking, details are everything: commandlines, computer used, ...) 
+
+ When I try to reproduce for OCaml I get: 
+
+ let rec f n = if n &lt; 2 then 1 else (f (n-1)) + (f (n-2))
+
+let () = Format.printf "%d@." (f 40)
+
+
+$ ocamlopt fib.ml
+$ time ./a.out 
+165580141
+
+real 0m1.643s
+ 
+
+ This is on an Intel Xeon 5150 (Core 2) at 2.66GHz. If I use the bytecode OCaml compiler ocamlc on the other hand, I get a time similar to your result (11s). But of course, for running a speed comparison, there is no reason to use the bytecode compiler, unless you want to benchmark the speed of compilation itself ( ocamlc is amazing for speed of compilation). 
+ #2 One possibility is that the C compiler is optimizing on the guess that the first branch ( n &lt; 2 ) is the one more frequently taken. It has to do that purely at compile time: make a guess and stick with it. 
+
+ Hotspot gets to run the code, see what actually happens more often, and reoptimize based on that data. 
+
+ You may be able to see a difference by inverting the logic of the if : 
+
+ public static int fib(int n) {
+ if (n &gt;= 2) return fib(n-1) + fib(n-2);
+ return 1;
+}
+ 
+
+ It's worth a try, anyway :) 
+
+ As always, check the optimization settings for all platforms, too. Obviously the compiler settings for C - and on Java, try using the client version of Hotspot vs the server version. (Note that you need to run for longer than a second or so to really get the full benefit of Hotspot... it might be interesting to put the outer call in a loop to get runs of a minute or so.) 
+ #3 I can explain the Python performance. Python's performance for recursion is abysmal at best, and it should be avoided like the plague when coding in it. Especially since stack overflow occurs by default at a recursion depth of only 1000... 
+
+ As for Java's performance, that's amazing. It's rare that Java beats C (even with very little compiler optimization on the C side)... what the JIT might be doing is memoization or tail recursion... 
+ #4 Note that if the Java Hotspot VM is smart enough to memoise fib() calls, it can cut down the exponentional cost of the algorithm to something nearer to linear cost. 
+ #5 With C, you should either declare the fibonacci function "inline", or, using gcc, add the -finline-functions argument to the compile options. That will allow the compiler to do recursive inlining. That's also the reason why with -O3 you get better performance, it activates -finline-functions . 
+
+ Edit You need to at least specify -O/-O1 to have recursive inlining, also if the function is declared inline. Actually, testing myself I found that declaring the function inline and using -O as compilation flag, or just using -O -finline-functions , my recursive fibonacci code was faster than with -O2 or -O2 -finline-functions . 
+ #6 I wrote a C version of the naive Fibonacci function and compiled it to assembler in gcc (4.3.2 Linux). I then compiled it with gcc -O3. 
+
+ The unoptimised version was 34 lines long and looked like a straight translation of the C code. 
+
+ The optimised version was 190 lines long and (it was difficult to tell but) it appeared to inline at least the calls for values up to about 5. 
+ #7 One C trick which you can try is to disable the stack checking (i e built-in code which makes sure that the stack is large enough to permit the additional allocation of the current function's local variables). This could be dicey for a recursive function and indeed could be the reason behind the slow C times: the executing program might well have run out of stack space which forces the stack-checking to reallocate the entire stack several times during the actual run. 
+
+ Try to approximate the stack size you need and force the linker to allocate that much stack space. Then disable stack-checking and re-make the program.

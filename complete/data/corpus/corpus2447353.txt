@@ -1,0 +1,170 @@
+Question (ID-2447353): __getattr__ on a module How can implement the equivalent of a __getattr__ on a class, on a module? 
+
+ Example 
+
+ When calling a function that does not exist in a module's statically defined attributes, I wish to create an instance of a class in that module, and invoke the method on it with the same name as failed in the attribute lookup on the module. 
+
+ class A(object):
+ def salutation(self, accusative):
+  print "hello", accusative
+
+# note this function is intentionally on the module, and not the class above
+def __getattr__(mod, name):
+ return getattr(A(), name)
+
+if __name__ == "__main__":
+ # i hope here to have my __getattr__ function above invoked, since
+ # salutation does not exist in the current namespace
+ salutation("world")
+ 
+
+ Which gives: 
+
+ matt@stanley:~/Desktop$ python getattrmod.py 
+Traceback (most recent call last):
+ File "getattrmod.py", line 9, in &lt;module&gt;
+ salutation("world")
+NameError: name 'salutation' is not defined
+ 
+ Answers (Total-8): #0 This is a hack, but you can wrap the module with a class: 
+
+ class Wrapper(object):
+ def __init__(self, wrapped):
+ self.wrapped = wrapped
+ def __getattr__(self, name):
+ # Perform custom logic here
+ try:
+  return getattr(self.wrapped, name)
+ except AttributeError:
+  return 'default' # Some sensible default
+
+sys.modules[__name__] = Wrapper(sys.modules[__name__])
+ 
+ #1 We don't usually do it that way. 
+
+ What we do is this. 
+
+ class A(object):
+....
+
+# The implicit global instance
+a= A()
+
+def salutation( *arg, **kw ):
+ a.salutation( *arg, **kw )
+ 
+
+ Why? So that the implicit global instance is visible. 
+
+ For examples, look at the random module, which creates an implicit global instance to slightly simplify the use cases where you want a "simple" random number generator. 
+ #2 Similar to what @Håvard S proposed, in a case where I needed to implement some magic on a module (like __getattr__ ), I would define a new class that inherits from types.ModuleType and put that in sys.modules (probably replacing the module where my custom ModuleType was defined). 
+
+ See the main __init__.py file of Werkzeug for a fairly robust implementation of this. 
+ #3 This is hackish, but... 
+
+ import types
+
+class A(object):
+ def salutation(self, accusative):
+  print "hello", accusative
+
+ def farewell(self, greeting, accusative):
+   print greeting, accusative
+
+def AddGlobalAttribute(classname, methodname):
+ print "Adding " + classname + "." + methodname + "()"
+ def genericFunction(*args):
+  return globals()[classname]().__getattribute__(methodname)(*args)
+ globals()[methodname] = genericFunction
+
+# set up the global namespace
+
+x = 0 # X and Y are here to add them implicitly to globals, so
+y = 0 # globals does not change as we iterate over it.
+
+toAdd = []
+
+def isCallableMethod(classname, methodname):
+ someclass = globals()[classname]()
+ something = someclass.__getattribute__(methodname)
+ return callable(something)
+
+
+for x in globals():
+ print "Looking at", x
+ if isinstance(globals()[x], (types.ClassType, type)):
+  print "Found Class:", x
+  for y in dir(globals()[x]):
+   if y.find("__") == -1: # hack to ignore default methods
+    if isCallableMethod(x,y):
+     if y not in globals(): # don't override existing global names
+      toAdd.append((x,y))
+
+
+for x in toAdd:
+ AddGlobalAttribute(*x)
+
+
+if __name__ == "__main__":
+ salutation("world")
+ farewell("goodbye", "world")
+ 
+
+ This works by iterating over the all the objects in the global namespace. If the item is a class, it iterates over the class attributes. If the attribute is callable it adds it to the global namespace as a function. 
+
+ It ignore all attributes which contain "__". 
+
+ I wouldn't use this in production code, but it should get you started. 
+ #4 There are two basic problems you are running into here: 
+
+ 
+ __xxx__ methods are only looked up on the class 
+ TypeError: can't set attributes of built-in/extension type 'module' 
+ 
+
+ (1) means any solution would have to also keep track of which module was being examined, otherwise every module would then have the instance-substitution behavior; and (2) means that (1) isn't even possible... at least not directly. 
+
+ Fortunately, sys.modules is not picky about what goes there so a wrapper will work, but only for module access (i.e. import somemodule; somemodule.salutation('world') ; for same-module access you pretty much have to yank the methods from the substitution class and add them to globals() eiher with a custom method on the class (I like using .export() ) or with a generic function (such as those already listed as answers). One thing to keep in mind: if the wrapper is creating a new instance each time, and the globals solution is not, you end up with subtly different behavior. Oh, and you don't get to use both at the same time -- it's one or the other. 
+ #5 Create your module file that has your classes. Import the module. Run getattr on the module you just imported. You can do a dynamic import using __import__ and pull the module from sys.modules. 
+
+ Here's your module some_module.py : 
+
+ class Foo(object):
+ pass
+
+class Bar(object):
+ pass
+ 
+
+ And in another module: 
+
+ import some_module
+
+Foo = getattr(some_module, 'Foo')
+ 
+
+ Doing this dynamically: 
+
+ import sys
+
+__import__('some_module')
+mod = sys.modules['some_module']
+Foo = getattr(mod, 'Foo')
+ 
+ #6 In some circumstances the globals() dictionary can suffice, for example you can instantiate a class by name from the global scope: 
+
+ from somemodule import * # imports SomeClass
+
+someclass_instance = globals()['SomeClass']()
+ 
+ #7 Why can't you just override the __getattr__() 
+
+
+
+ class Foo(object):
+ def __getattr__(self, name):
+  if conditionFoo(name):
+   # Do something
+  else:
+   # Default behaviour
+   raise AttributeError

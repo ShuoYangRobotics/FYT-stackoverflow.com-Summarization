@@ -1,0 +1,339 @@
+Question (ID-1892324): Why program functionally in Python? At work we used to program our Python in a pretty standard OO way. Lately, a couple guys got on the functional bandwagon. And their code now contains lots more lambdas, maps and reduces. I understand that functional languages are good for concurrency but does programming Python functionally really help with concurrency? I am just trying to understand what I get if I start using more of Python's functional features. 
+ Answers (Total-8): #0 Edit : I've been taken to task in the comments (in part, it seems, by fanatics of FP in Python, but not exclusively) for not providing more explanations/examples, so, expanding the answer to supply some. 
+
+ lambda , even more so map (and filter ), and most especially reduce , are hardly ever the right tool for the job in Python, which is a strongly multi-paradigm language. 
+
+ lambda main advantage (?) compared to the normal def statement is that it makes an anonymous function, while def gives the function a name -- and for that very dubious advantage you pay an enormous price (the function's body is limited to one expression, the resulting function object is not pickleable, the very lack of a name sometimes makes it much harder to understand a stack trace or otherwise debug a problem -- need I go on?!-). 
+
+ Consider what's probably the single most idiotic idiom you sometimes see used in "Python" (Python with "scare quotes", because it's obviously not idiomatic Python -- it's a bad transliteration from idiomatic Scheme or the like, just like the more frequent overuse of OOP in Python is a bad transliteration from Java or the like): 
+
+ inc = lambda x: x + 1
+ 
+
+ by assigning the lambda to a name, this approach immediately throws away the above-mentioned "advantage" -- and doesn't lose any of the DISadvantages! For example, inc doesn't know its name -- inc.__name__ is the useless string '&lt;lambda&gt;' -- good luck understanding a stack trace with a few of these;-). The proper Python way to achieve the desired semantics in this simple case is, of course: 
+
+ def inc(x): return x + 1
+ 
+
+ Now inc.__name__ is the string 'inc' , as it clearly should be, and the object is pickleable -- the semantics are otherwise identical (in this simple case where the desired functionality fits comfortably in a simple expression -- def also makes it trivially easy to refactor if you need to temporarily or permanently insert statements such as print or raise , of course). 
+
+ lambda is (part of) an expression while def is (part of) a statement -- that's the one bit of syntax sugar that makes people use lambda sometimes. Many FP enthusiasts (just as many OOP and procedural fans) dislike Python's reasonably strong distinction between expressions and statements (part of a general stance towards Command-Query Separation ). Me, I think that when you use a language you're best off using it "with the grain" -- the way it was designed to be used -- rather than fighting against it; so I program Python in a Pythonic way, Scheme in a Schematic (;-) way, Fortran in a Fortesque (?) way, and so on:-). 
+
+ Moving on to reduce -- one comment claims that reduce is the best way to compute the product of a list. Oh, really? Let's see...: 
+
+ $ python -mtimeit -s'L=range(12,52)' 'reduce(lambda x,y: x*y, L, 1)'
+100000 loops, best of 3: 18.3 usec per loop
+$ python -mtimeit -s'L=range(12,52)' 'p=1' 'for x in L: p*=x'
+100000 loops, best of 3: 10.5 usec per loop
+ 
+
+ so the simple, elementary, trivial loop is about twice as fast (as well as more concise) than the "best way" to perform the task?-) I guess the advantages of speed and conciseness must therefore make the trivial loop the "bestest" way, right?-) 
+
+ By further sacrificing compactness and readability...: 
+
+ $ python -mtimeit -s'import operator; L=range(12,52)' 'reduce(operator.mul, L, 1)'
+100000 loops, best of 3: 10.7 usec per loop
+ 
+
+ ...we can get almost back to the easily obtained performance of the simplest and most obvious, compact, and readable approach (the simple, elementary, trivial loop). This points out another problem with lambda , actually: performance! For sufficiently simple operations, such as multiplication, the overhead of a function call is quite significant compared to the actual operation being performed -- reduce (and map and filter ) often forces you to insert such a function call where simple loops, list comprehensions, and generator expressions, allow the readability, compactness, and speed of in-line operations. 
+
+ Perhaps even worse than the above-berated "assign a lambda to a name" anti-idiom is actually the following anti-idiom, e.g. to sort a list of strings by their lengths: 
+
+ thelist.sort(key=lambda s: len(s))
+ 
+
+ instead of the obvious, readable, compact, speedier 
+
+ thelist.sort(key=len)
+ 
+
+ Here, the use of lambda is doing nothing but inserting a level of indirection -- with no good effect whatsoever, and plenty of bad ones. 
+
+ The motivation for using lambda is often to allow the use of map and filter instead of a vastly preferable loop or list comprehension that would let you do plain, normal computations in line; you still pay that "level of indirection", of course. It's not Pythonic to have to wonder "should I use a listcomp or a map here": just always use listcomps, when both appear applicable and you don't know which one to choose, on the basis of "there should be one, and preferably only one, obvious way to do something". You'll often write listcomps that could not be sensibly translated to a map (nested loops, if clauses, etc), while there's no call to map that can't be sensibly rewritten as a listcomp. 
+
+ Perfectly proper functional approaches in Python often include list comprehensions, generator expressions, itertools , higher-order functions, first-order functions in various guises, closures, generators (and occasionally other kinds of iterators). 
+
+ itertools , as a commenter pointed out, does include imap and ifilter : the difference is that, like all of itertools, these are stream-based (like map and filter builtins in Python 3, but differently from those builtins in Python 2). itertools offers a set of building blocks that compose well with each other, and splendid performance: especially if you find yourself potentially dealing with very long (or even unbounded!-) sequences, you owe it to yourself to become familiar with itertools -- their whole chapter in the docs makes for good reading, and the recipes in particular are quite instructive. 
+
+ Writing your own higher-order functions is often useful, especially when they're suitable for use as decorators (both function decorators, as explained in that part of the docs, and class decorators, introduced in Python 2.6). Do remember to use functools.wraps on your function decorators (to keep the metadata of the function getting wrapped)! 
+
+ So, summarizing...: anything you can code with lambda , map , and filter , you can code (more often than not advantageously) with def (named functions) and listcomps -- and usually moving up one notch to generators, generator expressions, or itertools , is even better. reduce meets the legal definition of "attractive nuisance"...: it's hardly ever the right tool for the job (that's why it's not a built-in any more in Python 3, at long last!-). 
+ #1 FP is important not only for concurrency; in fact, there's virtually no concurrency in the canonical Python implementation (maybe 3.x changes that?). in any case, FP lends itself well to concurrency because it leads to programs with no or fewer (explicit) states. states are troublesome for a few reasons. one is that they make distributing the computation hard(er) (that's the concurrency argument), another, far more important in most cases, is the tendency to inflict bugs. the biggest source of bugs in contemporary software is variables (there's a close relationship between variables and states). FP may reduce the number of variables in a program: bugs squashed! 
+
+ see how many bugs can you introduce by mixing the variables up in these versions: 
+
+ def imperative(seq):
+ p = 1
+ for x in seq:
+  p *= x
+ return p
+ 
+
+ versus (warning, my.reduce 's parameter list differs from that of python's reduce ; rationale given later) 
+
+ import operator as ops
+
+def functional(seq):
+ return my.reduce(ops.mul, 1, seq)
+ 
+
+ as you can see, it's a matter of fact that FP gives you fewer opportunities to shoot yourself in the foot with a variables-related bug. 
+
+ also, readability: it may take a bit of training, but functional is way easier to read than imperative : you see reduce ("ok, it's reducing a sequence to a single value"), mul ("by multiplication"). wherease imperative has the generic form of a for cycle, peppered with variables and assignments. these for cycles all look the same, so to get an idea of what's going on in imperative , you need to read almost all of it. 
+
+ then there's succintness and flexibility. you give me imperative and I tell you I like it, but want something to sum sequences as well. no problem, you say, and off you go, copy-pasting: 
+
+ def imperative(seq):
+ p = 1
+ for x in seq:
+  p *= x
+ return p
+
+def imperative2(seq):
+ p = 0
+ for x in seq:
+  p += x
+ return p
+ 
+
+ what can you do to reduce the duplication? well, if operators were values, you could do something like 
+
+ def reduce(op, seq, init):
+ rv = init
+ for x in seq:
+  rv = op(rv, x)
+ return rv
+
+def imperative(seq):
+ return reduce(*, 1, seq)
+
+def imperative2(seq):
+ return reduce(+, 0, seq)
+ 
+
+ oh wait! operators provides operators that are values! but.. Alex Martelli condemned reduce already... looks like if you want to stay within the boundaries he suggests, you're doomed to copy-pasting plumbing code. 
+
+ is the FP version any better? surely you'd need to copy-paste as well? 
+
+ import operator as ops
+
+def functional(seq):
+ return my.reduce(ops.mul, 1, seq)
+
+def functional2(seq):
+ return my.reduce(ops.add, 0, seq)
+ 
+
+ well, that's just an artifact of the half-assed approach! abandoning the imperative def , you can contract both versions to 
+
+ import functools as func, operator as ops
+
+functional = func.partial(my.reduce, ops.mul, 1)
+functional2 = func.partial(my.reduce, ops.add, 0)
+ 
+
+ or even 
+
+ import functools as func, operator as ops
+
+reducer = func.partial(func.partial, my.reduce)
+functional = reducer(ops.mul, 1)
+functional2 = reducer(ops.add, 0)
+ 
+
+ ( func.partial is the reason for my.reduce ) 
+
+ what about runtime speed? yes, using FP in a language like Python will incur some overhead. here i'll just parrot what a few professors have to say about this: 
+
+ 
+ premature optimization is the root of all evil. 
+ most programs spend 80% of their runtime in 20% percent of their code. 
+ profile, don't speculate! 
+ 
+
+ I'm not very good at explaining things. Don't let me muddy the water too much, read the first half of the speech John Backus gave on the occasion of receiving the Turing Award in 1977. Quote: 
+
+ 
+ 5.1 A von Neumann Program for Inner Product 
+
+ c := 0
+for i := I step 1 until n do
+ c := c + a[i] * b[i]
+ 
+ 
+ Several properties of this program are
+ worth noting: 
+ 
+ 
+ Its statements operate on an invisible "state" according to complex
+ rules. 
+ It is not hierarchical. Except for the right side of the assignment
+ statement, it does not construct
+ complex entities from simpler ones.
+ (Larger programs, however, often do.) 
+ It is dynamic and repetitive. One must mentally execute it to
+ understand it. 
+ It computes word-at-a-time by repetition (of the assignment) and by
+ modification (of variable i). 
+ Part of the data, n , is in the program; thus it lacks generality and
+ works only for vectors of length n . 
+ It names its arguments; it can only be used for vectors a and b .
+ To become general, it requires a
+ procedure declaration. These involve
+ complex issues (e.g., call-by-name
+ versus call-by-value). 
+ Its "housekeeping" operations are represented by symbols in
+ scattered places (in the for statement
+ and the subscripts in the assignment).
+ This makes it impossible to
+ consolidate housekeeping operations,
+ the most common of all, into single,
+ powerful, widely useful operators. 
+ Thus in programming those operations
+ one must always start again at square
+ one, writing " for i := ... " and
+ " for j := ... " followed by
+ assignment statements sprinkled with
+ i 's and j 's. 
+ 
+ 
+ #2 I program in Python everyday, and I have to say that too much 'bandwagoning' toward OO or functional could lead toward missing elegant solutions. I believe that both paradigms have their advantages to certain problems - and I think that's when you know what approach to use. Use a functional approach when it leaves you with a clean, readable, and efficient solution. Same goes for OO. 
+
+ And that's one of the reasons I love Python - the fact that it is multi-paradigm and lets the developer choose how to solve his/her problem. 
+ #3 This answer is completely re-worked. It incorporates a lot of observations from the other answers. 
+
+ As you can see, there is a lot of strong feelings surrounding the use of functional programming constructs in Python. There are three major groups of ideas here. 
+
+ First, almost everybody but the people who are most wedded to the purest expression of the functional paradigm agree that list and generator comprehensions are better and clearer than using map or filter . Your colleagues should be avoiding the use of map and filter if you are targeting a version of Python new enough to support list comprehensions. And you should be avoiding itertools.imap and itertools.ifilter if your version of Python is new enough for generator comprehensions. 
+
+ Secondly, there is a lot of ambivalence in the community as a whole about lambda . A lot of people are really annoyed by a syntax in addition to def for declaring functions, especially one that involves a keyword like lambda that has a rather strange name. And people are also annoyed that these small anonymous functions are missing any of the nice meta-data that describes any other kind of function. It makes debugging harder. Lastly the small functions declared by lambda are often not terribly efficient as they require the overhead of a Python function call each time they are invoked, which is frequently in an inner loop. 
+
+ Lastly, most (meaning > 50%, but most likely not 90%) people think that reduce is a little strange and obscure. I myself admit to having print reduce.__doc__ whenever I want to use it, which isn't all that often. Though when I see it used, the nature of the arguments (i.e. function, list or iterator, scalar) speak for themselves. 
+
+ As for myself, I fall in the camp of people who think the functional style is often very useful. But balancing that thought is the fact that Python is not at heart a functional language. And overuse of functional constructs can make programs seem strangely contorted and difficult for people to understand. 
+
+ To understand when and where the functional style is very helpful and improves readability, consider this function in C++: 
+
+ unsigned int factorial(unsigned int x)
+{
+ int fact = 1;
+ for (int i = 2; i &lt;= n; ++i) {
+  fact *= i;
+ }
+ return fact
+ }
+ 
+
+ This loop seems very simple and easy to understand. And in this case it is. But its seeming simplicity is a trap for the unwary. Consider this alternate means of writing the loop: 
+
+ unsigned int factorial(unsigned int n)
+{
+ int fact = 1;
+ for (int i = 2; i &lt;= n; i += 2) {
+  fact *= i--;
+ }
+  return fact;
+ }
+ 
+
+ Suddenly, the loop control variable no longer varies in an obvious way. You are reduced to looking through the code and reasoning carefully about what happens with the loop control variable. Now this example is a bit pathological, but there are real-world examples that are not. And the problem is with the fact that the idea is repeated assignment to an existing variable. You can't trust the variable's value is the same throughout the entire body of the loop. 
+
+ This is a long recognized problem, and in Python writing a loop like this is fairly unnatural. You have to use a while loop, and it just looks wrong. Instead, in Python you would write something like this: 
+
+ def factorial(n):
+ fact = 1
+ for i in xrange(2, n):
+  fact = fact * i;
+ return fact
+ 
+
+ As you can see, the way you talk about the loop control variable in Python is not amenable to fooling with it inside the loop. This eliminates a lot of the problems with 'clever' loops in other imperative languages. Unfortunately, it's an idea that's semi-borrowed from functional languages. 
+
+ Even this lends itself to strange fiddling. For example, this loop: 
+
+ c = 1
+for i in xrange(0, min(len(a), len(b))):
+ c = c * (a[i] + b[i])
+ if i &lt; len(a):
+  a[i + 1] = a[a + 1] + 1
+ 
+
+ Oops, we again have a loop that is difficult to understand. It superficially resembles a really simple and obvious loop, and you have to read it carefully to realize that one of the variables used in the loop's computation is being messed with in a way that will effect future runs of the loop. 
+
+ Again, a more functional approach to the rescue: 
+
+ from itertools import izip
+c = 1
+for ai, bi in izip(a, b):
+ c = c * (ai + bi)
+ 
+
+ Now by looking at the code we have some strong indication (partly by the fact that the person is using this functional style) that the lists a and b are not modified during the execution of the loop. One less thing to think about. 
+
+ The last thing to be worried about is c being modified in strange ways. Perhaps it is a global variable and is being modified by some roundabout function call. To rescue us from this mental worry, here is a purely function approach: 
+
+ from itertools import izip
+c = reduce(lambda x, ab: x * (ab[0] + ab[1]), izip(a, b), 1)
+ 
+
+ Very concise, and the structure tells us that x is purely an accumulator. It is a local variable everywhere it appear. The final result is unambiguously assigned to c. Now there is much less to worry about. The structure of the code removes several classes of possible error. 
+
+ That is why people might choose a functional style. It is concise and clear, at least if you understand what reduce and lambda do. There are large classes of problems that could afflict a program written in a more imperative style that you know won't afflict your functional style program. 
+
+ In the case of factorial, there is a very simple and clear way to write this function in Python in a functional style: 
+
+ import operator
+def factorial(n):
+ return reduce(operator.mul, xrange(2, n+1), 1)
+ 
+ #4 The question, which seems to be mostly ignored here: 
+
+ 
+ does programming Python functionally really help with concurrency? 
+ 
+
+ No. The value FP brings to concurrency is in eliminating state in computation, which is ultimately responsible for the hard-to-grasp nastiness of unintended errors in concurrent computation. But it depends on the concurrent programming idioms not themselves being stateful, something that doesn't apply to twisted. If there are concurrency idioms for python that leverage stateless programming, I don't know of them. 
+
+ In any case, it's a bit lame to try to do FP in a language without tail-call elimination, and without curried anonymous lambdas. Programming Python in FP style is kind of pretending to yourself that Python is something that it isn't. 
+ #5 Here's a short summary of positive answers when/why to program functionally. 
+
+ 
+ List comprehensions were imported from Haskell, a FP language. They are Pythonic. I'd prefer to write 
+ 
+
+ 
+ y = [i*2 for i in k if i % 3 == 0]
+ 
+ 
+
+ than to use an imperative construct (loop). 
+
+ 
+ I'd use lambda when giving a complicated key to sort , like list.sort(key=lambda x: x.value.estimate()) 
+ It's cleaner to use higher-order functions than to write code using OOP's design patterns like visitor or abstract factory 
+ People say that you should program Python in Python, C++ in C++ etc. That's true, but certainly you should be able to think in different ways at the same thing. If while writing a loop you know that you're really doing reducing (folding), then you'll be able to think on a higher level. That cleans your mind and helps to organize. Of course lower-level thinking is important too. 
+ 
+
+ You should NOT overuse those features - there are many traps, see Alex Martelli's post. I'd subjectively say the most serious danger is that excessive use of those features will destroy readability of your code, which is a core attribute of Python. 
+ #6 The standard functions filter(), map() and reduce() are used for various operations on a list and all of the three functions expect two arguments: A function and a list 
+
+ We could define a separate function and use it as an argument to filter() etc., and its probably a good idea if that function is used several times, or if the function is too complex to be written in a single line. However, if it's needed only once and it's quite simple, it's more convenient to use a lambda construct to generate a (temporary) anonymous function and pass it to filter(). 
+
+ This helps in readability and compact code. 
+
+ Using these function, would also turn out to be efficient , because the looping on the elements of the list is done in C, which is a little bit faster than looping in python. 
+
+ And object oriented way is forcibly needed when states are to be maintained, apart from abstraction, grouping, etc., If the requirement is pretty simple, I would stick with functional than to Object Oriented programming. 
+ #7 Map and Filter have their place in OO programming. Right next to list comprehensions and generator functions. 
+
+ Reduce less so. The algorithm for reduce can rapidly suck down more time than it deserves; with a tiny bit of thinking, a manually-written reduce-loop will be more efficient than a reduce which applies a poorly-thought-out looping function to a sequence. 
+
+ Lambda never. Lambda is useless. One can make the argument that it actually does something, so it's not completely useless . First: Lambda is not syntactic "sugar"; it makes things bigger and uglier. Second: the one time in 10,000 lines of code that think you need an "anonymous" function turns into two times in 20,000 lines of code, which removes the value of anonymity, making it into a maintenance liability. 
+
+ However. 
+
+ The functional style of no-object-state-change programming is still OO in nature. You just do more object creation and fewer object updates. Once you start using generator functions, much OO programming drifts in a functional direction. 
+
+ Each state change appears to translate into a generator function that builds a new object in the new state from old object(s). It's an interesting world view because reasoning about the algorithm is much, much simpler. 
+
+ But that's no call to use reduce or lambda.

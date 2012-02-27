@@ -1,0 +1,206 @@
+<h3>Question (ID-141642):</h3><h2>What limitations have closures in Python compared to language X closures?</h2><p>Where X is any programming language (C#, Javascript, Lisp, Perl, Ruby, Scheme, etc) which supports some flavour of closures.  </p>
+
+<p>Some limitations are mentioned in the <a href="http://ivan.truemesh.com/archives/000411.html" rel="nofollow">Closures in Python</a> (compared to Ruby's closures), but the article is old and many limitations do not exist in modern Python any more.</p>
+
+<p>Seeing a code example for a concrete limitation would be great.</p>
+
+<p><strong>Related questions</strong>:</p>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/13857/can-you-explain-closures-as-they-relate-to-python">Can you explain closures (as they relate to Python)?</a></li>
+<li><a href="http://stackoverflow.com/questions/36636/what-is-a-closure">What is a ‘Closure’?</a></li>
+<li><a href="http://stackoverflow.com/questions/111102/how-does-a-javascript-closure-work">How does a javascript closure work ?</a></li>
+</ul>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>The most important limitation, currently, is that you cannot assign to an outer-scope variable. In other words, closures are read-only:</p>
+
+<pre><code>&gt;&gt;&gt; def outer(x): 
+...     def inner_reads():
+...         # Will return outer's 'x'.
+...         return x
+...     def inner_writes(y):
+...         # Will assign to a local 'x', not the outer 'x'
+...         x = y
+...     def inner_error(y):
+...         # Will produce an error: 'x' is local because of the assignment,
+...         # but we use it before it is assigned to.
+...         tmp = x
+...         x = y
+...         return tmp
+...     return inner_reads, inner_writes, inner_error
+... 
+&gt;&gt;&gt; inner_reads, inner_writes, inner_error = outer(5)
+&gt;&gt;&gt; inner_reads()
+5
+&gt;&gt;&gt; inner_writes(10)
+&gt;&gt;&gt; inner_reads()
+5
+&gt;&gt;&gt; inner_error(10)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "&lt;stdin&gt;", line 11, in inner_error
+UnboundLocalError: local variable 'x' referenced before assignment
+</code></pre>
+
+<p>A name that gets assigned to in a local scope (a function) is always local, unless declared otherwise. While there is the 'global' declaration to declare a variable global even when it is assigned to, there is no such declaration for enclosed variables -- yet. In Python 3.0, there is (will be) the 'nonlocal' declaration that does just that.</p>
+
+<p>You can work around this limitation in the mean time by using a mutable container type:</p>
+
+<pre><code>&gt;&gt;&gt; def outer(x):
+...     x = [x]
+...     def inner_reads():
+...         # Will return outer's x's first (and only) element.
+...         return x[0]
+...     def inner_writes(y):
+...         # Will look up outer's x, then mutate it.      
+...         x[0] = y
+...     def inner_error(y):
+...         # Will now work, because 'x' is not assigned to, just referenced.
+...         tmp = x[0]
+...         x[0] = y
+...         return tmp
+...     return inner_reads, inner_writes, inner_error
+... 
+&gt;&gt;&gt; inner_reads, inner_writes, inner_error = outer(5)
+&gt;&gt;&gt; inner_reads()
+5
+&gt;&gt;&gt; inner_writes(10)
+&gt;&gt;&gt; inner_reads()
+10
+&gt;&gt;&gt; inner_error(15)
+10
+&gt;&gt;&gt; inner_reads()
+15
+</code></pre>
+<br /><b>#1</b><br /><p>The only difficulty I've seen people encounter with Python's in particular is when they try to mix non-functional features like variable reassignment with closures, and are surprised when this doesn't work:</p>
+
+<pre><code>def outer ():
+    x = 1
+    def inner ():
+        print x
+        x = 2
+    return inner
+outer () ()
+</code></pre>
+
+<p>Usually just pointing out that a function has its own local variables is enough to deter such silliness.</p>
+<br /><b>#2</b><br /><p>@<a href="#141767" rel="nofollow">Kevin Little</a></p>
+
+<p><code>nonlocal</code> does not solves completely this problem:</p>
+
+<pre><code>x = 0 # global x
+def outer():
+    x = 1 # local to `outer`
+    def inner():
+        global x
+        x = 2 # change global
+        print(x) 
+        x = 3 # change global
+        return x
+    def inner2():
+##        nonlocal x # can't use `nonlocal` here
+        print(x)     # prints global
+##        x = 4      # can't change `x` here
+        return x
+    x = 5
+    return (inner, inner2)
+
+for inner in outer():
+    print(inner())
+# -&gt; 2 3 3 3
+</code></pre>
+
+<p>On the other hand:</p>
+
+<pre><code>x = 0
+def outer():
+    x = 1 # local to `outer`
+    def inner():
+##        global x
+        x = 2
+        print(x) # local to `inner` 
+        x = 3 
+        return x
+    def inner2():
+        nonlocal x
+        print(x)
+        x = 4  # local to `outer`
+        return x
+    x = 5
+    return (inner, inner2)
+
+for inner in outer():
+    print(inner())
+# -&gt; 2 3 5 4
+</code></pre>
+<br /><b>#3</b><br /><p>@<a href="#141670" rel="nofollow">John Millikin</a></p>
+
+<pre><code>def outer():
+    x = 1 # local to `outer()`
+
+    def inner():
+        x = 2     # local to `inner()`
+        print(x)
+        x = 3
+        return x
+
+    def inner2():
+        nonlocal x
+        print(x)  # local to `outer()`
+        x = 4     # change `x`, it is not local to `inner2()`
+        return x
+
+    x = 5         # local to `outer()`
+    return (inner, inner2)
+
+for inner in outer():
+    print(inner()) 
+
+# -&gt; 2 3 5 4
+</code></pre>
+<br /><b>#4</b><br /><p>Fixed in Python 3.0 via the <strong>nonlocal</strong> keyword. See <a href="http://www.artima.com/weblogs/viewpost.jsp?thread=208549" rel="nofollow">here </a>and search for "nonlocal".<br><br>For those of you who don't like using the web: </p>
+
+<blockquote>
+  <p>The nonlocal statement lets you assign to variables in outer (non-global) scopes.<br>
+         -- some guy named "van Rossum" or something...  ;)</p>
+</blockquote>
+<br /><b>#5</b><br /><p>A limitation (or "limitation") of Python closures, comparing to Javascript closures, is that it <strong>cannot</strong> be used for effective <strong>data hiding</strong></p>
+
+<h3>Javascript</h3>
+
+<pre><code>var mksecretmaker = function(){
+    var secrets = [];
+    var mksecret = function() {
+        secrets.push(Math.random())
+    }
+    return mksecret
+}
+var secretmaker = mksecretmaker();
+secretmaker(); secretmaker()
+// privately generated secret number list
+// is practically inaccessible
+</code></pre>
+
+<h3>Python</h3>
+
+<pre><code>import random
+def mksecretmaker():
+    secrets = []
+    def mksecret():
+        secrets.append(random.random())
+    return mksecret
+
+secretmaker = mksecretmaker()
+secretmaker(); secretmaker()
+# "secrets" are easily accessible,
+# it's difficult to hide something in Python:
+secretmaker.__closure__[0].cell_contents # -&gt; e.g. [0.680752847190161, 0.9068475951742101]
+</code></pre>
+<br /><b>#6</b><br /><p>The better workaround until 3.0 is to include the variable as a defaulted parameter in the enclosed function definition:</p>
+
+<pre>
+def f()
+    x = 5
+    def g(y, z, x=x):
+        x = x + 1
+</pre>
+<br />

@@ -1,0 +1,320 @@
+Question (ID-327223): Memory Efficient Alternatives to Python Dictionaries In one of my current side projects, I am scanning through some text looking at the frequency of word triplets. In my first go at it, I used the default dictionary three levels deep. In other words, topDictionary[word1][word2][word3] returns the number of times these words appear in the text, topdictionary[word1][word2] returns a dictionary with all the words that appeared following words 1 and 2, etc. 
+
+ This functions correctly, but it is very memory intensive. In my initial tests it used something like 20 times the memory of just storing the triplets in a text file, which seems like an overly large amount of memory overhead. 
+
+ My suspicion is that many of these dictionaries are being created with many more slots than are actually being used, so I want to replace the dictionaries with something else that is more memory efficient when used in this manner. I would strongly prefer a solution that allows key lookups along the lines of the dictionaries. 
+
+ From what I know of data structures, a balanced binary search tree using something like red-black or AVL would probably be ideal, but I would really prefer not to implement them myself. If possible, I'd prefer to stick with standard python libraries, but I'm definitely open to other alternatives if they would work best. 
+
+ So, does anyone have any suggestions for me? 
+
+ Edited to add: 
+
+ Thanks for the responses so far. A few of the answers so far have suggested using tuples, which didn't really do much for me when I condensed the first two words into a tuple. I am hesitant to use all three as a key since I want it to be easy to look up all third words given the first two. (ie I want something like the result of topDict[word1,word2].keys() ). 
+
+ The current dataset I am playing around with is the most recent version of Wikipedia For Schools . The results of parsing the first thousand pages, for example, is something like 11MB for a text file where each line is the three words and the count all tab separated. Storing the text in the dictionary format I am now using takes around 185MB. I know that there will be some additional overhead for pointers and whatnot, but the difference seems excessive. 
+
+ Once again, thank you all for the responses so far. 
+ Answers (Total-12): #0 Some measurements. I took 10MB of free e-book text and computed trigram frequencies, producing a 24MB file. Storing it in different simple Python data structures took this much space in kB, measured as RSS from running ps, where d is a dict, keys and freqs are lists, and a,b,c,freq are the fields of a trigram record: 
+
+ 295760  S. Lott's answer
+237984  S. Lott's with keys interned before passing in
+203172 [*] d[(a,b,c)] = int(freq)
+203156  d[a][b][c] = int(freq)
+189132  keys.append((a,b,c)); freqs.append(int(freq))
+146132  d[intern(a),intern(b)][intern(c)] = int(freq)
+145408  d[intern(a)][intern(b)][intern(c)] = int(freq)
+ 83888 [*] d[a+' '+b+' '+c] = int(freq)
+ 82776 [*] d[(intern(a),intern(b),intern(c))] = int(freq)
+ 68756  keys.append((intern(a),intern(b),intern(c))); freqs.append(int(freq))
+ 60320  keys.append(a+' '+b+' '+c); freqs.append(int(freq))
+ 50556  pair array
+ 48320  squeezed pair array
+ 33024  squeezed single array
+ 
+
+ The entries marked [*] have no efficient way to look up a pair (a,b); they're listed only because others have suggested them (or variants of them). (I was sort of irked into making this because the top-voted answers were not helpful, as the table shows.) 
+
+ 'Pair array' is the scheme below in my original answer ("I'd start with the array with keys
+being the first two words..."), where the value table for each pair is
+represented as a single string. 'Squeezed pair array' is the same,
+leaving out the frequency values that are equal to 1 (the most common
+case). 'Squeezed single array' is like squeezed pair array, but gloms key and value together as one string (with a separator character). The squeezed single array code: 
+
+ import collections
+
+def build(file):
+ pairs = collections.defaultdict(list)
+ for line in file: # N.B. file assumed to be already sorted
+  a, b, c, freq = line.split()
+  key = ' '.join((a, b))
+  pairs[key].append(c + ':' + freq if freq != '1' else c)
+ out = open('squeezedsinglearrayfile', 'w')
+ for key in sorted(pairs.keys()):
+  out.write('%s|%s\n' % (key, ' '.join(pairs[key])))
+
+def load():
+ return open('squeezedsinglearrayfile').readlines()
+
+if __name__ == '__main__':
+ build(open('freqs'))
+ 
+
+ I haven't written the code to look up values from this structure (use bisect, as mentioned below), or implemented the fancier compressed structures also described below. 
+
+ Original answer: A simple sorted array of strings, each string being a space-separated concatenation of words, searched using the bisect module, should be worth trying for a start. This saves space on pointers, etc. It still wastes space due to the repetition of words; there's a standard trick to strip out common prefixes, with another level of index to get them back, but that's rather more complex and slower. (The idea is to store successive chunks of the array in a compressed form that must be scanned sequentially, along with a random-access index to each chunk. Chunks are big enough to compress, but small enough for reasonable access time. The particular compression scheme applicable here: if successive entries are 'hello george' and 'hello world', make the second entry be '6world' instead. (6 being the length of the prefix in common.) Or maybe you could get away with using zlib ? Anyway, you can find out more in this vein by looking up dictionary structures used in full-text search.) So specifically, I'd start with the array with keys being the first two words, with a parallel array whose entries list the possible third words and their frequencies. It might still suck, though -- I think you may be out of luck as far as batteries-included memory-efficient options. 
+
+ Also, binary tree structures are not recommended for memory efficiency here. E.g., this paper tests a variety of data structures on a similar problem (unigrams instead of trigrams though) and finds a hashtable to beat all of the tree structures by that measure. 
+
+ I should have mentioned, as someone else did, that the sorted array could be used just for the wordlist, not bigrams or trigrams; then for your 'real' data structure, whatever it is, you use integer keys instead of strings -- indices into the wordlist. (But this keeps you from exploiting common prefixes except in the wordlist itself. Maybe I shouldn't suggest this after all.) 
+ #1 Use tuples. 
+Tuples can be keys to dictionaries, so you don't need to nest dictionaries. 
+
+ d = {}
+d[ word1, word2, word3 ] = 1
+ 
+
+ Also as a plus, you could use defaultdict 
+
+ 
+ so that elements that don't have entries always return 0 
+ and so that u can say d[w1,w2,w3] += 1 without checking if the key already exists or not 
+ 
+
+ example: 
+
+ from collections import defaultdict
+d = defaultdict(int)
+d["first","word","tuple"] += 1
+ 
+
+ If you need to find all words "word3" that are tupled with (word1,word2) then search for it in dictionary.keys() using list comprehension 
+
+ if you have a tuple, t, you can get the first two items using slices: 
+
+ &gt;&gt;&gt; a = (1,2,3)
+&gt;&gt;&gt; a[:2]
+(1, 2)
+ 
+
+ a small example for searching tuples with list comprehensions: 
+
+ &gt;&gt;&gt; b = [(1,2,3),(1,2,5),(3,4,6)]
+&gt;&gt;&gt; search = (1,2)
+&gt;&gt;&gt; [a[2] for a in b if a[:2] == search]
+[3, 5]
+ 
+
+ You see here, we got a list of all items that appear as the third item in the tuples that start with (1,2) 
+ #2 A couple attempts: 
+
+ I figure you're doing something similar to this: 
+
+ from __future__ import with_statement
+
+import time
+from collections import deque, defaultdict
+
+# Just used to generate some triples of words
+def triplegen(words="/usr/share/dict/words"):
+ d=deque()
+ with open(words) as f:
+  for i in range(3):
+   d.append(f.readline().strip())
+
+  while d[-1] != '':
+   yield tuple(d)
+   d.popleft()
+   d.append(f.readline().strip())
+
+if __name__ == '__main__':
+ class D(dict):
+  def __missing__(self, key):
+   self[key] = D()
+   return self[key]
+ h=D()
+ for a, b, c in triplegen():
+  h[a][b][c] = 1
+ time.sleep(60)
+ 
+
+ That gives me ~88MB. 
+
+ Changing the storage to 
+
+ h[a, b, c] = 1
+ 
+
+ takes ~25MB 
+
+ interning a, b, and c makes it take about 31MB. My case is a bit special because my words never repeat on the input. You might try some variations yourself and see if one of these helps you. 
+ #3 You could try to use same dictionary, only one level deep. 
+
+ topDictionary[word1+delimiter+word2+delimiter+word3]
+ 
+
+ delimiter could be plain " ". (or use (word1,word2,word3)) 
+
+ This would be easiest to implement.
+I believe you will see a little improvement, if it is not enough...
+...i'll think of something... 
+ #4 Ok, so you are basically trying to store a sparse 3D space. The kind of access patterns you want to this space is crucial for the choice of algorithm and data structure. Considering your data source, do you want to feed this to a grid? If you don't need O(1) access: 
+
+ In order to get memory efficiency you want to subdivide that space into subspaces with a similar number of entries. (like a BTree). So a data structure with : 
+
+ 
+ firstWordRange 
+ secondWordRange 
+ thirdWordRange 
+ numberOfEntries 
+ a sorted block of entries. 
+ next and previous blocks in all 3 dimensions 
+ 
+ #5 In this case, ZODB ¹ BTrees might be helpful, since they are much less memory-hungry. Use a BTrees.OOBtree (Object keys to Object values) or BTrees.OIBTree (Object keys to Integer values), and use 3-word tuples as your key. 
+
+ Something like: 
+
+ from BTrees.OOBTree import OOBTree as BTree
+ 
+
+ The interface is, more or less, dict-like, with the added bonus (for you) that .keys , .items , .iterkeys and .iteritems have two min, max optional arguments: 
+
+ &gt;&gt;&gt; t=BTree()
+&gt;&gt;&gt; t['a', 'b', 'c']= 10
+&gt;&gt;&gt; t['a', 'b', 'z']= 11
+&gt;&gt;&gt; t['a', 'a', 'z']= 12
+&gt;&gt;&gt; t['a', 'd', 'z']= 13
+&gt;&gt;&gt; print list(t.keys(('a', 'b'), ('a', 'c')))
+[('a', 'b', 'c'), ('a', 'b', 'z')]
+ 
+
+ ¹ Note that if you are on Windows and work with Python >2.4, I know there are packages for more recent python versions, but I can't recollect where. 
+
+ PS They exist in the CheeseShop ☺ 
+ #6 Are you implementing Markovian text generation? 
+
+ If your chains map 2 words to the probabilities of the third I'd use a dictionary mapping K-tuples to the 3rd-word histogram. A trivial (but memory-hungry) way to implement the histogram would be to use a list with repeats, and then random.choice gives you a word with the proper probability. 
+
+ Here's an implementation with the K-tuple as a parameter: 
+
+ import random
+
+# can change these functions to use a dict-based histogram
+# instead of a list with repeats
+def default_histogram():   return []
+def add_to_histogram(item, hist): hist.append(item)
+def choose_from_histogram(hist): return random.choice(hist)
+
+K=2 # look 2 words back
+words = ...
+d = {}
+
+# build histograms
+for i in xrange(len(words)-K-1):
+ key = words[i:i+K]
+ word = words[i+K]
+
+ d.setdefault(key, default_histogram())
+ add_to_histogram(word, d[key])
+
+# generate text
+start = random.randrange(len(words)-K-1)
+key = words[start:start+K]
+for i in NUM_WORDS_TO_GENERATE:
+ word = choose_from_histogram(d[key])
+ print word,
+ key = key[1:] + (word,)
+ 
+ #7 Scipy has sparse matrices, so if you can make the first two words a tuple, you can do something like this: 
+
+ import numpy as N
+from scipy import sparse
+
+word_index = {}
+count = sparse.lil_matrix((word_count*word_count, word_count), dtype=N.int)
+
+for word1, word2, word3 in triple_list:
+ w1 = word_index.setdefault(word1, len(word_index))
+ w2 = word_index.setdefault(word2, len(word_index))
+ w3 = word_index.setdefault(word3, len(word_index))
+ w1_w2 = w1 * word_count + w2
+ count[w1_w2,w3] += 1
+ 
+ #8 If memory is simply not big enough, pybsddb can help store a disk-persistent map. 
+ #9 You could use a numpy multidimensional array. You'll need to use numbers rather than strings to index into the array, but that can be solved by using a single dict to map words to numbers. 
+
+ import numpy
+w = {'word1':1, 'word2':2, 'word3':3, 'word4':4}
+a = numpy.zeros( (4,4,4) )
+ 
+
+ Then to index into your array, you'd do something like: 
+
+ a[w[word1], w[word2], w[word3]] += 1
+ 
+
+ That syntax is not beautiful, but numpy arrays are about as efficient as anything you're likely to find. Note also that I haven't tried this code out, so I may be off in some of the details. Just going from memory here. 
+ #10 Here's a tree structure that uses the bisect library to maintain a sorted list of words. Each lookup in O (log2(n)). 
+
+ import bisect
+
+class WordList( object ):
+ """Leaf-level is list of words and counts."""
+ def __init__( self ):
+  self.words= [ ('\xff-None-',0) ]
+ def count( self, wordTuple ):
+  assert len(wordTuple)==1
+  word= wordTuple[0]
+  loc= bisect.bisect_left( self.words, word )
+  if self.words[loc][0] != word:
+   self.words.insert( loc, (word,0) )  
+  self.words[loc]= ( word, self.words[loc][1]+1 )
+ def getWords( self ):
+  return self.words[:-1]
+
+class WordTree( object ):
+ """Above non-leaf nodes are words and either trees or lists."""
+ def __init__( self ):
+  self.words= [ ('\xff-None-',None) ]
+ def count( self, wordTuple ):
+  head, tail = wordTuple[0], wordTuple[1:]
+  loc= bisect.bisect_left( self.words, head )
+  if self.words[loc][0] != head:
+   if len(tail) == 1:
+    newList= WordList()
+   else:
+    newList= WordTree()
+   self.words.insert( loc, (head,newList) )
+  self.words[loc][1].count( tail )
+ def getWords( self ):
+  return self.words[:-1]
+
+t = WordTree()
+for a in ( ('the','quick','brown'), ('the','quick','fox') ):
+ t.count(a)
+
+for w1,wt1 in t.getWords():
+ print w1
+ for w2,wt2 in wt1.getWords():
+  print " ", w2
+  for w3 in wt2.getWords():
+   print " ", w3
+ 
+
+ For simplicity, this uses a dummy value in each tree and list. This saves endless if-statements to determine if the list was actually empty before we make a comparison. It's only empty once, so the if-statements are wasted for all n -1 other words. 
+ #11 You could put all words in a dictionary.
+key would be word, and value is number (index). 
+
+ Then you use it like this: 
+
+ Word1=indexDict[word1]
+Word2=indexDict[word2]
+Word3=indexDict[word3]
+
+topDictionary[Word1][Word2][Word3]
+ 
+
+ Insert in indexDict with: 
+
+ if word not in indexDict:
+ indexDict[word]=len(indexDict)

@@ -1,0 +1,127 @@
+<h3>Question (ID-4218961):</h3><h2>Why fmod(1.0,0.1) == .1?</h2><p>I experienced this phenomenon in Python first, but it turned out that it is the common answer, for example MS Excel gives this. Wolfram Alpha gives an interesting schizoid answer, where it states that the rational approximation of zero is 1/5. ( <a href="http://www.wolframalpha.com/input/?i=1.0+mod+.1" rel="nofollow">1.0 mod 0.1</a> )</p>
+
+<p>On the other hand, if I implement the definition by hand it gives me the 'right' answer (0).</p>
+
+<pre><code>def myFmod(a,n):
+    return a - floor(a/n) * n
+</code></pre>
+
+<p>What is going on here. Do I miss something?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Because <code>0.1</code> isn't 0.1; that value isn't representable in double precision, so it gets rounded to the nearest double-precision number, which is exactly:</p>
+
+<pre><code>0.1000000000000000055511151231257827021181583404541015625
+</code></pre>
+
+<p>When you call <code>fmod</code>, you get the remainder of division by the value listed above, which is exactly:</p>
+
+<pre><code>0.0999999999999999500399638918679556809365749359130859375
+</code></pre>
+
+<p>which rounds to <code>0.1</code> (or maybe <code>0.09999999999999995</code>) when you print it.</p>
+
+<p>In other words, <code>fmod</code> works perfectly, but you're not giving it the input that you think you are.</p>
+
+<hr>
+
+<p><strong>Edit:</strong> Your own implementation gives you the correct answer because it is <em>less accurate</em>, believe it or not.  First off, note that <code>fmod</code> computes the remainder without any rounding error; the only source of inaccuracy is the representation error introduced by using the value <code>0.1</code>.  Now, let's walk through your implementation, and see how the rounding error that it incurs exactly cancels out the representation error.</p>
+
+<p>Evaluate <code>a - floor(a/n) * n</code> one step at a time, keeping track of the exact values computed at each stage:</p>
+
+<p>First we evaluate <code>1.0/n</code>, where <code>n</code> is the closest double-precision approximation to <code>0.1</code> as shown above.  The result of this division is approximately:</p>
+
+<pre><code>9.999999999999999444888487687421760603063276150363492645647081359...
+</code></pre>
+
+<p>Note that this value is not a representable double precision number -- so it gets <em>rounded</em>.  To see how this rounding happens, let's look at the number in binary instead of decimal:</p>
+
+<pre><code>1001.1111111111111111111111111111111111111111111111111 10110000000...
+</code></pre>
+
+<p>The space indicates where the rounding to double precision occurs.  Since the part after the round point is larger than the exact half-way point, this value rounds up to exactly <code>10</code>.</p>
+
+<p><code>floor(10.0)</code> is, predictably, <code>10.0</code>.  So all that's left is to compute <code>1.0 - 10.0*0.1</code>.</p>
+
+<p>In binary, the exact value of <code>10.0 * 0.1</code> is:</p>
+
+<pre><code>1.0000000000000000000000000000000000000000000000000000 0100
+</code></pre>
+
+<p>again, this value is not representable as a double, and so is rounded at the position indicated by a space.  This time it rounds down to exactly <code>1.0</code>, and so the final computation is <code>1.0 - 1.0</code>, which is of course <code>0.0</code>.</p>
+
+<p>Your implementation contains two rounding errors, which happen to exactly cancel out the representation error of the value <code>0.1</code> in this case.  <code>fmod</code>, by contrast, is <em>always</em> exact (at least on platforms with a good numerics library), and exposes the representation error of <code>0.1</code>.</p>
+<br /><b>#1</b><br /><p>This result is due to machine floating point representation. In your method, you are 'casting' (kinda) the float to an int and do not have this issue. The 'best' way to avoid such issues (esp for <code>mod</code>) is to multiply by a sufficiently large enough int (only 10 is needed in your case) and perform the operation again.</p>
+
+<blockquote>
+  <p>fmod(1.0,0.1)</p>
+  
+  <p>fmod(10.0,1.0) = 0</p>
+</blockquote>
+<br /><b>#2</b><br /><p>From <code>man fmod</code>:</p>
+
+<blockquote>
+  <p>The fmod() function computes the floating-point remainder of dividing x
+  by y.  The return value is x - n * y, where n is the quotient of x / y,
+  rounded towards zero to an integer.</p>
+</blockquote>
+
+<p>So what happens is:</p>
+
+<ol>
+<li>In <code>fmod(1.0, 0.1)</code>, the 0.1 is actually slightly larger than 0.1 because the value cannot be exactly represented as a float.</li>
+<li>So n = x / y = 1.0 / 0.1000something = 9.9999something</li>
+<li><strong>When rounded towards 0, n actually becomes 9</strong></li>
+<li>x - n * y = 1.0 - 9 * 0.1 = 0.1</li>
+</ol>
+
+<p><strong>Edit:</strong> As for why it works with <code>floor(x/y)</code>, as far as I can tell this seems to be an FPU quirk. On x86, <code>fmod</code> uses the <code>fprem</code> instruction, whereas <code>x/y</code> will use <code>fdiv</code>. Curiously <code>1.0/0.1</code> seems to return exactly <code>10.0</code>:</p>
+
+<pre><code>&gt;&gt;&gt; struct.pack('d', 1.0/0.1) == struct.pack('d', 10.0)
+True
+</code></pre>
+
+<p>I suppose <code>fdiv</code> uses a more precise algorithm than <code>fprem</code>. Some discussion can be found here: <a href="http://www.rapideuphoria.com/cgi-bin/esearch.exu?thread=1&amp;fromMonth=A&amp;fromYear=8&amp;toMonth=C&amp;toYear=8&amp;keywords=%22Remainder%22" rel="nofollow">http://www.rapideuphoria.com/cgi-bin/esearch.exu?thread=1&amp;fromMonth=A&amp;fromYear=8&amp;toMonth=C&amp;toYear=8&amp;keywords=%22Remainder%22</a></p>
+<br /><b>#3</b><br /><p><code>fmod</code> returns x-i*y, which is less than y, and i is an integer. 0.09.... is because of floating point precision. try <code>fmod(0.3, 0.1) -&gt; 0.09...</code> but <code>fmod(0.4, 0.1) -&gt; 0.0</code> because 0.3 is 0.2999999... as a float.</p>
+
+<p><code>fmod(1/(2.**n), 1/(2.**m)</code> will never produce anything but <code>0.0</code> for integer n>=m.</p>
+<br /><b>#4</b><br /><p>This gives the right answer:</p>
+
+<pre><code>a = 1.0
+b = 0.1
+
+a1,a2 = a.as_integer_ratio()
+b1,b2 = b.as_integer_ratio()
+div = float(a1*b2) / float(a2*b1)
+mod = a - b*div
+print mod
+# 0.0
+</code></pre>
+
+<p>I think it works because by it uses rational equivalents of the two floating point numbers which provides a more accurate answer.</p>
+<br /><b>#5</b><br /><p>The Python divmod function is instructive here.  It tells you both the quotient and remainder of a division operation.</p>
+
+<pre><code>$ python
+&gt;&gt;&gt; 0.1
+0.10000000000000001
+&gt;&gt;&gt; divmod(1.0, 0.1)
+(9.0, 0.09999999999999995)
+</code></pre>
+
+<p>When you type 0.1, the computer can't represent that exact value in binary floating-point arithmetic, so it chooses the closest number that it can represent, 0.10000000000000001.  Then when you perform the division operation, floating-point arithmetic decides that the quotient has to be 9, since 0.10000000000000001 * 10 is larger than 1.0.  This leaves you with a remainder that is slightly less than 0.1.</p>
+
+<p>I would want to use the new Python <code>fractions</code> module to get exact answers.</p>
+
+<pre><code>&gt;&gt;&gt; from fractions import Fraction
+&gt;&gt;&gt; Fraction(1, 1) % Fraction(1, 10)
+Fraction(0, 1)
+</code></pre>
+
+<p>IOW, <code>(1/1) mod (1/10) = (0/1)</code>, which is equivalent to <code>1 mod 0.1 = 0</code>.</p>
+
+<p>Another option is to implement the modulus operator yourself, allowing you to specify your own policy.</p>
+
+<pre><code>&gt;&gt;&gt; x = 1.0
+&gt;&gt;&gt; y = 0.1
+&gt;&gt;&gt; x / y - math.floor(x / y)
+0.0
+</code></pre>
+<br />

@@ -1,0 +1,148 @@
+<h3>Question (ID-372365):</h3><h2>Set timeout for xmlrpclib.ServerProxy</h2><p>I am using xmlrpclib.ServerProxy to make RPC calls to a remote server. If there is not a network connection to the server it takes the default 10 seconds to return a socket.gaierror to my program. </p>
+
+<p>This is annoying when doing development without a network connection, or if the remote server is down. Is there a way to update the timeout on my ServerProxy object?</p>
+
+<p>I can't see a clear way to get access to the socket to update it.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>clean non global version.</p>
+
+<pre><code>import xmlrpclib
+import httplib
+
+class TimeoutHTTPConnection(httplib.HTTPConnection):
+   def connect(self):
+       httplib.HTTPConnection.connect(self)
+       self.sock.settimeout(self.timeout)
+
+class TimeoutHTTP(httplib.HTTP):
+   _connection_class = TimeoutHTTPConnection
+   def set_timeout(self, timeout):
+       self._conn.timeout = timeout
+
+class TimeoutTransport(xmlrpclib.Transport):
+    def __init__(self, timeout=10, *l, **kw):
+        xmlrpclib.Transport.__init__(self,*l,**kw)
+        self.timeout=timeout
+    def make_connection(self, host):
+        conn = TimeoutHTTP(host)
+        conn.set_timeout(self.timeout)
+        return conn
+
+class TimeoutServerProxy(xmlrpclib.ServerProxy):
+    def __init__(self,uri,timeout=10,*l,**kw):
+        kw['transport']=TimeoutTransport(timeout=timeout, use_datetime=kw.get('use_datetime',0))
+        xmlrpclib.ServerProxy.__init__(self,uri,*l,**kw)
+
+if __name__ == "__main__":
+    s=TimeoutServerProxy('http://127.0.0.1:9090',timeout=2)
+    s.dummy()
+</code></pre>
+<br /><b>#1</b><br /><p>I have looked at several ways to solve this issue and by far the most elegant is described here:
+<a href="https://seattle.cs.washington.edu/browser/seattle/trunk/demokit/timeout_xmlrpclib.py?rev=692" rel="nofollow">https://seattle.cs.washington.edu/browser/seattle/trunk/demokit/timeout_xmlrpclib.py?rev=692</a></p>
+
+<p>The technique was originally presented here, but this link is dead:
+<a href="https://seattle.cs.washington.edu/browser/seattle/trunk/demokit/timeout_xmlrpclib.py?rev=692" rel="nofollow">http://blog.bjola.ca/2007/08/using-timeout-with-xmlrpclib.html</a></p>
+
+<p>This works with Python 2.5 and 2.6.  The new link claims to work with Python 3.0 as well.</p>
+<br /><b>#2</b><br /><p>An more straightforward solution is at:
+<a href="http://www.devpicayune.com/entry/200609191448" rel="nofollow">http://www.devpicayune.com/entry/200609191448</a></p>
+
+<pre><code>import xmlrpclib 
+import socket
+
+x = xmlrpclib.ServerProxy('http:1.2.3.4')  
+socket.setdefaulttimeout(10)        #set the timeout to 10 seconds 
+x.func_name(args)                   #times out after 10 seconds
+socket.setdefaulttimeout(None)      #sets the default back
+</code></pre>
+<br /><b>#3</b><br /><p>Based on the one from antonylesuisse, a working version (on python >= 2.6).</p>
+
+<pre><code># -*- coding: utf8 -*-
+import xmlrpclib
+import httplib
+import socket
+
+class TimeoutHTTP(httplib.HTTP):
+   def __init__(self, host='', port=None, strict=None,
+                timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        if port == 0:
+            port = None
+        self._setup(self._connection_class(host, port, strict, timeout))
+
+class TimeoutTransport(xmlrpclib.Transport):
+    def __init__(self, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, *args, **kwargs):
+        xmlrpclib.Transport.__init__(self, *args, **kwargs)
+        self.timeout = timeout
+
+    def make_connection(self, host):
+        host, extra_headers, x509 = self.get_host_info(host)
+        conn = TimeoutHTTP(host, timeout=self.timeout)
+        return conn
+
+class TimeoutServerProxy(xmlrpclib.ServerProxy):
+    def __init__(self, uri, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+                 *args, **kwargs):
+        kwargs['transport'] = TimeoutTransport(timeout=timeout,
+                                    use_datetime=kwargs.get('use_datetime', 0))
+        xmlrpclib.ServerProxy.__init__(self, uri, *args, **kwargs)
+</code></pre>
+<br /><b>#4</b><br /><p>Here's a same/similar question:</p>
+
+<p><a href="http://stackoverflow.com/questions/366682/how-to-limit-execution-time-of-a-function-call-in-python">http://stackoverflow.com/questions/366682/how-to-limit-execution-time-of-a-function-call-in-python</a></p>
+
+<p>A more general solution is to use threads, where a thread is created with a time out that wraps your function.  Here's the recipe from:
+<a href="http://code.activestate.com/recipes/473878/" rel="nofollow">http://code.activestate.com/recipes/473878/</a></p>
+
+<pre><code>def timeout(func, args=(), kwargs={}, timeout_duration=1, default=None):
+    '''This function will spwan a thread and run the given function using the args, kwargs and 
+    return the given default value if the timeout_duration is exceeded 
+    ''' 
+    import threading
+    class InterruptableThread(threading.Thread):
+        def __init__(self):
+            threading.Thread.__init__(self)
+            self.result = default
+        def run(self):
+            try:
+                self.result = func(*args, **kwargs)
+            except:
+                self.result = default
+    it = InterruptableThread()
+    it.start()
+    it.join(timeout_duration)
+    if it.isAlive():
+        return it.result
+    else:
+        return it.result
+</code></pre>
+<br /><b>#5</b><br /><p>Here is code that works on Python 2.7 (probably for other 2.x versions of Python) without raising <em>AttributeError, instance has no attribute 'getresponse'</em>.</p>
+
+<pre><code>
+class TimeoutHTTPConnection(httplib.HTTPConnection):
+    def connect(self):
+        httplib.HTTPConnection.connect(self)
+        self.sock.settimeout(self.timeout)
+
+class TimeoutHTTP(httplib.HTTP):
+    _connection_class = TimeoutHTTPConnection
+
+    def set_timeout(self, timeout):
+        self._conn.timeout = timeout
+
+class TimeoutTransport(xmlrpclib.Transport):
+    def __init__(self, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, *args, **kwargs):
+        xmlrpclib.Transport.__init__(self, *args, **kwargs)
+        self.timeout = timeout
+
+    def make_connection(self, host):
+        if self._connection and host == self._connection[0]:
+            return self._connection[1]
+
+        chost, self._extra_headers, x509 = self.get_host_info(host)
+        self._connection = host, httplib.HTTPConnection(chost)
+        return self._connection[1]
+
+
+transport = TimeoutTransport(timeout=timeout)
+xmlrpclib.ServerProxy.__init__(self, uri, transport=transport, allow_none=True)
+</code></pre>
+<br />

@@ -1,0 +1,73 @@
+<h3>Question (ID-724664):</h3><h2>Python distutils, how to get a compiler that is going to be used?</h2><p>For example, I may use "python setup.py build --compiler=msvc" or "python setup.py build --compiler=mingw32"or just "python setup.py build", in which case the default compiler (say, "bcpp") will be used. How can I get the compiler name inside my setup.py (e. g. "msvc", "mingw32" and "bcpp", respectively)?</p>
+
+<p>UPD.: I don't need the default compiler, I need the one that is <strong>actually</strong> going to be used, which is not necessarily the default one. So far I haven't found a better way than to parse sys.argv to see if there's a "--compiler..." string there.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You can subclass the <code>distutils.command.build_ext.build_ext</code> command.</p>
+
+<p>Once <code>build_ext.finalize_options()</code> method has been called, the compiler type is stored in <code>self.compiler</code> as a string (the same as the one passed to the <code>build_ext</code>'s <code>--compiler</code> option, e.g. 'mingw32', 'gcc', etc...).</p>
+<br /><b>#1</b><br /><p>This is an expanded version of Luper Rouch's answer that worked for me to get an openmp extension to compile using both mingw and msvc on windows. After subclassing build_ext you need to pass it to setup.py in the cmdclass arg. By subclassing build_extensions instead of finalize_options you'll have the actual compiler object to look into, so you can then get more detailed version information. You could eventually set compiler flags on a per-compiler, per-extension basis:</p>
+
+<pre><code>from distutils.core import setup, Extension
+from distutils.command.build_ext import build_ext
+copt =  {'msvc': ['/openmp', '/Ox', '/fp:fast','/favor:INTEL64','/Og']  ,
+     'mingw32' : ['-fopenmp','-O3','-ffast-math','-march=native']       }
+lopt =  {'mingw32' : ['-fopenmp'] }
+
+class build_ext_subclass( build_ext ):
+    def build_extensions(self):
+        c = self.compiler.compiler_type
+        if copt.has_key(c):
+           for e in self.extensions:
+               e.extra_compile_args = copt[ c ]
+        if lopt.has_key(c):
+            for e in self.extensions:
+                e.extra_link_args = lopt[ c ]
+        build_ext.build_extensions(self)
+
+mod = Extension('_wripaca',
+            sources=['../wripaca_wrap.c', 
+                     '../../src/wripaca.c'],
+            include_dirs=['../../include']
+            )
+
+setup (name = 'wripaca',
+   ext_modules = [mod],
+   py_modules = ["wripaca"],
+   cmdclass = {'build_ext': build_ext_subclass } )
+</code></pre>
+<br /><b>#2</b><br /><pre>
+#This should work pretty good
+def compilerName():
+  import re
+  import distutils.ccompiler
+  comp = distutils.ccompiler.get_default_compiler()
+  getnext = False
+
+  for a in sys.argv[2:]:
+    if getnext:
+      comp = a
+      getnext = False
+      continue
+    #separated by space
+    if a == '--compiler'  or  re.search('^-[a-z]*c$', a):
+      getnext = True
+      continue
+    #without space
+    m = re.search('^--compiler=(.+)', a)
+    if m == None:
+      m = re.search('^-[a-z]*c(.+)', a)
+    if m:
+      comp = m.group(1)
+
+  return comp
+
+
+print "Using compiler " + '"' + compilerName() + '"'
+</pre>
+<br /><b>#3</b><br /><p>import distutils.ccompiler</p>
+
+<p>compiler_name = distutils.ccompiler.get_default_compiler()</p>
+<br /><b>#4</b><br /><pre><code>import sys
+sys.argv.extend(['--compiler', 'msvc'])
+</code></pre>
+<br /><b>#5</b><br /><p>See the default with: <a href="http://docs.python.org/distutils/apiref.html#distutils.ccompiler.get%5Fdefault%5Fcompiler" rel="nofollow"><code>distutils.ccompiler.get_default_compiler</code></a></p>
+<br />

@@ -1,0 +1,90 @@
+<h3>Question (ID-7460149):</h3><h2>Lightweight notification technique</h2><p>I need to develop a realtime recent activity feed in django (with AJAX long-polling), and I'm wondering what's the best strategy for the server-side.</p>
+
+<p>Pseudocode:</p>
+
+<pre><code>def recent_activity_post_save():
+    notify_view()
+
+[in the view]
+while not new_activity():
+    sleep(1)
+return HttpResponse(new_activity())
+</code></pre>
+
+<p>The first thing that comes in mind is querying the DB every second. Not feasible. Other options:</p>
+
+<ol>
+<li>using the cache as a notification service</li>
+<li>using a specialized tool, like Celery (I'd rather not do it, because it seems like overkill)</li>
+</ol>
+
+<p>What's the best way to go here?</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Have you considered using Signals? You could send a signal in recent_activity_post_save() and there could be a listener which stores the information in cache. </p>
+
+<p>The view would just refer to the cache to see if there are new notifications. Of course you don't need Signals, but IMHO it would be a bit cleaner that way, as you could add more "notification handlers".</p>
+
+<p>This seems optimal because you don't need to poll the DB (artificial load), the notifications are "visible" almost immediately (only after the time required to process signals and interact with cache).</p>
+
+<p>So the pseudocode would look like this:</p>
+
+<pre><code># model
+def recent_activity_post_save():
+    post_save_signal.send()
+
+# listener
+def my_handler( ... ):
+    cache.set( 'notification', .... )
+
+post_save_signal.connect( my_handler )
+
+# view
+def my_view( request ):
+    new_notification = None
+    while not new_notification:
+        sleep(1)
+        new_notification = cache.get( 'notification' )
+    return HttpResponse(...)
+</code></pre>
+<br /><b>#1</b><br /><p>I would suggest keeping it simple...</p>
+
+<p>Create a database table to store your events, insert into that table when appropriate, then just implement a simple ajax polling technique to hit the server every <em>x</em> seconds on the client side.</p>
+
+<p>I have concerns with other solutions considering using a push-notification approach or using a noSql data store.  It's a whole lot more complicated than a traditional pull-notification system using the tools that are built in to the Django framework, and except for very rare exceptions, is overkill.  Unless you specifically require a strict real-time solution, keep it simple and use the tools that already exist in the framework, and for people with objections based on database or network performance, all I have to say is that premature optimization is the root of all evil.</p>
+
+<p>Build a model that contains recent activity data specific to your application then, whenever your application does something that should log new activity you can just insert into this table.</p>
+
+<p>Your view would simply be like any other view, pulling the top <em>x</em> rows from this <code>RecentActivity</code> table (optionally based on query parameters and whatever).</p>
+
+<p>Then, on the client side, you'd just have a simple ajax poller hitting your view every <em>x</em> seconds.  There is no shortage of complicated plugins and technologies you can use, but writing your own isn't that complicated either:</p>
+
+<pre><code>function simplePoll() {
+  $.get("your-url", {query-parameters}, function(data){
+    //do stuff with the data, replacing a div or updating json or whatever
+    setTimeout(simplePoll, delay);
+  });
+}
+</code></pre>
+
+<p>My opinion is that performance issues aren't really issues until your site is successful enough for them to be an issue.  A traditional relational database can scale up fairly well until you start reaching the level of success like Twitter, Google, etc.  Most of us aren't at that level :)</p>
+<br /><b>#2</b><br /><p>You could use a comet solution, like the <a href="http://www.ape-project.org/" rel="nofollow">Ape project</a>. This kind of project is designed to send real-time data to the browser, and can make use of modern browsers web sockets feature.</p>
+<br /><b>#3</b><br /><p>You could use a trigger (fired whenever a new post is made). This trigger could write, for example, a new file in a polling directory with the necessary data in it (say the primary key). Your python could then just watch that folder for new file creations without having to touch the database until a new file appears.</p>
+<br /><b>#4</b><br /><p>If you're after a <em>comet</em> solution then <a href="http://www.rkblog.rk.edu.pl/w/p/django-and-comet/" rel="nofollow">you could use <code>orbited</code></a>. Let me warn you though that because it's a rather niche solution it's very hard to find good documentation on how to deploy and use <code>orbited</code> in production environments.</p>
+<br /><b>#5</b><br /><p>Here's a similar discussion, answering from the server-side perspective: <a href="http://stackoverflow.com/questions/4363899/making-moves-w-websockets-and-python-django-twisted">Making moves w/ websockets and python / django ( / twisted? )</a> 
+, the most important answer being <a href="http://stackoverflow.com/questions/4363899/making-moves-w-websockets-and-python-django-twisted/4369471#4369471">this one</a>.  </p>
+
+<p>There's also <a href="http://stackoverflow.com/questions/4363899/making-moves-w-websockets-and-python-django-twisted/4850729#4850729">this answer</a>, pointing to a very solid looking alternative to attempting this from Django.</p>
+
+<p>If you really want this served from your existing Django application, don't do this server side.  Holding that HTTP socket hostage to a single browser's connection is a fast way to break your application.  Two reasonable alternatives are:  explore the various web socket options (like the one above that uses Pyramid to host the service), or look at having the browser send a polling request periodically to the server looking for updates.</p>
+<br /><b>#6</b><br /><p>You should decide if you would rather go with a "pull" or "push" architecture for delivering your messages, see this <a href="http://www.quora.com/What-are-best-practices-for-building-something-like-a-News-Feed?q=news+feeds" rel="nofollow">post on quora</a>! If you like to go for a solution that "pushes" the notifications to their receivers caching/nosql based systems are preferrable as they don't produce such a high load for a lot of write actions.</p>
+
+<p>Redis for instance with its sorted set/list datastructures offers you a lot of instance. See eg. <a href="http://blog.waxman.me/how-to-build-a-fast-news-feed-in-redis" rel="nofollow">this post</a> (though its not python) to get an idea. You could also look into "real" message queues like <a href="http://www.rabbitmq.com/" rel="nofollow">RabbitMQ</a> for example!</p>
+
+<p>For the client connection the other posts here should already have given you some ideas on how to use twisted and similar frameworks. </p>
+
+<p>And Celery can always be a good tool, you could eg. have all the writing to the users' activ ity streams in an asynchronous job!</p>
+<br /><b>#7</b><br /><p>I don't see a need to limit yourself to the use of long-polling if that is not really necessary. There are libraries written to take advantage of best option possible (may that be short-polling, long polling, websockets or even tiny flash plugin if none of the previous options is available). Node.js has one of the best libraries out there for such a job, called Socket.IO, but lucky there is also two Python implementations available, <a href="https://bitbucket.org/Jeffrey/gevent-socketio" rel="nofollow">gevent-socketio</a> and <a href="https://github.com/MrJoes/tornadio" rel="nofollow">tornadio</a>, but later is built on top of tornado framework, so possibly out of the question.</p>
+
+<p>If that suits you, you can combine them with some of the NoSQL (document) database, which is proven much faster and lightweight than relational databases. There are many many options, including CouchDB, MongoDB, Redis, ... The combination of Socket.IO and document-based DB has proven to be fast, lightweight and reliable.</p>
+
+<p>Although I've seen you've already considered NoSQL in the comments, my personal opinion is, if you need a fast and easy solution, and options above suit you, this is the best chance you may take.    </p>
+<br />

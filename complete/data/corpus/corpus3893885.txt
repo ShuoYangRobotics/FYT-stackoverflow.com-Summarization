@@ -1,0 +1,146 @@
+Question (ID-3893885): Cheap way to search a large text file for a string I need to search a pretty large text file for a particular string. Whats the best way to go about doing that? 
+
+ Thanks 
+
+ Edit: Should have given more detail, my bad. Its a build log with about 5000 lines of text. Using regex shouldn't cause any problems should it? I'll go ahead and read blocks of lines, and use the simple find. Thanks guys. 
+ Answers (Total-6): #0 If it is "pretty large" file, then access the lines sequentially and don't read the whole file into memory: 
+
+ with open('largeFile', 'r') as inF:
+ for line in inF:
+  if 'myString' in line:
+   # do_something
+ 
+ #1 You could do a simple find: 
+
+ f = open('file.txt', 'r')
+lines = f.read()
+answer = lines.find('string')
+ 
+
+ A simple find will be quite a bit quicker than regex if you can get away with it. 
+ #2 If there is no way to tell where the string will be (first half, second half, etc) then there is really no optimized way to do the search other than the builtin "find" function. You could reduce the I/O time and memory consumption by not reading the file all in one shot, but at 4kb blocks (which is usually the size of an hard disk block). This will not make the search faster, unless the string is in the first part of the file, but in all case will reduce memory consumption which might be a good idea if the file is huge. 
+ #3 The following function works for textfiles and binary files (returns only position in byte-count though), it does have the benefit to find strings even if they would overlap a line or buffer and would not be found when searching line- or buffer-wise. 
+
+ def fnd(fname, s, start=0):
+ with open(fname, 'rb') as f:
+  fsize = os.path.getsize(fname)
+  bsize = 4096
+  buffer = None
+  if start &gt; 0:
+   f.seek(start)
+  overlap = len(s) - 1
+  while True:
+   if (f.tell() &gt;= overlap and f.tell() &lt; fsize):
+    f.seek(f.tell() - overlap)
+   buffer = f.read(bsize)
+   if buffer:
+    pos = buffer.find(s)
+    if pos &gt;= 0:
+     return f.tell() - (len(buffer) - pos)
+   else:
+    return -1
+ 
+
+ The idea behind this is: 
+
+ 
+ seek to a start position in file 
+ read from file to buffer (the search strings has to be smaller than the buffer size) but if not at the beginning, drop back the - 1 bytes, to catch the string if started at the end of the last read buffer and continued on the next one. 
+ return position or -1 if not found 
+ 
+
+ I used something like this to find signatures of files inside larger ISO9660 files, which was quite fast and did not use much memory, you can also use a larger buffer to speed things up. 
+ #4 5000 lines isn't big (well, depends on how long the lines are...) 
+
+ Anyway: assuming the string will be a word and will be seperated by whitespace... 
+
+ lines=open(file_path,'r').readlines()
+str_wanted="whatever_youre_looking_for"
+
+
+ for i in range(len(lines)):
+  l1=lines.split()
+  for p in range(len(l1)):
+   if l1[p]==str_wanted:
+    #found
+    # i is the file line, lines[i] is the full line, etc.
+ 
+ #5 I've had a go at putting together a multiprocessing example of file text searching. This is my first effort at using the multiprocessing module; and I'm a python n00b. Comments quite welcome. I'll have to wait until at work to test on really big files. It should be faster on multi core systems than single core searching. Bleagh! How do I stop the processes once the text has been found and reliably report line number? 
+
+ import multiprocessing, os, time
+NUMBER_OF_PROCESSES = multiprocessing.cpu_count()
+
+def FindText( host, file_name, text):
+ file_size = os.stat(file_name ).st_size 
+ m1 = open(file_name, "r")
+
+ #work out file size to divide up to farm out line counting
+
+ chunk = (file_size / NUMBER_OF_PROCESSES ) + 1
+ lines = 0
+ line_found_at = -1
+
+ seekStart = chunk * (host)
+ seekEnd = chunk * (host+1)
+ if seekEnd &gt; file_size:
+  seekEnd = file_size
+
+ if host &gt; 0:
+  m1.seek( seekStart )
+  m1.readline()
+
+ line = m1.readline()
+
+ while len(line) &gt; 0:
+  lines += 1
+  if text in line:
+   #found the line
+   line_found_at = lines
+   break
+  if m1.tell() &gt; seekEnd or len(line) == 0:
+   break
+  line = m1.readline()
+ m1.close()
+ return host,lines,line_found_at
+
+# Function run by worker processes
+def worker(input, output):
+ for host,file_name,text in iter(input.get, 'STOP'):
+  output.put(FindText( host,file_name,text ))
+
+def main(file_name,text):
+ t_start = time.time()
+ # Create queues
+ task_queue = multiprocessing.Queue()
+ done_queue = multiprocessing.Queue()
+ #submit file to open and text to find
+ print 'Starting', NUMBER_OF_PROCESSES, 'searching workers'
+ for h in range( NUMBER_OF_PROCESSES ):
+  t = (h,file_name,text)
+  task_queue.put(t)
+
+ #Start worker processes
+ for _i in range(NUMBER_OF_PROCESSES):
+  multiprocessing.Process(target=worker, args=(task_queue, done_queue)).start()
+
+ # Get and print results
+
+ results = {}
+ for _i in range(NUMBER_OF_PROCESSES):
+  host,lines,line_found = done_queue.get()
+  results[host] = (lines,line_found)
+
+ # Tell child processes to stop
+ for _i in range(NUMBER_OF_PROCESSES):
+  task_queue.put('STOP')
+#  print "Stopping Process #%s" % i
+
+ total_lines = 0
+ for h in range(NUMBER_OF_PROCESSES):
+  if results[h][1] &gt; -1:
+   print text, 'Found at', total_lines + results[h][1], 'in', time.time() - t_start, 'seconds'
+   break
+  total_lines += results[h][0]
+
+if __name__ == "__main__":
+ main( file_name = 'testFile.txt', text = 'IPI1520' )

@@ -1,0 +1,195 @@
+<h3>Question (ID-860313):</h3><h2>SQLAlchemy is convoluted?</h2><p>This may seems rather argumentative, but I just went through SQLAlchemy's <a href="http://www.sqlalchemy.org/docs/05/ormtutorial.html" rel="nofollow">ORM tutorial</a> and ended up with the following code:</p>
+
+<pre><code>from sqlalchemy import create_engine
+from sqlalchemy import Table, Column, Integer, String, MetaData, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+engine = create_engine('sqlite:///:memory:', echo=True)
+
+metadata = MetaData()
+users_table = Table('users', metadata,
+    Column('id', Integer, primary_key=True),
+    Column('name', String),
+    Column('fullname', String),
+    Column('password', String)
+)
+
+metadata.create_all(engine)
+
+Base = declarative_base()
+class User(Base):
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    fullname = Column(String)
+    password = Column(String)
+
+    def __init__(self, name, fullname, password):
+        self.name = name
+        self.fullname = fullname
+        self.password = password
+
+    def __repr__(self):
+       return "&lt;User('%s','%s', '%s')&gt;" % (self.name, self.fullname, self.password)
+
+users_table = User.__table__
+metadata = Base.metadata
+
+Session = sessionmaker(bind=engine)
+Session = sessionmaker()
+Session.configure(bind=engine)  # once engine is available
+session = Session()
+
+# actually using the ORM isn't too bad..
+ed_user = User('ed', 'Ed Jones', 'edspassword')
+session.add(ed_user)
+
+our_user = session.query(User).filter_by(name='ed').first() 
+print our_user
+
+session.add_all([
+    User('wendy', 'Wendy Williams', 'foobar'),
+    User('mary', 'Mary Contrary', 'xxg527'),
+    User('fred', 'Fred Flinstone', 'blah')])
+
+ed_user.password = 'f8s7ccs'
+
+print session.dirty
+print session.new
+session.commit()
+
+for instance in session.query(User).order_by(User.id): 
+    print instance.name, instance.fullname
+
+for name, fullname in session.query(User.name, User.fullname): 
+    print name, fullname
+</code></pre>
+
+<p>This seems incredibly complicated for effectively a Hello World table, especially compared to the roughly similar SQLObject code:</p>
+
+<pre><code>from sqlobject import SQLObject, StringCol, sqlhub, connectionForURI
+
+sqlhub.processConnection = connectionForURI('sqlite:/:memory:')
+
+class Person(SQLObject):
+    fname = StringCol()
+    mi = StringCol(length=1, default=None)
+    lname = StringCol()
+
+Person.createTable()
+
+p = Person(fname="John", lname="Doe")
+p.mi = 'Q'
+p2 = Person.get(1)
+print p2
+print p2 is p
+</code></pre>
+
+<p>I understand SQLAlchemy is "more powerful", but that power seems to come at a cost, or am I missing something?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Well, there is one thing you are missing: the tutorial you mention doesn't "build" a complete example, the different snippets of code are not meant to be concatenated into one source file. Rather, they describe the different ways the library can be used. No need to try and do the same thing over and over again yourself.</p>
+
+<p>Leaving out the actually-using-the-orm part from your example, the code could look like this:</p>
+
+<pre><code>from sqlalchemy import *
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, scoped_session
+
+engine = create_engine('sqlite:///:memory:', echo=True)
+Base = declarative_base(bind=engine)
+Session = scoped_session(sessionmaker(engine))
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    fullname = Column(String)
+    password = Column(String)
+
+Base.metadata.create_all()
+</code></pre>
+
+<p>The "declarative" extension takes care of defining the table and mapping it to your class, so you don't need to declare the <code>users_table</code> yourself. The User class will also allow instantiating with keyword arguments, like <code>User(name="foo")</code>, (but not positional arguments though). 
+I've also added use of scoped_session, which means you can directly use <code>Session</code> without actually having to instantiate it  (it will instantiate a new session if there isn't already one present in the current thread, or reuse the existing one otherwise)</p>
+<br /><b>#1</b><br /><p>The code examples you give aren't apples-to-apples.  The SQLAlchemy version could be pared down a bit:</p>
+
+<pre><code>from sqlalchemy import create_engine
+from sqlalchemy import Table, Column, Integer, String, MetaData, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+engine = create_engine('sqlite:///:memory:', echo=True)
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id = Column('id', Integer, primary_key=True)
+    name = Column('name', String)
+    fullname = Column('fullname', String)
+    password = Column('password', String)
+
+    def __repr__(self):
+       return "" % (self.name, self.fullname, self.password)
+
+Base.metadata.create_all(engine)
+
+Session = sessionmaker(bind=engine)
+session = Session()
+
+# actually using the ORM isn't too bad..
+ed_user = User(name='ed', fullname='Ed Jones', password='edspassword')
+session.add(ed_user)
+
+our_user = session.query(User).filter_by(name='ed').first()
+
+session.add_all([
+    User(name='wendy', fullname='Wendy Williams', password='foobar'),
+    User(name='mary', fullname='Mary Contrary', password='xxg527'),
+    User(name='fred', fullname='Fred Flinstone', password='blah')])
+
+ed_user.password = 'f8s7ccs'
+
+session.flush()
+
+for instance in session.query(User).order_by(User.id):
+    print instance.name, instance.fullname
+
+for name, fullname in session.query(User.name, User.fullname):
+    print name, fullname
+</code></pre>
+
+<p>You might also find <a href="http://elixir.ematia.de/trac/wiki">Elixir</a> more like SQLObject (but since I haven't used either, that's just a guess).</p>
+
+<p>Not having used SQLObject at all, I can't comment on what exactly SA does better.  But I have had great experiences with SA, especially when dealing with complicated, real-world, legacy schemas.  It does a good job of coming up with good SQL queries by default, and has lots of ways to tune them.</p>
+
+<p>I've found SQLAlchemy author's <a href="http://techspot.zzzeek.org/?p=33">elevator pitch</a> to hold up pretty well in practice.</p>
+<br /><b>#2</b><br /><p>Well, SQLAlchemy is divided into different parts, the main core part simply handles the DB, transforming your ptyhon built queries into the appropriate SQL language for the underlying DB. Then there is the support for sessions, the orm, and the new declarative syntax.</p>
+
+<p>Looks like SQLObject (I can't say for sure, haven't used it in many years, and even then, only once) skips most of it and does the ORM part straight away. This often makes things easier for simple data (which you can get away with in most cases), but SQLAlchemy allows for more complex db layouts, and get down and dirty with the db if you really need it.</p>
+<br /><b>#3</b><br /><p>Having used SQLObject (and only read about SQLAlchemy), I can say that one of SQLObject's strengths is the ease and simplicity with which you can get things done.  Also, excellent support is provided by the email group (<a href="https://lists.sourceforge.net/lists/listinfo/sqlobject-discuss" rel="nofollow">https://lists.sourceforge.net/lists/listinfo/sqlobject-discuss</a>) that gets answers back to you pretty quickly.</p>
+<br /><b>#4</b><br /><p>Try <a href="http://pypi.python.org/pypi/quick_orm" rel="nofollow">Quick ORM</a>, it is even simpler:</p>
+
+<pre><code>from quick_orm.core import Database
+from sqlalchemy import Column, String
+
+class User(object):
+    __metaclass__ = Database.DefaultMeta
+    name = Column(String(30))
+
+if __name__ == '__main__':
+    database = Database('sqlite://')
+    database.create_tables()
+
+    user = User(name = 'Hello World')
+    database.session.add_then_commit(user)
+
+    user = database.session.query(User).get(1)
+    print 'My name is', user.name
+</code></pre>
+
+<p><a href="http://pypi.python.org/pypi/quick_orm" rel="nofollow">Quick ORM</a> is built upon SQLAlchemy, so we could say that SQLAlchemy could be as simple as SQLObject.</p>
+<br /><b>#5</b><br /><p>you say "convoluted".... someone else might say "flexible". Sometimes you need it sometimes you don't. Isn't it awesome that you have a choice?</p>
+<br />

@@ -1,0 +1,217 @@
+<h3>Question ( ID-1191374 ) : </h3><h2><span style="background-color:yellow;">subprocess</span> with <span style="background-color:yellow;">timeout</span> </h2><p>In Python , I have a <span style="background-color:yellow;">program</span> snippet similar to the following that has the effect of <span style="background-color:yellow;">running</span> a custom <span style="background-color:yellow;">command</span> and returning the <span style="background-color:yellow;">stdout</span> data ( or raise exception when exit code is non-zero ) : </p>
+<pre><code>proc = subprocess.Popen(
+    cmd,
+    # keep stderr separate; or merge it with stdout (default).
+    stderr=(subprocess.PIPE if ignore_stderr else subprocess.STDOUT),
+    stdout=subprocess.PIPE,
+    shell=True)
+</code></pre>
+<p>And then I use communicate ( not wait which could deadlock ) to wait for the complete <span style="background-color:yellow;">stdout</span> data : </p>
+<pre><code>stdoutdata, stderrdata = proc.communicate()
+</code></pre>
+<p>My question is - how do I set a <span style="background-color:yellow;">timeout</span> for any <span style="background-color:yellow;">command</span> ? For example , I do n't want the <span style="background-color:yellow;">program</span> to wait indefinitely because a <span style="background-color:yellow;">particular</span> <span style="background-color:yellow;">programs</span> takes more than , say , 5 minutes to <span style="background-color:yellow;">run</span> . </p>
+<p>Simpler , unsophisticated solutions would be nice . </p>
+<br /><h3>Answers ( Total-10 ) : </h3><b># <span style="background-color:yellow;">0</span> </b><br /><p>I do n't know much about the low level details ; but , given that in <span style="background-color:yellow;">python</span> 2.6 the API offers the ability to wait for threads and terminate <span style="background-color:yellow;">processes</span> , what about <span style="background-color:yellow;">running</span> the <span style="background-color:yellow;">process</span> in a separate thread ? </p>
+<pre><code>import subprocess, threading
+
+class Command(object):
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.process = None
+
+    def run(self, timeout):
+        def target():
+            print 'Thread started'
+            self.process = subprocess.Popen(self.cmd, shell=True)
+            self.process.communicate()
+            print 'Thread finished'
+
+        thread = threading.Thread(target=target)
+        thread.start()
+
+        thread.join(timeout)
+        if thread.is_alive():
+            print 'Terminating process'
+            self.process.terminate()
+            thread.join()
+        print self.process.returncode
+
+command = Command("echo 'Process started'; sleep 2; echo 'Process finished'")
+command.run(timeout=3)
+command.run(timeout=1)
+</code></pre>
+<p>The output of this snippet in my machine is : </p>
+<pre><code>Thread started
+Process started
+Process finished
+Thread finished
+0
+Thread started
+Process started
+Terminating process
+Thread finished
+-15
+</code></pre>
+<p>where it can be seen that , in the first execution , the <span style="background-color:yellow;">process</span> finished correctly ( return code <span style="background-color:yellow;">0</span> ) , while the in the second one the <span style="background-color:yellow;">process</span> was terminated ( return code -15 ) . </p>
+<p>I have n't tested in windows ; but , aside from updating the example <span style="background-color:yellow;">command</span> , I think it should work since I have n't found in the documentation anything that says that thread.join or <span style="background-color:yellow;">process.terminate</span> is not supported . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>If you 're on Unix, </p>
+<pre><code>import signal
+  ...
+class Alarm(Exception):
+    pass
+
+def alarm_handler(signum, frame):
+    raise Alarm
+
+signal.signal(signal.SIGALRM, alarm_handler)
+signal.alarm(5*60)  # 5 minutes
+try:
+    stdoutdata, stderrdata = proc.communicate()
+    signal.alarm(0)  # reset the alarm
+except Alarm:
+    print "Oops, taking too long!"
+    # whatever else
+</code></pre>
+<br /><b># 2 </b><br /><p>Here is Alex Martelli 's solution as a module with <span style="background-color:yellow;">proper</span> <span style="background-color:yellow;">process</span> <span style="background-color:yellow;">killing.</span> The other approaches do not work because they do not use <span style="background-color:yellow;">proc.communicate</span> ( ) . So if you have a <span style="background-color:yellow;">process</span> that <span style="background-color:yellow;">produces</span> lots of output , it will fill its output buffer and then block until you read something from it . </p>
+<pre><code>from os import kill
+from signal import alarm, signal, SIGALRM, SIGKILL
+from subprocess import PIPE, Popen
+
+def run(args, cwd = None, shell = False, kill_tree = True, timeout = -1, env = None):
+    '''
+    Run a command with a timeout after which it will be forcibly
+    killed.
+    '''
+    class Alarm(Exception):
+        pass
+    def alarm_handler(signum, frame):
+        raise Alarm
+    p = Popen(args, shell = shell, cwd = cwd, stdout = PIPE, stderr = PIPE, env = env)
+    if timeout != -1:
+        signal(SIGALRM, alarm_handler)
+        alarm(timeout)
+    try:
+        stdout, stderr = p.communicate()
+        if timeout != -1:
+            alarm(0)
+    except Alarm:
+        pids = [p.pid]
+        if kill_tree:
+            pids.extend(get_process_children(p.pid))
+        for pid in pids:
+            # process might have died before getting to this line
+            # so wrap to avoid OSError: no such process
+            try: 
+                kill(pid, SIGKILL)
+            except OSError:
+                pass
+        return -9, '', ''
+    return p.returncode, stdout, stderr
+
+def get_process_children(pid):
+    p = Popen('ps --no-headers -o pid --ppid %d' % pid, shell = True,
+              stdout = PIPE, stderr = PIPE)
+    stdout, stderr = p.communicate()
+    return [int(p) for p in stdout.split()]
+
+if __name__ == '__main__':
+    print run('find /', shell = True, timeout = 3)
+    print run('find', shell = True)
+</code></pre>
+<br /><b># 3 </b><br /><p>This is the best I could come up with ( extracted from my <span style="background-color:yellow;">private</span> <span style="background-color:yellow;">program</span> ) : </p>
+<pre><code>        # poll for terminated status till timeout is reached
+        t_beginning = time.time()
+        seconds_passed = 0
+        while True:
+            if p.poll() is not None:
+                break
+            seconds_passed = time.time() - t_beginning
+            if timeout and seconds_passed > timeout:
+                p.terminate()
+                raise TimeoutError(cmd, timeout)
+            time.sleep(0.1)
+</code></pre>
+<p>( inspired by some other SO comment elsewhere ) </p>
+<br /><b># 4 </b><br /><p>Another option is to write to a temporary file to <span style="background-color:yellow;">prevent</span> the <span style="background-color:yellow;">stdout</span> blocking instead of needing to <span style="background-color:yellow;">poll</span> with communicate ( ) . This worked for me where the other answers did not ; for example on windows . </p>
+<pre><code>    outFile =  tempfile.SpooledTemporaryFile() 
+    errFile =   tempfile.SpooledTemporaryFile() 
+    proc = subprocess.Popen(args, stderr=errFile, stdout=outFile, universal_newlines=False)
+    wait_remaining_sec = timeout
+
+    while proc.poll() is None and wait_remaining_sec > 0:
+        time.sleep(1)
+        wait_remaining_sec -= 1
+
+    if wait_remaining_sec <= 0:
+        killProc(proc.pid)
+        raise ProcessIncompleteError(proc, timeout)
+
+    # read temp streams from start
+    outFile.seek(0);
+    errFile.seek(0);
+    out = outFile.read()
+    err = errFile.read()
+    outFile.close()
+    errFile.close()
+</code></pre>
+<br /><b># 5 </b><br /><p>I 've used <span style="background-color:yellow;">killableprocess</span> successfully on Windows , Linux and Mac. If you are using Cygwin Python , you 'll need OSAF 's version of <span style="background-color:yellow;">killableprocess</span> because otherwise native Windows <span style="background-color:yellow;">processes</span> wo n't get <span style="background-color:yellow;">killed</span> . </p>
+<br /><b># 6 </b><br /><p>I 've implemented what I could gather from a few of these. This works in Windows , and since this is a community wiki , I figure I would share my code as well : </p>
+<pre><code>class Command(threading.Thread):
+    def __init__(self, cmd, outFile, errFile, timeout):
+        threading.Thread.__init__(self)
+        self.cmd = cmd
+        self.process = None
+        self.outFile = outFile
+        self.errFile = errFile
+        self.timed_out = False
+        self.timeout = timeout
+
+    def run(self):
+        self.process = subprocess.Popen(self.cmd, stdout = self.outFile, \
+            stderr = self.errFile)
+
+        while (self.process.poll() is None and self.timeout > 0):
+            time.sleep(1)
+            self.timeout -= 1
+
+        if not self.timeout > 0:
+            self.process.terminate()
+            self.timed_out = True
+        else:
+            self.timed_out = False
+</code></pre>
+<p>Then from another class or file : </p>
+<pre><code>        outFile =  tempfile.SpooledTemporaryFile()
+        errFile =   tempfile.SpooledTemporaryFile()
+
+        executor = command.Command(c, outFile, errFile, timeout)
+        executor.daemon = True
+        executor.start()
+
+        executor.join()
+        if executor.timed_out:
+            out = 'timed out'
+        else:
+            outFile.seek(0)
+            errFile.seek(0)
+            out = outFile.read()
+            err = errFile.read()
+
+        outFile.close()
+        errFile.close()
+</code></pre>
+<br /><b># 7 </b><br /><p>I added the solution with <span style="background-color:yellow;">threading</span> from jcollado to my Python module <span style="background-color:yellow;">easyprocess</span> . </p>
+<p>Install : </p>
+<pre><code>pip install easyprocess
+</code></pre>
+<p>Example : </p>
+<pre><code>from easyprocess import Proc
+
+# shell is not supported!
+stdout=Proc('ping localhost').call(timeout=1.5).stdout
+print stdout
+</code></pre>
+<br /><b># 8 </b><br /><p>Although I have n't looked at it extensively , this decorator I found at ActiveState seems to be quite useful for this sort of thing. Along with <span style="background-color:yellow;">subprocess.Popen</span> ( ... , close_fds = True ) , at least I 'm ready for shell-scripting in Python . </p>
+<br /><b># 9 </b><br /><p>The solution I use is to <span style="background-color:yellow;">prefix</span> the shell <span style="background-color:yellow;">command</span> with timelimit . If the comand takes too long , timelimit will stop it and <span style="background-color:yellow;">Popen</span> will have a returncode set by timelimit. If it is &gt ; <span style="background-color:yellow;">128</span> , it means timelimit <span style="background-color:yellow;">killed</span> the <span style="background-color:yellow;">process</span> . </p>
+<p>See also <span style="background-color:yellow;">python</span> <span style="background-color:yellow;">subprocess</span> with <span style="background-color:yellow;">timeout</span> and large output ( &gt ; 64K ) </p>
+<br />

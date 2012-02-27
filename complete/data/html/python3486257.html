@@ -1,0 +1,240 @@
+<h3>Question (ID-3486257):</h3><h2>idiomatic way of taking action on attempt to loop over an empty iterable</h2><p>Suppose that I am looping over a iterable and would like to take some action if the iterator is empty. The two best ways that I can think of to do this are </p>
+
+<pre><code>for i in iterable:
+     # do_something
+if not iterable:
+    # do_something_else
+</code></pre>
+
+<p>and</p>
+
+<pre><code>empty = True
+for i in iterable:
+    empty = False
+    # do_something
+if empty:
+    # do_something_else
+</code></pre>
+
+<p>The first depends on the the iterable being a collection (so useless for when the iterable gets passed into the function/method where the loop is) and the second sets <code>empty</code> on every pass through the loop which seems ugly. </p>
+
+<p>Is there another way that I'm missing or is the second alternative the best? It would be really cool if there was some clause that I could add to the loop statement that would handle this for me much like <code>else</code> makes <code>not_found</code> flags go away. </p>
+
+<hr>
+
+<p>[Deleted specific example because it seems to be confusing people]</p>
+
+<hr>
+
+<h2>I am not looking for clever hacks.</h2>
+
+<h2>I am not looking for solutions that involve a lot of code</h2>
+
+<p>I am looking for a simple language feature. 
+I am looking for a <strong>clear</strong> and <strong>pythonic</strong> way to iterate over an iterable and take some action if the iterable is empty that any experienced python programmer will be understand. If I could do it without setting a flag on every iteration, that would be fantastic. 
+If there is no simple idiom that does this, then forget about it.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>This is quite hackish, but you can delete <code>i</code> and then check if it exists after the loop (if not, the loop never happened):</p>
+
+<pre><code>try:
+    del i
+except NameException: pass
+
+for i in iterable:
+    do_something(i)
+
+try:
+    del i
+except NameException:
+    do_something_else()
+</code></pre>
+
+<p>I think that's probably uglier than just using a flag though</p>
+<br /><b>#1</b><br /><p><strong>Update 2</strong></p>
+
+<p>I liked <a href="http://stackoverflow.com/questions/3486257/idiomatic-way-of-taking-action-on-attempt-to-loop-over-an-empty-iterable/3486566#3486566">Odomontois' answer</a>. IMHO it is better suited to this problem than what I have written below. </p>
+
+<p><strong>Update</strong></p>
+
+<p>(After reading the OP's comment and edited question) You can do that too. See below:</p>
+
+<pre><code>def with_divisible(n, a, b, f):
+ it = (i for i in xrange(a, b) if not i % n)
+ for i in wrapper(it):
+  f(i)
+
+&gt;&gt;&gt; with_divisible(1, 1, 1, lambda x: x)
+Traceback (most recent call last):
+  File "&lt;pyshell#55&gt;", line 1, in &lt;module&gt;
+    with_divisible(1, 1, 1, lambda x: x)
+  File "&lt;pyshell#54&gt;", line 3, in with_divisible
+    for i in wrapper(it):
+  File "&lt;pyshell#46&gt;", line 4, in wrapper
+    raise EmptyIterableException("Empty")
+EmptyIterableException: Empty
+
+&gt;&gt;&gt; with_divisible(7, 1, 21, lambda x: x)
+7
+14
+...Snipped...
+    raise EmptyIterableException("Empty")
+EmptyIterableException: Empty
+</code></pre>
+
+<p><strong>Original Answer</strong></p>
+
+<p>Interesting problem. I did some experiments and came up with the following:</p>
+
+<pre><code>class EmptyIterableException(Exception):
+    pass
+
+def wrapper(iterable):
+    for each in iterable:
+        yield each
+    raise EmptyIterableException("Empty")
+
+try:
+    for each in wrapper(iterable):
+        do_something(each)
+except EmptyIterableException, e:
+    do_something_else()
+</code></pre>
+<br /><b>#2</b><br /><pre><code>if not map(do_something_callable,iterable) : 
+    # do something else
+</code></pre>
+<br /><b>#3</b><br /><p>I think this the the cleanest way to do this:</p>
+
+<pre><code># first try with exceptions
+def nonempty( iter ):
+    """ returns `iter` if iter is not empty, else raises TypeError """
+    try:
+        first = next(iter)
+    except StopIteration:
+        raise TypeError("Emtpy Iterator")
+    yield first
+    for item in iter:
+        yield item
+
+
+# a version without exceptions. Seems nicer:
+def isempty( iter ):
+    """ returns `(True, ())` if `iter` if is empty else `(False, iter)`
+         Don't use the original iterator! """
+    try:
+        first = next(iter)
+    except StopIteration:
+        return True, ()
+    else:
+        def iterator():
+            yield first
+            for item in iter:
+                yield item
+        return False, iterator()
+
+
+
+for x in ([],[1]):
+    # first version
+    try:
+        list(nonempty(iter(x))) # trying to consume a empty iterator raises
+    except TypeError:
+        print x, "is empty"
+    else:
+        print x, "is not empty"
+
+    # with isempty
+    empty, it = isempty(iter(x))
+    print x,  "is", ("empty" if empty else "not empty")
+</code></pre>
+<br /><b>#4</b><br /><p>The general way forward if an iterator is to be partially checked before being consumed is to use <code>itertools.tee</code>. This way we can have two copies of the iterator and check one for emptiness while still consuming the other copy from the start.</p>
+
+<pre><code>from itertools import tee
+it1, it2 = tee(iterable)
+try:
+    it1.next()
+    for i in it2:
+        do_some_action(i) #iterator is not empty
+except StopIteration:
+    do_empty_action() #iterator is empty
+</code></pre>
+
+<p>The <code>StopIteration</code> exception is bound to be a result of the call to <code>it1.next()</code>, as any <code>StopIteration</code> exceptions raised froom inside the loop will terminate that loop.</p>
+
+<p><strong>Edit</strong>: for those who don't like such exceptions, <code>islice</code> can be used to set up a single step loop:</p>
+
+<pre><code>from itertools import tee, islice
+it1, it2 = tee(iterable)
+for _ in islice(it1, 1):
+    #loop entered if iterator is not empty
+    for i in it2:
+        do_some_action(i)
+    break #if loop entered don't execute the else section
+else:
+    do_empty_action()
+</code></pre>
+
+<p>I personally prefer the first style. YMMV.</p>
+<br /><b>#5</b><br /><p>What about reversing "if" and "for":</p>
+
+<pre><code>if iterable:
+    for i in iterable:
+        do_something(i)
+else:
+    do_something_else()
+</code></pre>
+
+<p><strong>OK, this does not work!</strong></p>
+
+<p>Here is an other solution: <a href="http://code.activestate.com/recipes/413614-testing-for-an-empty-iterator/" rel="nofollow">http://code.activestate.com/recipes/413614-testing-for-an-empty-iterator/</a> </p>
+<br /><b>#6</b><br /><p>This is a combination of <a href="http://stackoverflow.com/questions/3486257/idiomatic-way-of-taking-action-on-attempt-to-loop-over-an-empty-iterable/3486280#3486280">Michael Mrozek</a>'s and <a href="http://stackoverflow.com/questions/3486257/idiomatic-way-of-taking-action-on-attempt-to-loop-over-an-empty-iterable/3487375#3487375">FM</a>'s answers: </p>
+
+<pre><code>def with_divisible(n, a, b, f):
+    '''apply f to every integer x such that n divides x and a &lt;= x &lt; b'''
+    it = (i for i in xrange(a, b) if not i % n)
+    for i in it:
+        f(i)
+    try: i            # test if `it` was empty
+    except NameError: print('do something else')
+
+def g(i):
+    print i,
+
+with_divisible( 3, 1, 10, g)   # Prints 3 6 9.
+with_divisible(33, 1, 10, g)   # Prints "do something else"
+</code></pre>
+<br /><b>#7</b><br /><p>Generators have a 'gi_frame' property which is None once the generator is exhausted, but only after StopIteration has been raised.  If that's acceptable, here's something you could try:</p>
+
+<pre><code>import types
+
+def do(x, f, f_empty):
+    if type(x) == types.GeneratorType:
+        # generators have a 'gi_frame' property,
+        # which is None once the generator is exhausted
+        if x.gi_frame:
+            # not empty
+            return f(x)
+        return f_empty(x)
+    if x:
+        return f(x)
+    return f_empty(x)
+
+def nempty(lst):
+    print lst, 'not empty'
+
+def empty(lst):
+    print 'Twas empty!'
+
+# lists
+do([2,3,4], nempty, empty)
+do([], nempty, empty)
+
+# generators
+do((i for i in range(5)), nempty, empty)
+gen = (i for i in range(1))
+gen.next()
+try:
+    gen.next()
+except StopIteration:
+    pass
+do(gen, nempty, empty)
+</code></pre>
+<br />

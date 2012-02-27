@@ -1,0 +1,192 @@
+<h3>Question ( ID-1489372 ) : </h3><h2>When is it advisable to use a <span style="background-color:yellow;">ret_val</span> variable ? </h2><p>I have seen conflicting advice on whether the following code is better </p>
+<pre><code>def function():
+    ret_val = 0
+    if some_condition():
+        ret_val = 2
+    else:
+        ret_val = 3
+    return ret_val
+</code></pre>
+<p>or whether this is better : </p>
+<pre><code>def function():
+    if some_condition():
+        return 2
+    else:
+        return 3
+</code></pre>
+<p>This is a simple example , and I 've written it in python-style , but what I 'm looking for is a general principle as to when to use some " accumulator " variable to keep track of the <span style="background-color:yellow;">return</span> value , or whether to use multiple exit points. I know different languages might have different <span style="background-color:yellow;">reasons</span> for using one style over the other , so I 'd appreciate differing viewpoints for why a particular language might stick with a particular style. ( Specifically in the past I 've heard that structured programming in C avoids having multiple exit points for a <span style="background-color:yellow;">function.</span> ) </p>
+<br /><h3>Answers ( Total-11 ) : </h3><b># <span style="background-color:yellow;">0</span> </b><br /><p>Did we forget why " multiple exit points " was considered harmful in the first place ? Back in the day ( before widespread access to good exception handling and finally constructs , or managing objects like auto_ptr that do cleanup when they leave scope ) , this was the problem that haunted many multi-exit <span style="background-color:yellow;">functions</span> : </p>
+<pre><code>int function blah(arg1, arg2)
+    allocate resource
+
+    if early failure detection
+        return failure_status
+
+    ... much later...
+
+    release resource // oh rats! resource didn't release
+    return success_status
+</code></pre>
+<p>If the <span style="background-color:yellow;">resource</span> is memory , this creates a memory leak. If it 's a database transaction , we are heading for bad database contention or deadlock. For that matter , with the advent of more exception support , we implicitly add many potential exits from a method ( by virtue of an unhandled exception ) . In my C + + days , I developed the habit of never calling delete , but instead using auto_ptr , so that allocated memory was cleaned up when the auto_ptr exited its scope , even if some unexpected exception <span style="background-color:yellow;">reared</span> its head . </p>
+<p>In our garbage collected Python world , we can still have this issue , even though many of our objects , such as files , or locks , have improved self-cleaning behavior. But in implementations other than CPython ( jython and IronPython to name two ) , there is no guarantee just when a destructor will get called , so something more proactive needs to be built into your method. The first mechanism for this purpose was try/finally : </p>
+<pre><code>int function blah(arg1, arg2)
+    allocate resource
+    try:
+
+        if early failure detection
+            return failure_status
+
+        ... much later...
+        return success_status
+
+    finally:
+        release resource // always releases no matter what
+</code></pre>
+<p>But now Python has context managers , in conjunction with the new 'with ' syntax : </p>
+<pre><code>int function blah(arg1, arg2)
+    allocate resource
+    with context_manager(resource): // releases on exit from 'with'
+
+        if early failure detection
+            return failure_status
+
+        ... much later...
+        return success_status
+</code></pre>
+<p>So let 's be sure that we tell the whole story , that the <span style="background-color:yellow;">reason</span> we can <span style="background-color:yellow;">discard</span> this old chestnut is that newer coding practices make it unnecessary . </p>
+<br /><b># 1 </b><br /><p>In Python , it is quite common to have a <span style="background-color:yellow;">return</span> statement in the middle of the <span style="background-color:yellow;">function</span> - in particular , if it is an early exit. Your example often is <span style="background-color:yellow;">rewritten</span> as </p>
+<pre><code>def function():
+    if some_condition():
+        return 2
+    return 3
+</code></pre>
+<p>I.e. you drop the else case when the if ends with a <span style="background-color:yellow;">return</span> . </p>
+<br /><b># <span style="background-color:yellow;">2</span> </b><br /><p>Do n't use an accumulator unless it 's absolutely unavoidable. It introduces unnecessary statefulness and branching into your procedures , which you then have to track manually. By <span style="background-color:yellow;">returning</span> early , you can <span style="background-color:yellow;">reduce</span> the state and branch count of your code . </p>
+<blockquote>Specifically in the past I 've heard that structured programming in C avoids having multiple exit points for a <span style="background-color:yellow;">function</span> . </blockquote>
+<p>Precisely the opposite -- structured programming <span style="background-color:yellow;">discourages</span> multiple points of entry , but multiple points of exit are acceptable and even encouraged ( eg " guard clauses " ) . </p>
+<br /><b># <span style="background-color:yellow;">3</span> </b><br /><p>Stylistics aside , let 's take a look at the <span style="background-color:yellow;">disassembly</span> for the two approaches : </p>
+<pre><code>>>> def foo():
+...     r = 0
+...     if bar():
+...             r = 2
+...     else:
+...             r = 3
+...     return r
+... 
+>>> dis.dis(foo)
+  2           0 LOAD_CONST               1 (0)
+              3 STORE_FAST               0 (r)
+
+  3           6 LOAD_GLOBAL              0 (bar)
+              9 CALL_FUNCTION            0
+             12 JUMP_IF_FALSE           10 (to 25)
+             15 POP_TOP             
+
+  4          16 LOAD_CONST               2 (2)
+             19 STORE_FAST               0 (r)
+             22 JUMP_FORWARD             7 (to 32)
+        >>   25 POP_TOP             
+
+  6          26 LOAD_CONST               3 (3)
+             29 STORE_FAST               0 (r)
+
+  7     >>   32 LOAD_FAST                0 (r)
+             35 RETURN_VALUE
+</code></pre>
+<p>14 bytecode instructions in the first approach.. . </p>
+<pre><code>>>> def quux():
+...     if bar():
+...             return 2
+...     else:
+...             return 3
+... 
+>>> dis.dis(quux)
+  2           0 LOAD_GLOBAL              0 (bar)
+              3 CALL_FUNCTION            0
+              6 JUMP_IF_FALSE            5 (to 14)
+              9 POP_TOP             
+
+  3          10 LOAD_CONST               1 (2)
+             13 RETURN_VALUE        
+        >>   14 POP_TOP             
+
+  5          15 LOAD_CONST               2 (3)
+             18 RETURN_VALUE        
+             19 LOAD_CONST               0 (None)
+             22 RETURN_VALUE
+</code></pre>
+<p>11 in the second approach.. . </p>
+<p>And a third approach , slightly shorter than the second : </p>
+<pre><code>>>> def baz():
+...     if bar():
+...             return 2
+...     return 3
+... 
+>>> dis.dis(baz)
+  2           0 LOAD_GLOBAL              0 (bar)
+              3 CALL_FUNCTION            0
+              6 JUMP_IF_FALSE            5 (to 14)
+              9 POP_TOP             
+
+  3          10 LOAD_CONST               1 (2)
+             13 RETURN_VALUE        
+        >>   14 POP_TOP             
+
+  4          15 LOAD_CONST               2 (3)
+             18 RETURN_VALUE
+</code></pre>
+<p>Has just nine instructions. The differences may not seem like much , but it actually makes a bit of a difference over a million <span style="background-color:yellow;">runs</span> with timeit , with <span style="background-color:yellow;">bar</span> defined to <span style="background-color:yellow;">return</span> alternating zeros and ones : </p>
+<pre>
+$ sudo nice -n -19 python b.py
+('foo', 1.3846859931945801)
+('quux', 1.282526969909668)
+('baz', 1.2973799705505371)
+$ sudo nice -n -19 python b.py
+('foo', 1.354640007019043)
+('quux', 1.2609632015228271)
+('baz', 1.2767179012298584)
+
+$ sudo nice -n -19 python3 b.py
+foo 1.72521305084
+quux 1.62322306633
+baz 1.62547206879
+$ sudo nice -n -19 python3 b.py
+foo 1.73264288902
+quux 1.67029309273
+baz 1.62204194069
+</pre>
+<p><span style="background-color:yellow;">quux</span> and <span style="background-color:yellow;">baz</span> tended to be close to the same time , both of which were consistently faster than <span style="background-color:yellow;">foo</span> . </p>
+<p>If you 're still on the fence about which one is better , hopefully this illustrates another advantage of the accumulator-less approach that nobody else mentioned so far . </p>
+<br /><b># 4 </b><br /><p>It depends on the language to a large extent , however I would go with the second method <span style="background-color:yellow;">returning</span> the value directly <span style="background-color:yellow;">rather</span> than imposing another superfluous variable. The second method is cleaner , more precise and therefore more maintainable in my opinion . </p>
+<br /><b># <span style="background-color:yellow;">5</span> </b><br /><p>I suppose it 's more a question of style and coding conventions. Generally , theory tells us that multiple exit points are bad. In practice it can be easier to follow to simply <span style="background-color:yellow;">return</span> inside each condition. The code is likely to be compiled down to very similar if not identical instructions , so it has little to no <span style="background-color:yellow;">functional</span> impact . </p>
+<p>My <span style="background-color:yellow;">rule</span> of thumb is this : If the <span style="background-color:yellow;">function</span> is longer than one page ( <span style="background-color:yellow;">25</span> lines ) avoid multiple exit points. If you can see it all at once , do whatever seems best at the time you write it . </p>
+<br /><b># 6 </b><br /><p>A further alternative in <span style="background-color:yellow;">recent</span> versions of Python ( since <span style="background-color:yellow;">2.6</span> ? ) is a ternary operator statement like this : </p>
+<pre><code>def function():
+    return (2 if some_condition() else 3)
+</code></pre>
+<p>Just in case you like that better . </p>
+<br /><b># 7 </b><br /><p>For primitives , it does n't matter. In a language like C + + ( &amp ; presumably with structs in C it 's the compiler will do something similar ) , the compiler is able to optimize the copy constructor out if you ensure all code paths <span style="background-color:yellow;">return</span> the same variable. For example : </p>
+<pre><code>Foo someFunction()
+{
+    Foo result(5);
+    if (someConditionA())  return result;
+    else if (someConditionB()) result.doSomething();
+    result.doSomethingElse();
+    return result;
+}
+</code></pre>
+<p>becomes more efficient than ( unless your compiler is very very good ) : </p>
+<pre><code>Foo someFunction()
+{
+   if (someConditionA()) return Foo(5);
+   if (someConditionB()) { Foo result(5); result.doSomething(); result.doSomethingElse(); return result; }
+   Foo result(5);
+   result.doSomethingElse();
+   return result;
+}
+</code></pre>
+<p>In all other cases , it 's more style-preference &amp ; <span style="background-color:yellow;">readability.</span> In the end , choose the format that 's more <span style="background-color:yellow;">readable</span> for that particular case . </p>
+<br /><b># 8 </b><br /><p>Although people advocate single exit strategy , I find it useful to <span style="background-color:yellow;">return</span> early. That way you do n't have to keep track when you are adding code later . </p>
+<br /><b># 9 </b><br /><p>In a language with <span style="background-color:yellow;">function</span> prototypes like C + + or Java , the compiler enforces that you <span style="background-color:yellow;">return</span> something of the correct type , even if execution would otherwise fall off the end of the <span style="background-color:yellow;">function.</span> In Python , since there are no <span style="background-color:yellow;">function</span> prototypes , falling off the end of the <span style="background-color:yellow;">function</span> will <span style="background-color:yellow;">return</span> the special value <span style="background-color:yellow;">None</span> . For this <span style="background-color:yellow;">reason</span> , you may want to use an accumulator variable and an explicit <span style="background-color:yellow;">return</span> <span style="background-color:yellow;">ret_val</span> at the end when coding in Python. Or use another style that ensures that execution can not fall off the end without <span style="background-color:yellow;">returning</span> a value . </p>
+<br /><b># 10 </b><br /><p>Returning values directly is not terrible for small <span style="background-color:yellow;">functions</span> like your example. However , if you have a large or complex <span style="background-color:yellow;">function</span> then multiple <span style="background-color:yellow;">return</span> points can be more difficult to debug. If you have a coding standard I 'd <span style="background-color:yellow;">refer</span> to it ( here the variable is preferred according to our company coding standard ) . </p>
+<br />

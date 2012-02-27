@@ -1,0 +1,788 @@
+Question (ID-1841737): Hashing Multiple Files 
+ Problem Specification: 
+ 
+ Given a directory, I want to iterate through the directory and its non-hidden sub-directories, 
+  and add a whirlpool hash into the non-hidden
+ file's names. 
+ If the script is re-run it would would replace an old hash with a new one. 
+ 
+ 
+  &lt;filename&gt;.&lt;extension&gt;    ==>   &lt;filename&gt;.&lt;a-whirlpool-hash&gt;.&lt;extension&gt; 
+ 
+  &lt;filename&gt;.&lt;old-hash&gt;.&lt;extension&gt;    ==>   &lt;filename&gt;.&lt;new-hash&gt;.&lt;extension&gt; 
+ 
+ 
+
+ 
+
+ 
+ Question: 
+ 
+ a) How would you do this? 
+ 
+ b) Out of the all methods available to you, what makes your method most suitable? 
+ 
+
+ 
+
+ 
+ Verdict: 
+ 
+ Thanks all, I have chosen SeigeX's answer for it's speed and portability. 
+ It is emprically quicker than the other bash variants, 
+  and it worked without alteration on my Mac OS X machine. 
+ 
+ Answers (Total-13): #0 #!/bin/bash
+find -type f -print0 | while read -d $'\0' file
+do
+ md5sum=`md5sum "${file}" | sed -r 's/ .*//'`
+ filename=`echo "${file}" | sed -r 's/\.[^./]*$//'`
+ extension="${file:${#filename}}"
+ filename=`echo "${filename}" | sed -r 's/\.md5sum-[^.]+//'`
+ if [[ "${file}" != "${filename}.md5sum-${md5sum}${extension}" ]]; then
+  echo "Handling file: ${file}"
+  mv "${file}" "${filename}.md5sum-${md5sum}${extension}"
+ fi
+done
+ 
+
+ 
+ Tested on files containing spaces like 'a b' 
+ Tested on files containing multiple extensions like 'a.b.c' 
+ Tested with directories containing spaces and/or dots. 
+ Tested on files containing no extension inside directories containing dots, such as 'a.b/c' 
+ Updated : Now updates hashes if the file changes. 
+ 
+
+ Key points: 
+
+ 
+ Use of print0 piped to while read -d $'\0' , to correctly handle spaces in file names. 
+ md5sum can be replaced with your favourite hash function. The sed removes the first space and everything after it from the output of md5sum. 
+ The base filename is extracted using a regular expression that finds the last period that isn't followed by another slash (so that periods in directory names aren't counted as part of the extension). 
+ The extension is found by using a substring with starting index as the length of the base filename. 
+ 
+ #1 Updated to fix: 
+1. File names with '[' or ']' in their name (really, any character now. See comment) 
+2. Handling of md5sum when hashing a file with a backslash or newline in its name 
+3. Functionized hash-checking algo for modularity 
+4. Refactored hash-checking logic to remove double-negatives 
+
+ #!/bin/bash
+if (($# != 1)) || ! [[ -d "$1" ]]; then
+ echo "Usage: $0 /path/to/directory"
+ exit 1
+fi
+
+is_hash() {
+ md5=${1##*.} # strip prefix
+ [[ "$md5" == *[^[:xdigit:]]* || ${#md5} -lt 32 ]] &amp;&amp; echo "$1" || echo "${1%.*}"
+}
+
+while IFS= read -r -d $'\0' file; do
+ read hash junk &lt; &lt;(md5sum "$file")
+ basename="${file##*/}"
+ dirname="${file%/*}"
+ pre_ext="${basename%.*}"
+ ext="${basename:${#pre_ext}}"
+
+ # File already hashed?
+ pre_ext=$(is_hash "$pre_ext")
+ ext=$(is_hash "$ext")
+
+ mv "$file" "${dirname}/${pre_ext}.${hash}${ext}" 2&gt; /dev/null
+
+done &lt; &lt;(find "$1" -path "*/.*" -prune -o \( -type f -print0 \))
+ 
+
+ This code has the following benefits over other entries thus far 
+
+ 
+ It is fully compliant with Bash versions 2.0.2 and beyond 
+ No superfluous calls to other binaries like sed or grep; uses builtin parameter expansion instead 
+ Uses process substitution for 'find' instead of a pipe, no sub-shell is made this way 
+ Takes the directory to work on as an argument and does a sanity check on it 
+ Uses $() rather than `` notation for command substitution, the latter is deprecated 
+ Works with files with spaces 
+ Works with files with newlines 
+ Works with files with multiple extensions 
+ Works with files with no extension 
+ Does not traverse hidden directories 
+ Does NOT skip pre-hashed files, it will recalculate the hash as per the spec 
+ 
+
+ Test Tree 
+
+ 
+$ tree -a a
+a
+|-- .hidden_dir
+| `-- foo
+|-- b
+| `-- c.d
+|  |-- f
+|  |-- g.5236b1ab46088005ed3554940390c8a7.ext
+|  |-- h.d41d8cd98f00b204e9800998ecf8427e
+|  |-- i.ext1.5236b1ab46088005ed3554940390c8a7.ext2
+|  `-- j.ext1.ext2
+|-- c.ext^Mnewline
+| |-- f
+| `-- g.with[or].ext
+`-- f^Jnewline.ext
+
+4 directories, 9 files 
+ 
+
+ Result 
+
+ 
+$ tree -a a
+a
+|-- .hidden_dir
+| `-- foo
+|-- b
+| `-- c.d
+|  |-- f.d41d8cd98f00b204e9800998ecf8427e
+|  |-- g.d41d8cd98f00b204e9800998ecf8427e.ext
+|  |-- h.d41d8cd98f00b204e9800998ecf8427e
+|  |-- i.ext1.d41d8cd98f00b204e9800998ecf8427e.ext2
+|  `-- j.ext1.d41d8cd98f00b204e9800998ecf8427e.ext2
+|-- c.ext^Mnewline
+| |-- f.d41d8cd98f00b204e9800998ecf8427e
+| `-- g.with[or].d41d8cd98f00b204e9800998ecf8427e.ext
+`-- f^Jnewline.d3b07384d113edec49eaa6238ad5ff00.ext
+
+4 directories, 9 files
+ 
+ #2 The logic of the requirements is complex enough to justify the use of Python instead of bash. It should provide a more readable, extensible, and maintainable solution. 
+
+ #!/usr/bin/env python
+import hashlib, os
+
+def ishash(h, size):
+ """Whether `h` looks like hash's hex digest."""
+ if len(h) == size: 
+  try:
+   int(h, 16) # whether h is a hex number
+   return True
+  except ValueError:
+   return False
+
+for root, dirs, files in os.walk("."):
+ dirs[:] = [d for d in dirs if not d.startswith(".")] # skip hidden dirs
+ for path in (os.path.join(root, f) for f in files if not f.startswith(".")):
+  suffix = hash_ = "." + hashlib.md5(open(path).read()).hexdigest()
+  hashsize = len(hash_) - 1
+  # extract old hash from the name; add/replace the hash if needed
+  barepath, ext = os.path.splitext(path) # ext may be empty
+  if not ishash(ext[1:], hashsize):
+   suffix += ext # add original extension
+   barepath, oldhash = os.path.splitext(barepath) 
+   if not ishash(oldhash[1:], hashsize):
+    suffix = oldhash + suffix # preserve 2nd (not a hash) extension
+  else: # ext looks like a hash
+   oldhash = ext
+  if hash_ != oldhash: # replace old hash by new one
+   os.rename(path, barepath+suffix)
+ 
+
+ Here's a test directory tree. It contains: 
+
+ 
+ files without extension inside directories with a dot in their name 
+ filename which already has a hash in it (test on idempotency) 
+ filename with two extensions 
+ newlines in names 
+ 
+
+ 
+$ tree a
+a
+|-- b
+| `-- c.d
+|  |-- f
+|  |-- f.ext1.ext2
+|  `-- g.d41d8cd98f00b204e9800998ecf8427e
+|-- c.ext^Mnewline
+| `-- f
+`-- f^Jnewline.ext1
+
+7 directories, 5 files
+ 
+
+ Result 
+
+ 
+$ tree a
+a
+|-- b
+| `-- c.d
+|  |-- f.0bee89b07a248e27c83fc3d5951213c1
+|  |-- f.ext1.614dd0e977becb4c6f7fa99e64549b12.ext2
+|  `-- g.d41d8cd98f00b204e9800998ecf8427e
+|-- c.ext^Mnewline
+| `-- f.0bee89b07a248e27c83fc3d5951213c1
+`-- f^Jnewline.b6fe8bb902ca1b80aaa632b776d77f83.ext1
+
+7 directories, 5 files
+ 
+
+ The solution works correctly for all cases. 
+
+ 
+
+ Whirlpool hash is not in Python's stdlib, but there are both pure Python and C extensions that support it e.g., python-mhash . 
+
+ To install it: 
+
+ $ sudo apt-get install python-mhash
+ 
+
+ To use it: 
+
+ import mhash
+
+print mhash.MHASH(mhash.MHASH_WHIRLPOOL, "text to hash here").hexdigest()
+ 
+
+ Output:
+ cbdca4520cc5c131fc3a86109dd23fee2d7ff7be56636d398180178378944a4f41480b938608ae98da7eccbf39a4c79b83a8590c4cb1bace5bc638fc92b3e653 
+
+ 
+
+ Invoking whirlpooldeep in Python 
+
+ from subprocess import PIPE, STDOUT, Popen
+
+def getoutput(cmd):
+ return Popen(cmd, stdout=PIPE, stderr=STDOUT).communicate()[0]
+
+hash_ = getoutput(["whirlpooldeep", "-q", path]).rstrip()
+ 
+
+ 
+
+ git can provide with leverage for the problems that need to track set of files based on their hashes. 
+ #3 I wasn't really happy with my first answer, since as I said there, this problem looks like it's best solved with perl. You already said in one edit of your question that you have perl on the OS X machine you want to run this on, so I gave it a shot. 
+
+ It's hard to get it all right in bash, i.e. avoiding any quoting problems with odd filenames, and behaving nicely with corner-case filenames. 
+
+ So here it is in perl, a complete solution to your problem. It runs over all the files/directories listed on its command line. 
+
+ 
+#!/usr/bin/perl -w
+# whirlpool-rename.pl
+# 2009 Peter Cordes &lt;peter@cordes.ca&gt;. Share and Enjoy!
+
+use Fcntl;  # for O_BINARY
+use File::Find;
+use Digest::Whirlpool;
+
+# find callback, called once per directory entry
+# $_ is the base name of the file, and we are chdired to that directory.
+sub whirlpool_rename {
+ print "find: $_\n";
+# my @components = split /\.(?:[[:xdigit:]]{128})?/; # remove .hash while we're at it
+ my @components = split /\.(?!\.|$)/, $_, -1; # -1 to not leave out trailing dots
+
+ if (!$components[0] && $_ ne ".") { # hidden file/directory
+  $File::Find::prune = 1;
+  return;
+ }
+
+ # don't follow symlinks or process non-regular-files
+ return if (-l $_ || ! -f _);
+
+ my $digest;
+ eval {
+  sysopen(my $fh, $_, O_RDONLY | O_BINARY) or die "$!";
+  $digest = Digest->new( 'Whirlpool' )->addfile($fh);
+ };
+ if ($@) { # exception-catching structure from whirlpoolsum, distributed with Digest::Whirlpool.
+  warn "whirlpool: couldn't hash $_: $!\n";
+  return;
+ }
+
+ # strip old hashes from the name. not done during split only in the interests of readability
+ @components = grep { !/^[[:xdigit:]]{128}$/ } @components;
+ if ($#components == 0) {
+  push @components, $digest->hexdigest;
+ } else {
+  my $ext = pop @components;
+  push @components, $digest->hexdigest, $ext;
+ }
+
+ my $newname = join('.', @components);
+ return if $_ eq $newname;
+ print "rename $_ -> $newname\n";
+ if (-e $newname) {
+  warn "whirlpool: clobbering $newname\n";
+  # maybe unlink $_ and return if $_ is older than $newname?
+  # But you'd better check that $newname has the right contents then...
+ }
+ # This could be link instead of rename, but then you'd have to handle directories, and you can't make hardlinks across filesystems
+ rename $_, $newname or warn "whirlpool: couldn't rename $_ -> $newname: $!\n";
+}
+
+
+#main
+$ARGV[0] = "." if !@ARGV; # default to current directory
+find({wanted => \&whirlpool_rename, no_chdir => 0}, @ARGV );
+ 
+
+ Advantages:
+- actually uses whirlpool, so you can use this exact program directly. (after installing libperl-digest-whirlpool). Easy to change to any digest function you want, because instead of different programs with different output formats, you have the perl Digest common interface. 
+
+ 
+ implements all other requirements: ignore hidden files (and files under hidden directories). 
+ able to handle any possible filename without error or security problem. (Several people got this right in their shell scripts). 
+ follows best practices for traversing a directory tree, by chdiring down into each directory (like my previous answer, with find -execdir). This avoids problems with PATH_MAX, and with directories being renamed while you're running. 
+ clever handling of filenames that end with . foo..txt... -> foo..hash.txt... 
+ Handles old filenames containing hashes already without renaming them and then renaming them back. (It strips any sequence of 128 hex digits that's surrounded by "." characters.) In the everything-correct case, no disk write activity happens, just reads of every file. Your current solution runs mv twice in the already-correctly-named case, causing directory metadata writes. And being slower, because that's two processes that have to be execced. 
+ efficient. No programs are fork/execed, while most of the solutions that would actually work ended up having to sed something per-file.
+Digest::Whirlpool is implemented with a natively-compiled shared lib, so it's not slow pure-perl. This should be faster than running a program on every file, esp. for small files. 
+ Perl supports UTF-8 strings, so filenames with non-ascii characters shouldn't be a problem. (not sure if any multi-byte sequences in UTF-8 could include the byte that means ASCII '.' on its own. If that is possible, then you need UTF-8 aware string handling. sed doesn't know UTF-8. Bash's glob expressions may.) 
+ easily extensible. When you go to put this into a real program, and you want to handle more corner cases, you can do so quite easily. e.g. decide what to do when you want to rename a file but the hash-named filename already exists. 
+ good error reporting. Most shell scripts have this, though, by passing along errors from the progs they run. 
+ 
+ #4 find . -type f -print | while read file
+do
+ hash=`$hashcommand "$file"`
+ filename=${file%.*}
+ extension=${file##*.}
+ mv $file "$filename.$hash.$extension"
+done
+ 
+ #5 You might want to store the results in one file, like in 
+
+ find . -type f -exec md5sum {} \; &gt; MD5SUMS
+ 
+
+ If you really want one file per hash: 
+
+ find . -type f | while read f; do g=`md5sum $f` &gt; $f.md5; done
+ 
+
+ or even 
+
+ find . -type f | while read f; do g=`md5sum $f | awk '{print $1}'`; echo "$g $f"&gt; $f-$g.md5; done
+ 
+ #6 In sh or bash, two versions. One limits itself to files with extensions... 
+
+ hash () {
+ #openssl md5 t.sh | sed -e 's/.* //'
+ whirlpool "$f"
+}
+
+find . -type f -a -name '*.*' | while read f; do
+ # remove the echo to run this for real
+ echo mv "$f" "${f%.*}.whirlpool-`hash "$f"`.${f##*.}"
+done
+ 
+
+ Testing... 
+
+ ...
+mv ./bash-4.0/signames.h ./bash-4.0/signames.whirlpool-d71b117a822394a5b273ea6c0e3f4dc045b1098326d39864564f1046ab7bd9296d5533894626288265a1f70638ee3ecce1f6a22739b389ff7cb1fa48c76fa166.h
+...
+ 
+
+ And this more complex version processes all plain files, with or without extensions, with or without spaces and odd characters, etc, etc... 
+
+ hash () {
+ #openssl md5 t.sh | sed -e 's/.* //'
+ whirlpool "$f"
+}
+
+find . -type f | while read f; do
+ name=${f##*/}
+ case "$name" in
+ *.*) extension=".${name##*.}" ;;
+ *) extension= ;;
+ esac
+ # remove the echo to run this for real
+ echo mv "$f" "${f%/*}/${name%.*}.whirlpool-`hash "$f"`$extension"
+done
+ 
+ #7 Here's my take on it, in bash. Features: skips non-regular files; correctly deals with files with weird characters (i.e. spaces) in their names; deals with extensionless filenames; skips already-hashed files, so it can be run repeatedly (although if files are modified between runs, it adds the new hash rather than replacing the old one). I wrote it using md5 -q as the hash function; you should be able to replace this with anything else, as long as it only outputs the hash, not something like filename => hash. 
+
+ find -x . -type f -print0 | while IFS="" read -r -d $'\000' file; do
+ hash="$(md5 -q "$file")" # replace with your favorite hash function
+ [[ "$file" == *."$hash" ]] &amp;&amp; continue # skip files that already end in their hash
+ dirname="$(dirname "$file")"
+ basename="$(basename "$file")"
+ base="${basename%.*}"
+ [[ "$base" == *."$hash" ]] &amp;&amp; continue # skip files that already end in hash + extension
+ if [[ "$basename" == "$base" ]]; then
+   extension=""
+ else
+   extension=".${basename##*.}"
+ fi
+ mv "$file" "$dirname/$base.$hash$extension"
+done
+ 
+ #8 whirlpool isn't a very common hash. You'll probably have to install a program to compute it. e.g. Debian/Ubuntu include a "whirlpool" package. The program prints the hash of one file by itself. apt-cache search whirlpool shows that some other packages support it, including the interesting md5deep. 
+
+ Some of the earlier anwsers will fail on filenames with spaces in them. If this is the case, but your files don't have any newlines in the filename, then you can safely use \n as a delimiter. 
+
+ 
+oldifs="$IFS"
+IFS="
+"
+for i in $(find -type f); do echo "$i";done
+#output
+# ./base
+# ./base2
+# ./normal.ext
+# ./trick.e "xt
+# ./foo bar.dir ext/trick' (name "- }$foo.ext{}.ext2
+IFS="$oldifs"
+ 
+
+ try without setting IFS to see why it matters. 
+
+ I was going to try something with IFS="."; find -print0 | while read -a array, to split on "." characters, but I normally never use array variables. There's no easy way that I see in the man page to insert the hash as the second-last array index, and push down the last element (the file extension, if it had one.) Any time bash array variables look interesting, I know it's time to do what I'm doing in perl instead! See the gotchas for using read:
+ http://tldp.org/LDP/abs/html/gotchas.html#BADREAD0 
+
+ I decided to use another technique I like: find -exec sh -c. It's the safest, since you're not parsing filenames. 
+
+ This should do the trick: 
+
+ 
+find -regextype posix-extended -type f -not -regex '.*\.[a-fA-F0-9]{128}.*' \
+-execdir bash -c 'for i in "${@#./}";do 
+ hash=$(whirlpool "$i");
+ ext=".${i##*.}"; base="${i%.*}";
+ [ "$base" = "$i" ] && ext="";
+ newname="$base.$hash$ext";
+ echo "ext:$ext $i -> $newname";
+ false mv --no-clobber "$i" "$newname";done' \
+dummy {} +
+# take out the "false" before the mv, and optionally take out the echo.
+# false ignores its arguments, so it's there so you can
+# run this to see what will happen without actually renaming your files.
+ 
+
+ -execdir bash -c 'cmd' dummy {} + has the dummy arg there because the first arg after the command becomes $0 in the shell's positional parameters, not part of "$@" that for loops over. I use execdir instead of exec so I don't have to deal with directory names (or the possibility of exceeding PATH_MAX for nested dirs with long names, when the actual filenames are all short enough.) 
+
+ -not -regex prevents this from being applied twice to the same file. Although whirlpool is an extremely long hash, and mv says File name too long if I run it twice without that check. (on an XFS filesystem.) 
+
+ Files with no extension get basename.hash. I had to check specially to avoid appending a trailing ., or getting the basename as the extension. ${@#./} strips out the leading ./ that find puts in front of every filename, so there is no "." in the whole string for files with no extension. 
+
+ mv --no-clobber may be a GNU extension. If you don't have GNU mv, do something else if you want to avoid deleting existing files (e.g. you run this once, some of the same file are added to the directory with their old names; you run it again.) OTOH, if you want that behaviour, just take it out. 
+
+ My solution should work even when filenames contain a newline (they can, you know!), or any other possible character. It would be faster and easier in perl, but you asked for shell. 
+
+ wallenborn's solution for making one file with all the checksums (instead of renaming the original) is pretty good, but inefficient. Don't run md5sum once per file, run it on as many files at once as will fit on its command line: 
+
+ find dir -type f -print0 | xargs -0 md5sum > dir.md5
+or with GNU find, xargs is built in (note the + instead of ';')
+ find dir -type f -exec md5sum {} + > dir.md5 
+
+ if you just use find -print | xargs -d'\n', you will be screwed up by file names with quote marks in them, so be careful. If you don't know what files you might someday run this script on, always try to use print0 or -exec. This is esp. true if filenames are supplied by untrusted users (i.e. could be an attack vector on your server.) 
+ #9 Hm, interesting problem. 
+
+ Try the following (the mktest function is just for testing -- TDD for bash! :) 
+
+ Edit: 
+
+ 
+ Added support for whirlpool hashes. 
+ code cleanup 
+ better quoting of filenames 
+ changed array-syntax for test part-- should now work with most korn-like shells. Note that pdksh does not support :-based parameter expansion (or rather
+it means something else) 
+ 
+
+ Note also that when in md5-mode it fails for filenames with whirlpool-like hashes, and
+possibly vice-versa. 
+
+ 
+ 
+#!/usr/bin/env bash
+
+#Tested with:
+# GNU bash, version 4.0.28(1)-release (x86_64-pc-linux-gnu)
+# ksh (AT&T Research) 93s+ 2008-01-31
+# mksh @(#)MIRBSD KSH R39 2009/08/01 Debian 39.1-4
+# Does not work with pdksh, dash
+
+DEFAULT_SUM="md5"
+
+#Takes a parameter, as root path
+# as well as an optional parameter, the hash function to use (md5 or wp for whirlpool).
+main()
+{
+ case $2 in
+ "wp")
+  export SUM="wp"
+  ;;
+ "md5")
+  export SUM="md5"
+  ;;
+ *)
+  export SUM=$DEFAULT_SUM
+  ;;
+ esac
+
+ # For all visible files in all visible subfolders, move the file
+ # to a name including the correct hash:
+ find $1 -type f -not -regex '.*/\..*' -exec $0 hashmove '{}' \;
+}
+
+# Given a file named in $1 with full path, calculate it's hash.
+# Output the filname, with the hash inserted before the extention
+# (if any) -- or: replace an existing hash with the new one,
+# if a hash already exist.
+hashname_md5()
+{
+ pathname="$1"
+ full_hash=`md5sum "$pathname"`
+ hash=${full_hash:0:32}
+ filename=`basename "$pathname"`
+ prefix=${filename%%.*}
+ suffix=${filename#$prefix}
+
+ #If the suffix starts with something that looks like an md5sum,
+ #remove it:
+ suffix=`echo $suffix|sed -r 's/\.[a-z0-9]{32}//'`
+
+ echo "$prefix.$hash$suffix"
+}
+
+# Same as hashname_md5 -- but uses whirlpool hash.
+hashname_wp()
+{
+ pathname="$1"
+ hash=`whirlpool "$pathname"`
+ filename=`basename "$pathname"`
+ prefix=${filename%%.*}
+ suffix=${filename#$prefix}
+
+ #If the suffix starts with something that looks like an md5sum,
+ #remove it:
+ suffix=`echo $suffix|sed -r 's/\.[a-z0-9]{128}//'`
+
+ echo "$prefix.$hash$suffix"
+}
+
+
+#Given a filepath $1, move/rename it to a name including the filehash.
+# Try to replace an existing hash, an not move a file if no update is
+# needed.
+hashmove()
+{
+ pathname="$1"
+ filename=`basename "$pathname"`
+ path="${pathname%%/$filename}"
+
+ case $SUM in
+ "wp")
+  hashname=`hashname_wp "$pathname"`
+  ;;
+ "md5")
+  hashname=`hashname_md5 "$pathname"`
+  ;;
+ *)
+  echo "Unknown hash requested"
+  exit 1
+  ;;
+ esac
+
+ if [[ "$filename" != "$hashname" ]]
+ then
+  echo "renaming: $pathname => $path/$hashname"
+  mv "$pathname" "$path/$hashname"
+ else
+ echo "$pathname up to date"
+ fi
+}
+
+# Create som testdata under /tmp
+mktest()
+{
+ root_dir=$(tempfile)
+ rm "$root_dir"
+ mkdir "$root_dir"
+ i=0
+ test_files[$((i++))]='test'
+ test_files[$((i++))]='testfile, no extention or spaces'
+
+ test_files[$((i++))]='.hidden'
+ test_files[$((i++))]='a hidden file'
+
+ test_files[$((i++))]='test space'
+ test_files[$((i++))]='testfile, no extention, spaces in name'
+
+ test_files[$((i++))]='test.txt'
+ test_files[$((i++))]='testfile, extention, no spaces in name'
+
+ test_files[$((i++))]='test.ab8e460eac3599549cfaa23a848635aa.txt'
+ test_files[$((i++))]='testfile, With (wrong) md5sum, no spaces in name'
+
+ test_files[$((i++))]='test spaced.ab8e460eac3599549cfaa23a848635aa.txt'
+ test_files[$((i++))]='testfile, With (wrong) md5sum, spaces in name'
+
+ test_files[$((i++))]='test.8072ec03e95a26bb07d6e163c93593283fee032db7265a29e2430004eefda22ce096be3fa189e8988c6ad77a3154af76f582d7e84e3f319b798d369352a63c3d.txt'
+ test_files[$((i++))]='testfile, With (wrong) whirlpoolhash, no spaces in name'
+
+ test_files[$((i++))]='test spaced.8072ec03e95a26bb07d6e163c93593283fee032db7265a29e2430004eefda22ce096be3fa189e8988c6ad77a3154af76f582d7e84e3f319b798d369352a63c3d.txt']
+ test_files[$((i++))]='testfile, With (wrong) whirlpoolhash, spaces in name'
+
+ test_files[$((i++))]='test space.txt'
+ test_files[$((i++))]='testfile, extention, spaces in name'
+
+ test_files[$((i++))]='test multi-space .txt'
+ test_files[$((i++))]='testfile, extention, multiple consequtive spaces in name'
+
+ test_files[$((i++))]='test space.h'
+ test_files[$((i++))]='testfile, short extention, spaces in name'
+
+ test_files[$((i++))]='test space.reallylong'
+ test_files[$((i++))]='testfile, long extention, spaces in name'
+
+ test_files[$((i++))]='test space.reallyreallyreallylong.tst'
+ test_files[$((i++))]='testfile, long extention, double extention,
+      might look like hash, spaces in name'
+
+ test_files[$((i++))]='utf8test1 - æeiaæå.txt'
+ test_files[$((i++))]='testfile, extention, utf8 characters, spaces in name'
+
+ test_files[$((i++))]='utf8test1 - 漢字.txt'
+ test_files[$((i++))]='testfile, extention, Japanese utf8 characters, spaces in name'
+
+ for s in . sub1 sub2 sub1/sub3 .hidden_dir
+ do
+
+  #note -p not needed as we create dirs top-down
+  #fails for "." -- but the hack allows us to use a single loop
+  #for creating testdata in all dirs
+  mkdir $root_dir/$s
+  dir=$root_dir/$s
+
+  i=0
+  while [[ $i -lt ${#test_files[*]} ]]
+  do
+  filename=${test_files[$((i++))]}
+  echo ${test_files[$((i++))]} > "$dir/$filename"
+  done
+ done
+
+ echo "$root_dir"
+}
+
+# Run test, given a hash-type as first argument
+runtest()
+{
+ sum=$1
+
+ root_dir=$(mktest)
+
+ echo "created dir: $root_dir"
+ echo "Running first test with hashtype $sum:"
+ echo
+ main $root_dir $sum
+ echo
+ echo "Running second test:"
+ echo
+ main $root_dir $sum
+ echo "Updating all files:"
+
+ find $root_dir -type f | while read f
+ do
+ echo "more content" >> "$f"
+ done
+
+ echo
+ echo "Running final test:"
+ echo
+ main $root_dir $sum
+ #cleanup:
+ rm -r $root_dir
+}
+
+# Test md5 and whirlpool hashes on generated data.
+runtests()
+{
+ runtest md5
+ runtest wp
+}
+
+#For in order to be able to call the script recursively, without splitting off
+# functions to separate files:
+case "$1" in
+ 'test')
+ runtests
+ ;;
+ 'hashname')
+ hashname "$2"
+ ;;
+ 'hashmove')
+ hashmove "$2"
+ ;;
+ 'run')
+ main "$2" "$3"
+ ;;
+ *)
+ echo "Use with: $0 test - or if you just want to try it on a folder:"
+ echo " $0 run path (implies md5)"
+ echo " $0 run md5 path"
+ echo " $0 run wp path"
+ ;;
+esac
+ 
+ 
+ #10 In response to your updated question: 
+
+ 
+ If anyone can comment on how I can avoid looking in hidden directories with my BASH Script, it would be much appreciated. 
+ 
+
+ You can avoid hidden directories with find by using 
+
+ find -name '.?*' -prune -o \( -type f -print0 \)
+ 
+
+ -name '.*' -prune will prune ".", and stop without doing anything. :/ 
+
+ I'd still recommend my Perl version, though. I updated it... You may still need to install Digest::Whirlpool from CPAN, though. 
+ #11 using zsh: 
+
+ $ ls
+a.txt
+b.txt
+c.txt
+ 
+
+ The magic: 
+
+ $ FILES=**/*(.) 
+$ # */ stupid syntax coloring thinks this is a comment
+$ for f in $FILES; do hash=`md5sum $f | cut -f1 -d" "`; mv $f "$f:r.$hash.$f:e"; done
+$ ls
+a.60b725f10c9c85c70d97880dfe8191b3.txt
+b.3b5d5c3712955042212316173ccf37be.txt
+c.2cd6ee2c70b0bde53fbe6cac3c8b8bb1.txt
+ 
+
+ Happy deconstruction! 
+
+ Edit: added files in subdirectories and quotes around mv argument 
+ #12 Ruby: 
+
+ #!/usr/bin/env ruby
+require 'digest/md5'
+
+Dir.glob('**/*') do |f|
+ next unless File.file? f
+ next if /\.md5sum-[0-9a-f]{32}/ =~ f
+ md5sum = Digest::MD5.file f
+ newname = "%s/%s.md5sum-%s%s" %
+ [File.dirname(f), File.basename(f,'.*'), md5sum, File.extname(f)]
+ File.rename f, newname
+end
+ 
+
+ Handles filenames that have spaces, no extension, and that have already been hashed. 
+
+ Ignores hidden files and directories — add File::FNM_DOTMATCH as the second argument of glob if that's desired.

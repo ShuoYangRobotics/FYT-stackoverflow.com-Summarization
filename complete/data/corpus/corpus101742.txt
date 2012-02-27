@@ -1,0 +1,161 @@
+Question (ID-101742): How do you access an authenticated Google App Engine service from a (non-web) python client? I have a Google App Engine app - http://mylovelyapp.appspot.com/ 
+It has a page - mylovelypage 
+
+ For the moment, the page just does self.response.out.write('OK') 
+
+ If I run the following Python at my computer: 
+
+ import urllib2
+f = urllib2.urlopen("http://mylovelyapp.appspot.com/mylovelypage")
+s = f.read()
+print s
+f.close()
+ 
+
+ it prints "OK" 
+
+ the problem is if I add login:required to this page in the app's yaml 
+
+ then this prints out the HTML of the Google Accounts login page 
+
+ I've tried "normal" authentication approaches. e.g. 
+
+ passman = urllib2.HTTPPasswordMgrWithDefaultRealm()
+
+auth_handler = urllib2.HTTPBasicAuthHandler()
+auth_handler.add_password(None,
+       uri='http://mylovelyapp.appspot.com/mylovelypage',
+       user='billy.bob@gmail.com',
+       passwd='billybobspasswd')
+opener = urllib2.build_opener(auth_handler)
+urllib2.install_opener(opener)
+ 
+
+ But it makes no difference - I still get the login page's HTML back. 
+
+ I've tried Google's ClientLogin auth API , but I can't get it to work. 
+
+ h = httplib2.Http()
+
+auth_uri = 'https://www.google.com/accounts/ClientLogin'
+headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+myrequest = "Email=%s&amp;Passwd=%s&amp;service=ah&amp;source=DALELANE-0.0" % ("billy.bob@gmail.com", "billybobspassword")
+response, content = h.request(auth_uri, 'POST', body=myrequest, headers=headers)
+
+if response['status'] == '200':
+ authtok = re.search('Auth=(\S*)', content).group(1)
+
+ headers = {}
+ headers['Authorization'] = 'GoogleLogin auth=%s' % authtok.strip()
+ headers['Content-Length'] = '0'
+
+ response, content = h.request("http://mylovelyapp.appspot.com/mylovelypage", 
+         'POST', 
+         body="", 
+         headers=headers)
+
+ while response['status'] == "302":  
+  response, content = h.request(response['location'], 'POST', body="", headers=headers) 
+
+ print content
+ 
+
+ I do seem to be able to get some token correctly, but attempts to use it in the header when I call 'mylovelypage' still just return me the login page's HTML. :-( 
+
+ Can anyone help, please? 
+
+ Could I use the GData client library to do this sort of thing? From
+what I've read, I think it should be able to access App Engine apps,
+but I haven't been any more successful at getting the authentication working for App Engine stuff there either 
+
+ Any pointers to samples, articles, or even just keywords I should be
+searching for to get me started, would be very much appreciated. 
+
+ Thanks! 
+ Answers (Total-6): #0 appcfg.py, the tool that uploads data to App Engine has to do exactly this to authenticate itself with the App Engine server. The relevant functionality is abstracted into appengine_rpc.py. In a nutshell, the solution is: 
+
+ 
+ Use the Google ClientLogin API to obtain an authentication token. appengine_rpc.py does this in _GetAuthToken 
+ Send the auth token to a special URL on your App Engine app. That page then returns a cookie and a 302 redirect. Ignore the redirect and store the cookie. appcfg.py does this in _GetAuthCookie 
+ Use the returned cookie in all future requests. 
+ 
+
+ You may also want to look at _Authenticate , to see how appcfg handles the various return codes from ClientLogin, and _GetOpener , to see how appcfg creates a urllib2 OpenerDirector that doesn't follow HTTP redirects. Or you could, in fact, just use the AbstractRpcServer and HttpRpcServer classes wholesale, since they do pretty much everything you need. 
+ #1 thanks to Arachnid for the answer - it worked as suggested 
+
+ here is a simplified copy of the code, in case it is helpful to the next person to try! 
+
+ import os
+import urllib
+import urllib2
+import cookielib
+
+users_email_address = "billy.bob@gmail.com"
+users_password  = "billybobspassword"
+
+target_authenticated_google_app_engine_uri = 'http://mylovelyapp.appspot.com/mylovelypage'
+my_app_name = "yay-1.0"
+
+
+
+# we use a cookie to authenticate with Google App Engine
+# by registering a cookie handler here, this will automatically store the 
+# cookie returned when we use urllib2 to open http://currentcost.appspot.com/_ah/login
+cookiejar = cookielib.LWPCookieJar()
+opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookiejar))
+urllib2.install_opener(opener)
+
+#
+# get an AuthToken from Google accounts
+#
+auth_uri = 'https://www.google.com/accounts/ClientLogin'
+authreq_data = urllib.urlencode({ "Email": users_email_address,
+         "Passwd": users_password,
+         "service": "ah",
+         "source": my_app_name,
+         "accountType": "HOSTED_OR_GOOGLE" })
+auth_req = urllib2.Request(auth_uri, data=authreq_data)
+auth_resp = urllib2.urlopen(auth_req)
+auth_resp_body = auth_resp.read()
+# auth response includes several fields - we're interested in 
+# the bit after Auth= 
+auth_resp_dict = dict(x.split("=")
+      for x in auth_resp_body.split("\n") if x)
+authtoken = auth_resp_dict["Auth"]
+
+#
+# get a cookie
+# 
+# the call to request a cookie will also automatically redirect us to the page
+# that we want to go to
+# the cookie jar will automatically provide the cookie when we reach the 
+# redirected location
+
+# this is where I actually want to go to
+serv_uri = target_authenticated_google_app_engine_uri
+
+serv_args = {}
+serv_args['continue'] = serv_uri
+serv_args['auth']  = authtoken
+
+full_serv_uri = "http://mylovelyapp.appspot.com/_ah/login?%s" % (urllib.urlencode(serv_args))
+
+serv_req = urllib2.Request(full_serv_uri)
+serv_resp = urllib2.urlopen(serv_req)
+serv_resp_body = serv_resp.read()
+
+# serv_resp_body should contain the contents of the 
+# target_authenticated_google_app_engine_uri page - as we will have been 
+# redirected to that page automatically 
+#
+# to prove this, I'm just gonna print it out
+print serv_resp_body
+ 
+ #2 This solution is not working for me. Using the above code verbatim I get the Auth key from https://www.google.com/accounts/ClientLogin, and the appspot.com server responds with the the continue page, but I the server still does not see me as logged in. I have looked in the cookie jar and verified that the cookie is there! When I cut and paste the request to http://mylovelyapp.appspot.com/_ah/login into a browser I get the same results. Is there something I am missing? 
+
+ Ok, more experimenting and I have determined that the solution works with user@gmail.com accounts, but not with hosted accounts. Any ideas? 
+ #3 I'm not a python expert or a app engine expert. But did you try following the sample appl at http://code.google.com/appengine/docs/gettingstarted/usingusers.html . I created one at http://quizengine.appspot.com , it seemed to work fine with Google authentication and everything.
+Just a suggestion, but look in to the getting started guide. Take it easy if the suggestion sounds naive. :)
+Thanks. 
+ #4 Im not too familiar with AppEngine, or Googles web apis, but for a brute force approach you could write a script with something like mechanize ( http://wwwsearch.sourceforge.net/mechanize/ ) to simply walk through the login process before you begin doing the real work of the client. 
+ #5 for those who can't get ClientLogin to work, try app engine's OAuth support .

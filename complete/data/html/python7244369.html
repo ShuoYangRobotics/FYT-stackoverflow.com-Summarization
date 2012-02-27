@@ -1,0 +1,193 @@
+<h3>Question (ID-7244369):</h3><h2>Debug slow program; Restart from middle</h2><p>I have a program which has slow computations and I wish to debug the algorithm. Now it's very tedious to always rerun everything and I'd rather restart from the middle of the program. Can you think of some clever way to achieve this?</p>
+
+<p>The first vague idea is to define checkpoints (where I make a function call) where I save locals and large data with pickle and/or sqlite (sqlite to be able to inspect intermediate data). Later I could try to call the program telling it to restart at a specific checkpoint. However I don't want to split all code chunks between checkpoints just for this purpose.</p>
+
+<p>Has someone a clever idea how to solve this debugging issue?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Make your program more modular. Ideally, the main block of code should look something like</p>
+
+<pre><code>import config
+import my_numerics
+import post_processing
+
+my_numerics.configure(config.numerics)
+values = my_numerics.run()
+
+post_processing.run(values, config.post_processing)
+</code></pre>
+
+<p>You get the idea. It's then easy to make a 'mock' numerics object which returns pre-computed data, and pass that into post-processing.</p>
+
+<hr>
+
+<p>EDIT: I still don't understand. Is the following accurate pseudocode for your problem?</p>
+
+<pre><code>for _ in range(lots):
+    do_slow_thing_one()
+
+for _ in range(many):
+    do_slow_thing_two()
+
+for _ in range(lots_many)
+    do_slow_thing_three()
+</code></pre>
+
+<p>That is, you want to interrupt the numerics halfway through their run (not at the end), say at the beginning of the third loop, without having to rerun the first two?</p>
+
+<p>If so, even if the loops don't contain much code, you should modularise the design:</p>
+
+<pre><code>input_data = np.load(some_stuff)
+stage_one = do_thing_one(input_data)
+stage_two = do_thing_two(stage_one)
+stage_three = do_thing_three(stage_two)
+</code></pre>
+
+<p>The first way of doing this is transferring data between distinct stages through an implicit interface; namely, the dictionary of local variables. This is bad, because you haven't defined which variables are being used and hence you can't mock them for testing/debugging purposes. The second way defines a (rudimentary) interface between your functions. You now no longer care what <code>do_thing_one</code> does, as long as it takes some input data and returns some output data. This means that to debug <code>do_thing_three</code> you can just do</p>
+
+<pre><code>stage_two = np.load(intermediate_stuff)
+stage_three = do_thing_three(stage_two)
+</code></pre>
+
+<p>As long as the data in <code>stage_two</code> is of the correct format, it doesn't matter where it came from.</p>
+<br /><b>#1</b><br /><p><strong>Unit Tests</strong></p>
+
+<p>This is why Unit Tests exist. Try <code>pyunit</code> with small "sample data", or <code>doctest</code> for extremely simple functions.</p>
+
+<p><strong>Mini Test-Programs</strong></p>
+
+<p>If for some reason you really need interactivity, I usually write an interactive mini-program as what is effectively a unit test.</p>
+
+<pre><code>def _interactiveTest():
+    ...
+    import code
+    code.interact(local=locals())
+
+if __name__=='__main__':
+    _interactiveTest()
+</code></pre>
+
+<p>You can often afford to ignore loading large chunks of the main program if you're only testing a specific part; adjust your architecture as necessary to avoid initializing unneeded parts of the program. This is the reason people might be saying "make your program more modular", and that is what modularity means: small chunks of the program stand alone, letting you reuse them or (in this case) load them separately.</p>
+
+<p><strong>Invoking Interpreter in Program</strong></p>
+
+<p>You can also drop down into an interpreter and pass in the locals (as demonstrated above), at any point in your program. This is sort of "a poor man's debugger" but I find it efficient enough. =)</p>
+
+<p><strong>Monolithic Algorithms</strong></p>
+
+<p>Been there, done that. Sometimes your workflow can't be modularized any further, and things start getting unwieldy.</p>
+
+<p>Your intuition for making checkpoints is a very good one, and the same one I use: If you work in an interpreter environment, or embed an interpreter, you will not have to deal with this issue as often as if you just reran your scripts. Serializing your data <em>can</em> work, but it introduces a large overhead of reading and writing from disk; you want your dataset to remain in memory. Then you can do something like <code>test1 = algorithm(data), test2 = algorithm(data)</code> (this assumes your algorithm is not an in-place algorithm; if it is, use copy-on-write or make a copy of your datastructures before each test).</p>
+
+<p>If you are still having issues after trying all the above, then either perhaps you are either:</p>
+
+<ul>
+<li>using your real dataset; you should just a smaller test dataset for prototyping!</li>
+<li>using an inefficient algorithm.</li>
+</ul>
+
+<p>As a last resort, you can profile your code to find bottlenecks.</p>
+
+<p><strong>Other</strong></p>
+
+<p>There are probably powerful python debuggers out there. Eclipse has one I think.</p>
+
+<p>Also I'd personally avoid <code>reload &lt;modulename&gt;</code>, which I've always found caused more headaches than it has solved problems.</p>
+<br /><b>#2</b><br /><p><a href="http://packages.python.org/joblib/" rel="nofollow">Joblib</a> handles result caching in a quite transparent way.  Here is an example, from their documentation:</p>
+
+<pre><code>&gt;&gt;&gt; from joblib import Memory
+&gt;&gt;&gt; mem = Memory(cachedir='/tmp/joblib')
+&gt;&gt;&gt; import numpy as np
+&gt;&gt;&gt; a = np.vander(np.arange(3))
+&gt;&gt;&gt; square = mem.cache(np.square)
+&gt;&gt;&gt; b = square(a)
+________________________________________________________________________________
+[Memory] Calling square...
+square(array([[0, 0, 1],
+       [1, 1, 1],
+       [4, 2, 1]]))
+___________________________________________________________square - 0.0s, 0.0min
+
+&gt;&gt;&gt; c = square(a)
+&gt;&gt;&gt; # The above call did not trigger an evaluation because the result is cached
+</code></pre>
+
+<p>The calculation results are automatically saved on disk, so Joblib might suit your needs.</p>
+<br /><b>#3</b><br /><p>A google search pointed me to <a href="http://cryopid.berlios.de/" rel="nofollow">CryoPID</a>, which might do the job if you're developing on a linux-based system. It claims to be able to suspend a process and save it to a file, and then later restart it, even on a different computer. I've not tested it though.</p>
+<br /><b>#4</b><br /><p>The idea from <a href="http://www.buildbot.net" rel="nofollow">BuildBot</a> might work. It uses python's <a href="http://docs.python.org/library/functions.html#reload" rel="nofollow">reload()</a> to reload changes modules and then it moves state from old to new objects in a semi-clever fashion. </p>
+
+<p>The buildbot process is always running, but it can be signalled to reload from the outside, in which case this happens. </p>
+
+<p>So, if you stored the intermediate results of your algorithms in objects (sort of what <a href="http://www.vtk.org" rel="nofollow">VTK</a> does to reduce computation), you could reload and recreate your algorithm objects, have them reload the old data and then write some logic to re-run the computation on those objects if the python module actually did change. </p>
+
+<p>That way, you could have the process re-load itself just if the files on disk changes. Note that if there are syntax or runtime errors, things might be a bit hairy and you may need to restart (unless you can to a try-pass and roll back to the old objects)</p>
+
+<p>So, yeah, checkpoints are needed. But it might not be bad to have such a framework anyhow. :)</p>
+
+<p>Actually, just modularizing the steps will allow you to cache the data to disk instead. That might solve the case. It will definitely help for testing, just like @katrielalex said.</p>
+<br /><b>#5</b><br /><p>I thought about it and finally I wrote down what I first had only vaguely in mind. Suggesting redesign still does tell how to skip blocks, load cached data etc.:</p>
+
+<pre><code>class DebugCheckpoints:
+    def __init__(self, data, start):
+        self.checkpoint_passed=False
+        self.start=start
+        self.data=data
+
+    def __call__(self, variables):
+        return Checkpoint(self, variables.split())
+
+
+class CheckpointNotReached(Exception): pass
+
+
+class Checkpoint:
+    def __init__(self, debug_checkpoints, variables):
+        self.variables=variables
+        self.debug_checkpoints=debug_checkpoints
+
+    def tag(self, tag_name):
+        if self.debug_checkpoints.checkpoint_passed or \
+           tag_name==self.debug_checkpoints.start:
+            self.debug_checkpoints.checkpoint_passed=True
+        else:
+            raise CheckpointNotReached()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self,exc_type, exc_val, exc_tb):
+        if exc_type==CheckpointNotReached: # check if the context was supposed to be skipped
+            for v in self.variables:
+                globals()[v]=self.debug_checkpoints.data[v] # load globals from data
+            return True
+        else:
+            for v in self.variables:
+                self.debug_checkpoints.data[v]=globals()[v] # save globals to data
+            return False
+
+#------------------------------------------------------------------------------
+data={"x":1, "w":4} # this is supposed to be any persistent dict
+checkpoint=DebugCheckpoints(data, start="B") # start from B, skip block A but still load x and w from data
+
+with checkpoint("x w") as c: # variable x and w is to be loaded
+    c.tag("A") # this will force cancellation of this block, but x and w will be loaded from data
+    x=1
+    w=4
+    print("Doing A")
+
+with checkpoint("y") as c:
+    c.tag("B") # as the start is B, this tag will no cancel this block
+    y=2
+    print("Doing B")
+
+with checkpoint("z") as c:
+    c.tag("C")
+    z=3
+    print("Doing C")
+
+print(checkpoint.data)
+print(x,y,z,w)
+</code></pre>
+
+<p>This is an easy framework to introduce checkpoints into the code without writing too much. Because merely defining hundreds of one-time function for every little step would probably be coding horror and moreover variables in functions are local (just imaging putting every 5 lines of code into a function). I don't want to return all variables from the block and declare everything global (that's also why a decorator hack to implement a checkpoint framework isn't good).</p>
+
+<p>Maybe I redesign some calls when I try out cases, but I think it's a good start. Not sure what is supposed to go into the with line and what inside the block (like the <code>.tag</code>). I didn't manage to put the checkpoint exception into <code>__enter__</code>? </p>
+<br />

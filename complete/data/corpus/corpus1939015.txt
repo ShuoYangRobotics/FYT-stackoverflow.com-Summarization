@@ -1,0 +1,200 @@
+Question (ID-1939015): Singleton python generator? Or, pickle a python generator? I am using the following code, with nested generators, to iterate over a text document and return training examples using get_train_minibatch() . I would like to persist (pickle) the generators, so I can get back to the same place in the text document. However, you cannot pickle generators. 
+
+ 
+ Is there a simple workaround, so that I can save my position and start back where I stopped? Perhaps I can make get_train_example() a singleton, so I don't have several generators lying around. Then, I could make a global variable in this module that keeps track of how far along get_train_example() is. 
+ Do you have a better (cleaner) suggestion, to allow me to persist this generator? 
+ 
+
+ [edit: Two more ideas: 
+
+ 
+ Can I add a member variable/method to the generator, so I can call generator.tell() and find the file location? Because then, the next time I create the generator, I can ask it to seek to that location. This idea sounds the simplest of everything. 
+ Can I create a class and have the file location be a member variable, and then have the generator created within the class and update the file location member variable each time it yields? Because then I can know how far into the file it it. 
+ 
+
+ ] 
+
+ Here is the code: 
+
+ def get_train_example():
+ for l in open(HYPERPARAMETERS["TRAIN_SENTENCES"]):
+  prevwords = []
+  for w in string.split(l):
+   w = string.strip(w)
+   id = None
+   prevwords.append(wordmap.id(w))
+   if len(prevwords) &gt;= HYPERPARAMETERS["WINDOW_SIZE"]:
+    yield prevwords[-HYPERPARAMETERS["WINDOW_SIZE"]:]
+
+def get_train_minibatch():
+ minibatch = []
+ for e in get_train_example():
+  minibatch.append(e)
+  if len(minibatch) &gt;= HYPERPARAMETERS["MINIBATCH SIZE"]:
+   assert len(minibatch) == HYPERPARAMETERS["MINIBATCH SIZE"]
+   yield minibatch
+   minibatch = []
+ 
+ Answers (Total-6): #0 You can create a standard iterator object, it just won't be as convenient as the generator; you need to store the iterator's state on the instace (so that it is pickled), and define a next() function to return the next object: 
+
+ class TrainExampleIterator (object):
+ def __init__(self):
+  # set up internal state here
+  pass
+ def next(self):
+  # return next item here
+  pass
+ 
+
+ The iterator protocol is simple as that, defining the .next() method on an object is all you need to pass it to for loops etc. 
+
+ In Python 3, the iterator protocol uses the __next__ method instead (somewhat more consistent). 
+ #1 The following code should do more-or-less what you want. The first class defines something that acts like a file but can be pickled. (When you unpickle it, it re-opens the file, and seeks to the location where it was when you pickled it). The second class is an iterator that generates word windows. 
+
+ class PickleableFile(object):
+ def __init__(self, filename, mode='rb'):
+  self.filename = filename
+  self.mode = mode
+  self.file = open(filename, mode)
+ def __getstate__(self):
+  state = dict(filename=self.filename, mode=self.mode,
+      closed=self.file.closed)
+  if not self.file.closed:
+   state['filepos'] = self.file.tell()
+  return state
+ def __setstate__(self, state):
+  self.filename = state['filename']
+  self.mode = state['mode']
+  self.file = open(self.filename, self.mode)
+  if state['closed']: self.file.close()
+  else: self.file.seek(state['filepos'])
+ def __getattr__(self, attr):
+  return getattr(self.file, attr)
+
+class WordWindowReader:
+ def __init__(self, filenames, window_size):
+  self.filenames = filenames
+  self.window_size = window_size
+  self.filenum = 0
+  self.stream = None
+  self.filepos = 0
+  self.prevwords = []
+  self.current_line = []
+
+ def __iter__(self):
+  return self
+
+ def next(self):
+  # Read through files until we have a non-empty current line.
+  while not self.current_line:
+   if self.stream is None:
+    if self.filenum &gt;= len(self.filenames):
+     raise StopIteration
+    else:
+     self.stream = PickleableFile(self.filenames[self.filenum])
+     self.stream.seek(self.filepos)
+     self.prevwords = []
+   line = self.stream.readline()
+   self.filepos = self.stream.tell()
+   if line == '':
+    # End of file.
+    self.stream = None
+    self.filenum += 1
+    self.filepos = 0
+   else:
+    # Reverse line so we can pop off words.
+    self.current_line = line.split()[::-1]
+
+  # Get the first word of the current line, and add it to
+  # prevwords. Truncate prevwords when necessary.
+  word = self.current_line.pop()
+  self.prevwords.append(word)
+  if len(self.prevwords) &gt; self.window_size:
+   self.prevwords = self.prevwords[-self.window_size:]
+
+  # If we have enough words, then return a word window;
+  # otherwise, go on to the next word.
+  if len(self.prevwords) == self.window_size:
+   return self.prevwords
+  else:
+   return self.next()
+ 
+ #2 This may not be an option for you, but Stackless Python ( http://stackless.com ) does allow you to pickle things like functions and generators, under certain conditions. This will work: 
+
+ In foo.py: 
+
+ def foo():
+ with open('foo.txt') as fi:
+  buffer = fi.read()
+ del fi
+ for line in buffer.split('\n'):
+  yield line
+ 
+
+ In foo.txt: 
+
+ line1
+line2
+line3
+line4
+line5
+ 
+
+ In the interpreter: 
+
+ Python 2.6 Stackless 3.1b3 060516 (python-2.6:66737:66749M, Oct 2 2008, 18:31:31) 
+IPython 0.9.1 -- An enhanced Interactive Python.
+
+In [1]: import foo
+
+In [2]: g = foo.foo()
+
+In [3]: g.next()
+Out[3]: 'line1'
+
+In [4]: import pickle
+
+In [5]: p = pickle.dumps(g)
+
+In [6]: g2 = pickle.loads(p)
+
+In [7]: g2.next()
+Out[7]: 'line2'
+ 
+
+ Some things to note: you must buffer the contents of the file, and delete the file object. This means that the contents of the file will be duplicated in the pickle. 
+ #3 You might also consider using NLTK's corpus readers: 
+
+ 
+ http://nltk.googlecode.com/svn/trunk/doc/api/nltk.corpus.reader-module.html 
+ http://nltk.googlecode.com/svn/trunk/doc/howto/corpus.html 
+ 
+
+ -Edward 
+ #4 
+ Convert the generator to a class in which the generator code is the __iter__ method 
+ Add __getstate__ and __setstate__ methods to the class, to handling pickling. Remember that you can’t pickle file objects. So __setstate__ will have to re-open files, as necessary. 
+ 
+
+ I describe this method in more depth, with sample code, here . 
+ #5 You can try create callable object: 
+
+ class TrainExampleGenerator:
+
+ def __call__(self):
+  for l in open(HYPERPARAMETERS["TRAIN_SENTENCES"]):
+   prevwords = []
+   for w in string.split(l):
+    w = string.strip(w)
+    id = None
+    prevwords.append(wordmap.id(w))
+    if len(prevwords) &gt;= HYPERPARAMETERS["WINDOW_SIZE"]:
+     yield prevwords[-HYPERPARAMETERS["WINDOW_SIZE"]:]
+
+get_train_example = TrainExampleGenerator()
+ 
+
+ Now you can turn all state that needs to be saved into object fields and expose them to pickle. This is a basic idea and I hope this helps, but I haven't tried this myself yet. 
+
+ UPDATE: 
+Unfortunately, I failed to deliver my idea. Provided example is not complete solution. You see, TrainExampleGenerator have no state. You must design this state and make it available for pickling. And __call__ method should use and modify that state so that to return generator which started from the position determined by object's state. Obviously, generator itself won't be pickle-able. But TrainExampleGenerator will be possible to pickle and you'll be able to recreate generator with it as if generator itself were pickled.

@@ -1,0 +1,144 @@
+<h3>Question ( ID-3452832 ) : </h3><h2>Remove duplicate rows from a large file <span style="background-color:yellow;">in</span> Python </h2><p>I 've a <span style="background-color:yellow;">csv</span> file that I want to remove duplicate rows from , <span style="background-color:yellow;">but</span> <span style="background-color:yellow;">it</span> 's too large to fit <span style="background-color:yellow;">into</span> memory. I found a way to get <span style="background-color:yellow;">it</span> done , <span style="background-color:yellow;">but</span> my guess <span style="background-color:yellow;">is</span> that <span style="background-color:yellow;">it</span> 's <span style="background-color:yellow;">not</span> the <span style="background-color:yellow;">best</span> way . </p>
+<p>Each row contains 15 fields and several hundred characters , and all fields are <span style="background-color:yellow;">needed</span> to determine uniqueness. Instead of comparing the entire row to find a duplicate , I 'm comparing hash ( row-as-a-string ) <span style="background-color:yellow;">in</span> an attempt to save memory. I set a filter that partitions the data <span style="background-color:yellow;">into</span> a roughly equal <span style="background-color:yellow;">number</span> of rows ( e.g. <span style="background-color:yellow;">days</span> of the week ) , and each partition <span style="background-color:yellow;">is</span> small enough that a lookup table of hash values for that partition will fit <span style="background-color:yellow;">in</span> memory. I pass through the file once for each partition , checking for unique rows and writing them out to a second file ( pseudo code ) : </p>
+<pre><code>import csv
+
+headers={'DayOfWeek':None, 'a':None, 'b':None}
+outs=csv.DictWriter(open('c:\dedupedFile.csv','wb')
+days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+outs.writerows(headers)
+
+for day in days:
+    htable={}
+    ins=csv.DictReader(open('c:\bigfile.csv','rb'),headers)
+    for line in ins:
+        hvalue=hash(reduce(lambda x,y:x+y,line.itervalues()))
+        if line['DayOfWeek']==day:
+            if hvalue in htable:
+                pass
+            else:
+                htable[hvalue]=None
+                outs.writerow(line)
+</code></pre>
+<p>One way I was thinking to speed this up <span style="background-color:yellow;">is</span> <span style="background-color:yellow;">by</span> finding a <span style="background-color:yellow;">better</span> filter to reduce the <span style="background-color:yellow;">number</span> of passes <span style="background-color:yellow;">necessary.</span> Assuming the length of the rows <span style="background-color:yellow;">is</span> uniformly distributed , maybe <span style="background-color:yellow;">instead</span> of </p>
+<pre><code>for day in days: 
+</code></pre>
+<p>and </p>
+<pre><code>if line['DayOfWeek']==day:
+</code></pre>
+<p>we have </p>
+<pre><code>for i in range(n):
+</code></pre>
+<p>and </p>
+<pre><code>if len(reduce(lambda x,y:x+y,line.itervalues())%n)==i:
+</code></pre>
+<p>where 'n ' as small as memory will allow. But this <span style="background-color:yellow;">is</span> still using the same method . </p>
+<p>Wayne Werner provided a good practical solution <span style="background-color:yellow;">below</span> ; I was <span style="background-color:yellow;">curious</span> <span style="background-color:yellow;">if</span> there was <span style="background-color:yellow;">better/faster/simpler</span> way to do this from an algorithm perspective . </p>
+<p>P.S. I 'm limited to Python 2.5 . </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>If you want a really simple way to do this , just create a sqlite database : </p>
+<pre><code>import sqlite3
+conn = sqlite3.connect('single.db')
+cur = conn.cursor()
+cur.execute("""create table test(
+f1 text,
+f2 text,
+f3 text,
+f4 text,
+f5 text,
+f6 text,
+f7 text,
+f8 text,
+f9 text,
+f10 text,
+f11 text,
+f12 text,
+f13 text,
+f14 text,
+f15 text,
+primary key(f1,  f2,  f3,  f4,  f5,  f6,  f7,  
+            f8,  f9,  f10,  f11,  f12,  f13,  f14,  f15))
+"""
+conn.commit()
+
+#simplified/pseudo code
+for row in reader:
+    #assuming row returns a list-type object
+    try:
+        cur.execute('''insert into test values(?, ?, ?, ?, ?, ?, ?, 
+                       ?, ?, ?, ?, ?, ?, ?, ?)''', row)
+        conn.commit()
+    except IntegrityError:
+        pass
+
+conn.commit()
+cur.execute('select * from test')
+
+for row in cur:
+    #write row to csv file
+</code></pre>
+<p>Then you would <span style="background-color:yellow;">n't</span> have to worry about any of the comparison logic yourself - just let sqlite take care of <span style="background-color:yellow;">it</span> for you. It probably wo <span style="background-color:yellow;">n't</span> <span style="background-color:yellow;">be</span> much faster than hashing the strings , <span style="background-color:yellow;">but</span> <span style="background-color:yellow;">it</span> 's probably a lot easier. Of course you 'd modify the type stored <span style="background-color:yellow;">in</span> the database <span style="background-color:yellow;">if</span> you wanted , or <span style="background-color:yellow;">not</span> as the case may <span style="background-color:yellow;">be.</span> Of course since you 're already converting the data to a string you could just have one field <span style="background-color:yellow;">instead.</span> Plenty of options here . </p>
+<br /><b># 1 </b><br /><p>You are <span style="background-color:yellow;">basically</span> doing a merge sort , and removing duplicated entries . </p>
+<p>Breaking the <span style="background-color:yellow;">input</span> <span style="background-color:yellow;">into</span> memory-sized pieces , sorting each of piece , then merging the pieces while removing duplicates <span style="background-color:yellow;">is</span> a sound <span style="background-color:yellow;">idea</span> <span style="background-color:yellow;">in</span> general . </p>
+<p>Actually , up to a couple of gigs I would let the virtual memory system handle <span style="background-color:yellow;">it</span> and just write : </p>
+<pre><code>input = open(infilename, 'rb')
+output = open(outfile, 'wb')
+
+for key,  group in itertools.groupby(sorted(input)):
+    output.write(key)
+</code></pre>
+<br /><b># 2 </b><br /><p>Your <span style="background-color:yellow;">current</span> method <span style="background-color:yellow;">is</span> <span style="background-color:yellow;">not</span> guaranteed to work properly . </p>
+<p>Firstly , there <span style="background-color:yellow;">is</span> the small probability that two <span style="background-color:yellow;">lines</span> that are actually different can produce the same hash value. hash ( a ) = = hash ( <span style="background-color:yellow;">b</span> ) does <span style="background-color:yellow;">not</span> always mean that a = = <span style="background-color:yellow;">b</span> </p>
+<p>Secondly , you are making the probability higher with your " reduce/lambda " caper : </p>
+<pre><code>>>> reduce(lambda x,y: x+y, ['foo', '1', '23'])
+'foo123'
+>>> reduce(lambda x,y: x+y, ['foo', '12', '3'])
+'foo123'
+>>>
+</code></pre>
+<p>BTW , would <span style="background-color:yellow;">n't</span> " " .join ( [ 'foo ' , '1 ' , '23 ' ] ) <span style="background-color:yellow;">be</span> somewhat clearer ? </p>
+<p>BTW2 , why <span style="background-color:yellow;">not</span> use a set <span style="background-color:yellow;">instead</span> of a dict for htable ? </p>
+<p>Here 's a practical solution : get the " core utils " package from the GnuWin32 site , and <span style="background-color:yellow;">install</span> <span style="background-color:yellow;">it.</span> Then : </p>
+<ol>write a copy of your file without the headings to ( say ) <span style="background-color:yellow;">infile.csv</span> c : \ gnuwin32 \ <span style="background-color:yellow;">bin</span> \ sort --unique -ooutfile.csv <span style="background-color:yellow;">infile.csv</span> read outfile.csv and write a copy with the headings prepended </ol>
+<p>For each of steps 1 &amp ; 3 , you could use a Python script , or some of the other GnuWin32 utilities ( head , tail , tee , cat , ... ) . </p>
+<br /><b># 3 </b><br /><p>Your original solution <span style="background-color:yellow;">is</span> slightly <span style="background-color:yellow;">incorrect</span> : you could have different <span style="background-color:yellow;">lines</span> hashing to the same value ( a hash collision ) , and your code would leave one of them out . </p>
+<p>In terms of algorithmic complexity , <span style="background-color:yellow;">if</span> you 're expecting relatively few duplicates , I think the fastest solution would <span style="background-color:yellow;">be</span> to scan the file <span style="background-color:yellow;">line</span> <span style="background-color:yellow;">by</span> <span style="background-color:yellow;">line</span> , adding the hash of each <span style="background-color:yellow;">line</span> ( as you did ) , <span style="background-color:yellow;">but</span> also storing the location of that <span style="background-color:yellow;">line.</span> Then when you encounter a duplicate hash , seek to the original place to make sure that <span style="background-color:yellow;">it</span> <span style="background-color:yellow;">is</span> a duplicate and <span style="background-color:yellow;">not</span> just a hash collision , and <span style="background-color:yellow;">if</span> so , seek <span style="background-color:yellow;">back</span> and skip the <span style="background-color:yellow;">line</span> . </p>
+<p>By the way , <span style="background-color:yellow;">if</span> the CSV values are <span style="background-color:yellow;">normalized</span> ( <span style="background-color:yellow;">i.e.</span> , records are considered equal <span style="background-color:yellow;">iff</span> the corresponding CSV rows are equivalent <span style="background-color:yellow;">byte-for-byte</span> ) , you <span style="background-color:yellow;">need</span> <span style="background-color:yellow;">not</span> <span style="background-color:yellow;">involve</span> CSV parsing here at all , just deal with plain text <span style="background-color:yellow;">lines</span> . </p>
+<br /><b># 4 </b><br /><p>Since I suppose you 'll have to do this on a somewhat regular <span style="background-color:yellow;">basis</span> ( or you 'd have hacked a once-over script ) , and you mentioned you were <span style="background-color:yellow;">interested</span> <span style="background-color:yellow;">in</span> a theoretical solution , here 's a possibility . </p>
+<p>Read the <span style="background-color:yellow;">input</span> <span style="background-color:yellow;">lines</span> <span style="background-color:yellow;">into</span> B-Trees , ordered <span style="background-color:yellow;">by</span> each <span style="background-color:yellow;">input</span> <span style="background-color:yellow;">line</span> 's hash value , writing them to disk when memory fills. We take care to store , on the B-Trees , the original <span style="background-color:yellow;">lines</span> attached to the hash ( as a set , since we only care about unique <span style="background-color:yellow;">lines</span> ) . When we read a duplicate element , we check the <span style="background-color:yellow;">lines</span> set on the stored element and add <span style="background-color:yellow;">it</span> <span style="background-color:yellow;">if</span> <span style="background-color:yellow;">it</span> 's a <span style="background-color:yellow;">new</span> <span style="background-color:yellow;">line</span> that happens to hash to the same value . </p>
+<p>Why B-Trees ? They requires less disk reads when you only can ( or want ) to read parts of them to memory. The degree ( <span style="background-color:yellow;">number</span> of children ) on each <span style="background-color:yellow;">node</span> depends on the available memory and <span style="background-color:yellow;">number</span> of <span style="background-color:yellow;">lines</span> , <span style="background-color:yellow;">but</span> you do <span style="background-color:yellow;">n't</span> want to have too many <span style="background-color:yellow;">nodes</span> . </p>
+<p>Once we have those B-Trees on disk , we compare the lowest element from each of them. We remove the lowest of all , from all B-Trees that have <span style="background-color:yellow;">it.</span> We merge their <span style="background-color:yellow;">lines</span> sets , meaning that we have <span style="background-color:yellow;">no</span> duplicates left for those <span style="background-color:yellow;">lines</span> ( and also that we have <span style="background-color:yellow;">no</span> more <span style="background-color:yellow;">lines</span> that hash to that value ) . We then write the <span style="background-color:yellow;">lines</span> from this merge <span style="background-color:yellow;">into</span> the output <span style="background-color:yellow;">csv</span> structure . </p>
+<p>We can separate half of the memory for reading the B-Trees , and half to keep the output <span style="background-color:yellow;">csv</span> <span style="background-color:yellow;">in</span> memory for some time. We flush the <span style="background-color:yellow;">csv</span> to disk when <span style="background-color:yellow;">its</span> half <span style="background-color:yellow;">is</span> full , appending to whatever has already <span style="background-color:yellow;">been</span> written. How much of each B-Tree we read on each step can <span style="background-color:yellow;">be</span> roughly calculated <span style="background-color:yellow;">by</span> ( available_memory / 2 ) / <span style="background-color:yellow;">number_of_btrees</span> , rounded so we read full <span style="background-color:yellow;">nodes</span> . </p>
+<p>In pseudo-Python : </p>
+<pre><code>ins = DictReader(...)
+i = 0
+while ins.still_has_lines_to_be_read():
+    tree = BTree(i)
+    while fits_into_memory:
+        line = ins.readline()
+        tree.add(line, key=hash)
+    tree.write_to_disc()
+    i += 1
+n_btrees = i
+
+# At this point, we have several (n_btres) B-Trees on disk
+while n_btrees:
+    n_bytes = (available_memory / 2) / n_btrees
+    btrees = [read_btree_from_disk(i, n_bytes)
+              for i in enumerate(range(n_btrees))]
+    lowest_candidates = [get_lowest(b) for b in btrees]
+    lowest = min(lowest_candidates)
+    lines = set()
+    for i in range(number_of_btrees):
+        tree = btrees[i]
+        if lowest == lowest_candidates[i]:
+            node = tree.pop_lowest()
+            lines.update(node.lines)
+        if tree.is_empty():
+        n_btrees -= 1
+
+    if output_memory_is_full or n_btrees == 0:
+        outs.append_on_disk(lines)
+</code></pre>
+<br /><b># 5 </b><br /><p>How about using heapq module to read pieces of file up to memory limit and write them out the <span style="background-color:yellow;">sorted</span> pieces ( heapq keeps things always <span style="background-color:yellow;">in</span> <span style="background-color:yellow;">sorted</span> order ) . </p>
+<p>Or you could catch the first word <span style="background-color:yellow;">in</span> <span style="background-color:yellow;">line</span> and divide the file to pieces <span style="background-color:yellow;">by</span> that. Then you can read the <span style="background-color:yellow;">lines</span> ( maybe do ' '.join ( <span style="background-color:yellow;">line.split</span> ( ) ) to unify the spacing/tabs <span style="background-color:yellow;">in</span> <span style="background-color:yellow;">line</span> <span style="background-color:yellow;">if</span> <span style="background-color:yellow;">it</span> <span style="background-color:yellow;">is</span> OK to change spacing ) <span style="background-color:yellow;">in</span> set <span style="background-color:yellow;">in</span> alphabetic order clearing the set <span style="background-color:yellow;">between</span> the pieces ( set removes duplicates ) to get things half <span style="background-color:yellow;">sorted</span> ( set <span style="background-color:yellow;">is</span> <span style="background-color:yellow;">not</span> <span style="background-color:yellow;">in</span> order , <span style="background-color:yellow;">if</span> you want you can read <span style="background-color:yellow;">in</span> to heap and write out to get <span style="background-color:yellow;">sorted</span> order , last occurrence <span style="background-color:yellow;">in</span> set replacing old values as you go. ) Alternatively you can also sort the piece and remove duplicate <span style="background-color:yellow;">lines</span> with Joe Koberg 's groupby solution. Lastly you can join pieces <span style="background-color:yellow;">back</span> together ( you can of course do the writing as you go piece <span style="background-color:yellow;">by</span> piece to final file during sorting of pieces ) </p>
+<br />

@@ -1,0 +1,171 @@
+<h3>Question ( ID-2581817 ) : </h3><h2>Python <span style="background-color:yellow;">subprocess</span> : <span style="background-color:yellow;">callback</span> when <span style="background-color:yellow;">cmd</span> exits </h2><p>I 'm currently launching a programme using <span style="background-color:yellow;">subprocess.Popen</span> ( <span style="background-color:yellow;">cmd</span> , shell = TRUE ) </p>
+<p>I 'm <span style="background-color:yellow;">fairly</span> new <span style="background-color:yellow;">to</span> Python , but it 'feels ' like <span style="background-color:yellow;">there</span> ought <span style="background-color:yellow;">to</span> be some api <span style="background-color:yellow;">that</span> lets me do something similar <span style="background-color:yellow;">to</span> : </p>
+<pre><code>subprocess.Popen(cmd, shell=TRUE,  postexec_fn=function_to_call_on_exit)
+</code></pre>
+<p>I am doing <span style="background-color:yellow;">this</span> so <span style="background-color:yellow;">that</span> <span style="background-color:yellow;">function_to_call_on_exit</span> can do something based on knowing <span style="background-color:yellow;">that</span> <span style="background-color:yellow;">the</span> <span style="background-color:yellow;">cmd</span> has exited ( <span style="background-color:yellow;">for</span> example keeping count of <span style="background-color:yellow;">the</span> number of external processes currently running ) </p>
+<p>I assume <span style="background-color:yellow;">that</span> I could <span style="background-color:yellow;">fairly</span> <span style="background-color:yellow;">trivially</span> wrap <span style="background-color:yellow;">subprocess</span> in a class <span style="background-color:yellow;">that</span> combined <span style="background-color:yellow;">threading</span> with <span style="background-color:yellow;">the</span> <span style="background-color:yellow;">Popen.wait</span> ( ) method , but as I 've not done <span style="background-color:yellow;">threading</span> in Python yet and it seems like <span style="background-color:yellow;">this</span> might be common enough <span style="background-color:yellow;">for</span> an API <span style="background-color:yellow;">to</span> exist , I <span style="background-color:yellow;">thought</span> I 'd <span style="background-color:yellow;">try</span> and <span style="background-color:yellow;">find</span> one <span style="background-color:yellow;">first</span> . </p>
+<p>Thanks in advance : ) </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>You 're right - <span style="background-color:yellow;">there</span> is no nice API <span style="background-color:yellow;">for</span> <span style="background-color:yellow;">this.</span> You 're also right on your second point - it 's <span style="background-color:yellow;">trivially</span> easy <span style="background-color:yellow;">to</span> design a <span style="background-color:yellow;">function</span> <span style="background-color:yellow;">that</span> does <span style="background-color:yellow;">this</span> <span style="background-color:yellow;">for</span> you using <span style="background-color:yellow;">threading</span> . </p>
+<pre><code>import threading
+import subprocess
+
+def popenAndCall(onExit, popenArgs):
+    """
+    Runs the given args in a subprocess.Popen, and then calls the function
+    onExit when the subprocess completes.
+    onExit is a callable object, and popenArgs is a list/tuple of args that 
+    would give to subprocess.Popen.
+    """
+    def runInThread(onExit, popenArgs):
+        proc = subprocess.Popen(*popenArgs)
+        proc.wait()
+        onExit()
+        return
+    thread = threading.Thread(target=runInThread, args=(onExit, popenArgs))
+    thread.start()
+    # returns immediately after the thread starts
+    return thread
+</code></pre>
+<p>Even <span style="background-color:yellow;">threading</span> is pretty easy in Python , but note <span style="background-color:yellow;">that</span> if onExit ( ) is computationally expensive , you 'll want <span style="background-color:yellow;">to</span> put <span style="background-color:yellow;">this</span> in a separate process instead using <span style="background-color:yellow;">multiprocessing</span> ( so <span style="background-color:yellow;">that</span> <span style="background-color:yellow;">the</span> GIL does n't slow your program down ) . It 's actually very simple - you can basically just replace all calls <span style="background-color:yellow;">to</span> <span style="background-color:yellow;">threading.Thread</span> with <span style="background-color:yellow;">multiprocessing.Process</span> since <span style="background-color:yellow;">they</span> <span style="background-color:yellow;">follow</span> ( almost ) <span style="background-color:yellow;">the</span> same API . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>I had same problem , and solved it using <span style="background-color:yellow;">multiprocessing.Pool</span> . There are <span style="background-color:yellow;">two</span> hacky <span style="background-color:yellow;">tricks</span> involved : </p>
+<ol>make size of pool <span style="background-color:yellow;">1</span> pass iterable <span style="background-color:yellow;">arguments</span> within an iterable of length <span style="background-color:yellow;">1</span> </ol>
+<p>result is one <span style="background-color:yellow;">function</span> executed with <span style="background-color:yellow;">callback</span> on completion </p>
+<pre><code>def sub(arg):
+    print arg             #prints [1,2,3,4,5]
+    return "hello"
+
+def cb(arg):
+    print arg             # prints "hello"
+
+pool = multiprocessing.Pool(1)
+rval = pool.map_async(sub,([[1,2,3,4,5]]),callback =cb)
+(do stuff) 
+pool.close()
+</code></pre>
+<p>In my case , I wanted invocation <span style="background-color:yellow;">to</span> be non-blocking as well. Works beautifully </p>
+<br /><b># <span style="background-color:yellow;">2</span> </b><br /><p>There is <span style="background-color:yellow;">concurrent.futures</span> module in Python 3.2 ( available via pip install <span style="background-color:yellow;">futures</span> <span style="background-color:yellow;">for</span> older Python &lt ; 3.2 ) : </p>
+<pre><code>pool = Pool(max_workers=1)
+f = pool.submit(subprocess.call, "sleep 2; echo done", shell=True)
+f.add_done_callback(callback)
+</code></pre>
+<p>The <span style="background-color:yellow;">callback</span> will be called in <span style="background-color:yellow;">the</span> same process <span style="background-color:yellow;">that</span> called <span style="background-color:yellow;">f.add_done_callback</span> ( ) . </p>
+<h3>Full program </h3>
+<pre><code>import logging
+import subprocess
+# to install run `pip install futures` on Python <3.2
+from concurrent.futures import ThreadPoolExecutor as Pool
+
+info = logging.getLogger(__name__).info
+
+def callback(future):
+    if future.exception() is not None:
+        info("got exception: %s" % future.exception())
+    else:
+        info("process returned %d" % future.result())
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format=("%(relativeCreated)04d %(process)05d %(threadName)-10s "
+                "%(levelname)-5s %(msg)s"))
+
+    # wait for the process completion asynchronously
+    info("begin waiting")
+    pool = Pool(max_workers=1)
+    f = pool.submit(subprocess.call, "sleep 2; echo done", shell=True)
+    f.add_done_callback(callback)
+    pool.shutdown(wait=False) # no .submit() calls after that point
+    info("continue waiting asynchronously")
+
+if __name__=="__main__":
+    main()
+</code></pre>
+<h3>Output </h3>
+<pre><code>$ python . && python3 .
+0013 05382 MainThread INFO  begin waiting
+0021 05382 MainThread INFO  continue waiting asynchronously
+done
+2025 05382 Thread-1   INFO  process returned 0
+0007 05402 MainThread INFO  begin waiting
+0014 05402 MainThread INFO  continue waiting asynchronously
+done
+2018 05402 Thread-1   INFO  process returned 0
+</code></pre>
+<br /><b># 3 </b><br /><p>AFAIK <span style="background-color:yellow;">there</span> is no such API , at least not in <span style="background-color:yellow;">subprocess</span> module. You need <span style="background-color:yellow;">to</span> roll something on your own , possibly using <span style="background-color:yellow;">threads</span> . </p>
+<br /><b># 4 </b><br /><p><span style="background-color:yellow;">multiprocessing</span> ? </p>
+<br /><b># <span style="background-color:yellow;">5</span> </b><br /><p>I was inspired by Daniel G. answer and implemented a very simple use case - in my work I often need <span style="background-color:yellow;">to</span> make repeated calls <span style="background-color:yellow;">to</span> <span style="background-color:yellow;">the</span> same ( external ) process with different <span style="background-color:yellow;">arguments.</span> I had hacked a way <span style="background-color:yellow;">to</span> determine when each specific call was done , but now I have a much cleaner way <span style="background-color:yellow;">to</span> issue <span style="background-color:yellow;">callbacks</span> . </p>
+<p>I like <span style="background-color:yellow;">this</span> implementation because it is very simple , yet it allows me <span style="background-color:yellow;">to</span> issue asynchronous calls <span style="background-color:yellow;">to</span> multiple processors ( notice I use <span style="background-color:yellow;">multiprocessing</span> instead of <span style="background-color:yellow;">threading</span> ) and receive notification upon completion . </p>
+<p>I <span style="background-color:yellow;">tested</span> <span style="background-color:yellow;">the</span> sample program and works great. Please edit at will and provide <span style="background-color:yellow;">feedback</span> . </p>
+<pre><code>import multiprocessing
+import subprocess
+
+class Process(object):
+    """This class spawns a subprocess asynchronously and calls a
+    `callback` upon completion; it is not meant to be instantiated
+    directly (derived classes are called instead)"""
+    def __call__(self, *args):
+    # store the arguments for later retrieval
+    self.args = args
+    # define the target function to be called by
+    # `multiprocessing.Process`
+    def target():
+        cmd = [self.command] + [str(arg) for arg in self.args]
+        process = subprocess.Popen(cmd)
+        # the `multiprocessing.Process` process will wait until
+        # the call to the `subprocess.Popen` object is completed
+        process.wait()
+        # upon completion, call `callback`
+        return self.callback()
+    mp_process = multiprocessing.Process(target=target)
+    # this call issues the call to `target`, but returns immediately
+    mp_process.start()
+    return mp_process
+
+if __name__ == "__main__":
+
+    def squeal(who):
+    """this serves as the callback function; its argument is the
+    instance of a subclass of Process making the call"""
+    print "finished %s calling %s with arguments %s" % (
+        who.__class__.__name__, who.command, who.args)
+
+    class Sleeper(Process):
+    """Sample implementation of an asynchronous process - define
+    the command name (available in the system path) and a callback
+    function (previously defined)"""
+    command = "./sleeper"
+    callback = squeal
+
+    # create an instance to Sleeper - this is the Process object that
+    # can be called repeatedly in an asynchronous manner
+    sleeper_run = Sleeper()
+
+    # spawn three sleeper runs with different arguments
+    sleeper_run(5)
+    sleeper_run(2)
+    sleeper_run(1)
+
+    # the user should see the following message immediately (even
+    # though the Sleeper calls are not done yet)
+    print "program continued"
+</code></pre>
+<p>Sample output : </p>
+<pre><code>program continued
+finished Sleeper calling ./sleeper with arguments (1,)
+finished Sleeper calling ./sleeper with arguments (2,)
+finished Sleeper calling ./sleeper with arguments (5,)
+</code></pre>
+<p>Below is <span style="background-color:yellow;">the</span> source code of sleeper.c - my sample " <span style="background-color:yellow;">time</span> consuming " external process </p>
+<pre><code>#include<stdlib.h>
+#include<unistd.h>
+
+int main(int argc, char *argv[]){
+  unsigned int t = atoi(argv[1]);
+  sleep(t);
+  return EXIT_SUCCESS;
+}
+</code></pre>
+<p>compile as : </p>
+<pre><code>gcc -o sleeper sleeper.c
+</code></pre>
+<br />

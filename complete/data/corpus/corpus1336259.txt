@@ -1,0 +1,152 @@
+Question (ID-1336259): Performance - Python vs. C#/C++/C reading char-by-char So I have these giant XML files (and by giant, I mean like 1.5GB+) and they don't have CRLFs. I'm trying to run a diff-like program to find the differences between these files. 
+
+ Since I've yet to find a diff program that won't explode due to memory exhaustion, I've decided the best bet was to add CRLFs after closing tags. 
+
+ I wrote a python script to read char-by-char and add new-lines after '>'. The problem is I'm running this on a single core PC circa-1995 or something ridiculous, and it's only processing about 20MB/hour when I have both converting at the same time. 
+
+ Any idea if writing this in C#/C/C++ instead will yield any benefits? If not, does anyone know of a diff program that will go byte-by-byte? Thanks. 
+
+ 
+
+ EDIT: 
+
+ Here's the code for my processing function... 
+
+ def read_and_format(inputfile, outputfile):
+ ''' Open input and output files, then read char-by-char and add new lines after "&gt;" '''
+ infile = codecs.open(inputfile,"r","utf-8")
+ outfile = codecs.open(outputfile,"w","utf-8")
+
+ char = infile.read(1) 
+ while(1):
+  if char == "":
+   break
+  else:
+   outfile.write(char)
+   if(char == "&gt;"):
+    outfile.write("\n")
+  char = infile.read(1)
+
+ infile.close()
+ outfile.close()
+ 
+
+ 
+
+ EDIT2: 
+Thanks for the awesome responses. Increaseing the read size created an unbelievable speed increase. Problem solved. 
+ Answers (Total-8): #0 Reading and writing a single character at a time is almost always going to be slow, because disks are block-based devices, rather than character-based devices - it will read a lot more than just the one byte you're after, and the surplus parts need to be discarded. 
+
+ Try reading and writing more at a time, say, 8192 bytes (8KB) and then finding and adding newlines in that string before writing it out - you should save a lot in performance because a lot less I/O is required. 
+
+ As LBushkin points out, your I/O library may be doing buffering, but unless there is some form of documentation that shows this does indeed happen (for reading AND writing), it's a fairly easy thing to try before rewriting in a different language. 
+ #1 Why don't you just use sed?
+cat giant.xml | sed 's/>/>\x0a\x0d/g' > giant-with-linebreaks.xml 
+ #2 Rather than reading byte by byte, which incurs a disk access for each byte read, try reading ~20 MB at a time and doing your search + replace on that :) 
+
+ You can probably do this in Notepad.... 
+
+ Billy3 
+ #3 For the type of problem you describe, I suspect the algorithm you employ for comparing the data will have a much more significant effect than the I/O model or language. In fact, string allocation and search may be more expensive here than anything else. 
+
+ Some general suggestions before you write this yourself: 
+
+ 
+ Try running on a faster machine if you have one available. That will make a huge difference. 
+ Look for an existing tool online for doing XML diffs ... don't write one yourself. 
+ 
+
+ If are are going to write this in C# (or Java or C/C++), I would do the following: 
+
+ 
+ Read a fairly large block into memory all at once (let's say between 200k and 1M) 
+ Allocate an empty block that's twice that size (this assumes a worst case of every character is a '>') 
+ Copy from the input block to the output block conditionally appending a CRLF after each '>' character. 
+ Write the new block out to disk. 
+ Repeat until all the data has been processed. 
+ 
+
+ Additionally, you could also write such a program to run on multiple threads, so that while once thread is perform CRLF insertions in memory, a separate thread is read blocks in from disk. This type of parallelization is complicated ... so I would only do so if you really need maximum performance. 
+
+ Here's a really simple C# program to get you started, if you need it. It accepts an input file path and an output path on the command line, and performs the substitution you are looking for ('>' ==> CRLF). This sample leaves much to be improved (parallel processing, streaming, some validation, etc)... but it should be a decent start. 
+
+ using System;
+using System.IO;
+
+namespace ExpandBrackets
+{
+ class Program
+ {
+  static void Main(string[] args)
+  {
+   if (args.Length == 2)
+   {
+    using( StreamReader input = new StreamReader( args[0] ) )
+    using( StreamWriter output = new StreamWriter( args[1] ) )
+    {
+     int readSize = 0;
+     int blockSize = 100000;
+     char[] inBuffer = new char[blockSize];
+     char[] outBuffer = new char[blockSize*3];
+     while( ( readSize = input.ReadBlock( inBuffer, 0, blockSize ) ) &gt; 0 )
+     {
+      int writeSize = TransformBlock( inBuffer, outBuffer, readSize );
+      output.Write( outBuffer, 0, writeSize );
+     }
+    }
+   }
+   else
+   {
+    Console.WriteLine( "Usage: repchar {inputfile} {outputfile}" );
+   }
+  }
+
+  private static int TransformBlock( char[] inBuffer, char[] outBuffer, int size )
+  {
+   int j = 0;
+   for( int i = 0; i &lt; size; i++ )
+   {
+    outBuffer[j++] = inBuffer[i];
+    if (inBuffer[i] == '&gt;') // append CR LF
+    {
+     outBuffer[j++] = '\r';
+     outBuffer[j++] = '\n';
+    }
+   }
+   return j;
+  }
+ }
+}
+ 
+ #4 All of the languages mentioned typically, at some point, revert to the C runtime library for byte by byte file access. Writing this in C will probably be the fastest option. 
+
+ However, I doubt it will provide a huge speed boost. Python is fairly speedy, if you're doing things correctly. 
+
+ The main way to really get a big speed improvement would be to introduce threading. If you read the data in from the file in a large block in one thread, and had a separate thread that did your newline processing + diff processing, you could dramatically improve the speed of this algorithm. This would probably be easier to implement in C++, C#, or IronPython than in C or CPython directly, since they provide very easy, high-level synchronization tools for handling the threading issues (especially when using .NET). 
+ #5 you could try xmldiff - http://msdn.microsoft.com/en-us/library/aa302294.aspx 
+
+ I haven't used it for such huge data but I think it would be reasonably optimized 
+ #6 I put this as a comment on another answer, but in case you miss it--you might want to look at The Shootout . It's a highly optimized set of code for various problems in many languages. 
+
+ According to those results, Python tends to be about 50x slower than c (but it is faster than the other interpreted languages). In comparison Java is about 2x slower than c. If you went to one of the faster compiled languages, I don't see why you wouldn't see a similar increase. 
+
+ By the way, the figures attained from the shootout are wonderfully un-assailable, you can't really challenge them, instead if you don't believe the numbers are fair because the code to solve a problem in your favorite language isn't optimized properly, then you can submit better code yourself. The act of many people doing this means most of the code on there is pretty damn optimized for every popular language. If you show them a more optimized compiler or interpreter, they may include the results from it as well. 
+
+ Oh: except C#, that's only represented by MONO so if Microsoft's compiler is more optimized, it's not shown. All the tests seem to run on Linux machines. My guess is Microsoft's C# should run at about the same speed as Java, but the shootout lists mono as a bit slower (about 3x as slow as C).. 
+ #7 As others said, if you do it in C it will be pretty much unbeatable, because C buffers I/O, and getc() is inlined (in my memory). 
+
+ Your real performance issue will be in the diff. 
+
+ Maybe there's a pretty good one out there, but for those size files I doubt it. For fun, I'm a do-it-yourselfer. The strategy I would use is to have a rolling window in each file, several megabytes long. The search strategy for mismatches is diagonal search, which is if you are at lines i and j, compare in this sequence: 
+
+ line(i+0) == line(j+0)
+
+line(i+0) == line(j+1)
+line(i+1) == line(j+0)
+
+line(i+0) == line(j+2)
+line(i+1) == line(j+1)
+line(i+2) == line(j+0)
+ 
+
+ and so on. No doubt there's a better way, but if I'm going to code it myself and manage the rolling windows, that's what I'd try.

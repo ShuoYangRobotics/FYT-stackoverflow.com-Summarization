@@ -1,0 +1,129 @@
+Question (ID-2768628): Iterating through String word at a time in Python I have a string buffer of a huge text file. I have to search a given words/phrases in the string buffer. Whats the efficient way to do it ? 
+
+ I tried using re module matches. But As i have a huge text corpus that i have to search through. This is taking large amount of time. 
+
+ Given a Dictionary of words and Phrases. 
+
+ I iterate through the each file, read that into string , search all the words and phrases in the dictionary and increment the count in the dictionary if the keys are found. 
+
+ One small optimization that we thought was to sort the dictionary of phrases/words with the max number of words to lowest. And then compare each word start position from the string buffer and compare the list of words. If one phrase is found, we don search for the other phrases (as it matched the longest phrase ,which is what we want) 
+
+ Can some one suggest how to go about word by word in the string buffer. (Iterate string buffer word by word) ? 
+
+ Also, Is there any other optimization that can be done on this ? 
+
+ data = str(file_content)
+for j in dictionary_entity.keys():
+ cnt = data.count(j+" ")
+ if cnt != -1:
+  dictionary_entity[j] = dictionary_entity[j] + cnt
+f.close()
+ 
+ Answers (Total-8): #0 Iterating word-by-word through the contents of a file (the Wizard of Oz from Project Gutenberg, in my case), three different ways: 
+
+ from __future__ import with_statement
+import time
+import re
+from cStringIO import StringIO
+
+def word_iter_std(filename):
+ start = time.time()
+ with open(filename) as f:
+  for line in f:
+   for word in line.split():
+    yield word
+ print 'iter_std took %0.6f seconds' % (time.time() - start)
+
+def word_iter_re(filename):
+ start = time.time()
+ with open(filename) as f:
+  txt = f.read()
+ for word in re.finditer('\w+', txt):
+  yield word
+ print 'iter_re took %0.6f seconds' % (time.time() - start)
+
+def word_iter_stringio(filename):
+ start = time.time()
+ with open(filename) as f:
+  io = StringIO(f.read())
+ for line in io:
+  for word in line.split():
+   yield word
+ print 'iter_io took %0.6f seconds' % (time.time() - start)
+
+woo = '/tmp/woo.txt'
+
+for word in word_iter_std(woo): pass
+for word in word_iter_re(woo): pass
+for word in word_iter_stringio(woo): pass
+ 
+
+ Resulting in: 
+
+ % python /tmp/junk.py
+iter_std took 0.016321 seconds
+iter_re took 0.028345 seconds
+iter_io took 0.016230 seconds
+ 
+ #1 This sounds like the sort of problem where a trie would really help. You should probably use some sort of compressed trie like a Patricia/radix trie . As long as you can fit the whole dictionary of words/phrases that you are looking for in the trie, this will greatly reduce the time complexity. How it will work is you take the beginning of a word and descend the trie until you find the longest match and increment the counter in that node. This might mean that you have to ascend the trie if a partial match doesn't pan out. Then you would proceed to the beginning of the next word and do it again. The advantage of the trie is that you are searching through the whole dictionary with each search through the trie (each look-up should take about O(m) where m is the average length of a word/phrase in your dictionary). 
+
+ If you can't fit the whole dictionary into one trie, then you could split the dictionary into a few tries (one for all words/phrases starting with a-l, one for m-z for instance) and do a sweep through the whole corpus for each trie. 
+ #2 If the re module can't do it fast, you're going to be hard pressed doing it any faster. Either way you need to read the entire file. You might consider fixing your regular expression (can you provide one?). Maybe some background on what you are trying to accomplish too. 
+ #3 You could try doing it the other way around...instead of processing the text corpus 2,000,000 times (once for each word), process it only once. For every single word in the corpus, increment a hash table or similar to store the count of that word. A simple example in pseudocode: 
+
+ word_counts = new hash&lt;string,int&gt;
+for each word in corpus:
+ if exists(word_counts[word]):
+ word_counts[word]++
+ else:
+ word_counts[word] = 1
+ 
+
+ You might be able to speed it up by initializing the word_counts ahead of time with the full list of words, this not needing that if statement...not sure. 
+ #4 As xyld said, I do not think that you can beat the speed of the re module, although it would help if you posted your regexes and possibly the code as well. All I can add is try profiling before optimizing. You may be quite surprised when you see where most of the processing goes. I use hotshot to profile my code and am quite happy with it. You can find a good introduction to python profiling here http://onlamp.com/pub/a/python/2005/12/15/profiling.html . 
+ #5 If using re is not performant enough, you're probably using findall() , or finding the matches one by one manually. Using an iterator might make it faster: 
+
+ &gt;&gt;&gt; for i in re.finditer(r'\w+', 'Hello, this is a sentence.'):
+...  print i.group(0)
+...  
+Hello
+this
+is
+a
+sentence
+ 
+ #6 #!/usr/bin/env python
+import re
+
+s = ''
+for i in xrange(0, 100000):
+ s = s + 'Hello, this is a sentence. '
+ if i == 50000:
+  s = s + " my phrase "
+
+s = s + 'AARRGH'
+
+print len(s)
+
+itr = re.compile(r'(my phrase)|(\w+)').finditer(s)
+for w in itr:
+ if w.group(0) == 'AARRGH':
+  print 'Found AARRGH'
+ elif w.group(0) == "my phrase":
+  print 'Found "my phrase"'
+ 
+
+ Running this, we get 
+
+ $ time python itrword.py
+2700017
+Found "my phrase"
+Found AARRGH
+
+real 0m0.616s
+user 0m0.573s
+sys  0m0.033s
+ 
+
+ But, each "phrase" explicitly added to the regex will take its toll on performance -- the above is 50% slower than just using "\w+", by my rough measurement. 
+ #7 Have you considered looking at the Natural Language Toolkit . It includes many nice functions for working with a text corpus, also has a a cool FreqDist class that behaves dict-like (has keys) and list-like (slice).

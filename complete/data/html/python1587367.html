@@ -1,0 +1,166 @@
+<h3>Question (ID-1587367):</h3><h2>Python/numpy tricky slicing problem</h2><p>I have a problem with some numpy stuff. I need a numpy array to behave in an unusual manner by returning a slice as a view of the data I have sliced, not a copy. So heres an example of what I want to do:</p>
+
+<p>Say we have a simple array like this:</p>
+
+<pre><code>a = array([1, 0, 0, 0])
+</code></pre>
+
+<p>I would like to update consecutive entries in the array (moving left to right) with the previous entry from the array, using syntax like this:</p>
+
+<pre><code>a[1:] = a[0:3]
+</code></pre>
+
+<p>This would get the following result:</p>
+
+<pre><code>a = array([1, 1, 1, 1])
+</code></pre>
+
+<p>Or something like this:</p>
+
+<pre><code>a[1:] = 2*a[:3]
+# a = [1,2,4,8]
+</code></pre>
+
+<p>To illustrate further I want the following kind of behaviour:</p>
+
+<pre><code>for i in range(len(a)):
+    if i == 0 or i+1 == len(a): continue
+    a[i+1] = a[i]
+</code></pre>
+
+<p>Except I want the speed of numpy.</p>
+
+<p>The default behavior of numpy is to take a copy of the slice, so what I actually get is this:</p>
+
+<pre><code>a = array([1, 1, 0, 0])
+</code></pre>
+
+<p>I already have this array as a subclass of the ndarray, so I can make further changes to it if need be, I just need the slice on the right hand side to be continually updated as it updates the slice on the left hand side. </p>
+
+<p>Am I dreaming or is this magic possible?</p>
+
+<p>Update: This is all because I am trying to use Gauss-Seidel iteration to solve a linear algebra problem, more or less. It is a special case involving harmonic functions, I was trying to avoid going into this because its really not necessary and likely to confuse things further, but here goes.</p>
+
+<p>The algorithm is this:</p>
+
+<pre><code>while not converged:
+    for i in range(len(u[:,0])):
+        for j in range(len(u[0,:])):
+            # skip over boundary entries, i,j == 0 or len(u)
+            u[i,j] = 0.25*(u[i-1,j] + u[i+1,j] + u[i, j-1] + u[i,j+1])
+</code></pre>
+
+<p>Right? But you can do this two ways, Jacobi involves updating each element with its neighbours without considering updates you have already made until the while loop cycles, to do it in loops you would copy the array then update one array from the copied array. However Gauss-Seidel uses information you have already updated for each of the i-1 and j-1 entries, thus no need for a copy, the loop should essentially 'know' since the array has been re-evaluated after each single element update. That is to say, every time we call up an entry like u[i-1,j] or u[i,j-1] the information calculated in the previous loop will be there.</p>
+
+<p>I want to replace this slow and ugly nested loop situation with one nice clean line of code using numpy slicing:</p>
+
+<pre><code>u[1:-1,1:-1] = 0.25(u[:-2,1:-1] + u[2:,1:-1] + u[1:-1,:-2] + u[1:-1,2:])
+</code></pre>
+
+<p>But the result is Jacobi iteration because when you take a slice: u[:,-2,1:-1] you copy the data, thus the slice is not aware of any updates made. Now numpy still loops right? Its not parallel its just a faster way to loop that looks like a parallel operation in python. I want to exploit this behaviour by sort of hacking numpy to return a pointer instead of a copy when I take a slice. Right? Then every time numpy loops, that slice will 'update' or really just replicate whatever happened in the update. To do this I need slices on both sides of the array to be pointers.</p>
+
+<p>Anyway if there is some really really clever person out there that awesome, but I've pretty much resigned myself to believing the only answer is to loop in C.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p><a href="http://docs.scipy.org/doc/numpy/reference/generated/numpy.ufunc.accumulate.html" rel="nofollow"><strong>accumulate</strong></a> is designed to do what you seem to want; that is, to proprigate an operation along an array.  Here's an example:</p>
+
+<pre><code>from numpy import *
+
+a = array([1,0,0,0])
+a[1:] = add.accumulate(a[0:3])
+# a = [1, 1, 1, 1]
+
+b = array([1,1,1,1])
+b[1:] = multiply.accumulate(2*b[0:3])
+# b = [1 2 4 8]
+</code></pre>
+
+<p>Another way to do this is to explicitly specify the result array as the input array.  Here's an example:</p>
+
+<pre><code>c = array([2,0,0,0])
+multiply(c[:3], c[:3], c[1:])
+# c = [  2   4  16 256]
+</code></pre>
+<br /><b>#1</b><br /><p>Late answer, but this turned up on Google so I probably point to the doc the OP wanted. Your problem is clear: when using NumPy slices, temporaries are created. Wrap your code in a quick call to weave.blitz to get rid of the temporaries and have the behaviour your want.</p>
+
+<p>Read <a href="http://www.scipy.org/PerformancePython#head-cafc55bbf8fd74071b2c2ebcfb6f24ed1989d540" rel="nofollow">PerformancePython tutorial</a> for full details.</p>
+<br /><b>#2</b><br /><p>Just use a loop. I can't immediately think of any way to make the slice operator behave the way you're saying you want it to, except <em>maybe</em> by subclassing numpy's <code>array</code> and overriding the appropriate method with some sort of Python voodoo... but more importantly, the idea that <code>a[1:] = a[0:3]</code> should copy the first value of <code>a</code> into the next three slots seems completely nonsensical to me. I imagine that it could easily confuse anyone else who looks at your code (at least the first few times).</p>
+<br /><b>#3</b><br /><p>i would suggest cython instead of looping in c.  there <em>might</em> be some fancy numpy way of getting your example to work using a lot of intermediate steps... but since you know how to write it in c already, just write that quick little bit as a cython function and let cython's magic make the rest of the work easy for you.</p>
+<br /><b>#4</b><br /><p>It must have something to do with assigning a slice.  Operators, however, as you may already know, do follow your expected behavior:</p>
+
+<pre><code>&gt;&gt;&gt; a = numpy.array([1,0,0,0])
+&gt;&gt;&gt; a[1:]+=a[:3]
+&gt;&gt;&gt; a
+array([1, 1, 1, 1])
+</code></pre>
+
+<p>If you already have zeros in your real-world problem where your example does, then this solves it.  Otherwise, at added cost, set them to zero either by multiplying by zero or assigning to zero, (whichever is faster)</p>
+
+<p>edit:
+I had another thought. You may prefer this:</p>
+
+<pre><code>numpy.put(a,[1,2,3],a[:3])
+</code></pre>
+<br /><b>#5</b><br /><p>It is not the correct logic.
+I'll try to use letters to explain it.</p>
+
+<p>Image <code>array = abcd</code> with a,b,c,d as elements.<br />
+Now, <code>array[1:]</code> means from the element in position <code>1</code> (starting from <code>0</code>) on.<br />
+In this case:<code>bcd</code> and <code>array[0:3]</code> means from the character in position <code>0</code> up to the third character (the one in position <code>3-1</code>) in this case: <code>'abc'</code>.</p>
+
+<p>Writing something like:<br />
+<code>array[1:] = array[0:3]</code></p>
+
+<p>means: replace <code>bcd</code> with <code>abc</code></p>
+
+<p>To obtain the output you want, now in python, you should use something like:</p>
+
+<pre><code>a[1:] = a[0]
+</code></pre>
+<br /><b>#6</b><br /><p>Numpy must be checking if the target array is the same as the input array when doing the setkey call.  Luckily, there are ways around it.  First, I tried using <a href="http://docs.scipy.org/doc/numpy/reference/generated/numpy.put.html" rel="nofollow"><code>numpy.put</code></a> instead</p>
+
+<pre><code>In [46]: a = numpy.array([1,0,0,0])
+
+In [47]: numpy.put(a,[1,2,3],a[0:3])
+
+In [48]: a
+Out[48]: array([1, 1, 1, 1])
+</code></pre>
+
+<p>And then from the documentation of that, I gave using flatiters a try (<a href="http://docs.scipy.org/doc/numpy/reference/generated/numpy.ndarray.flat.html" rel="nofollow"><code>a.flat</code></a>)</p>
+
+<pre><code>In [49]: a = numpy.array([1,0,0,0])
+
+In [50]: a.flat[1:] = a[0:3]
+
+In [51]: a
+Out[51]: array([1, 1, 1, 1])
+</code></pre>
+
+<p>But this doesn't solve the problem you had in mind</p>
+
+<pre><code>In [55]: a = np.array([1,0,0,0])
+
+In [56]: a.flat[1:] = 2*a[0:3]
+
+In [57]: a
+Out[57]: array([1, 2, 0, 0])
+</code></pre>
+
+<p>This fails because the multiplication is done before the assignment, not in parallel as you would like.</p>
+
+<p>Numpy is designed for repeated application of the exact same operation in parallel across an array.  To do something more complicated, unless you can find decompose it in terms of functions like <code>numpy.cumsum</code> and <code>numpy.cumprod</code>, you'll have to resort to something like scipy.weave or writing the function in C.  (See the <a href="http://www.scipy.org/PerformancePython" rel="nofollow">PerfomancePython</a> page for more details.)  (Also, I've never used weave, so I can't guarantee it will do what you want.)</p>
+<br /><b>#7</b><br /><p>You could have a look at np.lib.stride_tricks.</p>
+
+<p>There is some information in these excellent slides:
+<a href="http://mentat.za.net/numpy/numpy%5Fadvanced%5Fslides/" rel="nofollow">http://mentat.za.net/numpy/numpy_advanced_slides/</a></p>
+
+<p>with stride_tricks starting at slide 29.</p>
+
+<p>I'm not completely clear on the question though so can't suggest anything more concrete - although I would probably do it in cython or fortran with f2py or with weave. I'm liking fortran more at the moment because by the time you add all the required type annotations in cython I think it ends up looking less clear than the fortran.</p>
+
+<p>There is a comparison of these approaches here:</p>
+
+<p>www. scipy. org/ PerformancePython</p>
+
+<p>(can't post more links as I'm a new user)
+with an example that looks similar to your case.</p>
+<br />

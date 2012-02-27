@@ -1,0 +1,155 @@
+Question (ID-1961340): what exactly is random.random doing  random.shuffle(lst_shuffle, random.random)
+ 
+
+ I know the latter part is an optional argument. But what does it do exactly. I don't understand what this mean.
+This is from the docs. 
+
+ 
+ random.random()¶
+ Return the next random floating point
+ number in the range [0.0, 1.0). 
+ 
+
+ I also see this, is this what this range 0,0, 1,0 means? 
+
+ Pseudorandom number generators
+Most, if not all programming languages have libraries that include a pseudo-random
+number generator. This generator usually returns a random number between 0 and 1 (not
+including 1). In a perfect generator all numbers have the same probability of being selected but
+in the pseudo generators some numbers have zero probability.
+ 
+ Answers (Total-6): #0 The second argument is used to specify which random number generator to use. This could be useful if you need/have something "better" than random.random . Security-sensitive applications might need to use a cryptographically secure random number generator. 
+
+ The difference between random.random and random.random() is that the first one is a reference to the function that produces simple random numbers, and the second one actually calls that function. 
+
+ If you had another random number generator, you wanted to use, you could say 
+
+ random.shuffle(x, my_random_number_function)
+ 
+
+ As to what random.random (the default generator) is doing, it uses an algorithm called the Mersenne twister to create a seemingly random floating point number between 0 and 1 (not including 1), all the numbers in that interval being of equal likelihood. 
+
+ That the interval is from 0 to 1 is just a convention. 
+ #1 Existing answers do a good job of addressing the question's specific, but I think it's worth mentioning a side issue: why you're particularly likely to want to pass an alternative "random generator" to shuffle as opposed to other functions in the random module. Quoting the docs : 
+
+ 
+ Note that for even rather small
+ len(x), the total number of
+ permutations of x is larger than the
+ period of most random number
+ generators; this implies that most
+ permutations of a long sequence can
+ never be generated. 
+ 
+
+ The phrase "random number generators" here refers to what may be more pedantically called pseudo -random number generators -- generators that give a good imitation of randomness, but are entirely algorithmic, and therefore are known not to be "really random". Any such algorithmic approach will have a "period" -- it will start repeating itself eventually. 
+
+ Python's random module uses a particularly good and well-studied pseudo-random generator, the Mersenne Twister , with a period of 2**19937-1 -- a number that has more than 6 thousand digits when written out in decimal digits, as len(str(2**19937-1)) will confirm;-). On my laptop I can generate about 5 million such numbers per second: 
+
+ $ python -mtimeit -s'import random' 'random.random()'
+1000000 loops, best of 3: 0.214 usec per loop
+ 
+
+ Assuming a much faster machine, able to generate a billion such numbers per second, the cycle would take about 10**5985 years to repeat -- and the best current estimate for the age of the Universe is a bit less than 1.5*10**12 years. It would thus take an almost-unimaginable number of Universe-lifetimes to reach the point of repetition;-). Making the computation parallel wouldn't help much; there are estimated to be about 10**80 atoms in the Universe, so even if you were able to run such a billion-per-second generator on each atom in the Universe, it would still take well over 10**5800 Universe-lifetimes to start repeating. 
+
+ So, you might be justified in suspecting that this worry about repetition is a tiny little bit of a theoretical, rather than practical, issue;-). 
+
+ Nevertheless, factorials (which count the permutations of a sequence of length N) also grow pretty fast. Using natural logarithms (since 2**19937 is too large to fit in a double;-) and Stirling's approximation: 
+
+ &gt;&gt;&gt; from math import log
+&gt;&gt;&gt; def stirling(n): return n*log(n)-n
+... 
+&gt;&gt;&gt; 19937*log(2)
+13819.275338823629
+&gt;&gt;&gt; stirling(2081)
+13819.096562725152
+&gt;&gt;&gt; stirling(2082)
+13826.737406782171
+ 
+
+ so we see that the Mersenne Twister might be able to produce all permutations of a sequence of length 2081, but definitely not of one of length 2082 or higher. Were it not for the "lifetime of the Universe" issue, the docs' worry about "even rather small len(x)" would be justified -- we know that many possible permutations can never be reached by shuffling with such a pseudo-RNG, as soon as we have a reasonably long sequence, so one might worry about what kind of bias we're actually introducing with even a few shuffles!-) 
+
+ os.urandom mediates access to whatever sources of physical randomness the OS provides -- CryptGenRandom on Windows, /dev/urandom on Linux, etc. os.urandom gives sequences of bytes, but with the help of struct it's easy to make them into random numbers : 
+
+ &gt;&gt;&gt; n = struct.calcsize('I')
+&gt;&gt;&gt; def s2i(s): return struct.unpack('I', s)[0]
+... 
+&gt;&gt;&gt; maxi = s2i(b'\xff'*n) + 1
+&gt;&gt;&gt; maxi = float(s2i(b'\xff'*n) + 1)
+&gt;&gt;&gt; def rnd(): return s2i(os.urandom(n))/maxi
+ 
+
+ Now we can call random.shuffle(somelist, rnd) and worry less about bias;-). 
+
+ Unfortunately, measurement shows that this approach to RNG is about 50 times slower than calls to random.random() -- this could be an important practical consideration if we're going to need many random numbers (and if we don't, the worry about possible bias may be misplaced;-). The os.urandom approach is also hard to use in predictable, repeatable ways (e.g. for testing purposes), while with random.random() you need only provide a fixed initial random.seed at the start of the test to guarantee reproducible behavior. 
+
+ In practice, therefore, os.urandom is only used when you need "cryptographic quality" random numbers - ones that a determined attacker can't predict - and are therefore willing to pay the practical price for using it instead of random.random . 
+ #2 The second argument is the function which is called to produce random numbers that are in turn used to shuffle the sequence (first argument). The default function used if you don't provide your own is random.random. 
+
+ You might want to provide this parameter if you want to customize how shuffle is performed. 
+
+ And your customized function will have to return numbers in range [0.0, 1.0) - 0.0 included, 1.0 excluded. 
+ #3 The docs go on saying: 
+
+ 
+ The optional argument random is a
+ 0-argument function returning a random
+ float in [0.0, 1.0); by default, this
+ is the function random(). 
+ 
+
+ It means that you can either specify your own random number generator function, or tell the module to use the default random function. The second option is almost always the best choice, because Python uses a pretty good PRNG. 
+
+ The function it expects is supposed to return a floating point pseudo-random number in the range [0.0, 1.0), which means 0.0 included and 1.0 isn't included (i.e. 0.9999 is a valid number to be returned, but 1.0 is not). Each number in this range should be in theory returned with equal probability (i.e. this is a linear distribution). 
+ #4 The shuffle function depends on an RNG (Random Number Generator), which defaults to random.random. The second argument is there so you can provide your own RNG instead of the default. 
+
+ UPDATE: 
+
+ The second argument is a random number generator that generates a new, random number in the range [0.0, 1.0) each time you call it. 
+
+ Here's an example for you: 
+
+ import random
+
+def a():
+ return 0.0
+
+def b():
+ return 0.999999999999
+
+arr = [1,2,3]
+
+random.shuffle(arr)
+print arr # prints [1, 3, 2]
+
+arr.sort()
+print arr # prints [1, 2, 3]
+
+random.shuffle(arr)
+print arr # prints [3, 2, 1]
+
+arr.sort()
+random.shuffle(arr, a)
+print arr # prints [2, 3, 1]
+
+arr.sort()
+random.shuffle(arr, a)
+print arr # prints [2, 3, 1]
+
+arr.sort()
+random.shuffle(arr, b)
+print arr # prints [1, 2, 3]
+
+arr.sort()
+random.shuffle(arr, b)
+print arr # prints [1, 2, 3]
+ 
+
+ So if the function always returns the same value, you always get the same permutation. If the function returns random values each time it's called, you get a random permutation. 
+ #5 From the example : 
+
+ &gt;&gt;&gt; random.random()  # Random float x, 0.0 &lt;= x &lt; 1.0
+0.37444887175646646
+ 
+
+ It generates a random floating point number between 0 and 1.

@@ -1,0 +1,154 @@
+<h3>Question ( ID-1717393 ) : </h3><h2>Is this simple python <span style="background-color:yellow;">code</span> thread safe ? </h2><p>I want to <span style="background-color:yellow;">create</span> a non-thread-safe <span style="background-color:yellow;">chunk</span> of <span style="background-color:yellow;">code</span> for experimentation , and this is the function that 2 threads are going to be <span style="background-color:yellow;">called</span> . </p>
+<pre><code>c = 0
+
+def increment():
+  c += 1
+
+def decrement():
+  c -= 1
+</code></pre>
+<p>Is this <span style="background-color:yellow;">code</span> thread safe ? </p>
+<p>If not , may I understand why it is not thread safe , and what kind of statements usually lead to non-thread-safe operations . </p>
+<p>If it is thread-safe , how <span style="background-color:yellow;">can</span> I make it explicitly non-thread-safe ? </p>
+<p>Thanks ! </p>
+<br /><h3>Answers ( Total-8 ) : </h3><b># <span style="background-color:yellow;">0</span> </b><br /><p>( note : you would need global <span style="background-color:yellow;">c</span> in each function to make your <span style="background-color:yellow;">code</span> work. ) </p>
+<blockquote>Is this <span style="background-color:yellow;">code</span> thread safe ? </blockquote>
+<p></p>
+<pre><code>>>> c= 0
+>>> def inc():
+...     global c
+...     c+= 1
+
+>>> import dis
+>>> dis.dis(inc)
+
+  3           0 LOAD_GLOBAL              0 (c)
+              3 LOAD_CONST               1 (1)
+              6 INPLACE_ADD         
+              7 STORE_GLOBAL             0 (c)
+             10 LOAD_CONST               0 (None)
+             13 RETURN_VALUE
+</code></pre>
+<p>So one thread <span style="background-color:yellow;">could</span> get to index 6 with <span style="background-color:yellow;">c</span> and <span style="background-color:yellow;">1</span> loaded , give up the GIL and let another thread in , which executes an <span style="background-color:yellow;">inc</span> and <span style="background-color:yellow;">sleeps</span> , returning the GIL to the first thread , which now has the wrong value . </p>
+<p>In any <span style="background-color:yellow;">case</span> , what 's atomic is an implementation detail which you should n't rely on. Bytecodes may <span style="background-color:yellow;">change</span> in future versions of CPython , and the results will be totally different in other implementations of Python that do not rely on a GIL. If you need thread safety , you need a locking mechanism . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>Single opcodes are thread-safe because of the GIL but nothing else : </p>
+<pre><code>import time
+class something(object):
+    def __init__(self,c):
+        self.c=c
+    def inc(self):
+        new = self.c+1 
+        # if the thread is interrupted by another inc() call its result is wrong
+        time.sleep(0.001) # sleep makes the os continue another thread
+        self.c = new
+
+
+x = something(0)
+import threading
+
+for _ in range(10000):
+    threading.Thread(target=x.inc).start()
+
+print x.c # ~900 here, instead of 10000
+</code></pre>
+<p>Every resource shared by multiple threads must have a lock . </p>
+<br /><b># 2 </b><br /><p>Short answer : no . </p>
+<p>Long answer : generally not . </p>
+<p>While CPython 's GIL makes single opcodes thread-safe , this is no general behaviour. You may not assume that even simple operations like an addition is a atomic instruction. The addition may only be half done when another thread runs . </p>
+<p>And as soon as your functions access a variable in more than one opcode , your thread safety is gone. You <span style="background-color:yellow;">can</span> generate thread safety , if you wrap your function bodies in locks . But be aware that locks may be <span style="background-color:yellow;">computationally</span> <span style="background-color:yellow;">costly</span> and may generate deadlocks . </p>
+<br /><b># 3 </b><br /><p>If you actually want to make your <span style="background-color:yellow;">code</span> not thread-safe , and have good <span style="background-color:yellow;">chance</span> of " bad " stuff actually happening without you trying like ten thousand <span style="background-color:yellow;">times</span> ( or one <span style="background-color:yellow;">time</span> when you real do n't want " bad " stuff to happen ) , you <span style="background-color:yellow;">can</span> 'jitter ' your <span style="background-color:yellow;">code</span> with explicit <span style="background-color:yellow;">sleeps</span> : </p>
+<pre><code>def íncrement():
+    global c
+    x = c
+    from time import sleep
+    sleep(0.1)
+    c = x + 1
+</code></pre>
+<br /><b># 4 </b><br /><p>No , this <span style="background-color:yellow;">code</span> is absolutely , demonstrably not threadsafe . </p>
+<pre><code>import threading
+
+i = 0
+
+def test():
+    global i
+    for x in range(100000):
+        i += 1
+
+threads = [threading.Thread(target=test) for t in range(10)]
+for t in threads:
+    t.start()
+
+for t in threads:
+    t.join()
+
+assert i == 1000000, i
+</code></pre>
+<p>fails <span style="background-color:yellow;">consistently</span> . </p>
+<p>i + = <span style="background-color:yellow;">1</span> resolves to four opcodes : load i , load <span style="background-color:yellow;">1</span> , add the two , and store it back to i. The Python interpreter switches active threads ( by releasing the GIL from one thread so another thread <span style="background-color:yellow;">can</span> have it ) every <span style="background-color:yellow;">100</span> opcodes. ( Both of these are implementation details. ) The race <span style="background-color:yellow;">condition</span> occurs when the <span style="background-color:yellow;">100-opcode</span> preemption happens between loading and storing , allowing another thread to start <span style="background-color:yellow;">incrementing</span> the <span style="background-color:yellow;">counter.</span> When it gets back to the suspended thread , it <span style="background-color:yellow;">continues</span> with the old value of " i " and undoes the <span style="background-color:yellow;">increments</span> run by other threads in the meantime . </p>
+<p>Making it threadsafe is straightforward ; add a lock : </p>
+<pre><code>#!/usr/bin/python
+import threading
+i = 0
+i_lock = threading.Lock()
+
+def test():
+    global i
+    i_lock.acquire()
+    try:
+        for x in range(100000):
+            i += 1
+    finally:
+        i_lock.release()
+
+threads = [threading.Thread(target=test) for t in range(10)]
+for t in threads:
+    t.start()
+
+for t in threads:
+    t.join()
+
+assert i == 1000000, i
+</code></pre>
+<br /><b># 5 </b><br /><p>Are you sure that the functions <span style="background-color:yellow;">increment</span> and <span style="background-color:yellow;">decrement</span> execute without any error ? </p>
+<p>I think it should raise an UnboundLocalError because you have to explicitly tell Python that you want to use the global variable named 'c' . </p>
+<p>So <span style="background-color:yellow;">change</span> <span style="background-color:yellow;">increment</span> ( also <span style="background-color:yellow;">decrement</span> ) to the following : </p>
+<pre><code>def increment():
+    global c
+    c += 1
+</code></pre>
+<p>I think as is your <span style="background-color:yellow;">code</span> is thread unsafe. This article about thread synchronisation mechanisms in Python may be helpful . </p>
+<br /><b># 6 </b><br /><p>You <span style="background-color:yellow;">can</span> <span style="background-color:yellow;">increase</span> the likelyhood of seeing race <span style="background-color:yellow;">conditions</span> by using a <span style="background-color:yellow;">sleep</span> in the <span style="background-color:yellow;">critical</span> parts </p>
+<pre><code>from time import sleep
+c = 0
+
+def increment():
+  global c
+  c_ = c
+  sleep(0.1)
+  c = c+1
+
+def decrement():
+  global c
+  c_ = c
+  sleep(0.1)
+  c  = c_-1
+</code></pre>
+<br /><b># 7 </b><br /><p>To be sure I recommend to use a lock : </p>
+<pre><code>import threading
+
+class ThreadSafeCounter():
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.counter=0
+
+    def increment(self):
+        with self.lock:
+            self.counter+=1
+
+
+    def decrement(self):
+        with self.lock:
+            self.counter-=1
+</code></pre>
+<p>The synchronized decorator <span style="background-color:yellow;">can</span> also help to keep the <span style="background-color:yellow;">code</span> easy to read . </p>
+<br />

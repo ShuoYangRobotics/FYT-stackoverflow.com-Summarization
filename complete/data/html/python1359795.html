@@ -1,0 +1,114 @@
+<h3>Question (ID-1359795):</h3><h2>Error while using multiprocessing module in a python daemon</h2><p>I'm getting the following error when using the <strong>multiprocessing</strong> module within a python daemon process (using <strong>python-daemon</strong>):</p>
+
+<pre>
+Traceback (most recent call last):
+  File "/usr/local/lib/python2.6/atexit.py", line 24, in _run_exitfuncs
+    func(*targs, **kargs)
+  File "/usr/local/lib/python2.6/multiprocessing/util.py", line 262, in _exit_function
+    for p in active_children():
+  File "/usr/local/lib/python2.6/multiprocessing/process.py", line 43, in active_children
+    _cleanup()
+  File "/usr/local/lib/python2.6/multiprocessing/process.py", line 53, in _cleanup
+    if p._popen.poll() is not None:
+  File "/usr/local/lib/python2.6/multiprocessing/forking.py", line 106, in poll
+    pid, sts = os.waitpid(self.pid, flag)
+OSError: [Errno 10] No child processes
+</pre>
+
+<p>The daemon process (parent) spawns a number of processes (children) and then periodically polls the processes to see if they have completed.  If the parent detects that one of the processes has completed, it then attempts to restart that process.  It is at this point that the above exception is raised.  It seems that once one of the processes completes, any operation involving the multiprocessing module will generate this exception.  If I run the identical code in a non-daemon python script, it executes with no errors whatsoever.</p>
+
+<p><strong>EDIT:</strong></p>
+
+<p>Sample script</p>
+
+<pre><code>from daemon import runner
+
+class DaemonApp(object):
+    def __init__(self, pidfile_path, run):
+        self.pidfile_path = pidfile_path
+        self.run = run
+
+        self.stdin_path = '/dev/null'
+        self.stdout_path = '/dev/tty'
+        self.stderr_path = '/dev/tty'
+
+def run():
+    import multiprocessing as processing
+    import time
+    import os
+    import sys
+    import signal
+
+    def func():
+        print 'pid: ', os.getpid()
+        for i in range(5):
+            print i
+            time.sleep(1)
+
+    process = processing.Process(target=func)
+    process.start()
+
+    while True:
+        print 'checking process'
+        if not process.is_alive():
+            print 'process dead'
+            process = processing.Process(target=func)
+            process.start()
+        time.sleep(1)
+
+# uncomment to run as daemon
+app = DaemonApp('/root/bugtest.pid', run)
+daemon_runner = runner.DaemonRunner(app)
+daemon_runner.do_action()
+
+#uncomment to run as regular script
+#run()
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Your problem is a conflict between the daemon and multiprocessing modules, in particular in its handling of the SIGCLD (child process terminated) signal. daemon sets SIGCLD to SIG_IGN when launching, which, at least on Linux, causes terminated children to immediately be reaped (rather than becoming a zombie until the parent invokes wait()). But multiprocessing's is_alive test invokes wait() to see if the process is alive, which fails if the process has already been reaped.</p>
+
+<p>Simplest solution is just to set SIGCLD back to SIG_DFL (default behaviour -- ignore the signal and let the parent wait() for the terminated child process):</p>
+
+<pre><code>def run():
+    # ...
+
+    signal.signal(signal.SIGCLD, signal.SIG_DFL)
+
+    process = processing.Process(target=func)
+    process.start()
+
+    while True:
+        # ...
+</code></pre>
+<br /><b>#1</b><br /><p>Ignoring <code>SIGCLD</code> also causes problems with the <code>subprocess</code> module, because of a bug in that module (<a href="http://bugs.python.org/issue1731717" rel="nofollow">issue 1731717</a>, still open as of 2011-09-21).</p>
+
+<p>This behaviour is addressed in <a href="http://pypi.python.org/pypi/python-daemon/1.4.8/" rel="nofollow">version 1.4.8</a> of the <code>python-daemon</code> library; it now omits the default fiddling with <code>SIGCLD</code>, so no longer has this unpleasant interaction with other standard library modules.</p>
+<br /><b>#2</b><br /><p>I think there was a fix put into trunk and 2.6 maint a little while ago which should help with this can you try running your script in python-trunk or the latest 2.6-maint svn? I'm failing to pull up the bug information</p>
+<br /><b>#3</b><br /><p>Looks like your error is coming at the very end of your process -- your clue's at the very start of your traceback, and I quote...:</p>
+
+<pre><code>File "/usr/local/lib/python2.6/atexit.py", line 24, in _run_exitfuncs
+    func(*targs, **kargs)
+</code></pre>
+
+<p>if <code>atexit._run_exitfuncs</code> is running, this clearly shows that your own process is terminating.  So, the error itself is a minor issue in a sense -- just from some function that the <code>multiprocessing</code> module registered to run "at-exit" from your process. The really interesting issue is, WHY is your main process exiting?  I think this may be due to some uncaught exception: try setting the exception hook and showing rich diagnostic info before it gets lost by the OTHER exception caused by whatever it is that multiprocessing's registered for at-exit running...</p>
+<br /><b>#4</b><br /><p>I'm running into this also using the celery distributed task manager under RHEL 5.3 with Python 2.6.  My traceback looks a little different but the error the same:</p>
+
+<pre><code>      File "/usr/local/lib/python2.6/multiprocessing/pool.py", line 334, in terminate
+    self._terminate()
+  File "/usr/local/lib/python2.6/multiprocessing/util.py", line 174, in __call__
+    res = self._callback(*self._args, **self._kwargs)
+  File "/usr/local/lib/python2.6/multiprocessing/pool.py", line 373, in _terminate_pool
+    p.terminate()
+  File "/usr/local/lib/python2.6/multiprocessing/process.py", line 111, in terminate
+    self._popen.terminate()
+  File "/usr/local/lib/python2.6/multiprocessing/forking.py", line 136, in terminate
+    if self.wait(timeout=0.1) is None:
+  File "/usr/local/lib/python2.6/multiprocessing/forking.py", line 121, in wait
+    res = self.poll()
+  File "/usr/local/lib/python2.6/multiprocessing/forking.py", line 106, in poll
+    pid, sts = os.waitpid(self.pid, flag)
+OSError: [Errno 10] No child processes
+</code></pre>
+
+<p>Quite frustrating..  I'm running the code through pdb now,  but haven't spotted anything yet.</p>
+<br /><b>#5</b><br /><p>The original sample script has "import signal" but no use of signals.  However, I had a script causing this error message and it was due to my signal handling, so I'll explain here in case its what is happening for others.  Within a signal handler, I was doing stuff with processes (e.g. creating a new process).  Apparently this doesn't work, so I stopped doing that within the handler and fixed the error.  (Note: sleep() functions wake up after signal handling so that can be an alternative approach to acting upon signals if you need to do things with processes)</p>
+<br />

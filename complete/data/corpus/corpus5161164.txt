@@ -1,0 +1,153 @@
+Question (ID-5161164): Python: in-memory object database which supports indexing? I'm doing some data munging which would be quite a bit simpler if I could stick a bunch of dictionaries in an in-memory database, then run simply queries against it. 
+
+ For example, something like: 
+
+ people = db([
+ {"name": "Joe", "age": 16},
+ {"name": "Jane", "favourite_color": "red"},
+])
+over_16 = db.filter(age__gt=16)
+with_favorite_colors = db.filter(favorite_color__exists=True)
+ 
+
+ There are three confounding factors, though: 
+
+ 
+ Some of the values will be Python objects, and serializing them is out of the question (too slow, breaks identity). Of course, I could work around this (eg, by storing all the items in a big list, then serializing their indexes in that list… But that could take a fair bit of fiddling). 
+ There will be thousands of data, and I will be running lookup-heavy operations (like graph traversals) against them, so it must be possible to perform efficient (ie, indexed) queries. 
+ As in the example, the data is unstructured , so systems which require me to predefine a schema would be tricky. 
+ 
+
+ So, does such a thing exist? Or will I need to kludge something together? 
+ Answers (Total-6): #0 What about using an in-memory SQLite database via the sqlite3 standard library module , using the special value :memory: for the connection? If you don't want to write your on SQL statements, you can always use an ORM, like SQLAlchemy , to access an in-memory SQLite database. 
+
+ EDIT : I noticed you stated that the values may be Python objects, and also that you require avoiding serialization. Requiring arbitrary Python objects be stored in a database also necessitates serialization. 
+
+ Can I propose a practical solution if you must keep those two requirements? Why not just use Python dictionaries as indices into your collection of Python dictionaries? It sounds like you will have idiosyncratic needs for building each of your indices; figure out what values you're going to query on, then write a function to generate and index for each. The possible values for one key in your list of dicts will be the keys for an index; the values of the index will be a list of dictionaries. Query the index by giving the value you're looking for as the key. 
+
+ import collections
+import itertools
+
+def make_indices(dicts):
+ color_index = collections.defaultdict(list)
+ age_index = collections.defaultdict(list)
+ for d in dicts:
+  if 'favorite_color' in d:
+   color_index[d['favorite_color']].append(d)
+  if 'age' in d:
+   age_index[d['age']].append(d)
+ return color_index, age_index
+
+
+def make_data_dicts():
+ ...
+
+
+data_dicts = make_data_dicts()
+color_index, age_index = make_indices(data_dicts)
+# Query for those with a favorite color is simply values
+with_color_dicts = list(
+  itertools.chain.from_iterable(color_index.values()))
+# Query for people over 16
+over_16 = list(
+  itertools.chain.from_iterable(
+   v for k, v in age_index.items() if age &gt; 16)
+)
+ 
+ #1 If the in memory database solution ends up being too much work, here is a method for filtering it yourself that you may find useful. 
+
+ The get_filter function takes in arguments to define how you want to filter a dictionary, and returns a function that can be passed into the built in filter function to filter a list of dictionaries. 
+
+ import operator
+
+def get_filter(key, op=None, comp=None, inverse=False):
+ # This will invert the boolean returned by the function 'op' if 'inverse == True'
+ result = lambda x: not x if inverse else x
+ if op is None:
+  # Without any function, just see if the key is in the dictionary
+  return lambda d: result(key in d)
+
+ if comp is None:
+  # If 'comp' is None, assume the function takes one argument
+  return lambda d: result(op(d[key])) if key in d else False
+
+ # Use 'comp' as the second argument to the function provided
+ return lambda d: result(op(d[key], comp)) if key in d else False
+
+people = [{'age': 16, 'name': 'Joe'}, {'name': 'Jane', 'favourite_color': 'red'}]
+
+print filter(get_filter("age", operator.gt, 15), people)
+# [{'age': 16, 'name': 'Joe'}]
+print filter(get_filter("name", operator.eq, "Jane"), people)
+# [{'name': 'Jane', 'favourite_color': 'red'}]
+print filter(get_filter("favourite_color", inverse=True), people)
+# [{'age': 16, 'name': 'Joe'}]
+ 
+
+ This is pretty easily extensible to more complex filtering, for example to filter based on whether or not a value is matched by a regex: 
+
+ p = re.compile("[aeiou]{2}") # matches two lowercase vowels in a row
+print filter(get_filter("name", p.search), people)
+# [{'age': 16, 'name': 'Joe'}]
+ 
+ #2 The only solution I know is a package I stumbled across a few years ago on PyPI, PyDbLite . It's okay, but there are few issues: 
+
+ 
+ It still wants to serialize everything to disk, as a pickle file. But that was simple enough for me to rip out. (It's also unnecessary. If the objects inserted are serializable, so is the collection as a whole.) 
+ The basic record type is a dictionary, into which it inserts its own metadata, two ints under keys __id__ and __version__ . 
+ The indexing is very simple, based only on value of the record dictionary. If you want something more complicated, like based on a the attribute of a object in the record, you'll have to code it yourself. (Something I've meant to do myself, but never got around to.) 
+ 
+
+ The author does seem to be working on it occasionally. There's some new features from when I used it, including some nice syntax for complex queries. 
+
+ Assuming you rip out the pickling (and I can tell you what I did), your example would be (untested code): 
+
+ from PyDbLite import Base
+
+db = Base()
+db.create("name", "age", "favourite_color")
+
+# You can insert records as either named parameters
+# or in the order of the fields
+db.insert(name="Joe", age=16, favourite_color=None)
+db.insert("Jane", None, "red")
+
+# These should return an object you can iterate over
+# to get the matching records. These are unindexed queries.
+#
+# The first might throw because of the None in the second record
+over_16 = db("age") &gt; 16
+with_favourite_colors = db("favourite_color") != None
+
+# Or you can make an index for faster queries
+db.create_index("favourite_color")
+with_favourite_color_red = db._favourite_color["red"]
+ 
+
+ Hopefully it will be enough to get you started. 
+ #3 As far as "identity" anything that is hashable you should be able to compare, to keep track of object identity. 
+
+ Zope Object Database (ZODB):
+ http://www.zodb.org/ 
+
+ PyTables works well:
+ http://www.pytables.org/moin 
+
+ Also Metakit for Python works well: 
+ http://equi4.com/metakit/python.html 
+ supports columns, and sub-columns but not unstructured data 
+
+ Research "Stream Processing", if your data sets are extremely large this may be useful:
+ http://www.trinhhaianh.com/stream.py/ 
+
+ Any in-memory database, that can be serialized (written to disk) is going to have your identity problem. I would suggest representing the data you want to store as native types (list, dict) instead of objects if at all possible. 
+
+ Keep in mind NumPy was designed to perform complex operations on in-memory data structures, and could possibly be apart of your solution if you decide to roll your own. 
+ #4 If you are willing to work around serializing, MongoDB could work for you. PyMongo provides an interface almost identical to what you describe. If you decide to serialize, the hit won't be as bad since Mongodb is memory mapped. 
+ #5 It should be possible to do what you are wanting to do with just isinstance(), hasattr(), getattr() and setattr(). 
+
+ However, things are going to get fairly complicated before you are done! 
+
+ I suppose one could store all the objects in a big list, then run a query on each object, determining what it is and looking for a given attribute or value, then return the value and the object as a list of tuples. Then you could sort on your return values pretty easily. copy.deepcopy will be your best friend and your worst enemy. 
+
+ Sounds like fun! Good luck!

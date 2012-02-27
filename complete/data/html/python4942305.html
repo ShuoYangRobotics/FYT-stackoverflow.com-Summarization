@@ -1,0 +1,116 @@
+<h3>Question (ID-4942305):</h3><h2>Why don't scripting languages output Unicode to the Windows console?</h2><p>The Windows console has been Unicode aware for at least a decade and perhaps as far back as Windows NT. However for some reason the major cross-platform scripting languages including Perl and Python only ever output various 8-bit encodings, requiring much trouble to work around. Perl gives a "wide character in print" warning, Python gives a charmap error and quits. Why on earth after all these years do they not just simply call the Win32 -W APIs that output UTF-16 Unicode instead of forcing everything through the ANSI/codepage bottleneck?</p>
+
+<p>Is it just that cross-platform performance is low priority? Is it that the languages use UTF-8 internally and find it too much bother to output UTF-16? Or are the -W APIs inherently broken to such a degree that they can't be used as-is?</p>
+
+<p><strong>UPDATE</strong></p>
+
+<p>It seems that the blame may need to be shared by all parties. I imagined that the scripting languages could just call <code>wprintf</code> on Windows and let the OS/runtime worry about things such as redirection. But it turns out that <a href="http://blog.kalmbachnet.de/?postid=23" rel="nofollow">even wprintf on Windows converts wide characters to ANSI and back before printing to the console</a>!</p>
+
+<p>Please let me know if this has been fixed since the bug report link seems broken but my Visual C test code still fails for wprintf and succeeds for WriteConsoleW.</p>
+
+<p><strong>UPDATE 2</strong></p>
+
+<p>Actually you can print UTF-16 to the console from C using <code>wprintf</code> but only if you first do <code>_setmode(_fileno(stdout), _O_U16TEXT)</code>.</p>
+
+<p>From C you can print UTF-8 to a console whose codepage is set to codepage 65001, however Perl, Python, PHP and Ruby all have bugs which prevent this. Perl and PHP corrupt the output by adding additional blank lines following lines which contain at least one wide character. Ruby has slightly different corrupt output. Python crashes.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>The main problem seems to be that it is not possible to use Unicode on Windows using only the standard C library and no platform-dependent or third-party extensions. The languages you mentioned originate from Unix platforms, whose method of implementing Unicode blends well with C (they use normal <code>char*</code> strings, the C locale functions, and UTF-8). If you want to do Unicode in C, you more or less have to write everything twice: once using nonstandard Microsoft extensions, and once using the standard C API functions for all other operating systems. While this can be done, it usually doesn't have high priority because it's cumbersome and most scripting language developers either hate or ignore Windows anyway.</p>
+
+<p>At a more technical level, I think the basic assumption that most standard library designers make is that all I/O streams are inherently byte-based on the OS level, which is true for files on all operating systems, and for all streams on Unix-like systems, with the Windows console being the only exception. Thus the architecture many class libraries and programming language standard have to be modified to a great extent if one wants to incorporate Windows console I/O.</p>
+
+<p>Another more subjective point is that Microsoft just did not enough to promote the use of Unicode. The first Windows OS with decent (for its time) Unicode support was Windows NT 3.1, released in 1993, long before Linux and OS X grew Unicode support. Still, the transition to Unicode in those OSes has been much more seamless and unproblematic. Microsoft once again listened to the sales people instead of the engineers, and kept the technically obsolete Windows 9x around until 2001; instead of forcing developers to use a clean Unicode interface, they still ship the broken and now-unnecessary 8-bit API interface, and invite programmers to use it (look at a few of the recent Windows API questions on Stack Overflow, most newbies <em>still</em> use the horrible legacy API!).</p>
+
+<p>When Unicode came out, many people realized it was useful. Unicode started as a pure 16-bit encoding, so it was natural to use 16-bit code units. Microsoft then apparently said "OK, we have this 16-bit encoding, so we have to create a 16-bit API", not realizing that nobody would use it. The Unix luminaries, however, thought "how can we integrate this into the current system in an efficient and backward-compatible way so that people will actually use it?" and subsequently invented UTF-8, which is a brilliant piece of engineering. Just as when Unix was created, the Unix people thought a bit more, needed a bit longer, has less financially success, but did it eventually right.</p>
+
+<p>I cannot comment on Perl (but I think that there are more Windows haters in the Perl community than in the Python community), but regarding Python I know that the BDFL (who doesn't like Windows as well) has stated that adequate Unicode support on all platforms is a major goal.</p>
+<br /><b>#1</b><br /><p>Small contribution to the discussion - I am running Czech localized Windows XP, which almost everywhere uses CP1250 code page. Funny thing with console is though that it still uses legacy DOS 852 code page.  </p>
+
+<p>I was able to make very simple perl script that prints utf8 encoded data to console using:</p>
+
+<pre><code>binmode STDOUT, ":utf8:encoding(cp852)";
+</code></pre>
+
+<p>Tried various options (including utf16le), but only above settings printed accented Czech characters correctly.</p>
+
+<p><strong>Edit:</strong> I played a little more with the problem and found <a href="http://search.cpan.org/perldoc?Win32%3a%3aUnicode" rel="nofollow">Win32::Unicode</a>. The module exports function <code>printW</code> that works properly both in output and redirected:</p>
+
+<pre><code>use utf8;
+use Win32::Unicode;
+
+binmode STDOUT, ":utf8";
+printW "Příliš žluťoučký kůň úpěl ďábelské ódy";
+</code></pre>
+<br /><b>#2</b><br /><p>I have to unask many of your questions.</p>
+
+<p>Did you know that</p>
+
+<ul>
+<li>Windows uses UTF-16 for its APIs, but still defaults to the various "fun" legacy encodings (e.g. Windows-1252, Windows-1251) in userspace, including file names, differently for the many localisations of Windows?</li>
+<li>you need to encode output, and picking the appropriate encoding for the system is achieved by the <a href="http://p3rl.org/locale" rel="nofollow">locale pragma</a>, and that there is the a POSIX standard called <a href="http://en.wikipedia.org/wiki/Locale" rel="nofollow">locale</a> on which this is built, and Windows is incompatible with it?</li>
+<li><a href="http://stackoverflow.com/q/2796127">Perl already supported</a> the so-called "wide" APIs once?</li>
+<li>Microsoft managed to adapt UTF-8 into their codepage system of character encoding, and you can switch your terminal by issuing the appropriate <code>chcp 65001</code> command?</li>
+</ul>
+<br /><b>#3</b><br /><p>Are you sure your script would output Unicode on some other platform correctly? "wide character in print" warning makes me very suspicious.</p>
+
+<p>I recommend to look over this <a href="http://en.wikibooks.org/wiki/Perl_Programming/Unicode_UTF-8" rel="nofollow">overview</a></p>
+<br /><b>#4</b><br /><p>Michael Kaplan has series of blog posts about the <code>cmd</code> console and Unicode that may be informative (while not really answering your question):</p>
+
+<ul>
+<li><p><a href="http://blogs.msdn.com/b/michkap/archive/2008/03/18/8306597.aspx" rel="nofollow">Conventional wisdom is retarded, aka What the @#%&amp;* is _O_U16TEXT?</a></p></li>
+<li><p><a href="http://blogs.msdn.com/b/michkap/archive/2010/04/07/9989346.aspx" rel="nofollow">Anyone who says the console can't do Unicode isn't as smart as they think they are</a></p></li>
+<li><p><a href="http://blogs.msdn.com/b/michkap/archive/2010/09/23/10066660.aspx" rel="nofollow">A confluence of circumstances leaves a stone unturned...</a></p></li>
+</ul>
+<br /><b>#5</b><br /><blockquote>
+  <p>Why on earth after all these years do
+  they not just simply call the Win32 -W
+  APIs that output UTF-16 Unicode
+  instead of forcing everything through
+  the ANSI/codepage bottleneck?</p>
+</blockquote>
+
+<p>Because Perl and Python aren't Windows programs.  They're Unix programs that happen to have been mostly ported to Windows.  As such, they don't like to call Win32 functions unless necessary.  For byte-based I/O, it's not necessary; this can be done with the Standard C Libary.  UTF-16-based I/O is a special case.</p>
+
+<blockquote>
+  <p>Or are the -W APIs inherently broken
+  to such a degree that they can't be
+  used as-is?</p>
+</blockquote>
+
+<p>I wouldn't say that the -W APIs are inherently broken as much as I'd say that Microsoft's approach to Unicode in C(++) is inherently broken.</p>
+
+<p>No matter how much certain Windows developers insist that programs should use <code>wchar_t</code> instead of <code>char</code>, there are just too many barriers to switching:</p>
+
+<ul>
+<li>Platform dependence:
+<ul>
+<li>The use of UTF-16 <code>wchar_t</code> on Windows and UTF-32 <code>wchar_t</code> elsewhere.  (The new <code>char16_t</code> and <code>char32_t</code> types may help.)</li>
+<li>The non-standardness of UTF-16 filename functions like <code>_wfopen</code>, <code>_wstat</code>, etc. limits the ability to use <code>wchar_t</code> in cross-platform code.</li>
+</ul></li>
+<li>Education.  Everbody learns C with <code>printf("Hello, world!\n");</code>, not <code>wprintf(L"Hello, world!\n");</code>.  The C textbook I used in college never even mentioned wide characters until Appendix A.13.</li>
+<li>The existing zillions of lines of code that use <code>char*</code> strings.</li>
+</ul>
+<br /><b>#6</b><br /><p>For Perl to fully support Windows in this way, every call to <code>print</code> <code>printf</code> <code>say</code> <code>warn</code> and <code>die</code> has to be modified.</p>
+
+<ul>
+<li>Is this Windows?</li>
+<li>Which version of Windows?
+<sup><sub>Perl still mostly works on Windows 95</sub></sup></li>
+<li>Is this going to the console, or somewhere else.</li>
+</ul>
+
+<p>Once you have that determined, you then have to use a completely different set of API functions.</p>
+
+<p>If you really want to see everything involved in doing this properly, have a look at the <a href="http://cpansearch.perl.org/src/XAICRON/Win32-Unicode-0.25/lib/Win32/Unicode/Console.pm" rel="nofollow">source</a> of <a href="http://search.cpan.org/perldoc/Win32%3a%3aUnicode%3a%3aConsole" rel="nofollow">Win32::Unicode::Console</a>.</p>
+
+<hr>
+
+<p>On Linux, OpenBSD, FreeBSD and similar OS's you can usually just call <a href="http://perldoc.perl.org/functions/binmode.html" rel="nofollow"><code>binmode</code></a> on the <code>STDOUT</code> and <code>STDERR</code> file handles.</p>
+
+<pre><code>binmode STDOUT, ':utf8';
+binmode STDERR, ':utf8';
+</code></pre>
+
+<p><sup><sub>This assumes that the terminal is using the UTF-8 encoding.</sub></sup></p>
+<br /><b>#7</b><br /><p><a href="http://www.i-programmer.info/programming/other-languages/1973-unicode-issues-in-perl.html" rel="nofollow">Unicode issues in Perl</a></p>
+
+<p>covers how the Win32 console works with Perl and the transcoding that happens behind the scene from ANSI to Unicode;albeit not just a Perl issue but affects other languages</p>
+<br />

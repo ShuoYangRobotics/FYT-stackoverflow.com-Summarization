@@ -1,0 +1,144 @@
+Question (ID-5698267): Efficient way to search for invalid characters in python I am building a forum application in Django and I want to make sure that users dont enter certain characters in their forum posts. I need an efficient way to scan their whole post to check for the invalid characters. What I have so far is the following although it does not work correctly and I do not think the idea is very efficient. 
+
+ def clean_topic_message(self):
+ topic_message = self.cleaned_data['topic_message']
+ words = topic_message.split()
+ if (topic_message == ""):
+  raise forms.ValidationError(_(u'Please provide a message for your topic'))
+ ***for word in words:
+  if (re.match(r'[^&lt;&gt;/\{}[]~`]$',topic_message)):
+   raise forms.ValidationError(_(u'Topic message cannot contain the following: &lt;&gt;/\{}[]~`'))***
+ return topic_message
+ 
+
+ Thanks for any help. 
+ Answers (Total-9): #0 If efficiency is a major concern I would re.compile() the re string, since you're going to use the same regex many times. 
+ #1 re.match and re.search behave differently . Splitting words is not required to search using regular expressions. 
+
+ import re
+symbols_re = re.compile(r"[^&lt;&gt;/\{}[]~`]");
+
+if symbols_re.search(self.cleaned_data('topic_message')):
+ //raise Validation error
+ 
+ #2 You have to be much more careful when using regular expressions - they are full of traps. 
+
+ in the case of [^&lt;&gt;/\{}[]~] the first ] closes the group which is probably not what you intended. If you want to use ] in a group it has to be the first character after the [ eg []^&lt;&gt;/\{}[~] 
+
+ simple test confirms this 
+
+ &gt;&gt;&gt; import re
+&gt;&gt;&gt; re.search("[[]]","]")
+&gt;&gt;&gt; re.search("[][]","]")
+&lt;_sre.SRE_Match object at 0xb7883db0&gt;
+ 
+
+ regex is overkill for this problem anyway 
+
+ def clean_topic_message(self):
+ topic_message = self.cleaned_data['topic_message']
+ invalid_chars = '^&lt;&gt;/\{}[]~`$'
+ if (topic_message == ""):
+  raise forms.ValidationError(_(u'Please provide a message for your topic'))
+ if set(invalid_chars).intersection(topic_message):
+  raise forms.ValidationError(_(u'Topic message cannot contain the following: %s'%invalid_chars))
+ return topic_message
+ 
+ #3 For a regex solution, there are two ways to go here: 
+
+ 
+ Find one invalid char anywhere in the string. 
+ Validate every char in the string. 
+ 
+
+ Here is a script that implements both: 
+
+
+
+ import re
+topic_message = 'This topic is a-ok'
+
+# Option 1: Invalidate one char in string.
+re1 = re.compile(r"[&lt;&gt;/{}[\]~`]");
+if re1.search(topic_message):
+ print ("RE1: Invalid char detected.")
+else:
+ print ("RE1: No invalid char detected.")
+
+# Option 2: Validate all chars in string.
+re2 = re.compile(r"^[^&lt;&gt;/{}[\]~`]*$");
+if re2.match(topic_message):
+ print ("RE2: All chars are valid.")
+else:
+ print ("RE2: Not all chars are valid.")
+ 
+
+ Take your pick. 
+
+ Note: the original regex erroneously has a right square bracket in the character class which needs to be escaped. 
+
+ Benchmarks: After seeing gnibbler's interesting solution using set() , I was curious to find out which of these methods would actually be fastest, so I decided to measure them. Here are the benchmark data and statements measured and the timeit result values: 
+
+ Test data: 
+
+
+
+ r"""
+TEST topic_message STRINGS:
+ok: 'This topic is A-ok.  This topic is  A-ok.'
+bad: 'This topic is &lt;not&gt;-ok. This topic is {not}-ok.'
+
+MEASURED PYTHON STATEMENTS:
+Method 1: 're1.search(topic_message)'
+Method 2: 're2.match(topic_message)'
+Method 3: 'set(invalid_chars).intersection(topic_message)'
+"""
+ 
+
+ Results: 
+
+
+
+ r"""
+Seconds to perform 1000000 Ok-match/Bad-no-match loops:
+Method Ok-time Bad-time
+1  1.054 1.190
+2  1.830 1.636
+3  4.364 4.577
+"""
+ 
+
+ The benchmark tests show that Option 1 is slightly faster than option 2 and both are much faster than the set().intersection() method. This is true for strings which both match and don't match. 
+ #4 I can't say what would be more efficient, but you certainly should get rid of the $ (unless it's an invalid character for the message)... right now you only match the re if the characters are at the end of topic_message because $ anchors the match to the right-hand side of the line. 
+ #5 is_valid = not any(k in text for k in '&lt;>/{}[]~`') 
+ #6 I agree with gnibbler, regex is an overkiller for this situation. Probably after removing this unwanted chars you'll want to remove unwanted words also, here's a little basic way to do it: 
+
+ def remove_bad_words(title):
+'''Helper to remove bad words from a sentence based in a dictionary of words.
+'''
+word_list = title.split(' ')
+for word in word_list:
+ if word in BAD_WORDS: # BAD_WORDS is a list of unwanted words
+  word_list.remove(word)
+#let's build the string again
+title2 = u''
+for word in word_list:
+ title2 = ('%s %s') % (title2, word)
+ #title2 = title2 + u' '+ word
+
+return title2
+ 
+ #7 In any case you need to scan the entire message. So wouldn't something simple like this work ? 
+
+ def checkMessage(topic_message):
+ for char in topic_message:
+  if char in "&lt;&gt;/\{}[]~`":
+   return False
+ return True
+ 
+ #8 Example: just tailor to your needs. 
+
+ ### valid chars: 0-9 , a-z, A-Z only
+import re
+REGEX_FOR_INVALID_CHARS=re.compile( r'[^0-9a-zA-Z]+' )
+list_of_invalid_chars_found=REGEX_FOR_INVALID_CHARS.findall( topic_message )

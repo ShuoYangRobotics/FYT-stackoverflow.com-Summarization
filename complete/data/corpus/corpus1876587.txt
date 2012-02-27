@@ -1,0 +1,158 @@
+Question (ID-1876587): Optimal way to access a value from the last iteration in a loop What's the best and fastest way to access a value from the previous iteration in a for loop, assuming that the object will be very large (example, a cursor object which has 100,000+ records) 
+
+ Using a simple example: 
+
+ tmp = [
+   ['xyz', 335], ['zzz', 338], ['yyy', 339], ['yyy', 442], 
+   ['abc', 443], ['efg', 444], ['ttt', 446], ['fff', 447]
+  ]
+
+for x in tmp:
+ if not prev:
+  prev = x[1]
+ print 'seq: ', x[1], 'prev seq:', prev, 'variance: ', x[1]-prev
+ prev = x[1]
+ 
+
+ Is this the most optimal way to handle this? 
+
+ Based on the responses below i did some testing: 
+tmp was created with 500 lists, the average of running it 20 times is shown below. 
+
+ results: 
+
+ Mines: 0,623 
+Dave snippet1: 0,605 
+Dave snippet2: 0,586 
+Catchmeifyoutry (edited code): 0,707 
+ Answers (Total-6): #0 Just iterate over pairs, using zip() , which is much more readable. 
+
+ UPDATE: for python 2.x, use itertools.izip instead as it is more efficient! 
+
+ from itertools import izip
+for prev, next in izip(tmp, tmp[1:]):
+ print 'seq: ', next[1], 'prev seq:', prev[1], 'variance: ', next[1]-prev[1]
+ 
+
+ which can also use value unpacking to avoid the index: 
+
+ for (_, prev), (_, next) in izip(tmp, tmp[1:]):
+ print 'seq: ', next, 'prev seq:', prev, 'variance: ', next-prev
+ 
+
+ Or, if you really need the first iteration too 
+
+ for prev, next in izip(tmp, tmp[:1] + tmp):
+ print 'seq: ', next[1], 'prev seq:', prev[1], 'variance: ', next[1]-prev[1]
+ 
+
+ EDIT 
+
+ If you want to avoid the creation of a list in the second argument you can also use an explicit iterator: 
+
+ itr = iter(tmp)
+itr.next() # here I assume tmp is not empty, otherwise an exception will be thrown
+for prev, next in izip(tmp, itr):
+ print 'seq: ', next[1], 'prev seq:', prev[1], 'variance: ', next[1]-prev[1]
+ 
+
+ Note : This zip pattern is useful in similar problems too.
+For example to extract successive triplets from a list: 
+
+ xs = range(9)
+triplets = zip(xs[::3], xs[1::3], xs[2::3]) # python 2.x, zip returns a list
+
+print xs  # [0, 1, 2, 3, 4, 5, 6, 7, 8]
+print triplets # [(0, 1, 2), (3, 4, 5), (6, 7, 8)]
+ 
+
+ Also note that in python 3 zip returns an iterator , similar to itertools.izip . 
+ #1 Your code is going to be doing the "if not prev" test every time round the loop, even though it only applies to the first element.
+Also your code seems broken to me - the first time round the loop the prev and current values are the same. 
+
+ I would do it like this, assuming that there is at least one element: 
+
+ tmp_iter = iter(tmp)
+prev = tmp_iter.next()
+
+for x in tmp_iter: 
+ print 'seq: ', x[1], 'prev seq:', prev[1], 'variance: ', x[1]-prev[1]
+ prev = x
+ 
+
+ this could be optimised further by getting rid of the indexing: 
+
+ tmp_iter = iter(tmp)
+[_, prev] = tmp_iter.next()
+
+for [_, x] in tmp_iter: 
+ print 'seq: ', x, 'prev seq:', prev, 'variance: ', x-prev
+ prev = x
+ 
+
+ I use the assignment to spit the list into its constituent parts, and assign the first element to _ because it is not used. 
+ #2 Using itertools : 
+
+ from itertools import izip, islice
+for prev, cur in izip(l, islice(l, 1, None)):
+ print 'seq:', cur[1], 'prev seq:', prev[1], 'delta:', cur[1]-prev[1]
+ 
+
+ For the specific example given in the question, note that, if the numbers
+can be represented using 32-bit ints, and the list of numbers fits into
+memory, one of the fastest ways to compute the difference would be to
+use numpy : 
+
+ import numpy
+a = numpy.array([x[1] for x in tmp])
+delta = numpy.diff(a)
+ 
+ #3 Guido's time machine to the rescue! 
+
+ From the itertools recipes page: 
+
+ import itertools
+def pairwise(iterable):
+ "s -&gt; (s0,s1), (s1,s2), (s2, s3), ..."
+ a, b = itertools.tee(iterable)
+ next(b, None)
+ return itertools.izip(a, b)
+ 
+
+ This should be the most appropriate method (consider the iterable was (random.randint(100) for x in xrange(1000)) ; here iter(iterable); next(iterable) as a secondary iterator might not provide correct functionality. 
+
+ Use it in your loop as: 
+
+ for prev_item, item in pairwise(iterable):
+ …
+ 
+ #4 This code generates NameError because at if not prev , prev is not defined. Set it to False or None before the cycle. Also you may make a different loop: 
+
+ for i in xrange(1, len(tmp)):
+ print 'seq: {0}, prev seq: {1}, variance: {2}'.format(tmp[i][1], tmp[i - 1][1], tmp[i] - tmp[i - 1][1])
+ 
+
+ If you'll use 100,000+ records, the bottleneck will be not the cycle, but the memory used by the app. Don't store all the data in such a format: each pair of values (a list) will eat 100+ bytes . If they're in a file, it's better to iterate over it's lines: 
+
+ (assuming the data is tab-separated) 
+
+ def reader(filename):
+ with open(filename) as f:
+  prev = f.next()
+  for l in f:
+   l = l.split('\t')
+   yield (prev, l)
+   prev = l
+
+for (prev, curr) in reader(myfile):
+ print 'seq: {0}, prev seq: {1}, variance: {2}'.format(curr[1], prev[1], curr[1] - prev[1])
+ 
+
+ reader is a generator , it returns values from a sequence many times. This way, only 2 lines of data will be stored in memory at any moment, and your app will sustain even millions of rows. 
+
+ To make the code readable, I put it aside, so that in the program body we dealed with the sequence of data, without caring how it's composed. 
+ #5 it = imap(operator.itemgetter(1), tmp) # get all 2nd items
+prev = next(it, None) # get 1st element (doesn't throw exception for empty `tmp`)
+for x in it:
+ print 'seq: %s prev seq: %s variance: %s' % (x, prev, x-prev)
+ prev = x

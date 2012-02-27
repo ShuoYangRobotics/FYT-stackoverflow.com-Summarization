@@ -1,0 +1,164 @@
+Question (ID-4127805): Override operator + to make date + time = datetime in Python I have a couple classes extending builtin datetime.* 
+
+ Is there any good reason to not overload + ( MyTime.__radd___ ) so MyDate + MyTime returns a MyDateTime? 
+ Answers (Total-6): #0 This is already implemented as a class method, datetime.datetime.combine : 
+
+ import datetime
+d = datetime.date(2010, 12, 5)
+t = datetime.time(10, 22, 15)
+dt = datetime.datetime.combine(d, t)
+print dt
+ 
+
+ prints 
+
+ 2010-12-05 10:22:15
+ 
+ #1 This would generally be frowned upon because you're really combining rather than adding; this is why the actual datetime library has a combine method rather than using addition in this way. 
+
+ I'm not aware of any other cases in Python where &lt;instance of TypeA&gt; + &lt;instance of TypeB&gt; produces &lt;instance of TypeC&gt; . Thus, the Principle of least astonishment suggests that you should simply provide a combine method rather than overload addition. 
+ #2 Yes, there is at least one good reason not to: the resulting instance is completely different from the two input instances. Is this important? I don't think so -- consider that date - date yields timedelta . 
+
+ The way I see it: 
+
+ 
+ Does adding two dates together make sense? No. 
+ Does adding two times together make sense? No. 
+ Does adding a date and a time together make sense? Yup! 
+ Does adding a date and a timedelta togethor make sense? Maybe. 
+ Does adding a time and a timedelta together make sense? Maybe. 
+ 
+
+ and for subtraction 
+
+ 
+ Does subtracting two dates make sense? Yes. 
+ Does subtracting two times make sense? Yes. 
+ Does subtracting a time from a date make sense? Nope. 
+ Does subtracting a timedelta from a date make sense? Maybe. 
+ Does subtracting a timedelta from a time make sense? Maybe. 
+ 
+
+ Developing along the lines of what makes sense: 
+
+ date + time  =&gt; datetime
+date + timedelta =&gt; date | datetime or exception or silently drop time portion
+
+time + date =&gt; datetime
+time + timedelta =&gt; time | wrap-around or exception
+
+date - date  =&gt; timedelta
+date - timedelta =&gt; date | datetime or exception or silently drop time portion
+
+time - time  =&gt; timedelta
+time - timedelta =&gt; time | wrap-around or exception
+
+datetime + timedelta =&gt; datetime
+datetime - timedelta =&gt; datetime
+ 
+
+ So, if it were me and I were designing a Date, Time, DateTime, TimeDelta framework, I would allow: 
+
+ date + time
+date - date
+time - time
+datetime + timedelta
+datetime - timedelta
+ 
+
+ and for these: 
+
+ date +/- timedelta
+time +/- timedelta
+ 
+
+ I would default to returning the same type if the timedelta had none of the other type, and raising an exception if the timedelta did have some of the other type, but there would be a setting that would control that. The other possible behavior would be to drop the unneeded portion -- so a date combined with a timedelta that had hours would drop the hours and return a date. 
+ #3 Due to the existence of the date, time, and datetime cross-type addition and subtraction operators, I would think that this is fine, so long as it is well defined. 
+
+ Currently (2.7.2): 
+
+ date = date + timedelta
+date = date - timedelta
+timedelta = date - date
+
+datetime = datetime + timedelta
+datetime = datetime - timedelta
+timedelta = datetime - datetime
+ 
+
+ I believe the following is also reasonable for an extension: 
+
+ timedelta = time - time
+datetime = date + time
+ 
+
+ I was going to suggest the following as well, but time has very specific min and max values for hour , minute , second , and microsecond , thus requiring a silent wraparound of values or returning of a different type: 
+
+ time = time + timedelta
+time = time - timedelta
+ 
+
+ Similarly, date cannot handle a timedelta of less than a day being added to it. Often I have been told to simply use Duck Typing with Python , because that's the intent. If that is true , then I would propose the following completed interface: 
+
+ [date|datetime] = date + timedelta
+[date|datetime] = date - timedelta
+timedelta = date - date
+
+[time|timedelta] = time + timedelta
+[time|timedelta] = time - timedelta
+timedelta = time - time
+
+datetime = datetime + timedelta
+datetime = datetime - timedelta
+datetime = date + time
+datetime = date - time
+timedelta = datetime - datetime
+timedelta = datetime - date
+
+timedelta = timedelta + timedelta
+timedelta = timedelta - timedelta
+ 
+
+ In which, given the case that date has precision loss (for timedelta 's with partial days), it is promoted to datetime . Similarly, given the case that time has precision loss (for timedelta 's that yield a result of more than one day, or negative time), it is promoted to timedelta . However , I'm not fully comfortable with [time|timedelta] . It makes sense given the rest of the interface from parallelism and precision views, but I do think it might be more elegant to just wraparound the time to the proper hour, thus changing all the [time|timedelta] 's to simply time , but unfortunately that leaves us with lost precision. 
+ #4 In my opinion, the most valuable uses of operator overloading are situations where many input values can be combined. You'd never want to deal with: 
+
+ concat(concat(concat("Hello", ", "), concat("World", "!")), '\n');
+ 
+
+ or 
+
+ distance = sqrt(add(add(x*x, y*y), z*z));
+ 
+
+ So we overload math symbols to create a more intuitive syntax. Another way to deal with this problem is variadic functions, like + in Scheme. 
+
+ With your date + time = datetime , it doesn't make sense to add datetime + datetime , datetime + time , or datetime + date , so you could never encounter a situation like those above. 
+
+ In my opinion, once again, the right thing is to use a constructor method. In a language with strong typing like C++, you'd have DateTime(const Date &amp;d, const Time &amp;t) . With Python's dynamic typing, I guess they gave the function a name, datetime.combine(date, time) , to make the code clearer when the types of the input variables are not visible in the code. 
+ #5 I guess most important things are functionality and efficiency. Of course using a simple + operator will be easier to use, but i am not sure about functionality. 
+
+ If we compare it to datetime.combine , What combine do is: 
+
+ dt = date(2011,01,01)
+tm = time(20,00)
+dtm = datetime.combine(dt, tm)
+ 
+
+ For dtm 
+
+ 
+ If dt is a date object and tm is a time object, than date info is taken from dt , time info and tzinfo is taken from tm object 
+ if dt is a datetime object, than its time and tzinfo attributes will be ignored. 
+ 
+
+ From that point of view, working with datetime objects do not seem to be simple objects, but more compex structures with diffrent attributes, like timezone info . 
+
+ Probably thats why datetime objects have some additional functions that is used for formatting object type and data structure of the object. 
+
+ Python have a motto (something like that): 
+
+ 
+ In python, nothing is unchangable, if you know what you are doing. If not, it is better to leave library functions as they are... 
+ 
+
+ So, in my opinion, it is better you use combine that overloading + operator

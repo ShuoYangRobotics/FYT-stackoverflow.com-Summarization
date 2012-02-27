@@ -1,0 +1,62 @@
+Question (ID-2023608): check what files are open in Python I'm getting an error in a program that is supposed to run for a long time that too many files are open. Is there any way I can keep track of which files are open so I can print that list out occasionally and see where the problem is? 
+ Answers (Total-6): #0 I ended up wrapping the built-in file object at the entry point of my program. I found out that I wasn't closing my loggers. 
+
+ import __builtin__
+openfiles = set()
+oldfile = __builtin__.file
+class newfile(oldfile):
+ def __init__(self, *args):
+  self.x = args[0]
+  print "### OPENING %s ###" % str(self.x)   
+  oldfile.__init__(self, *args)
+  openfiles.add(self)
+
+ def close(self):
+  print "### CLOSING %S ###" % str(self.x)
+  oldfile.close(self)
+  openfiles.remove(self)
+oldopen = __builtin__.open
+def newopen(*args):
+ return newfile(*args)
+__builtin__.file = newfile
+__builtin__.open = newopen
+
+def printOpenFiles():
+ print "### %d OPEN FILES: [%s]" % (len(openfiles), ", ".join(f.x for f in openfiles))
+ 
+ #1 On Linux, you can look at the contents of /proc/self/fd : 
+
+ $ ls -l /proc/self/fd/
+total 0
+lrwx------ 1 foo users 64 Jan 7 15:15 0 -&gt; /dev/pts/3
+lrwx------ 1 foo users 64 Jan 7 15:15 1 -&gt; /dev/pts/3
+lrwx------ 1 foo users 64 Jan 7 15:15 2 -&gt; /dev/pts/3
+lr-x------ 1 foo users 64 Jan 7 15:15 3 -&gt; /proc/9527/fd
+ 
+ #2 On Linux, you can use lsof to show all files opened by a process. 
+ #3 On Windows, you can use Process Explorer to show all file handles owned by a process. 
+ #4 I'd guess that you are leaking file descriptors. You probably want to look through your code to make sure that you are closing all of the files that you open. 
+ #5 Although the solutions above that wrap opens are useful for one's own code, I was debugging my client to a third party library including some c extension code, so I needed a more direct way. The following routine works under darwin, and (I hope) other unix-like environments: 
+
+ def get_open_fds():
+ '''
+ return the number of open file descriptors for current process
+
+ .. warning: will only work on UNIX-like os-es.
+ '''
+ import subprocess
+ import os
+
+ pid = os.getpid()
+ procs = subprocess.check_output( 
+  [ "lsof", '-w', '-Ff', "-p", str( pid ) ] )
+
+ nprocs = len( 
+  filter( 
+   lambda s: s and s[ 0 ] == 'f' and s[1: ].isdigit(),
+   procs.split( '\n' ) )
+  )
+ return nprocs
+ 
+
+ If anyone can extend to be portable to windows, I'd be grateful.

@@ -1,0 +1,184 @@
+<h3>Question (ID-1832528):</h3><h2>Is close() necessary when using iterator on a Python file object</h2><p>Is it bad practice to do the following and <strong>not</strong> explicitly handle a file object and call its <code>close()</code> method?</p>
+
+<pre><code>for line in open('hello.txt'):
+    print line
+</code></pre>
+
+<p>NB - this is for versions of Python that do not yet have the <code>with</code> statement.</p>
+
+<p>I ask as the Python documentation seems to recommend this :-</p>
+
+<pre><code>f = open("hello.txt")
+try:
+    for line in f:
+        print line
+finally:
+    f.close()
+</code></pre>
+
+<p>Which seems more verbose than necessary.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Close is <strong>always</strong> necessary when dealing with files, it is not a good idea to leave open file handles all over the place. They will eventually be closed when the file object is garbage collected but you do not know when that will be and in the mean time you will be wasting system resources by holding to file handles you no longer need.</p>
+
+<p>If you are using Python 2.5 and higher the <code>close()</code> can be called for you automatically using the <code>with</code> statement:</p>
+
+<pre><code>from __future__ import with_statement # Only needed in Python 2.5
+with open("hello.txt") as f:
+    for line in f:
+        print line
+</code></pre>
+
+<p>This is has the same effect as the code you have:</p>
+
+<pre><code>f = open("hello.txt")
+try:
+    for line in f:
+        print line
+finally:
+    f.close()
+</code></pre>
+
+<p>The <code>with</code> statement is direct language support for the <a href="http://en.wikipedia.org/wiki/Resource%5Facquisition%5Fis%5Finitialization" rel="nofollow">Resource Acquisition Is Initialization</a> idiom commonly used in C++. It allows the safe use and clean up of all sorts of resources, for example it can be used to always ensure that database connections are closed or locks are always released like below.</p>
+
+<pre><code>mylock = threading.Lock()
+with mylock:
+    pass # do some thread safe stuff
+</code></pre>
+<br /><b>#1</b><br /><p>In actuality, the file will be closed when it is garbage collected.  See <a href="http://stackoverflow.com/questions/575278/how-does-python-close-files-that-have-been-gced">this question</a> for more on how that works.  </p>
+
+<p>It is still recommended that you use a try/finally block or a with statement though.  If there is an exception when using one of the file object's methods, a reference will be stored in the traceback (which is stored as a global variable) until you clear it or another exception occurs.  </p>
+
+<p>Thus, it's bad to rely on garbage collection to close your file for you.</p>
+
+<p>Also, if you've written to the file, you can't guarantee that the changes will be saved to the file until it is closed or flushed.</p>
+<br /><b>#2</b><br /><p>Upon exit the Python interpreter (or the kernel in the event of a crash) will close the file, but it's still a good practice to close them when you don't need them. For 1 or 2, or 10, files it might not be a problem, but for more it might bring the whole system down.</p>
+
+<p>Most importantly, it is a sign that the person who wrote the code actually <strong>cares</strong> about his work.</p>
+<br /><b>#3</b><br /><p>It's kind of hinted at all over the place, but to make it the most clear, yes, you need to close that file.  In Python 2.5 (using <strong>future</strong>) and in Python 2.6, you no longer need the wordy version:</p>
+
+<pre><code>from __future__ import with_statement
+with open("hello.txt") as f:
+    for line in f:
+        print line
+</code></pre>
+<br /><b>#4</b><br /><p>Strange that for all the discussion in this topic of the importance of freeing system resources, nobody has mentioned what seems to me an obviously more significant reason to close a file deterministically:  so that it can be opened again.</p>
+
+<p>There are certainly cases where it doesn't matter.  If a file object goes out of scope or gets deleted, the underlying file will get closed.  (When it gets closed depends on the specific implementation of Python you're using.)  That's generally going to be good enough - <em>if</em> you know exactly when the file variable is going to go out of scope, and <em>if</em> you know that you don't care if the file gets closed deterministically.</p>
+
+<p>But why should you even be troubling yourself with that kind of analysis when the <code>with</code> statement exists?</p>
+<br /><b>#5</b><br /><p>You need to close handles so that memory is freed up. Not really needed until dealing with a lot of files at a time.</p>
+<br /><b>#6</b><br /><p>Yes, because otherwise you might leak resources.</p>
+
+<blockquote>
+  <p>When you’re done with a file, call
+  <code>f.close()</code> to close it and free up any
+  system resources taken up by the open
+  file.</p>
+</blockquote>
+
+<p>From the <a href="http://docs.python.org/tutorial/inputoutput.html#methods-of-file-objects" rel="nofollow">Python docs</a>.</p>
+
+<p>This'll happen for you when the program exits, but otherwise Python's keeping around resources it no longer needs up to that point.</p>
+<br /><b>#7</b><br /><p>No, I don't believe the longer idiom is necessary, and here is why:</p>
+
+<p>I grepped /usr/lib/python2.6/ for the pattern <code>'for\s+.*\s+in\s+open\('</code>
+and found many examples of </p>
+
+<pre><code>for line in open('hello.txt'):
+    print line
+</code></pre>
+
+<p>and so far zero instances of </p>
+
+<pre><code>f = open("hello.txt")
+try:
+    for line in f:
+        print line
+finally:
+    f.close()
+</code></pre>
+
+<p>See below for the list of files in the standard library that use the <code>for ... in open</code> idiom.</p>
+
+<p>This naturally leads to the question: If the Python developers accept the shorter idiom in
+the standard libraries, how can we be improving anything by using something
+different in our own code if our code depends on standard libraries?</p>
+
+<p>I think the answer is, the longer idiom does not improve anything.</p>
+
+<p>I also ran </p>
+
+<pre><code>#!/usr/bin/env python
+try:
+    for i,line in enumerate(open('a')):
+        print line
+        raw_input()
+        if i==5:
+            break
+except Exception:
+    pass
+
+raw_input()
+</code></pre>
+
+<p>and checked <code>/proc/PID/fd</code> for when the file descriptor was closed. 
+It appears that when you break out of the for loop, the file is closed for you.</p>
+
+<p>On the basis of these experiments, I do not believe the long 
+<code>try...finally...close</code> idiom is necessary. </p>
+
+<p>Here is the result of the grep:</p>
+
+<pre><code>/usr/lib/python2.6/dist-packages/NvidiaDetector/nvidiadetector.py:89:tempList = [ x.strip() for x in open(obsolete).readlines() ]
+/usr/lib/python2.6/dist-packages/rpy_io.py:49:for line in open(file).readlines():
+/usr/lib/python2.6/dist-packages/setuptools/command/easy_install.py:1376:for line in open(self.filename,'rt'):
+/usr/lib/python2.6/dist-packages/GDebi/DscSrcPackage.py:47:for line in open(file):
+/usr/lib/python2.6/dist-packages/aptsources/distinfo.py:220:[x.strip() for x in open(value)])
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeCache.py:989:for line in open("/proc/mounts"):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeAufs.py:100:for line in open("/proc/mounts"):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeAufs.py:205:for line in open("/proc/mounts"):
+/usr/lib/python2.6/dist-packages/DistUpgrade/distinfo.py:220:[x.strip() for x in open(value)])
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeViewKDE.py:826:for c in open(sys.argv[2]).read():
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeConfigParser.py:45:items = [x.strip() for x in open(p)]
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeQuirks.py:684:for line in open(cpuinfo):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeQuirks.py:692:for line in open("/proc/mounts"):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeQuirks.py:726:for line in open("/etc/fstab"):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeQuirks.py:762:for line in open(fstab):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeQuirks.py:801:for line in open("/etc/fstab"):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeQuirks.py:874:for line in open(XORG):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeQuirks.py:939:for line in open(os.path.join(modaliasesdir,filename)):
+/usr/lib/python2.6/dist-packages/DistUpgrade/DistUpgradeController.py:1307:for line in open(template):
+/usr/lib/python2.6/dist-packages/DistUpgrade/xorg_fix_proprietary.py:23:for raw in open(xorg_source):
+/usr/lib/python2.6/dist-packages/DistUpgrade/xorg_fix_proprietary.py:58:for line in open(xorg):
+/usr/lib/python2.6/dist-packages/DistUpgrade/xorg_fix_proprietary.py:82:for line in open(xorg):
+/usr/lib/python2.6/dist-packages/jockey/oslib.py:377:for line in open(self.apt_jockey_source):
+/usr/lib/python2.6/dist-packages/jockey/oslib.py:393:for line in open(f):
+/usr/lib/python2.6/dist-packages/jockey/backend.py:651:for line in open(path):
+/usr/lib/python2.6/dist-packages/jockey/detection.py:277:for line in open(alias_file):
+/usr/lib/python2.6/dist-packages/jockey/detection.py:597:for l in open(os.path.join(path, 'uevent')):
+/usr/lib/python2.6/dist-packages/apt/cdrom.py:83:for line in open(fname):
+/usr/lib/python2.6/dist-packages/problem_report.py:1119:for line in open('/proc/mounts'):
+/usr/lib/python2.6/dist-packages/apport/packaging_impl.py:128:for line in open(f):
+/usr/lib/python2.6/dist-packages/apport/packaging_impl.py:190:for line in open(sumfile):
+/usr/lib/python2.6/dist-packages/apport/packaging_impl.py:641:for l in open('/etc/apt/sources.list'):
+/usr/lib/python2.6/dist-packages/apport/hookutils.py:190:for line in open('/proc/asound/cards'):
+/usr/lib/python2.6/dist-packages/apport/hookutils.py:290:for line in open('/var/log/syslog'):
+/usr/lib/python2.6/dist-packages/apport/hookutils.py:493:mods = [l.split()[0] for l in open(module_list)]
+/usr/lib/python2.6/dist-packages/softwareproperties/SoftwareProperties.py:597:for line in open(f):
+/usr/lib/python2.6/dist-packages/softwareproperties/gtk/SoftwarePropertiesGtk.py:883:for x in open(tmp.name):
+/usr/lib/python2.6/dist-packages/lsb_release.py:253:for line in open('/etc/lsb-release'):
+/usr/lib/python2.6/dist-packages/numpy/distutils/system_info.py:815:for d in open(ld_so_conf,'r').readlines():
+/usr/lib/python2.6/dist-packages/LanguageSelector/LocaleInfo.py:72:for line in open(languagelist_file):
+/usr/lib/python2.6/dist-packages/LanguageSelector/LocaleInfo.py:187:for line in open(environment).readlines():
+/usr/lib/python2.6/dist-packages/LanguageSelector/LocaleInfo.py:193:for line in open(environment).readlines():
+/usr/lib/python2.6/dist-packages/LanguageSelector/LanguageSelector.py:125:for line in open(fname):
+/usr/lib/python2.6/dist-packages/LanguageSelector/LanguageSelector.py:140:for line in open(fname):
+/usr/lib/python2.6/dist-packages/LanguageSelector/LanguageSelector.py:171:for line in open(fname):
+/usr/lib/python2.6/dist-packages/LanguageSelector/LanguageSelector.py:210:for line in open(fname):
+/usr/lib/python2.6/dist-packages/LanguageSelector/macros.py:16:for l in open(file):
+/usr/lib/python2.6/dist-packages/LanguageSelector/macros.py:37:for l in open(self.LANGCODE_TO_LOCALE):
+/usr/lib/python2.6/dist-packages/LanguageSelector/LangCache.py:94:for l in open(self.BLACKLIST):
+/usr/lib/python2.6/dist-packages/LanguageSelector/LangCache.py:99:for l in open(self.LANGCODE_TO_LOCALE):
+/usr/lib/python2.6/dist-packages/LanguageSelector/LangCache.py:111:for l in open(self.PACKAGE_DEPENDS):
+/usr/lib/python2.6/dist-packages/LanguageSelector/ImSwitch.py:78:for l in open(self.blacklist_file):
+</code></pre>
+<br />

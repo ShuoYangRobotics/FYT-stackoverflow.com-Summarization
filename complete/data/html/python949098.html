@@ -1,0 +1,331 @@
+<h3>Question (ID-949098):</h3><h2>Python: split a list based on a condition?</h2><p>What's the best way, both aesthetically and from a performance perspective, to split a list of items into multiple lists based on a conditional? The equivalent of:</p>
+
+<pre><code>good = [x for x in mylist if x in goodvals]
+bad  = [x for x in mylist if x not in goodvals]
+</code></pre>
+
+<p>is there a more elegant way to do this?</p>
+
+<p>Update: here's the actual use case, to better explain what I'm trying to do:</p>
+
+<pre><code># files looks like: [ ('file1.jpg', 33L, '.jpg'), ('file2.avi', 999L, '.avi'), ... ]
+IMAGE_TYPES = ('.jpg','.jpeg','.gif','.bmp','.png')
+images = [f for f in files if f[2].lower() in IMAGE_TYPES]
+anims  = [f for f in files if f[2].lower() not in IMAGE_TYPES]
+</code></pre>
+<br /><h3>Answers (Total-13):</h3><b>#0</b><br /><p>Here's the lazy iterator approach:</p>
+
+<pre><code>from itertools import tee
+
+def split_on_condition(seq, condition):
+    l1,l2 = tee((condition(item),item) for item in seq)
+    return (i for p, i in l1 if p), (i for p, i in l2 if not p)
+</code></pre>
+
+<p>It evaluates the condition once per item and returns two generators, first yielding values from the sequence where the condition is true, the other where it's false.</p>
+
+<p>Because it's lazy you can use it on any iterator, even an infinite one:</p>
+
+<pre><code>from itertools import count, islice
+
+def is_prime(n):
+    return n &gt; 1 and all(n % i for i in xrange(2,n))
+
+primes, not_primes = split_on_condition(count(), is_prime)
+print("First 10 primes", list(islice(primes, 10)))
+print("First 10 non-primes", list(islice(not_primes, 10)))
+</code></pre>
+
+<p>Usually though the non-lazy list returning approach is better:</p>
+
+<pre><code>def split_on_condition(seq, condition):
+    a, b = [], []
+    for item in seq:
+        (a if condition(item) else b).append(item)
+    return a,b
+</code></pre>
+
+<p>Edit: For your more specific usecase of splitting items into different lists by some key, heres a generic function that does that:</p>
+
+<pre><code>DROP_VALUE = lambda _:_
+def split_by_key(seq, resultmapping, keyfunc, default=DROP_VALUE):
+    """Split a sequence into lists based on a key function.
+
+        seq - input sequence
+        resultmapping - a dictionary that maps from target lists to keys that go to that list
+        keyfunc - function to calculate the key of an input value
+        default - the target where items that don't have a corresponding key go, by default they are dropped
+    """
+    result_lists = dict((key, []) for key in resultmapping)
+    appenders = dict((key, result_lists[target].append) for target, keys in resultmapping.items() for key in keys)
+
+    if default is not DROP_VALUE:
+        result_lists.setdefault(default, [])
+        default_action = result_lists[default].append
+    else:
+        default_action = DROP_VALUE
+
+    for item in seq:
+        appenders.get(keyfunc(item), default_action)(item)
+
+    return result_lists
+</code></pre>
+
+<p>Usage:</p>
+
+<pre><code>def file_extension(f):
+    return f[2].lower()
+
+split_files = split_by_key(files, {'images': IMAGE_TYPES}, keyfunc=file_extension, default='anims')
+print split_files['images']
+print split_files['anims']
+</code></pre>
+<br /><b>#1</b><br /><blockquote>
+<pre><code>good = [x for x in mylist if x in goodvals]
+bad  = [x for x in mylist if x not in goodvals]
+</code></pre>
+  
+  <p>is there a more elegant way to do this?</p>
+</blockquote>
+
+<p>That code is perfectly readable, and extremely clear!</p>
+
+<pre><code># files looks like: [ ('file1.jpg', 33L, '.jpg'), ('file2.avi', 999L, '.avi'), ... ]
+IMAGE_TYPES = ('.jpg','.jpeg','.gif','.bmp','.png')
+images = [f for f in files if f[2].lower() in IMAGE_TYPES]
+anims  = [f for f in files if f[2].lower() not in IMAGE_TYPES]
+</code></pre>
+
+<p>Again, this is <em>fine!</em></p>
+
+<p>There might be slight performance improvements using sets, but it's a trivial difference, and I find the list comprehension far easier to read, and you don't have to worry about the order being messed up, duplicates being removed as so on.</p>
+
+<p>In fact, I may go another step "backward", and just use a simple for loop:</p>
+
+<pre><code>images, anims = [], []
+
+for f in files:
+    if f.lower() in IMAGE_TYPES:
+        images.append(f)
+    else:
+        anims.append(f)
+</code></pre>
+
+<p>The a list-comprehension or using <code>set()</code> is fine until you need to add some other check or another bit of logic - say you want to remove all 0-byte jpeg's, you just add something like..</p>
+
+<pre><code>if f[1] == 0:
+    continue
+</code></pre>
+<br /><b>#2</b><br /><p><strong>First go</strong> (pre-OP-edit): Use sets:</p>
+
+<pre><code>mylist = [1,2,3,4,5,6,7]
+goodvals = [1,3,7,8,9]
+
+myset = set(mylist)
+goodset = set(goodvals)
+
+print list(myset.intersection(goodset))  # [1, 3, 7]
+print list(myset.difference(goodset))    # [2, 4, 5, 6]
+</code></pre>
+
+<p>That's good for both readability (IMHO) and performance.</p>
+
+<p><strong>Second go</strong> (post-OP-edit):</p>
+
+<p>Create your list of good extensions as a set:</p>
+
+<pre><code>IMAGE_TYPES = set(['.jpg','.jpeg','.gif','.bmp','.png'])
+</code></pre>
+
+<p>and that will increase performance.  Otherwise, what you have looks fine to me.</p>
+<br /><b>#3</b><br /><p>Problem with all proposed solutions is that it will scan and apply the filtering function twice. I'd make a simple small function like this:</p>
+
+<pre><code>def SplitIntoTwoLists(l, f):
+  a = []
+  b = []
+  for i in l:
+    if f(i):
+      a.append(i)
+    else:
+      b.append(i)
+ return (a,b)
+</code></pre>
+
+<p>That way you are not processing anything twice and also are not repeating code.</p>
+<br /><b>#4</b><br /><p>Personally, I like the version you cited, assuming you already have a list of <code>goodvals</code> hanging around.  If not, something like:</p>
+
+<pre><code>good = filter(lambda x: is_good(x), mylist)
+bad = filter(lambda x: !is_good(x), mylist)
+</code></pre>
+
+<p>Of course, that's really very similar to using a list comprehension like you originally did, but with a function instead of a lookup:</p>
+
+<pre><code>good = [x for x in mylist if is_good(x)]
+bad  = [x for x in mylist if !is_good(x)]
+</code></pre>
+
+<p>In general, I find the aesthetics of list comprehensions to be very pleasing.  Of course, if you don't actually need to preserve ordering and don't need duplicates, using the <code>intersection</code> and <code>difference</code> methods on sets would work well too.</p>
+<br /><b>#5</b><br /><p><a href="http://docs.python.org/library/itertools.html#itertools.groupby" rel="nofollow">itertools.groupby</a> almost does what you want, except it requires the items to be sorted to ensure that you get a single contiguous range, so you need to sort by your key first (otherwise you'll get multiple interleaved groups for each type).  eg.</p>
+
+<pre><code>def is_good(f):
+    return f[2].lower() in IMAGE_TYPES
+
+files = [ ('file1.jpg', 33L, '.jpg'), ('file2.avi', 999L, '.avi'), ('file3.gif', 123L, '.gif')]
+
+for key, group in itertools.groupby(sorted(files, key=is_good), key=is_good):
+    print key, list(group)
+</code></pre>
+
+<p>gives:</p>
+
+<pre><code>False [('file2.avi', 999L, '.avi')]
+True [('file1.jpg', 33L, '.jpg'), ('file3.gif', 123L, '.gif')]
+</code></pre>
+
+<p>Similar to the other solutions, the key func can be defined to divide into any number of groups you want.</p>
+<br /><b>#6</b><br /><p>I agree with RIchieHindle. you can also check this link<br>
+<a href="http://house.hcn-strela.ru/doc/python/lib/types-set.html" rel="nofollow">http://house.hcn-strela.ru/doc/python/lib/types-set.html</a></p>
+<br /><b>#7</b><br /><p>For perfomance, try <code>itertools</code>.</p>
+
+<blockquote>
+  <p>The <a href="http://docs.python.org/library/itertools.html" rel="nofollow">itertools</a> module standardizes a core set of fast, memory efficient tools that are useful by themselves or in combination. Together, they form an “iterator algebra” making it possible to construct specialized tools succinctly and efficiently in pure Python.</p>
+</blockquote>
+
+<p>See <a href="http://docs.python.org/library/itertools.html#itertools.ifilter" rel="nofollow">itertools.ifilter</a> or imap.</p>
+
+<blockquote>
+  <p>itertools.ifilter(predicate, iterable)</p>
+  
+  <p>Make an iterator that filters elements from iterable returning only those for which the predicate is True</p>
+</blockquote>
+<br /><b>#8</b><br /><p>If you want to make it in FP style:</p>
+
+<pre><code>good, bad = [ sum(x, []) for x in zip(*(([y], []) if y in goodvals else ([], [y])
+                                        for y in mylist)) ]
+</code></pre>
+
+<p>Not the most readable solution, but at least iterates through mylist only once.</p>
+<br /><b>#9</b><br /><p>I basically like Anders' approach as it is very general.  Here's a version that puts the categorizer first (to match filter syntax) and uses a defaultdict (assumed imported).</p>
+
+<pre><code>def categorize(func, seq):
+    """Return mapping from categories to lists
+    of categorized items.
+    """
+    d = defaultdict(list)
+    for item in seq:
+        d[func(item)].append(item)
+    return d
+</code></pre>
+<br /><b>#10</b><br /><p>If you insist on clever, you could take Winden's solution and just a bit spurious cleverness:</p>
+
+<pre><code>def splay(l, f, d=None):
+  d = d or {}
+  for x in l: d.setdefault(f(x), []).append(x)
+  return d
+</code></pre>
+<br /><b>#11</b><br /><p>Sometimes you won't need that other half of the list.
+For example:</p>
+
+<pre><code>import sys
+from itertools import ifilter
+
+trustedPeople = sys.argv[1].split(',')
+newName = sys.argv[2]
+
+myFriends = ifilter(lambda x: x.startswith('Shi'), trustedPeople)
+
+print '%s is %smy friend.' % (newName, newName not in myFriends 'not ' or '')
+</code></pre>
+<br /><b>#12</b><br /><p>My take on it. I propose a lazy, single-pass, <code>splitBy</code> function, which preserves relative order in the output subsequences.</p>
+
+<h3>Requirements</h3>
+
+<p>I assume that the requirements are:</p>
+
+<ul>
+<li>maintain elements' relative order (hence, no sets and dictionaries)</li>
+<li>evaluate condition only once for every element (hence not using (<code>i</code>)<code>filter</code> or <code>groupby</code>)</li>
+<li>allow for lazy consumption of either sequence (if we can afford to precomute them, then the naïve implementation is likely to be acceptable too)</li>
+</ul>
+
+<h3>Code explained</h3>
+
+<p>Internally we need to build two subsequences at once, so consuming only one output sequence will force the other one to be computed too. And we need to keep state between user requests (store processed but not yet requested elements). To keep state, I use two double-ended queues (<code>deques</code>):</p>
+
+<pre><code>from collections import deque
+</code></pre>
+
+<p><code>SplitSeq</code> class takes care of the housekeeping:</p>
+
+<pre><code>class SplitSeq:
+    def __init__(self, condition, sequence):
+        self.cond = condition
+        self.goods = deque([])
+        self.bads = deque([])
+        self.seq = iter(sequence)
+</code></pre>
+
+<p>Magic happens in its <code>.getNext()</code> method. It is almost like <code>.next()</code> of the iterators, but allows to specify which kind of element we want this time. Behind the scene it doesn't discard the rejected elements, but instead puts them in one of the two queues:</p>
+
+<pre><code>    def getNext(self, getGood=True):
+        if getGood:
+            these, those, cond = self.goods, self.bads, self.cond
+        else:
+            these, those, cond = self.bads, self.goods, lambda x: not self.cond(x)
+        if these:
+            return these.popleft()
+        else:
+            while 1: # exit on StopIteration
+                n = self.seq.next()
+                if cond(n):
+                    return n
+                else:
+                    those.append(n)
+</code></pre>
+
+<p>The end user is supposed to use <code>splitBy</code> function. It takes a condition function and a sequence (just like <code>map</code> or <code>filter</code>), and returns two generators. The first generator builds a subsequence of elements for which the condition holds, the second one builds the complementary subsequence. Iterators and generators allow for lazy splitting of even long or infinite sequences.</p>
+
+<pre><code>def splitBy(condition, sequence):
+    cond = condition if condition else bool  # evaluate as bool if condition == None
+    ss = SplitSeq(cond, sequence)
+    def goods():
+        while 1:
+            yield ss.getNext(getGood=True)
+    def bads():
+        while 1:
+            yield ss.getNext(getGood=False)
+    return goods(), bads()
+</code></pre>
+
+<p>I choose the test function to be the first argument to facilitate partial application in the future (similar to how <code>map</code> and <code>filter</code> have the test function as the first argument).</p>
+
+<h3>Complete source</h3>
+
+<p>The complete source code with comments and documentations is available <a href="https://bitbucket.org/jetxee/python-split/src/" rel="nofollow">on bitbucket</a>. Download this file:</p>
+
+<ul>
+<li><a href="https://bitbucket.org/jetxee/python-split/raw/tip/splitBy.py" rel="nofollow"><code>splitBy.py</code></a></li>
+</ul>
+
+<h3>Example</h3>
+
+<p>In your case, let the input data be:</p>
+
+<pre><code>&gt;&gt;&gt; IMAGE_TYPES = ('.jpg','.jpeg','.gif','.bmp','.png')
+&gt;&gt;&gt; files = [ ('file1.jpg', 33L, '.jpg'),
+              ('file2.avi', 999L, '.avi'),
+              ('file3.png', 48L, '.png') ]
+</code></pre>
+
+<p>Then to separate animations from images, we create a condition function and call <code>splitBy</code>:</p>
+
+<pre><code>&gt;&gt;&gt; def isAnim(f): return (f[2].lower() not in IMAGE_TYPES)
+&gt;&gt;&gt; anims, images = splitBy(isAnim, files)
+&gt;&gt;&gt; list(anims)
+[('file2.avi', 999L, '.avi')]
+&gt;&gt;&gt; list(images)
+[('file1.jpg', 33L, '.jpg'), ('file3.png', 48L, '.png')]
+</code></pre>
+
+<p>To consume elements one by one use <code>.next()</code> method of the returned generators.</p>
+<br />

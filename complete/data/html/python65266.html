@@ -1,0 +1,83 @@
+<h3>Question (ID-65266):</h3><h2>Caching compiled regex objects in Python?</h2><p>Each time a python file is imported that contains a large quantity of static regular expressions, cpu cycles are spent compiling the strings into their representative state machines in memory.</p>
+
+<pre><code>a = re.compile("a.*b")
+b = re.compile("c.*d")
+...
+</code></pre>
+
+<p>Question: Is it possible to store these regular expressions in a cache on disk in a pre-compiled manner to avoid having to execute the regex compilations on each import?</p>
+
+<p>Pickling the object simply does the following, causing compilation to happen anyway:</p>
+
+<pre><code>&gt;&gt;&gt; import pickle
+&gt;&gt;&gt; import re
+&gt;&gt;&gt; x = re.compile(".*")
+&gt;&gt;&gt; pickle.dumps(x)
+"cre\n_compile\np0\n(S'.*'\np1\nI0\ntp2\nRp3\n."
+</code></pre>
+
+<p>And re objects are unmarshallable:</p>
+
+<pre><code>&gt;&gt;&gt; import marshal
+&gt;&gt;&gt; import re
+&gt;&gt;&gt; x = re.compile(".*")
+&gt;&gt;&gt; marshal.dumps(x)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ValueError: unmarshallable object
+</code></pre>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><blockquote>
+  <p>Is it possible to store these regular expressions in a cache on disk in a pre-compiled manner to avoid having to execute the regex compilations on each import?</p>
+</blockquote>
+
+<p>Not easily. You'd have to write a custom serializer that hooks into the C <code>sre</code> implementation of the Python regex engine. Any performance benefits would be vastly outweighed by the time and effort required.</p>
+
+<p>First, have you actually profiled the code? I doubt that compiling regexes is a significant part of the application's run-time. Remember that they are only compiled the first time the module is imported in the current execution -- thereafter, the module and its attributes are cached in memory.</p>
+
+<p>If you have a program that basically spawns once, compiles a bunch of regexes, and then exits, you could try re-engineering it to perform multiple tests in one invocation. Then you could re-use the regexes, as above.</p>
+
+<p>Finally, you could compile the regexes into C-based state machines and then link them in with an extension module. While this would likely be more difficult to maintain, it would eliminate regex compilation entirely from your application.</p>
+<br /><b>#1</b><br /><p>Note that each module initializes itself only once during the life of an app, no matter how many times you import it. So if you compile your expressions at the module's global scope (ie. not in a function) you should be fine.</p>
+<br /><b>#2</b><br /><p>First of all, this is a clear limitation in the python re module. It causes a limit how much and how big regular expressions are reasonable. The limit is bigger with long running processes and smaller with short lived processes like command line applications.</p>
+
+<p>Some years ago I did look at it and it is possible to dig out the compilation result, pickle it and then unpickle it and reuse it. The problem is that it requires using the sre.py internals and so won't probably work in different python versions.</p>
+
+<p>I would like to have this kind of feature in my toolbox. I would also like to know, if there are any separate modules that could be used instead.</p>
+<br /><b>#3</b><br /><p>The <a href="http://docs.python.org/lib/module-shelve.html" rel="nofollow">shelve</a> module appears to work just fine:</p>
+
+<pre><code>
+import re
+import shelve
+a_pattern = "a.*b"
+b_pattern = "c.*d"
+a = re.compile(a_pattern)
+b = re.compile(b_pattern)
+
+x = shelve.open('re_cache')
+x[a_pattern] = a
+x[b_pattern] = b
+x.close()
+
+# ...
+x = shelve.open('re_cache')
+a = x[a_pattern]
+b = x[b_pattern]
+x.close()
+
+</code></pre>
+
+<p>You can then make a nice wrapper class that automatically handles the caching for you so that it becomes transparent to the user... an exercise left to the reader.</p>
+<br /><b>#4</b><br /><p>Hum,</p>
+
+<p>Doesn't shelve use pickle ?</p>
+
+<p>Anyway, I agree with the previous anwsers. Since a module is processed only once, I doubt compiling regexps will be your app bottle neck. And Python re module is wicked fast since it's coded in C :-)</p>
+
+<p>But the good news is that Python got a nice community, so I am sure you can find somebody currently hacking just what you need.</p>
+
+<p>I googled 5 sec and found : <a href="http://home.gna.org/oomadness/en/cerealizer/index.html" rel="nofollow">http://home.gna.org/oomadness/en/cerealizer/index.html</a>.</p>
+
+<p>Don't know if it will do it but if not, good luck in you research :-)</p>
+<br /><b>#5</b><br /><p>Open /usr/lib/python2.5/re.py and look for "def _compile". You'll find re.py's internal cache mechanism. </p>
+<br /><b>#6</b><br /><p>It's possible to place each regex (or group of regexs) into a separate file and then dynamically import the file that you need using the imp module.  I doubt that it scales very well but it could be what you need.</p>
+<br />

@@ -1,0 +1,237 @@
+Question (ID-1164930): Image resizing with django? I'm new to Django (and Python) and I have been trying to work out a few things myself, before jumping into using other people's apps. I'm having trouble understanding where things 'fit' in the Django (or Python's) way of doing things. What I'm trying to work out is how to resize an image, once it's been uploaded. I have my model setup nicely and plugged into the admin, and the image uploads fine to the directory: 
+
+ from django.db import models
+
+# This is to list all the countries
+# For starters though, this will be just United Kingdom (GB)
+class Country(models.Model):
+ name = models.CharField(max_length=120, help_text="Full name of country")
+ code = models.CharField(max_length=2, help_text="This is the ISO 3166 2-letter country code (see: http://www.theodora.com/country_digraphs.html)")
+ flag = models.ImageField(upload_to="images/uploaded/country/", max_length=150, help_text="The flag image of the country.", blank=True)
+
+ class Meta:
+  verbose_name_plural = "Countries"
+
+ def __unicode__(self):
+  return self.name
+ 
+
+ The thing I'm now having trouble with is taking that file and making a new file into a thumbnail. Like I say, I'd like to know how to do it without using others' apps (for now). I have got this code from DjangoSnippets: 
+
+ from PIL import Image
+import os.path
+import StringIO
+
+def thumbnail(filename, size=(50, 50), output_filename=None):
+ image = Image.open(filename)
+ if image.mode not in ('L', 'RGB'):
+  image = image.convert('RGB')
+ image = image.resize(size, Image.ANTIALIAS)
+
+ # get the thumbnail data in memory.
+ if not output_filename:
+  output_filename = get_default_thumbnail_filename(filename)
+ image.save(output_filename, image.format) 
+ return output_filename
+
+def thumbnail_string(buf, size=(50, 50)):
+ f = StringIO.StringIO(buf)
+ image = Image.open(f)
+ if image.mode not in ('L', 'RGB'):
+  image = image.convert('RGB')
+ image = image.resize(size, Image.ANTIALIAS)
+ o = StringIO.StringIO()
+ image.save(o, "JPEG")
+ return o.getvalue()
+
+def get_default_thumbnail_filename(filename):
+ path, ext = os.path.splitext(filename)
+ return path + '.thumb.jpg'
+ 
+
+ ...but this has ultimately confused me... As I don't know how this 'fits in' to my Django app? And really, is it the best solution for simply making a thumbnail of an image that has been successfully uploaded? Can anyone possibly show me a good, solid, decent way that a beginner like me can learn to do this properly? As in, knowing where to put that sort of code (models.py? forms.py? ...) and how it would work in context? ... I just need a bit of help understanding and working this problem out. 
+
+ Thank you! 
+ Answers (Total-9): #0 If it's OK for you, there is a Django application ready, doing exactly what you want:
+ http://code.google.com/p/sorl-thumbnail/ 
+ #1 This is what I use in my models to save a new thumbnail if the uploaded image has changed. It's based of another DjangoSnippet but it I can't remember who wrote the orginal - if you know please add a comment so that I can credit them. 
+
+ from PIL import Image
+from django.db import models
+from django.contrib.auth.models import User
+
+import os
+import settings
+
+class Photo_Ex(models.Model):
+ user = models.ForeignKey(User, blank=True, null=True) 
+ photo = models.ImageField(upload_to='photos')
+ thumbnail = models.ImageField(upload_to='profile_thumb', blank=True,
+        null=True, editable=False)
+
+ def save(self, *args, **kwargs):
+  size = (256,256)
+  if not self.id and not self.photo:
+   return
+
+  try:
+   old_obj = Photo_Ex.objects.get(pk=self.pk)
+   old_path = old_obj.photo.path
+  except:
+   pass
+
+  thumb_update = False
+  if self.thumbnail:
+   try:
+    statinfo1 = os.stat(self.photo.path)
+    statinfo2 = os.stat(self.thumbnail.path)
+    if statinfo1 &gt; statinfo2:
+     thumb_update = True
+   except:
+    thumb_update = True
+
+  pw = self.photo.width
+  ph = self.photo.height
+  nw = size[0]
+  nh = size[1]
+
+  if self.photo and not self.thumbnail or thumb_update:
+   # only do this if the image needs resizing
+   if (pw, ph) != (nw, nh):
+    filename = str(self.photo.path)
+    image = Image.open(filename)
+    pr = float(pw) / float(ph)
+    nr = float(nw) / float(nh)
+
+    if image.mode not in ('L', 'RGB'):
+     image = image.convert('RGB')
+
+    if pr &gt; nr:
+     # photo aspect is wider than destination ratio
+     tw = int(round(nh * pr))
+     image = image.resize((tw, nh), Image.ANTIALIAS)
+     l = int(round(( tw - nw ) / 2.0))
+     image = image.crop((l, 0, l + nw, nh))
+    elif pr &lt; nr:
+     # photo aspect is taller than destination ratio
+     th = int(round(nw / pr))
+     image = image.resize((nw, th), Image.ANTIALIAS)
+     t = int(round(( th - nh ) / 2.0))
+     image = image.crop((0, t, nw, t + nh))
+    else:
+     # photo aspect matches the destination ratio
+     image = image.resize(size, Image.ANTIALIAS)
+
+   image.save(self.get_thumbnail_path())
+   (a, b) = os.path.split(self.photo.name)
+   self.thumbnail = a + '/thumbs/' + b
+   super(Photo_Ex, self).save()
+   try:
+    os.remove(old_path)
+    os.remove(self.get_old_thumbnail_path(old_path))
+   except:
+    pass
+
+ def get_thumbnail_path(self):
+  (head, tail) = os.path.split(self.photo.path)
+  if not os.path.isdir(head + '/thumbs'):
+   os.mkdir(head + '/thumbs')
+  return head + '/thumbs/' + tail
+
+ def get_old_thumbnail_path(self, old_photo_path):
+  (head, tail) = os.path.split(old_photo_path)
+  return head + '/thumbs/' + tail
+ 
+ #2 Not sure about the code you sent, because I never use Models as such, but there is another method. 
+
+ You can implement your own FileUploadHandler for handling image file uploads. Example is
+ here .
+Just after line 37 (dest.close()) use thumbnail(upload_dir + upload.name) function (the one you sent). 
+
+ Hope it helps you. 
+
+ Tomasz Kopczuk. 
+ #3 A key question is: when should the thumbnail be generated? 
+
+ 
+ Dynamically when the user requests a thumbnail image? 
+ Or do you want to create a physical disk file whenever a country is INSERTed/UPDATEd in the database. 
+ 
+
+ If (1) I suggest you create a view that maps to url /flagthumbnail/countryid . The view method would then have to: 
+
+ 
+ Get the country instance from the database 
+ Read the flag image into a PIL Image and resize that. 
+ Create (and return) a HTTPResponse with correct content-type and write the PIL Image to the response. 
+ 
+
+ Whenever you need to display a thumbnail flag, just use &lt;a href="/flagthumbnail/countryid"&gt; . 
+
+ If (2), you could connect to Django's django.db.models.signals.post_save signal and in the signal handler create and save a thumbnail file. 
+ #4 I guess it depends on how and when your using your thumbnails. 
+
+ If you want to create some thumbnails every time the Country is saved, you could do it like so: 
+
+ from django.db import models
+
+# This is to list all the countries
+# For starters though, this will be just United Kingdom (GB)
+class Country(models.Model):
+ name = models.CharField(max_length=120, help_text="Full name of country")
+ code = models.CharField(max_length=2, help_text="This is the ISO 3166 2-letter country code (see: http://www.theodora.com/country_digraphs.html)")
+ flag = models.ImageField(upload_to="images/uploaded/country/", max_length=150, help_text="The flag image of the country.", blank=True)
+
+ class Meta:
+  verbose_name_plural = "Countries"
+
+ def __unicode__(self):
+  return self.name
+
+ def save(self, force_insert=False, force_update=False):
+  resize_image(self.flag)
+  super(Country, self).save(force_insert, force_update)
+ 
+
+ If you aren't 100% sure what sizes you'll need your images, you could resize them last minute. I've seen this effectively done with a templatetag (I believe in a version on Pinax). You create a templatetag that takes the image and a size, then create and save the image of the appropriate size if you need to, or display a previously created one if it's there. It works pretty well. 
+ #5 Overriding the save method is a good option, but I'd be more tempted to use a signal in this case. Django signals allow you to "listen" to a given model type's various events; in this case, you'd be interested in the post_save event. 
+
+ I usually subscribe to such signals in my models.py file. Code for you would look something like this: 
+
+ from django.db.models.signals import post_save
+from models import Country
+
+def resize_image(sender, **kwargs):
+ country = kwargs["instance"]
+ resize_image(country.flag) # where resize_image generates a thumbnail given a Country instance
+
+post_save.connect(resize_image, sender=Country)
+ 
+ #6 Ryan is correct signals are a better way to go however the advantage of the overriden save is that we can get the old and new image paths, see if the image has changed (and if it has create a new thumbnail), save the model instance and then delete the old image and thumbnail. 
+
+ Remember django does not clean up the old images for you so unless you have script to check that the images/thumbnails are still in use and clean out any that are not you will leak disk space. (This may or may-not be a problem for you depending on image size and frequency of updates) 
+
+ I'm not sure how you could do this with a post_save signal, and I don't know enough about signals (That's research for tonight!) to know if there is a suitable pre_save signal. If i find one then I'll re-write the code above to use signals as a generic pre save listner. 
+ #7 I also swear by Justin Driscoll's django-photologue is also great for resizing. It: 
+
+ 
+ Resizes (that is can be scaled to a height or width proportionately) 
+ Crops (kind-of intelligently: from the center, top, left, bottom or right) 
+ Optionally upsizes 
+ Can add effects (such as "color", "brightness", "contrast" and "sharpness" as well as filters like "Find Edges" and "Emboss". Sharpen your images. Make your thumbnails black and white.) 
+ Can add simple watermark 
+ Cache the results 
+ 
+
+ Basically it's awesome. 
+ #8 You can give a try to: 
+
+ image headcut 
+
+ features: 
+
+ 
+ Allows you to set the center of attention of an image... heads won't get cut anymore. 
+ Video thumbnailing 
+ Prevents cross-site image linking 
+ Simple setup and usage

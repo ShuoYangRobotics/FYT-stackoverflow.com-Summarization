@@ -1,0 +1,130 @@
+<h3>Question (ID-8069503):</h3><h2>Scaling temporary records in database to count totals to stop over-subscribing</h2><p>I'm looking at a system where people RSVP to a free web conference, these web conferences can get really busy with a lot of interest and there are limited places, so there has to be some way to ensure it doesn't get over-subscribed... So, we need to have a countdown from the time they book their seat to the time that their order is completed and confirmed. This way it's the first X amount of people to actually click 'Attending' that get the seats for the conference. If the user does not complete their booking their allocated seat is put back in the pool for someone else to grab...</p>
+
+<p>An overview of what happens (how I see this best working)</p>
+
+<p>1) User clicks "RSVP" on event, this makes an AJAX request to /rsvp/{event_id}/</p>
+
+<p>This goes and stores a unique id (refered to as token in the rest of this question) along with a timestamp. It stores that token in a session too.</p>
+
+<p>The user is then notified they have X amount of time (let's say 5 mins) to complete the rest of their details (name/email/d.o.b, etc)</p>
+
+<p>However: before anything is put in the database, it checks if the amount of pending orders is less than the total seats available, if not (there are no seats left for the conference) then it returns saying "sorry, no seats available any more, keep checking as bookings aren't completed and more seats become available" </p>
+
+<p>2) If the user fills this out in time, it stores their details in database as "attending"....</p>
+
+<p>If however they fail to fill the form out in time, there is a cron job running every second and go through and delete any tokens that have a timestamp of over 5 minutes ago so they will loose their chance to attend, this 'seat' on the conference is then put back in to the pool. (They'll be notified they were unsuccessful and taken back to the first step)</p>
+
+<p>All easy enough to write with simply putting records in a database, doing a <code>COUNT(*) FROM pending_bookings WHERE conference_id = {x}</code> and working out how many seats are either confirmed or orders pending, then subtracting from the total seats available for the conference.</p>
+
+<p>But I don't feel that using MySQL would be very scalable on this - these have (and I'm sure will have again) in excess of 200k people trying to grab around 200 seats, doing a COUNT(*) for each one of those people will get pretty expensive, and we can't do any decent caching as it needs to be checking in real time how many people are in the process.</p>
+
+<p>I've looked into using <a href="http://aws.amazon.com/simpledb/" rel="nofollow">Amazon SimpleDB</a> for this, just for it's deploy-and-go scalability, but I've used it before and seen that COUNT() isn't necessarily accurate (nature of it's scalability I guess) - for obvious reasons that COUNT needs to be 100% accurate, I need to be able to add records along with a timestamp to it and be able to delete records from it older than five minutes.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Seems to me that all 200k people could get a "token" to start with but only 200 can complete the token.</p>
+
+<p>So two things come to mind; 
+1) why not keep track of "Seats Remaining" on the event itself that way you're not doing a count and over bookings cannot occur because the lock needed to update the event would prevent it ever going below zero.</p>
+
+<p>2)  At anytime during the persons subscription if the seats remaining drops to zero all the remaining tokens become invalid and users are "kicked" out of the signup process (being nice about it and apologizing but all seats are now full etc)</p>
+<br /><b>#1</b><br /><blockquote>
+  <p>doing a COUNT(*) for each one of those people will get pretty expensive</p>
+</blockquote>
+
+<p>Have you found that out, or is it a gut feeling? I'd rather benchmark that (and also whether your web servers can carry that load) than assume it on beforehand. Indexing (and properly selecting a storage engine) might help a lot here.</p>
+
+<p>Furthermore, wouldn't it be a lot more user-friendly to let people register and enter their account data before registering for an event? Because now you seem to favor people who can type real quick, or who use a decent browser.</p>
+<br /><b>#2</b><br /><p>You could cache the count available in the database, and update that whenever you issue (registration started), confirm (registration finished), or revoke (over 5 minutes) a token. But if you need that kind of performance, this really isn't what a SQL database is for.</p>
+
+<p>You could implement a fairly simple token broker using a <a href="http://en.wikipedia.org/wiki/Heap_%28data_structure%29" rel="nofollow">heap</a> (based on expiring-soonest). Every time a token is requested, it'd check the soonest-expiring token and see if it has expired. If so, revoke it from whoever it was assigned to, and give it to the new person. If not, tell them to try again later. </p>
+
+<p>When a registration is completed, you'd have to remove that token from the heap (a relatively expensive operation, but you're only doing that 200 times). So your heap would always have tokens equal to the number of free+pending slots.</p>
+
+<p>Handling even thousands-per-second of find-soonest-expiring requests against e.g., a <a href="http://en.wikipedia.org/wiki/Fibonacci_heap" rel="nofollow">Fibonacci heap</a> is trivial on even modest hardware.</p>
+
+<p>I didn't check, but I suspect that someone else has already solved most if not all of this problem, you may be able to download said token broker.</p>
+<br /><b>#3</b><br /><p>Sorry for misreading the question. In this case I would suggest having a cache table (yes, you can), that will be updated using a trigger (ON INSERT / DELETE) on the table where the transactions are. </p>
+
+<p>When you allow a user to go into the transaction you insert his hash and expiration timestamp into that table. It triggers a trigger, that will update the cached value (i.e. value in the cache table) according to that - +1 for insert / -1 for delete. </p>
+
+<p>When checking wheteher there are free seats, you check the cache table. </p>
+
+<p>Would this sort of caching work? :)</p>
+<br /><b>#4</b><br /><p>Redis <a href="http://redis.io" rel="nofollow">http://redis.io</a> is a good fit for what you're wanting to do. You can keep a counter of available seats, store the temporary data and have it auto-expire... Super versatile. </p>
+<br /><b>#5</b><br /><p>I agree with xQbert, with each successful attendance fill out completion you just decrement the total in the database row for the event (or an adjoining table).</p>
+
+<p>If your worried about reservation collisions then just decrement it at the beginning of filling out the attendance info; Then add a row to a temp table saying the person with this session id is filling out the attendance form for this event and they have 5 minutes from this timestamp to complete it. When they complete the form their entry is removed from this temp table.</p>
+
+<p>Then run a cron job on this table that queries for timestamps that are less than or equal to the current time - 5 min. Any that come up will be removed from the table and their events will get a seat incremented back on it. Then when they submit the form past the 5 min timeframe it will check to make sure they still have an entry in the table before saving their seat permanently.</p>
+
+<p>If they don't then check to see if there are any seats remaining. If there are then decrement the seat count and insert their reservation record. If not then give them an error that says that they didn't complete the form in the allotted time, lost their position in line and you ran out of seats.</p>
+
+<p>Its simple enough and can be done all on the PHP side. You will probably want to put a JS timer on their page so that they know how much time they have left though.</p>
+<br /><b>#6</b><br /><p>It's probably worth to re-visit your design:</p>
+
+<p>The remaining seats are the total number of seats minus booked seats.</p>
+
+<p>This number is only valid in a certain moment of time as the number of booked seats change.</p>
+
+<p>To book a seat, you're doing a transaction: A user signals that she wants to book one or multiple seats, processes the registration and then finally books (or not).</p>
+
+<p>As long as this transaction has not been finished, the remaining seats number that you can calculate is probably wrong.</p>
+
+<p>You have two options here:</p>
+
+<ol>
+<li>Permissive Locking</li>
+<li>Optimistic Locking</li>
+</ol>
+
+<p>With the first one, each time a user starts a transaction and tells the application that X seats should be booked, these X seats are locked. It does not mean that those seats are already booked, they are just locked, so the user has enough time to complete the booking transaction. If the transaction finishes, those locked seats are booked by the user.</p>
+
+<p>With the second one, <em>Optimistic Locking</em> the user just starts to register but nothing is locked. At the end of the booking transaction, the transaction may fail if not enough seats are available any longer.</p>
+
+<p>Permissive Locking might prevent some users from subscribing before they start a transaction - even if they could a day later - Optimistic Locking might prevent some users from subscribing at the end of the transaction.</p>
+
+<p>You need to find out what's working best for your case. Normally optimistic locking is more nice to users (as only some fail at the end), however permissive locking will help you to not frustrate users at the end of a transaction. If there is always a run on the tickets, maybe permissive locking is best.</p>
+
+<p>You can think about how to make things less frustrating for users by bringing usability into play. For example with optimistic locking, each page in the transaction could have a AJAX remaining counter at the top giving the current numbers of remaining seats, so you can inform users early if seats have run out. So even they might already have put something into forms, they can see how lucky (or fast enough) they are with their doing.</p>
+
+<p>I would not time-limit users to sign-up btw.. That puts stress on the user. With optimistic locking and the AJAX bar users will be stressed enough if seats run out. It's just that your system does not need to care about sign-ups.</p>
+
+<p>If you want to allow sign-ups with a peace of mind, you need to choose permissive locking. Then you need a timeout, but I would do this per user action, so if the user is active, the timeout will be extended with another 15 minutes until completed. I would choose a high value here to not frustrate the user of getting a timeout.</p>
+
+<p>For those users who want to sign-up while all available seats are locked by signup transactions, you should offer a back-list and tell the users that currently X seats are locked with sign-ups but they might be lucky to catch another seat later. Or you allow to over-book the number of locked seats so those users are queued in case another user does not finish her transaction successfully.</p>
+
+<p>BTW, the database design should reflect the procedure you define upfront, I don't think you run into real problems here as long as you know what you try to achieve. As everything is done in buisiness transactions you can even keep a simple count per each event of total, booked and locked seats. That's one simple query, no need for aggregation like with <code>COUNT(*)</code>. Triggers and stored procedures can be helpful, too.</p>
+<br /><b>#7</b><br /><p>I think COUNT(*) applied to 200k records could be retrieved fairly quickly. I just tried a query on 243k records and it took well under 1 second.</p>
+
+<p>But I don't think you even need COUNT, except at the final confirmation step.</p>
+
+<p>I don't think you need any "cron jobs", either. That would certainly be more intensive than just querying the database.</p>
+
+<p>Not to mention the fact that you don't even have to let users check how many people are attending if the event is already fully booked. Once you hit 200 attendees, you can just change another db value. The front page should not even display a clickable button if you don't have seats left.</p>
+
+<p>Also, if there are plenty of seats left, why limit a user to 5 minutes? Why clean out their session with a "cron job" and force them to start all over? What if there are still 100 seats left? Instead, when 200 seats are reserved, but not all confirmed, you have the newest clickers crowd out the older ones one-by-one.</p>
+
+<p>On your front page, where you have the "sign up button", it doesn't need to perform the COUNT(*) query.</p>
+
+<p>You can just have it do this:</p>
+
+<pre><code>SELECT `event_status` from `events` WHERE `event` = 'this_event';
+</code></pre>
+
+<p>The event_status can be updated as soon as all the seats are confirmed.</p>
+
+<p>Then using your PHP or whatever, you either display the button, or display "Sorry, Event is Full".</p>
+
+<pre><code>if($event_status == 'full') { echo 'Sorry, it's full; }
+else { echo $press_this_button; }
+</code></pre>
+
+<p>Once all 200 seats are reserved, but not all are confirmed, you start kicking people out. When a new person clicks the button, you do this.</p>
+
+<pre><code>SELECT MIN(time_initiated) as time_initiated, id, sessID FROM testtime WHERE `time_initiated` &lt;= DATE_SUB(NOW(), INTERVAL 5 MINUTE);
+</code></pre>
+
+<p>If that gives you any results, then you have your guy to kick off the waiting list. Just flag his session as "Expired" and if he ever does click submit, 1st check to see if the event is fully confirmed. If so, tell him sorry he was too late. If not, then repeat the above query, kick someone else off the bottom of the list, and confirm him, unless all people on the waiting list are less than 5 minutes old, in which case you can ask him to wait a few minutes and see if any spots free up.</p>
+
+<p>After every successful confirmation, you can query the COUNT of confirmed guests and if the number is 200+, you change the event_status to "full" and prevent anyone else from clicking that button. They will just see the message that the even is full. You should be able to wrap those 2 queries in a transaction to ensure that multiple people cannot book at the exact same time and you end up overbooked.</p>
+
+<p>That's just my 2 cents.</p>
+<br />

@@ -1,0 +1,81 @@
+Question (ID-496814): Progress bar not updating during operation in my python program to upload a file to the internet, im using a GTK progress bar to show the upload progress. But the problems that im facing is that the progress bar does not show any activity until the upload is complete, and then it abruptly indicates upload complete. im using pycurl to make the http requests...my question is -
+do i need to have a multi-threaded application to upload the file and simultaneously update the gui? or is there some other mistake that im making? 
+
+ Thanks in advance! 
+ Answers (Total-6): #0 I'm going to quote the PyGTK FAQ : 
+
+ 
+ You have created a progress bar inside a window, then you start running a loop that does some work: 
+ 
+
+ while work_left:
+ ...do something...
+ progressbar.set_fraction(...)
+ 
+
+ 
+ You will notice that the window doesn't even show up, or if it does the progress bar stays frozen until the end of the task. The explanation is simple: gtk is event driven, and you are stealing control away from the gtk main loop, thus preventing it from processing normal GUI update events. 
+ 
+ The simplest solution consists on temporarily giving control back to gtk every time the progress is changed: 
+ 
+
+ while work_left:
+ ...do something...
+ progressbar.set_fraction(...)
+ while gtk.events_pending():
+  gtk.main_iteration()
+ 
+
+ 
+ Notice that with this solution, the user cannot quit the application (gtk.main_quit would not work because of new loop [gtk.main_iteration()]) until your heavy_work is done. 
+ 
+ Another solution consists on using gtk idle functions, which are called by the gtk main loop whenever it has nothing to do. Therefore, gtk is in control, and the idle function has to do a bit of work. It should return True if there's more work to be done, otherwise False. 
+ 
+ The best solution (it has no drawbacks) was pointed out by James Henstridge. It is taking advantage of python's generators as idle functions, to make python automatically preserve the state for us. It goes like this: 
+ 
+
+ def my_task(data):
+ ...some work...
+ while heavy_work_needed:
+  ...do heavy work here...
+  progress_label.set_text(data) # here we update parts of UI
+  # there's more work, return True
+  yield True
+ # no more work, return False
+ yield False
+
+def on_start_my_task_button_click(data):
+ task = my_task(data)
+ gobject.idle_add(task.next)
+ 
+
+ 
+ The 'while' above is just an example. The only rules are that it should yield True after doing a bit of work and there's more work to do, and it must yield False when the task is done. 
+ 
+ #1 More than likely the issue is that in your progress callback, which is where I presume you're updating the progress bar, you're not making a call to manually update the display i.e. run through the GUI's event loop. This is just speculation though, if you can provide more code, it might be easier to narrow it down further. 
+
+ The reason you need to manually update the display is because your main thread is also performing the upload, which is where it's blocking. 
+ #2 here is the code im using to set the progress bar fraction. what do i need to do, to update the display manually? 
+
+ (mainwin is the module with the window, mainw is the actual window and prog_bar is the progress bar component of the window.) 
+
+ #Callback function invoked when download/upload has progress
+def progress(download_t, download_d, upload_t, upload_d):
+ print 'in fileupload progress'
+ mainwin.mainw.prog_bar.set_fraction(upload_d/upload_t)
+ 
+ #3 In python 2.x integer operands result in integer division. Try this: 
+
+ #Callback function invoked when download/upload has progress
+def progress(download_t, download_d, upload_t, upload_d):
+ print 'in fileupload progress'
+ mainwin.mainw.prog_bar.set_fraction(float(upload_d) / upload_t)
+ 
+ #4 Yes, you probably need concurrency, and yes threads are one approach, but if you do use threads, please use an method like this one: http://unpythonic.blogspot.com/2007/08/using-threads-in-pygtk.html which will abstract away the pain, and allow you to focus on the important aspects. 
+
+ (I have not repeated everything in that blog post through laziness, hence community wiki). 
+ #5 One option, if you are not married to pycurl, is to use GObject's IO watchers. 
+
+ http://pygtk.org/pygtk2reference/gobject-functions.html#function-gobject--io-add-watch 
+
+ Using this you can interleave the file upload with the normal PyGTK event loop, and even do the set_progress call in your IO watch callback. If you are offloading all the work for uploading onto pycurl this is not really feasible, but if you're just uploading a file over HTTP, io_add_watch will make using a socket for this much less painful as well.

@@ -1,0 +1,239 @@
+Question (ID-685758): Pythonic ways to use 'else' in a for loop I have hardly ever noticed a python program that uses else in a for loop. 
+
+ I recently used it to perform an action based on the loop variable condition while exiting; as it is in the scope. 
+
+ What is the pythonic way to use an else in a for loop? Are there any notable use cases? 
+
+ And, yea. I dislike using break statement. I'd rather set the looping condition complex. Would I be able to get any benefit out of it, if I don't like to use break statement anyway. 
+
+ Worth noting that for loop has an else since the language inception, the first ever version. 
+ Answers (Total-6): #0 What could be more pythonic than PyPy? 
+
+ Look at what I discovered starting at line 284 in ctypes_configure/configure.py: 
+
+  for i in range(0, info['size'] - csize + 1, info['align']):
+  if layout[i:i+csize] == [None] * csize:
+   layout_addfield(layout, i, ctype, '_alignment')
+   break
+ else:
+  raise AssertionError("unenforceable alignment %d" % (
+   info['align'],))
+ 
+
+ And here, from line 425 in pypy/annotation/annrpython.py ( clicky ) 
+
+ if cell.is_constant():
+ return Constant(cell.const)
+else:
+ for v in known_variables:
+  if self.bindings[v] is cell:
+   return v
+ else:
+  raise CannotSimplify
+ 
+
+ In pypy/annotation/binaryop.py, starting at line 751: 
+
+ def is_((pbc1, pbc2)):
+ thistype = pairtype(SomePBC, SomePBC)
+ s = super(thistype, pair(pbc1, pbc2)).is_()
+ if not s.is_constant():
+  if not pbc1.can_be_None or not pbc2.can_be_None:
+   for desc in pbc1.descriptions:
+    if desc in pbc2.descriptions:
+     break
+   else:
+    s.const = False # no common desc in the two sets
+ return s
+ 
+
+ A non-one-liner in pypy/annotation/classdef.py, starting at line 176: 
+
+ def add_source_for_attribute(self, attr, source):
+ """Adds information about a constant source for an attribute.
+ """
+ for cdef in self.getmro():
+  if attr in cdef.attrs:
+   # the Attribute() exists already for this class (or a parent)
+   attrdef = cdef.attrs[attr]
+   s_prev_value = attrdef.s_value
+   attrdef.add_constant_source(self, source)
+   # we should reflow from all the reader's position,
+   # but as an optimization we try to see if the attribute
+   # has really been generalized
+   if attrdef.s_value != s_prev_value:
+    attrdef.mutated(cdef) # reflow from all read positions
+   return
+ else:
+  # remember the source in self.attr_sources
+  sources = self.attr_sources.setdefault(attr, [])
+  sources.append(source)
+  # register the source in any Attribute found in subclasses,
+  # to restore invariant (III)
+  # NB. add_constant_source() may discover new subdefs but the
+  #  right thing will happen to them because self.attr_sources
+  #  was already updated
+  if not source.instance_level:
+   for subdef in self.getallsubdefs():
+    if attr in subdef.attrs:
+     attrdef = subdef.attrs[attr]
+     s_prev_value = attrdef.s_value
+     attrdef.add_constant_source(self, source)
+     if attrdef.s_value != s_prev_value:
+      attrdef.mutated(subdef) # reflow from all read positions
+ 
+
+ Later in the same file, starting at line 307, an example with an illuminating comment: 
+
+ def generalize_attr(self, attr, s_value=None):
+ # if the attribute exists in a superclass, generalize there,
+ # as imposed by invariant (I)
+ for clsdef in self.getmro():
+  if attr in clsdef.attrs:
+   clsdef._generalize_attr(attr, s_value)
+   break
+ else:
+  self._generalize_attr(attr, s_value)
+ 
+ #1 If you have a for loop you don't really have any condition statement. So break is your choice if you like to abort and then else can serve perfectly to handle the case where you were not happy. 
+
+ for fruit in basket:
+ if fruit.kind in ['Orange', 'Apple']:
+  fruit.eat()
+  break
+else:
+ print 'The basket contains no desirable fruit'
+ 
+ #2 Without using break , else blocks have no benefit for for and while statements. The following two examples are equivalent: 
+
+ for x in range(10):
+ pass
+else:
+ print "else"
+
+for x in range(10):
+ pass
+print "else"
+ 
+
+ The only reason for using else with for or while is to do something after the loop if it terminated normally, meaning without an explicit break . 
+
+ After a lot of thinking, I can finally come up with a case where this might be useful: 
+
+ def commit_changes(directory):
+ for file in directory:
+  if file_is_modified(file):
+   break
+ else:
+  # No changes
+  return False
+
+ # Something has been changed
+ send_directory_to_server()
+ return True
+ 
+ #3 Basically, it simplifies any loop that uses a boolean flag like this: 
+
+ found = False    # &lt;-- initialize boolean
+for divisor in range(2, n):
+ if n % divisor == 0:
+  found = True   # &lt;-- update boolean
+  break # optional, but continuing would be a waste of time
+
+if found:     # &lt;-- check boolean
+ print n, "is composite"
+else:
+ print n, "is prime"
+ 
+
+ and allows you to skip the management of the flag: 
+
+ for divisor in range(2, n):
+ if n % divisor == 0:
+  print n, "is composite"
+  break
+else:
+ print n, "is prime"
+ 
+
+ Note that there is already a natural place for code to execute when you do find a divisor - right before the break . The only new feature here is a place for code to execute when you tried all divisor and did not find any. 
+
+ This helps only in conjuction with break . You still need booleans if you can't break (e.g. because you looking for the last match, or have to track several conditions in parallel). 
+
+ Oh, and BTW, this works for while loops just as well. 
+
+ any/all 
+
+ Nowdays, if the only purpose of the loop is a yes-or-no answer, you might be able to write it much shorter with the any() / all() functions with a generator or generator expression that yields booleans: 
+
+ if any(n % divisor == 0 
+  for divisor in range(2, n)):
+ print n, "is composite"
+else:
+ print n, "is prime"
+ 
+
+ Note the elegancy! The code is 1:1 what you want to say! 
+
+ [This is as effecient as a loop with a break , because the any() function is short-circuiting, only running the generator expression until it yeilds True . In fact it's usually even faster than a loop. Simpler Python code tends to have less overhear.] 
+
+ This is less workable if you have other side effects - for example if you want to find the divisor. You can still do it (ab)using the fact that non-0 value are true in Python: 
+
+ divisor = any(d for d in range(2, n) if n % d == 0)
+if divisor:
+ print n, "is divisible by", divisor
+else:
+ print n, "is prime"
+ 
+
+ but as you see this is getting shaky - wouldn't work if 0 was a possible divisor value... 
+ #4 Perhaps the best answer comes from the official Python tutorial: 
+
+ break and continue Statements, and else Clauses on Loops : 
+
+ 
+ Loop statements may have an else
+ clause; it is executed when the loop
+ terminates through exhaustion of the
+ list (with for) or when the condition
+ becomes false (with while), but not
+ when the loop is terminated by a break
+ statement 
+ 
+ #5 Here you go: 
+
+ a = ('y','a','y')
+for x in a:
+ print x,
+else:
+ print '!'
+ 
+
+ It's for the caboose. 
+
+ edit: 
+
+ # What happens if we add the ! to a list?
+
+def side_effect(your_list):
+ your_list.extend('!')
+ for x in your_list:
+ print x,
+
+claimant = ['A',' ','g','u','r','u']
+side_effect(claimant)
+print claimant[-1]
+
+# oh no, claimant now ends with a '!'
+ 
+
+ edit: 
+
+ a = (("this","is"),("a","contrived","example"),("of","the","caboose","idiom"))
+for b in a:
+ for c in b:
+ print c,
+ if "is" == c:
+  break
+ else:
+ print

@@ -1,0 +1,155 @@
+Question (ID-1149253): How to create Classes in Python with highly constrained instances In Python, there are examples of built-in classes with highly constrained instances. For example, "None" is the only instance of its class, and in the bool class there are only two objects, "True" and "False" (I hope I am more-or-less correct so far).  
+
+ Another good example are integers: if a and b are instances of the int type then a == b implies that a is b. 
+
+ Two questions: 
+
+ 
+ How does one create a class with similarly constrained instances? For example we could ask for a class with exactly 5 instances. Or there could be infinitely many instances, like type int, but these are not arbitrary. 
+ if integers form a class, why does int() give the 0 instance? compare this to a user-defined class Cl, where Cl() would give an instance of the class, not a specific unique instance , like 0. Shouldn't int() return an unspecified integer object, i.e. an integer without a specified value? 
+ 
+ Answers (Total-7): #0 You're talking about giving a class value semantics , which is typically done by creating class instances in the normal way, but remembering each one, and if a matching instance would be created, give the already created instance instead. In python, this can be achieved by overloading a classes __new__ method . 
+
+ Brief example, say we wanted to use pairs of integers to represent coordinates, and have the proper value semantics. 
+
+ class point(object):
+ memo = {}
+ def __new__(cls, x, y):
+  if (x, y) in cls.memo:   # if it already exists, 
+   return cls.memo[(x, y)] # return the existing instance
+  else:       # otherwise, 
+   newPoint = object.__new__(cls) # create it, 
+   newPoint.x = x    # initialize it, as you would in __init__
+   newPoint.y = y    
+   cls.memo[(x, y)] = newPoint # memoize it, 
+   return newPoint   # and return it!
+ 
+
+ 
+ #1 Looks like #1 has been well answered already and I just want to explain a principle, related to #2, which appears to have been missed by all respondents: for most built-in types, calling the type without parameters (the "default constructor") returns an instance of that type which evaluates as false . That means an empty container for container types, a number which compares equal to zero for number types. 
+
+ &gt;&gt;&gt; import decimal
+&gt;&gt;&gt; decimal.Decimal()
+Decimal("0")
+&gt;&gt;&gt; set()
+set([])
+&gt;&gt;&gt; float()
+0.0
+&gt;&gt;&gt; tuple()
+()
+&gt;&gt;&gt; dict()
+{}
+&gt;&gt;&gt; list()
+[]
+&gt;&gt;&gt; str()
+''
+&gt;&gt;&gt; bool()
+False
+ 
+
+ See? Pretty regular indeed! Moreover, for mutable types, like most containers, calling the type always returns a new instance; for immutable types, like numbers and strings, it doesn't matter (it's a possible internal optimization to return new reference to an existing immutable instance, but the implementation is not required to perform such optimization, and if it does it can and often will perform them quite selectively) since it's never correct to compare immutable type instances with is or equivalently by id() . 
+
+ If you design a type of which some instances can evaluate as false (by having __len__ or __nonzero__ special methods in the class), it's advisable to follow the same precept (have __init__ [or __new__ for immutables], if called without arguments [[beyond self for __init__ and 'cls' for __new__ of course]], prepare a [[new, if mutable]] "empty" or "zero-like" instance of the class). 
+ #2 For the first question you could implement a singleton class design pattern http://en.wikipedia.org/wiki/Singleton_pattern you should from that restrict the number of instances. 
+
+ For the second question, I think this kind of explains your issue http://docs.python.org/library/stdtypes.html 
+
+ Because integers are types, there are limitations to it. 
+
+ Here is another resource...
+ http://docs.python.org/library/functions.html#built-in-funcs 
+ #3 
+ Create them in advance and return one of those from __new__ instead of creating a new object, or cache created instances ( weakrefs are handy here) and return one of those instead of creating a new object. 
+ Integers are special. Effectively this means you can never use identity to compare them as you would use identity to compare other objects. Since they are immutable and rarely used in any way other than a value context, this isn't much of a problem. This is done, as far as I can tell, for implementation reasons more than anything else. (And since there's no clear indication that it's an incorrect way, it's a good decision.) 
+ 
+
+ Singletons such as None: Create the class with the name you want to give the variable, and then rebind the variable to the (only) instance, or delete the class afterwards. This is handy when you want to emulate an interface such as getattr , where a parameter is optional but using None is different from not providing a value. 
+
+ class raise_error(object): pass
+raise_error = raise_error()
+
+def example(d, key, default=raise_error):
+ """Return d[key] if key in d, else return default or
+ raise KeyError if default isn't supplied."""
+ try:
+ return d[key]
+ except KeyError:
+ if default is raise_error:
+  raise
+ return default
+ 
+ #4 To answer the more generic question of how to create constrained instances, it depends on the constraint. Both you examples above are a sort of "singletons", although the second example is a variation where you can have many instances of one class, but you will have only one per input value. 
+
+ These can both done by overriding the class' __new__ method, so that the class creates the instances if it hasn't been created already, and both returns it, and stores it as an attribute on the class (as has been suggested above). However, a slightly less hackish way is to use metaclasses. These are classes that change the behaviour of classes, and singletons is a great example of when to use metaclasses. And the great thing about this is that you can reuse metaclasses. By creating a Singleton metaclass, you can then use this metaclass for all Singletons you have. 
+
+ A nice Python example in on Wikipedia: http://en.wikipedia.org/wiki/Singleton_pattern#Python 
+
+ Here is a variation that will create a different instance depending on parameters:
+(It's not perfect. If you pass in a parameter which is a dict, it will fail, for example. But it's a start): 
+
+ # Notice how you subclass not from object, but from type. You are in other words
+# creating a new type of type.
+class SingletonPerValue(type):
+ def __init__(cls, name, bases, dict):
+  super(SingletonPerValue, cls).__init__(name, bases, dict)
+  # Here we store the created instances later.
+  cls.instances = {}
+
+ def __call__(cls, *args, **kw):
+  # We make a tuple out of all parameters. This is so we can use it as a key
+  # This will fail if you send in unhasheable parameters.
+  params = args + tuple(kw.items())
+  # Check in cls.instances if this combination of parameter has been used:
+  if params not in cls.instances:
+   # No, this is a new combination of parameters. Create a new instance,
+   # and store it in the dictionary:
+   cls.instances[params] = super(SingletonPerValue, cls).__call__(*args, **kw)
+
+  return cls.instances[params]
+
+
+class MyClass(object):
+ # Say that this class should use a specific metaclass:
+ __metaclass__ = SingletonPerValue
+
+ def __init__(self, value):
+  self.value = value
+
+print 1, MyClass(1)
+print 2, MyClass(2)
+print 2, MyClass(2)
+print 2, MyClass(2)
+print 3, MyClass(3)
+ 
+
+ But there are other constraints in Python than instantiation. Many of them can be done with metaclasses. Others have shortcuts, here is a class that only allows you to set the attributes 'items' and 'fruit', for example. 
+
+ class Constrained(object):
+ __slots__ = ['items', 'fruit']
+
+con = Constrained()
+con.items = 6
+con.fruit = "Banana"
+con.yummy = True
+ 
+
+ If you want restrictions on attributes, but not quite these strong, you can override __getattr__, __setattr__ and __delattr__ to make many fantastic and horrid things happen. :-) There are also packages out there that let you set constraints on attributes, etc. 
+ #5 I think some names for the concept you're thinking about are interning and immutable objects . 
+
+ As for an answer to your specific questions, I think for #1, you could look up your constrained instance in a class method and return it. 
+
+ For question #2, I think it's just a matter of how you specify your class. A non-specific instance of the int class would be pretty useless, so just spec it so it's impossible to create. 
+ #6 Note: this is not really an answer to your question, but more a comment I could not fit in the "comment" space. 
+
+ Please note that a == b does NOT implies that a is b . 
+
+ It is true only for first handfuls of integers (like first hundred or so - I do not know exactly) and it is only an implementation detail of CPython, that actually changed with the switch to Python 3.0. 
+
+ For example: 
+
+ &gt;&gt;&gt; n1 = 4000
+&gt;&gt;&gt; n2 = 4000
+&gt;&gt;&gt; n1 == n2
+True
+&gt;&gt;&gt; n1 is n2
+False

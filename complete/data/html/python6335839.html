@@ -1,0 +1,158 @@
+<h3>Question (ID-6335839):</h3><h2>Python how to read N number of lines at a time</h2><p>I am writing a code to take an enormous textfile (several GB) N lines at a time, process that batch, and move onto the next N lines until I have completed the entire file.  (I don't care if the last batch isn't the perfect size).</p>
+
+<p>I have been reading about using itertools islice for this operation.  I think I am halfway there:</p>
+
+<pre><code>from itertools import islice
+N = 16
+infile = open("my_very_large_text_file", "r")
+lines_gen = islice(infile, N)
+
+for lines in lines_gen:
+     ...process my lines...
+</code></pre>
+
+<p>The trouble is that I would like to process the next batch of 16 lines (I guess I am imagining something like "pop").  Any help?  </p>
+
+<p>There were some posts similar to this question, but I am new to python and the explanations were confusing.  Please provide comments to code / links to well commented code.
+Thanks</p>
+
+<p>EDIT:  <strong>Please clearly comment/explain your code, I have a lot to learn!</strong>  I have been looking up other pages, but they offer quick and dirty solutions without explanations!  </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p><code>islice()</code> can be used to get the next <code>n</code> items of an iterator.  Thus, <code>list(islice(f, n))</code> will return a list of the next <code>n</code> lines of the file <code>f</code>.  Using this inside a loop will give you the file in chunks of <code>n</code> lines.  At the end of the file, the list might be shorter, and finally the call will return an empty list.</p>
+
+<pre><code>with open(...) as f:
+    while True:
+        next_n_lines = list(islice(f, n))
+        if not next_n_lines:
+            break
+        # process next_n_lines
+</code></pre>
+
+<p>An alternative is to use the <a href="http://docs.python.org/library/itertools.html#recipes" rel="nofollow">grouper pattern</a>:</p>
+
+<pre><code>with open(...) as f:
+    for next_n_lines in izip_longest(*[f] * n):
+        # process next_n_lines
+</code></pre>
+<br /><b>#1</b><br /><p>Since the requirement was added that there be statistically uniform distribution of the lines selected from the file, I offer this simple approach.</p>
+
+<pre><code>"""randsamp - extract a random subset of n lines from a large file"""
+
+import random
+
+def scan_linepos(path):
+    """return a list of seek offsets of the beginning of each line"""
+    linepos = []
+    offset = 0
+    with open(path) as inf:     
+        # WARNING: CPython 2.7 file.tell() is not accurate on file.next()
+        for line in inf:
+            linepos.append(offset)
+            offset += len(line)
+    return linepos
+
+def sample_lines(path, linepos, nsamp):
+    """return nsamp lines from path where line offsets are in linepos"""
+    offsets = random.sample(linepos, nsamp)
+    offsets.sort()  # this may make file reads more efficient
+
+    lines = []
+    with open(path) as inf:
+        for offset in offsets:
+            inf.seek(offset)
+            lines.append(inf.readline())
+    return lines
+
+dataset = 'big_data.txt'
+nsamp = 5
+linepos = scan_linepos(dataset) # the scan only need be done once
+
+lines = sample_lines(dataset, linepos, nsamp)
+print 'selecting %d lines from a file of %d' % (nsamp, len(linepos))
+print ''.join(lines)
+</code></pre>
+
+<p>I tested it on a mock data file of 3 million lines comprising 1.7GB on disk. The <code>scan_linepos</code> dominated the runtime taking about 20 seconds on my not-so-hot desktop. </p>
+
+<p>Just to check the performance of <code>sample_lines</code> I used the <code>timeit</code> module as so</p>
+
+<pre><code>import timeit
+t = timeit.Timer('sample_lines(dataset, linepos, nsamp)', 
+        'from __main__ import sample_lines, dataset, linepos, nsamp')
+trials = 10 ** 4
+elapsed = t.timeit(number=trials)
+print u'%dk trials in %.2f seconds, %.2fµs per trial' % (trials/1000,
+        elapsed, (elapsed/trials) * (10 ** 6))
+</code></pre>
+
+<p>For various values of <code>nsamp</code>; when <code>nsamp</code> was 100, a single <code>sample_lines</code> completed in 460µs and scaled linearly up to 10k samples at 47ms per call.</p>
+
+<p>The natural next question is <a href="http://stackoverflow.com/questions/2145510/how-good-is-pythons-random-number-generator-from-module-random">how good is Python&#39;s random number generator from module random?</a>, and the answer is "sub-cryptographic but certainly fine for bioinformatics".</p>
+<br /><b>#2</b><br /><p>Used chunker function from <a href="http://stackoverflow.com/questions/434287/what-is-the-most-pythonic-way-to-iterate-over-a-list-in-chunks">What is the most “pythonic” way to iterate over a list in chunks?</a>:</p>
+
+<pre><code>from itertools import izip_longest
+
+def grouper(iterable, n, fillvalue=None):
+    "grouper(3, 'ABCDEFG', 'x') --&gt; ABC DEF Gxx"
+    args = [iter(iterable)] * n
+    return izip_longest(*args, fillvalue=fillvalue)
+
+
+with open(filename) as f:
+    for lines in grouper(f, chunk_size, ""): #for every chunk_sized chunk
+        """process lines like 
+        lines[0], lines[1] , ... , lines[chunk_size-1]"""
+</code></pre>
+<br /><b>#3</b><br /><p>Here is another way using <a href="http://docs.python.org/library/itertools.html#itertools.groupby" rel="nofollow">groupby</a>:</p>
+
+<pre><code>from itertools import count, groupby
+
+N = 16
+with open('test') as f:
+    for g, group in groupby(f, key=lambda _, c=count(): c.next()/N):
+        print list(group)
+</code></pre>
+
+<p><strong>How it works:</strong></p>
+
+<p>Basically groupby() will group the lines by the return value of the key parameter and the key parameter is the <a href="http://docs.python.org/tutorial/controlflow.html#lambda-forms" rel="nofollow">lambda</a> function <code>lambda _, c=count(): c.next()/N</code> and using the fact that the c argument will be bound to <a href="http://docs.python.org/library/itertools.html#itertools.count" rel="nofollow">count()</a> when the <a href="http://stackoverflow.com/questions/1132941/least-astonishment-in-python-the-mutable-default-argument">function will be defined</a> so each time <code>groupby()</code> will call the lambda function and evaluate the return value to determine the grouper that will group the lines so :</p>
+
+<pre><code># 1 iteration.
+c.next() =&gt; 0
+0 / 16 =&gt; 0
+# 2 iteration.
+c.next() =&gt; 1
+1 / 16 =&gt; 0
+...
+# Start of the second grouper.
+c.next() =&gt; 16
+16/16 =&gt; 1   
+...
+</code></pre>
+<br /><b>#4</b><br /><p>The question appears to presume that there is efficiency to be gained by reading an "enormous textfile" in blocks of N lines at a time. This adds an application layer of buffering over the already highly optimized <code>stdio</code> library, adds complexity, and probably buys you absolutely nothing.</p>
+
+<p>Thus:</p>
+
+<pre><code>with open('my_very_large_text_file') as f:
+    for line in f:
+        process(line)
+</code></pre>
+
+<p>is probably superior to any alternative in time, space, complexity and readability.</p>
+
+<p>See also <a href="http://users.ece.utexas.edu/~adnan/pike.html" rel="nofollow">Rob Pike's first two rules</a>, <a href="http://en.wikipedia.org/wiki/Program_optimization#Quotes" rel="nofollow">Jackson's Two Rules</a>, and <a href="http://www.python.org/dev/peps/pep-0020/" rel="nofollow">PEP-20 The Zen of Python</a>. If you really just wanted to play with <code>islice</code> you should have left out the large file stuff.</p>
+<br /><b>#5</b><br /><p>Assuming "batch" means to want to process all 16 recs at one time instead of individually, read the file one record at a time and update a counter; when the counter hits 16, process that group.    <pre><code>interim_list = []
+infile = open("my_very_large_text_file", "r")
+ctr = 0
+for rec in infile:
+    interim_list.append(rec)
+    ctr += 1
+    if ctr > 15:
+        process_list(interim_list)
+        interim_list = []
+        ctr = 0</p>
+
+<h2>the final group</h2>
+
+<p>process_list(interim_list)<br>
+</code></pre></p>
+<br />

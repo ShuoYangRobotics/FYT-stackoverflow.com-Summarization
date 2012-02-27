@@ -1,0 +1,102 @@
+<h3>Question (ID-509994):</h3><h2>Best way to write a Python function that integrates a gaussian?</h2><p>In attempting to use scipy's quad method to integrate a gaussian (lets say there's a gaussian method named gauss), I was having problems passing needed parameters to gauss and leaving quad to do the integration over the correct variable. Does anyone have a good example of how to use quad w/ a multidimensional function?</p>
+
+<p>But this led me to a more grand question about the best way to integrate a gaussian in general. I didn't find a gaussian integrate in scipy (to my surprise). My plan was to write a simple gaussian function and pass it to quad (or maybe now a fixed width integrator). What would you do?</p>
+
+<p>Edit: Fixed-width meaning something like trapz that uses a fixed dx to calculate areas under a curve.</p>
+
+<p>What I've come to so far is a method make___gauss that returns a lambda function that can then go into quad. This way I can make a normal function with the average and variance I need before integrating.</p>
+
+<pre><code>def make_gauss(N, sigma, mu):
+    return (lambda x: N/(sigma * (2*numpy.pi)**.5) *
+            numpy.e ** (-(x-mu)**2/(2 * sigma**2)))
+
+quad(make_gauss(N=10, sigma=2, mu=0), -inf, inf)
+</code></pre>
+
+<p>When I tried passing a general gaussian function (that needs to be called with x, N, mu, and sigma) and filling in some of the values using quad like</p>
+
+<pre><code>quad(gen_gauss, -inf, inf, (10,2,0))
+</code></pre>
+
+<p>the parameters 10, 2, and 0 did NOT necessarily match N=10, sigma=2, mu=0, which prompted the more extended definition.</p>
+
+<p>The erf(z) in scipy.special would require me to define exactly what t is initially, but it nice to know it is there.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Okay, you appear to be pretty confused about several things. Let's start at the beginning: you mentioned a "multidimensional function", but then go on to discuss the usual one-variable Gaussian curve. This is <em>not</em> a multidimensional function: when you integrate it, you only integrate one variable (x). The distinction is important to make, because there <em>is</em> a monster called a "multivariate Gaussian distribution" which is a true multidimensional function and, if integrated, requires integrating over two or more variables (which uses the expensive Monte Carlo technique I mentioned before). But you seem to just be talking about the regular one-variable Gaussian, which is much easier to work with, integrate, and all that.</p>
+
+<p>The one-variable Gaussian distribution has two parameters, <code>sigma</code> and <code>mu</code>, and is a function of a single variable we'll denote <code>x</code>. You also appear to be carrying around a normalization parameter <code>n</code> (which is useful in a couple of applications). Normalization parameters are usually <em>not</em> included in calculations, since you can just tack them back on at the end (remember, integration is a linear operator: <code>int(n*f(x), x) = n*int(f(x), x)</code> ). But we can carry it around if you like; the notation I like for a normal distribution is then </p>
+
+<p><code>N(x | mu, sigma, n) := (n/(sigma*sqrt(2*pi))) * exp((-(x-mu)^2)/(2*sigma^2))</code></p>
+
+<p>(read that as "the normal distribution of <code>x</code> given <code>sigma</code>, <code>mu</code>, and <code>n</code> is given by...") So far, so good; this matches the function you've got. Notice that the only <em>true variable</em> here is <code>x</code>: the other three parameters are <em>fixed</em> for any particular Gaussian.</p>
+
+<p>Now for a mathematical fact: it is provably true that all Gaussian curves have the same shape, they're just shifted around a little bit. So we can work with <code>N(x|0,1,1)</code>, called the "standard normal distribution", and just translate our results back to the general Gaussian curve. So if you have the integral of <code>N(x|0,1,1)</code>, you can trivially calculate the integral of any Gaussian. This integral appears so frequently that it has a special name: the <em>error function</em> <code>erf</code>. Because of some old conventions, it's not <em>exactly</em> <code>erf</code>; there are a couple additive and multiplicative factors also being carried around. </p>
+
+<p>If <code>Phi(z) = integral(N(x|0,1,1), -inf, z)</code>; that is, <code>Phi(z)</code> is the integral of the standard normal distribution from minus infinity up to <code>z</code>, then it's true by the definition of the error function that</p>
+
+<p><code>Phi(z) = 0.5 + 0.5 * erf(z / sqrt(2))</code>.</p>
+
+<p>Likewise, if <code>Phi(z | mu, sigma, n) = integral( N(x|sigma, mu, n), -inf, z)</code>; that is, <code>Phi(z | mu, sigma, n)</code> is the integral of the normal distribution given parameters <code>mu</code>, <code>sigma</code>, and <code>n</code> from minus infinity up to <code>z</code>, then it's true by the definition of the error function that</p>
+
+<p><code>Phi(z | mu, sigma, n) = (n/2) * (1 + erf((x - mu) / (sigma * sqrt(2))))</code>.</p>
+
+<p>Take a look at <a href="http://en.wikipedia.org/wiki/Normal_distribution#Cumulative_distribution_function" rel="nofollow">the Wikipedia article on the normal CDF</a> if you want more detail or a proof of this fact.</p>
+
+<p>Okay, that should be enough background explanation. Back to your (edited) post. You say "The erf(z) in scipy.special would require me to define exactly what t is initially". I have no idea what you mean by this; where does <code>t</code> (time?) enter into this at all? Hopefully the explanation above has demystified the error function a bit and it's clearer now as to why the error function is the right function for the job.</p>
+
+<p>Your Python code is OK, but I would prefer a closure over a lambda:</p>
+
+<pre><code>def make_gauss(N, sigma, mu):
+    k = N / (sigma * math.sqrt(2*math.pi))
+    s = -1.0 / (2 * sigma * sigma)
+    def f(x):
+        return k * math.exp(s * (x - mu)*(x - mu))
+return f
+</code></pre>
+
+<p>Using a closure enables precomputation of constants <code>k</code> and <code>s</code>, so the returned function will need to do less work each time it's called (which can be important if you're integrating it, which means it'll be called many times). Also, I have avoided any use of the exponentiation operator <code>**</code>, which is slower than just writing the squaring out, and hoisted the divide out of the inner loop and replaced it with a multiply. I haven't looked at all at their implementation in Python, but from my last time tuning an inner loop for pure speed using raw x87 assembly, I seem to remember that adds, subtracts, or multiplies take about 4 CPU cycles each, divides about 36, and exponentiation about 200. That was a couple years ago, so take those numbers with a grain of salt; still, it illustrates their relative complexity. As well, calculating <code>exp(x)</code> the brute-force way is a very bad idea; there are tricks you can take when writing a good implementation of <code>exp(x)</code> that make it significantly faster and more accurate than a general <code>a**b</code> style exponentiation.</p>
+
+<p>I've never used the numpy version of the constants pi and e; I've always stuck with the plain old math module's versions. I don't know why you might prefer either one.</p>
+
+<p>I'm not sure what you're going for with the <code>quad()</code> call. <code>quad(gen_gauss, -inf, inf, (10,2,0))</code> ought to integrate a renormalized Gaussian from minus infinity to plus infinity, and should always spit out 10 (your normalization factor), since the Gaussian integrates to 1 over the real line. Any answer far from 10 (I wouldn't expect <em>exactly</em> 10 since <code>quad()</code> is only an approximation, after all) means something is screwed up somewhere... hard to say what's screwed up without knowing the actual return value and possibly the inner workings of <code>quad()</code>.</p>
+
+<p>Hopefully that has demystified some of the confusion, and explained why the error function  is the right answer to your problem, as well as how to do it all yourself if you're curious. If any of my explanation wasn't clear, I suggest taking a quick look at Wikipedia first; if you still have questions, don't hesitate to ask. </p>
+<br /><b>#1</b><br /><p>scipy ships with the "error function", aka Gaussian integral:</p>
+
+<pre><code>import scipy.special
+help(scipy.special.erf)
+</code></pre>
+<br /><b>#2</b><br /><p>I assume you're handling multivariate Gaussians; if so, SciPy already has the function you're looking for: it's called MVNDIST ("MultiVariate Normal DISTribution). The SciPy documentation is, as ever, terrible, so I can't even find where the function is buried, but <a href="http://www.google.com/search?q=site%3Ascipy.org+MVNDST+&amp;ie=utf-8&amp;oe=utf-8&amp;aq=t" rel="nofollow">it's in there somewhere</a>. The documentation is easily the worst part of SciPy, and has frustrated me to no end in the past.</p>
+
+<p>Single-variable Gaussians just use the good old error function, of which many implementations are available.</p>
+
+<p>As for attacking the problem in general, yes, as James Thompson mentions, you just want to write your own gaussian distribution function and feed it to quad(). If you can avoid the generalized integration, though, it's a good idea to do so -- specialized integration techniques for a particular function (like MVNDIST uses) are going to be much faster than a standard Monte Carlo multidimensional integration, which can be extremely slow for high accuracy.</p>
+<br /><b>#3</b><br /><p>Why not just always do your integration from -infinity to +infinity, so that you always know the answer? (joking!)</p>
+
+<p>My guess is that the only reason that there's not already a canned Gaussian function in SciPy is that it's a trivial function to write. Your suggestion about writing your own function and passing it to quad to integrate sounds excellent. It uses the accepted SciPy tool for doing this, it's minimal code effort for you, and it's very readable for other people even if they've never seen SciPy. </p>
+
+<p>What exactly do you mean by a fixed-width integrator? Do you mean using a different algorithm than whatever QUADPACK is using?</p>
+
+<p>Edit: For completeness, here's something like what I'd try for a Gaussian with the mean of 0 and standard deviation of 1 from 0 to +infinity:</p>
+
+<pre><code>from scipy.integrate import quad
+from math import pi, exp
+mean = 0
+sd   = 1
+quad(lambda x: 1 / ( sd * ( 2 * pi ) ** 0.5 ) * exp( x ** 2 / (-2 * sd ** 2) ), 0, inf )
+</code></pre>
+
+<p>That's a little ugly because the Gaussian function is a little long, but still pretty trivial to write. </p>
+<br /><b>#4</b><br /><p>The gaussian distribution is also called a normal distribution. The cdf function in the scipy norm module does what you want.</p>
+
+<p>from scipy.stats import norm</p>
+
+<p>print norm.cdf(0.0)</p>
+
+<p>0.5</p>
+
+<p><a href="http://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.norm.html#scipy.stats.norm" rel="nofollow">http://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.norm.html#scipy.stats.norm</a></p>
+<br /><b>#5</b><br /><p>use the attachment in <a href="http://projects.scipy.org/scipy/ticket/846" rel="nofollow">http://projects.scipy.org/scipy/ticket/846</a></p>
+<br /><b>#6</b><br /><p>Is there a python function to get the expectation of a function over a multivariate normal distribution? </p>
+
+<p>That is, is there a python integration routine (over infinite limits) that explicitly and efficiently makes use of the fact that the distribution is multivariate normal when integrating over a user-specified function?</p>
+<br />

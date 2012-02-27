@@ -1,0 +1,134 @@
+Question (ID-2983264): Will this SQL cause any problems? I'm sure everyone knows the joys of concurrency when it comes to threading. 
+
+ Imagine the following scenario on every page-load on a noobily set up MySQL db: 
+
+ UPDATE stats SET visits = (visits+1)
+ 
+
+ If a thousand users load the page at same time, will the count cause any issues? is this that table locking/row locking mechanism? Which one mysql use. 
+ Answers (Total-8): #0 No this won't screw up. This is perfectly acceptable in any ACID compliant DB. The I stands for Isolation . Each one of these queries will lock all rows in the visit table. The A (in ACID) stands for Atomicity and means the transaction must run in full or not at all. 
+ #1 You have two potential problems: 
+
+ 
+ Will you get the right answer? 
+ Will you get unreasonable locking, will your whole app go very slow or even deadlock. 
+ 
+
+ The right answer depends upon whether two users could compute (visit + 1) on the same value of visit. We can imagine that the database needs to do these actions: 
+
+ Read visit count
+ Add one to visit count
+ Write visit count
+ 
+
+ So if two users are working at the same time could they both read the same old value? That's where the isolation level of the transaction comes into play. As observed by Artefacto the default isolation level is repeatable read, and hence we get: 
+
+ Grab a lock
+ Read, increment, Write
+ Release lock
+ 
+
+ Rather than 
+
+ Read (two users same old value)
+ Increment
+ First user Grab Lock, second waits
+ Write 
+ Release, second user grabs lock
+ Write (same value!)
+ Release
+ 
+
+ However the level of contention could be quite high, and very much depends on the scope of your transaction. Suppose you have: 
+
+ Begin transaction
+
+ Do the visit increment stuff
+
+ Do some serious business work
+
+ End transaction &lt;==== visit lock is held until here
+ 
+
+ Then you will get a lot of folks waiting for that visit lock. We don't know the overall structure of your app, whether you are using large transaction scopes like this. Very likely you are getting a default behaviour of a single transaction per SQL statement, and in which case you're contention is just for the duration of the SQL statement, pretty much as you would be hoping. 
+
+ Other folks might not be so fortunate: there are environments (eg. JEE Servlets) where implicit transaction scopes can be created by the infrastructure and then the longer lived transactions I show above happen by default. Worse is the possibility that your code is not written consistently (with the visit increment always first, or always last) you can get: 
+
+ Begin transaction
+ Do the visit increment stuff
+ Do some serious business work
+ End transaction &lt;==== visit lock and business locks held until here
+ 
+
+ and 
+
+ Begin transaction
+ Do some other serious business work
+ Do the visit increment stuff  
+ End transaction &lt;==== visit lock and maybesame business locks held until here
+ 
+
+ And bingo: Deadlock 
+
+ For high volume sites you bcould consider writing a "Visit" event to a queue, and having a daemon listening for those events and maintaining the count. More complex, but possibly fewer contention issues. 
+ #2 For MySQL, the manual says: 
+
+ 
+ [Repeatable read] is the default isolation level for InnoDB. [...] For [...] UPDATE , and DELETE statements, locking depends on whether the statement uses a unique index with a unique search condition, or a range-type search condition. For a unique index with a unique search condition, InnoDB locks only the index record found, not the gap before it. For other search conditions, InnoDB locks the index range scanned, using gap locks or next-key (gap plus index-record) locks to block insertions by other sessions into the gaps covered by the range. 
+ 
+
+ So I'd say yes, you're fine, though that particular query may well lock the entire table. It would probably be better: 
+
+ UPDATE stats SET value = value + 1 WHERE key = 'visits'
+ 
+
+ with an index on "key". 
+ #3 All the answers so far appear to assume an InnoDB table, which does support transactions; with MyISAM tables, you get "atomic transactions" instead, which should be fine for your specific use case (though they fall well short of full ACID for the general case). 
+
+ In the MySQL docs on transactions (e.g. here ) it gives your UPDATE form as a good practice typical case, specifically, and I quote...: 
+
+ 
+ This gives us something that is
+ similar to column locking but is
+ actually even better because we only
+ update some of the columns, using
+ values that are relative to their
+ current values. This means that
+ typical UPDATE statements look
+ something like these: 
+ 
+
+ UPDATE tablename SET pay_back=pay_back+125;
+ 
+
+ 
+ ...This is very efficient and works even if another client has changed the values in the pay_back [[column]] 
+ 
+ #4 Make sure you have SET autocommit so this is treated as a transaction, and the count will be fine. The only concern is performance (e.g. having a table hot spot) 
+ #5 This will work if you: 
+
+ 
+ Are running in a transaction 
+ Row locking is set up correctly 
+ 
+
+ Be especially careful with the second point. It's not a no-brainer because MySQL allows you to relax locking constraints to a point where this will indeed screw up. 
+
+ On the other hand (when locking is set up correctly) if you hit some (very) heavy traffic this might become your bottle neck (as it can only execute in a single thread). If you keep the transaction open longer than just to update the number this becomes more likely, and it can even cause a deadlock if you're not careful as djna explains in detail. 
+ #6 As everyone has said this will lock the row if you're using InnoDB. Now if you're just using just one row and that row stores stats about all accesses then locking this row may slow things down as queries wait to acquire the lock. This slow down may be imperceptible under your loads. If it is significant you could get around it by writing to multiple different rows, say 0-255. This will still lock each row, but the chance of lock contention is now 1/256 of what it originally was. When you want the total you can just sum all rows. 
+
+ UPDATE stats SET value=value+1 WHERE id=X 
+ 
+
+ where X is a random id 0-255 
+
+ then 
+
+ SELECT SUM(value) FROM stats
+ 
+
+ will give you the real total. 
+ #7 It's fine. 
+all that "table locking/row locking" is the crap databases were invented to take care for. 
+
+ There can be other issues when "thousand users load the page at same time", like index updating. But that's another story and noobily MySQL setup isn't a case anyway.

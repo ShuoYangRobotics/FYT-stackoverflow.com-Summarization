@@ -1,0 +1,232 @@
+<h3>Question (ID-1307016):</h3><h2>Pearson Similarity Score, how can I optimise this further?</h2><p>I have an implemented of Pearson's Similarity score for comparing two dictionaries of values. More time is spent in this method than anywhere else (potentially many millions of calls), so this is clearly the critical method to optimise.</p>
+
+<p>Even the slightest optimisation could have a big impact on my code, so I'm keen to explore even the smallest improvements.</p>
+
+<p>Here's what I have so far:</p>
+
+<pre><code>def simple_pearson(v1,v2):
+
+    si = [val for val in v1 if val in v2]
+
+    n = len(si)
+
+    if n==0: return 0.0
+
+    sum1 = 0.0
+    sum2 = 0.0
+    sum1_sq = 0.0
+    sum2_sq = 0.0
+    p_sum = 0.0
+
+    for v in si:
+        val_1 = v1[v]
+        val_2 = v2[v]
+        sum1+=val_1
+        sum2+=val_2
+        sum1_sq+=pow(val_1,2)
+        sum2_sq+=pow(val_2,2)
+        p_sum+=val_1*val_2
+
+    # Calculate Pearson score
+    num = p_sum-(sum1*sum2/n)
+    temp = (sum1_sq-pow(sum1,2)/n) * (sum2_sq-pow(sum2,2)/n)
+    if temp &lt; 0.0:
+        temp = -temp
+    den = sqrt(temp)
+    if den==0: return 1.0
+
+    r = num/den
+
+    return r
+</code></pre>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>The real speed increase would be gained by moving to numpy or scipy. Short of that, there are microoptimizations: e.g. <code>x*x</code> is faster than <code>pow(x,2)</code>; you could extract the values at the same time as the keys by doing, instead of:</p>
+
+<pre><code>si = [val for val in v1 if val in v2]
+</code></pre>
+
+<p>something like</p>
+
+<pre><code>vs = [ (v1[val],v2[val]) for val in v1 if val in v2]
+</code></pre>
+
+<p>and then</p>
+
+<pre><code>sum1 = sum(x for x, y in vs)
+</code></pre>
+
+<p>and so on; whether each of these brings time advantage needs microbenchmarking. Depending on how you're using these coefficients returning the square would save you a sqrt (that's a similar idea to using squares of distances between points, in geometry, rather than the distances themselves, and for the same reason -- saves you a sqrt; which makes sense because the coefficient IS a distance, kinda...;-).</p>
+<br /><b>#1</b><br /><p>If you can use scipy, you could use the pearson function: <a href="http://www.scipy.org/doc/api%5Fdocs/SciPy.stats.stats.html#pearsonr" rel="nofollow">http://www.scipy.org/doc/api%5Fdocs/SciPy.stats.stats.html#pearsonr</a></p>
+
+<p>Or you could copy/paste the code (it has a liberal license) from <a href="http://svn.scipy.org/svn/scipy/trunk/scipy/stats/stats.py" rel="nofollow">http://svn.scipy.org/svn/scipy/trunk/scipy/stats/stats.py</a> (search for <code>def pearson()</code>).
+In the code <code>np</code> is just numpy (the code does <code>import numpy as np</code>).</p>
+<br /><b>#2</b><br /><p>I'd suggest changing:</p>
+
+<pre><code>[val for val in v1 if val in v2]
+</code></pre>
+
+<p>to</p>
+
+<pre><code>set(v1) &amp; set(v2)
+</code></pre>
+
+<p>do</p>
+
+<pre><code>if not n: return 0.0    # and similar for den
+</code></pre>
+
+<p>instead of</p>
+
+<pre><code>if n == 0: return 0.0
+</code></pre>
+
+<p>and it's worth replacing last 6 lines with:</p>
+
+<pre><code>try:
+    return num / sqrt(abs(temp))
+except ZeroDivisionError:
+    return 1.0
+</code></pre>
+<br /><b>#3</b><br /><p>Since it looks like you're doing quite a bit of numeric computation you should give <strong><a href="http://psyco.sourceforge.net/" rel="nofollow">Psyco</a></strong> a shot.  It's a JIT compiler that analyzes running code and optimizes certain operations. Install it, then at the top of your file put:</p>
+
+<pre><code>try:
+    import psyco
+    psyco.full()
+except ImportError:
+    pass
+</code></pre>
+
+<p>This will enable Psyco's JIT and should speed up your code somewhat, for free :) (actually not, it takes up more memory)</p>
+<br /><b>#4</b><br /><p>Scipy is the fastest!</p>
+
+<p>I have don some tests with the code above and also with a version I found on my comp, see below for results and the code:</p>
+
+<pre>
+pearson 14.7597990757
+sim_pearson 15.6806837987
+scipy:pearsonr 0.451986019188
+
+</pre>
+
+<pre>
+try:
+    import psyco
+    psyco.full()
+except ImportError:
+    pass
+
+from math import sqrt
+
+def sim_pearson(set1, set2):
+    si={}
+    for item in set1:
+        if item in set2:
+            si[item] = 1
+
+    #number of elements
+    n = len(si)
+
+    #if none common, return 0 similarity
+    if n == 0: return 0
+
+    #add up all the preferences
+    sum1 = sum([set1[item] for item in si])
+    sum2 = sum([set2[item] for item in si])
+
+    #sum up the squares
+    sum_sq1 = sum([pow(set1[item], 2) for item in si])
+    sum_sq2 = sum([pow(set2[item], 2) for item in si])
+
+    #sum up the products
+    sum_p = sum([set1[item] * set2[item] for item in si])
+
+    nom = sum_p - ((sum1 * sum2) / n )
+    den = sqrt( (sum_sq1 - (sum1)**2 / n) * (sum_sq2 - (sum2)**2 / n) )
+
+    if den==0: return 0
+    return nom/den
+
+
+
+# from http://stackoverflow.com/questions/1307016/pearson-similarity-score-how-can-i-optimise-this-further
+def pearson(v1, v2):
+    vs = [(v1[val],v2[val]) for val in v1 if val in v2]
+
+    n = len(vs)
+
+    if n==0: return 0.0
+
+    sum1,sum2,sum1_sq,sum2_sq,p_sum = 0.0, 0.0, 0.0, 0.0, 0.0
+
+    for v1,v2 in vs:
+        sum1+=v1
+        sum2+=v2
+        sum1_sq+=v1*v1
+        sum2_sq+=v2*v2
+        p_sum+=v1*v2
+
+    # Calculate Pearson score
+    num = p_sum-(sum1*sum2/n)
+    temp = max((sum1_sq-pow(sum1,2)/n) * (sum2_sq-pow(sum2,2)/n),0)
+    if temp:
+        return num / sqrt(temp)
+    return 1.0
+
+
+
+
+
+
+if __name__ == "__main__":
+    import timeit
+
+    tsetup = """
+from random import randrange
+from __main__ import pearson, sim_pearson
+from scipy.stats import pearsonr
+v1 = [randrange(0,1000) for x in range(1000)]
+v2 = [randrange(0,1000) for x in range(1000)]
+#gc.enable()
+"""
+    t1 = timeit.Timer(stmt="pearson(v1,v2)", setup=tsetup)
+    t2 = timeit.Timer(stmt="sim_pearson(v1,v2)", setup=tsetup)
+    t3 = timeit.Timer(stmt="pearsonr(v1,v2)", setup=tsetup)
+
+    tt = 1000
+
+    print 'pearson', t1.timeit(tt)
+    print 'sim_pearson', t2.timeit(tt)
+    print 'scipy:pearsonr', t3.timeit(tt)
+
+</pre>
+<br /><b>#5</b><br /><p>If the inputs to any of your math functions are fairly constrained, you can use a lookup table instead of the math function.  This can earn you some performance (speed) at the cost of extra memory to store the table.</p>
+<br /><b>#6</b><br /><p>I'm not sure if this holds in Python. But calculating the sqrt is a processor intensive calculation.</p>
+
+<p>You might go for a fast approximation <a href="http://en.wikipedia.org/wiki/Methods%5Fof%5Fcomputing%5Fsquare%5Froots" rel="nofollow">newton</a></p>
+<br /><b>#7</b><br /><p>I'll post what I've got so far as an answer to differentiate it from the question. This is a combination of some techniques described above that seem to have given the best improvement s far.</p>
+
+<pre><code>def pearson(v1,v2):
+    vs = [(v1[val],v2[val]) for val in v1 if val in v2]
+
+    n = len(vs)
+
+    if n==0: return 0.0
+
+    sum1,sum2,sum1_sq,sum2_sq,p_sum = 0.0, 0.0, 0.0, 0.0, 0.0
+
+    for v1,v2 in vs:
+        sum1+=v1
+        sum2+=v2
+        sum1_sq+=v1*v1
+        sum2_sq+=v2*v2
+        p_sum+=v1*v2
+
+    # Calculate Pearson score
+    num = p_sum-(sum1*sum2/n)
+    temp = max((sum1_sq-pow(sum1,2)/n) * (sum2_sq-pow(sum2,2)/n),0)
+    if temp:
+        return num / sqrt(temp)
+    return 1.0
+</code></pre>
+
+<p>Edit: It looks like psyco gives a 15% improvment for this version which isn't massive but is enough to justify its use.</p>
+<br />

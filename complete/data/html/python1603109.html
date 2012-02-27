@@ -1,0 +1,196 @@
+<h3>Question (ID-1603109):</h3><h2>How to make a python script run like a service or daemon in linux</h2><p>I have written a python script that checks a certain e-mail address and passes new e-mails to an external program.  How can I get this script to execute 24/7, such as turning it into daemon or service in linux.  Anyone that answers this, would I also need a loop that never ends in the program, or can it be done by just having the code re executed multiple times?</p>
+
+<p>Thanks to anyone that replies</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>You have two options here.</p>
+
+<ol>
+<li><p>Make a proper <strong>cron job</strong> that calls your script.  Cron is a common name for a GNU/Linux daemon that periodically launches scripts according to a schedule you set.  You add your script into a crontab or place a symlink to it into a special directory and the daemon handles the job of launching it in the background.  You can <a href="http://en.wikipedia.org/wiki/Cron" rel="nofollow">read more</a> at wikipedia.  There is a variety of different cron daemons, but your GNU/Linux system should have it already installed.</p></li>
+<li><p>Use some kind of <strong>python approach</strong> (a library, for example) for your script to be able to daemonize itself.  Yes, it will require a simple event loop (where your events are timer triggering, possibly, provided by sleep function).</p></li>
+</ol>
+
+<p>I wouldn't recommend you to choose 2., because you're in fact repeating cron functionality.  The Linux system paradigm is to let multiple simple tools interact and solve your problems.  Unless there are additional reasons why you should make a daemon (in addition to trigger periodically), choose the other approach.</p>
+
+<p>Also, if you use daemonize with a loop and a crash happens, noone will check the mail after that (as pointed out by <a href="http://stackoverflow.com/users/93988/ivan-nevostruev">Ivan Nevostruev</a> in comments to <a href="http://stackoverflow.com/questions/1603109/how-to-make-a-python-script-run-like-a-service-or-daemon-in-linux/1603146#1603146">this</a> answer).  While if the script is added as a cron job, it will just trigger again.</p>
+<br /><b>#1</b><br /><p>You should use a library, it takes care of everything:  </p>
+
+<p><a href="http://pypi.python.org/pypi/python-daemon/" rel="nofollow">http://pypi.python.org/pypi/python-daemon/</a><br />
+From PyPI: <em>Library to implement a well-behaved Unix daemon process.</em></p>
+<br /><b>#2</b><br /><p><a href="http://code.activestate.com/recipes/278731/">Recipe 278731: Creating a daemon the Python way </a></p>
+<br /><b>#3</b><br /><p>Here's a nice class that is taken from <a href="http://www.jejik.com/articles/2007/02/a_simple_unix_linux_daemon_in_python/">here</a>:  </p>
+
+<pre><code>#!/usr/bin/env python
+
+import sys, os, time, atexit
+from signal import SIGTERM
+
+class Daemon:
+        """
+        A generic daemon class.
+
+        Usage: subclass the Daemon class and override the run() method
+        """
+        def __init__(self, pidfile, stdin='/dev/null', stdout='/dev/null', stderr='/dev/null'):
+                self.stdin = stdin
+                self.stdout = stdout
+                self.stderr = stderr
+                self.pidfile = pidfile
+
+        def daemonize(self):
+                """
+                do the UNIX double-fork magic, see Stevens' "Advanced
+                Programming in the UNIX Environment" for details (ISBN 0201563177)
+                http://www.erlenstar.demon.co.uk/unix/faq_2.html#SEC16
+                """
+                try:
+                        pid = os.fork()
+                        if pid &gt; 0:
+                                # exit first parent
+                                sys.exit(0)
+                except OSError, e:
+                        sys.stderr.write("fork #1 failed: %d (%s)\n" % (e.errno, e.strerror))
+                        sys.exit(1)
+
+                # decouple from parent environment
+                os.chdir("/")
+                os.setsid()
+                os.umask(0)
+
+                # do second fork
+                try:
+                        pid = os.fork()
+                        if pid &gt; 0:
+                                # exit from second parent
+                                sys.exit(0)
+                except OSError, e:
+                        sys.stderr.write("fork #2 failed: %d (%s)\n" % (e.errno, e.strerror))
+                        sys.exit(1)
+
+                # redirect standard file descriptors
+                sys.stdout.flush()
+                sys.stderr.flush()
+                si = file(self.stdin, 'r')
+                so = file(self.stdout, 'a+')
+                se = file(self.stderr, 'a+', 0)
+                os.dup2(si.fileno(), sys.stdin.fileno())
+                os.dup2(so.fileno(), sys.stdout.fileno())
+                os.dup2(se.fileno(), sys.stderr.fileno())
+
+                # write pidfile
+                atexit.register(self.delpid)
+                pid = str(os.getpid())
+                file(self.pidfile,'w+').write("%s\n" % pid)
+
+        def delpid(self):
+                os.remove(self.pidfile)
+
+        def start(self):
+                """
+                Start the daemon
+                """
+                # Check for a pidfile to see if the daemon already runs
+                try:
+                        pf = file(self.pidfile,'r')
+                        pid = int(pf.read().strip())
+                        pf.close()
+                except IOError:
+                        pid = None
+
+                if pid:
+                        message = "pidfile %s already exist. Daemon already running?\n"
+                        sys.stderr.write(message % self.pidfile)
+                        sys.exit(1)
+
+                # Start the daemon
+                self.daemonize()
+                self.run()
+
+        def stop(self):
+                """
+                Stop the daemon
+                """
+                # Get the pid from the pidfile
+                try:
+                        pf = file(self.pidfile,'r')
+                        pid = int(pf.read().strip())
+                        pf.close()
+                except IOError:
+                        pid = None
+
+                if not pid:
+                        message = "pidfile %s does not exist. Daemon not running?\n"
+                        sys.stderr.write(message % self.pidfile)
+                        return # not an error in a restart
+
+                # Try killing the daemon process       
+                try:
+                        while 1:
+                                os.kill(pid, SIGTERM)
+                                time.sleep(0.1)
+                except OSError, err:
+                        err = str(err)
+                        if err.find("No such process") &gt; 0:
+                                if os.path.exists(self.pidfile):
+                                        os.remove(self.pidfile)
+                        else:
+                                print str(err)
+                                sys.exit(1)
+
+        def restart(self):
+                """
+                Restart the daemon
+                """
+                self.stop()
+                self.start()
+
+        def run(self):
+                """
+                You should override this method when you subclass Daemon. It will be called after the process has been
+                daemonized by start() or restart().
+                """
+</code></pre>
+<br /><b>#4</b><br /><p>First, read up on mail aliases.  A mail alias will do this inside the mail system without you having to fool around with daemons or services or anything of the sort.</p>
+
+<p>You can write a simple script that will be executed by sendmail each time a mail message is sent to a specific mailbox.</p>
+
+<p>See <a href="http://www.feep.net/sendmail/tutorial/intro/aliases.html" rel="nofollow">http://www.feep.net/sendmail/tutorial/intro/aliases.html</a></p>
+
+<p>If you really want to write a needlessly complex server, you can do this.</p>
+
+<pre><code>nohup python myscript.py &amp;
+</code></pre>
+
+<p>That's all it takes.  Your script simply loops and sleeps.</p>
+
+<pre><code>import time
+def do_the_work():
+    # one round of polling -- checking email, whatever.
+while True:
+    time.sleep( 600 ) # 10 min.
+    try:
+        do_the_work()
+    except:
+        pass
+</code></pre>
+<br /><b>#5</b><br /><p>You can use fork() to detach your script from the tty and have it continue to run, like so:</p>
+
+<pre><code>import os, sys
+fpid = os.fork()
+if fpid!=0:
+  # Running as daemon now. PID is fpid
+  sys.exit(0)
+</code></pre>
+
+<p>Of course you also need to implement an endless loop, like</p>
+
+<pre><code>while 1:
+  do_your_check()
+  sleep(5)
+</code></pre>
+
+<p>Hope this get's you started.</p>
+<br /><b>#6</b><br /><p>how about using <code>$nohup</code> command on linux?</p>
+
+<p>I use it for running my commands on my Bluehost server.</p>
+
+<p>Please advice if I am wrong.</p>
+<br />

@@ -1,0 +1,1055 @@
+Question (ID-3114924): I have a serial Python application that takes hours to process, how can I decrease the time it takes to run? Could someone please post a few examples of multi-threaded python? I am searching all over the internet but cannot find a simple, easy-to-replicate tutorial. Simple examples are fine. 
+
+ I have written a program which takes a few hours to run serially--I am hoping I can bring it's run time down to minutes after multi-threading it. 
+ Answers (Total-12): #0 I see you got a lot of examples, all so far from @Noctis, but I'm not sure how they're going to help you. Addressing your question more directly: the only way multithreading can speed your application up, in today's CPython, is if your slow-down is due in good part to "blocking I/O" operations, e.g. due to interactions with (for example) DB servers, mail servers, websites, and so on. (A powerful alternative to speed up I/O is asynchronous, AKA event-driven, programming, for which the richest Python framework is twisted -- but it can be harder to learn, if you've never done event-driven coding). 
+
+ Even if you have many cores in your machine, one multi-threaded Python process will use only one of them at a time, except when it's executing specially coded extensions (typically in C, C++, Cython, and the like) which "release the GIL" (the global interpreter lock) when feasible. 
+
+ If you do have many cores, multiprocessing (a module whose interface is designed to look a lot like threading ) can indeed speed up your program. There are many other packages supporting "symmetric multi-processor" distributed programming, see the list here , but, out of all of them, multiprocessing is the one that comes as part of the standard library (a very convenient thing). If you have multiple computers with a fast LAN between them, you should also consider the more general approach of distributed processing, which could let you use all of your available computers for the same task (some of these packages are also listed at the previous URL I gave, under the "cluster computing" header). 
+
+ What speed-up you can get for any number of available cores or computers ultimately depends on the nature of your problems -- and, if the problems per se are suitable for it, then also of the algorithms and data structures you're using... not all will speed-up well (it varies between "embarassingly parallel" problems such as ray-tracing, which speed up linearly all the way, to "intrinsically serial" ones where 100 machines won't be any faster than one). So, it's hard to advise you further without understanding the nature of your problems; care to explain that? 
+ #1 This is not a direct answer to your question but: 
+
+ Have you considered using Python's multiprocessing module instead? It works by forking new processes, which has slightly more overhead but can often be faster because it avoid contention problems with Python's global interpreter lock. The documentation is quite thorough and there are a number of other articles about it online. 
+ #2 Here is a good tutorial. Section 3.1.2 (page 72 of the tutorial) has a simple client/server example using threads. 
+ #3 the C (CPython) implementation of Python is multi-threaded but NOT concurrent. Only one thread runs at a time, because of the Global Interpeter Lock (GIL). If you want true concurrency you can use the mulitprocessing module. 
+
+ None of the examples posted will help your multi-hour process run shorter, they will actually cause it to run L O N G E R. 
+
+ Also you don't mention what you are actually doing, but you are probably I/O bound if you are reading/writing data to anything (network or disk). And concurrency will just exacerbate the problem if that is the case. 
+ #4 Example 1 
+
+ import thread
+
+class sync:
+
+ def __init__(self, threads):
+  self.__threads = threads
+  self.__count = 0
+  self.__main = thread.allocate_lock()
+  self.__exit = thread.allocate_lock()
+  self.__exit.acquire()
+
+ def sync(self):
+  self.__main.acquire()
+  self.__count += 1
+  if self.__count &lt; self.__threads:
+   self.__main.release()
+  else:
+   self.__exit.release()
+  self.__exit.acquire()
+  self.__count -= 1
+  if self.__count &gt; 0:
+   self.__exit.release()
+  else:
+   self.__main.release()
+
+def example():
+ def get_input(share):
+  while share[0]:
+   share[1] = raw_input('Please say something.\n')
+   share[2].sync()
+  share[3].sync()
+ def do_output(share):
+  while share[0]:
+   share[2].sync()
+   print 'You said, "%s"' % share[1]
+  share[3].sync()
+ share = [True, None, sync(2), sync(3)]
+ thread.start_new_thread(get_input, (share,))
+ thread.start_new_thread(do_output, (share,))
+ import time; time.sleep(60)
+ share[0] = False
+ share[3].sync()
+
+if __name__ == '__main__':
+ example()
+ 
+ #5 Example 2 
+
+ from os.path import basename
+from Queue import Queue
+from random import random
+from sys import argv, exit
+from threading import Thread
+from time import sleep
+
+# for creating widgets
+class Widget:
+ pass
+
+# for creating stacks
+class Stack:
+ def __init__(self):
+  self.__stack = list()
+ def __len__(self):
+  return len(self.__stack)
+ def push(self, item):
+  self.__stack.append(item)
+ def pop(self):
+  return self.__stack.pop()
+
+# provides an outline for the execution of the program
+def main():
+ # check and parse the command line arguments
+ parse_sys_argv()
+ # setup the variables used by the threads
+ run_flag = [True]
+ queue = Queue(argv[1])
+ send = Stack()
+ recv = Stack()
+ # start the threads
+ producer = Thread(target=produce, args=(run_flag, queue, send))
+ consumer = Thread(target=consume, args=(run_flag, queue, recv, producer))
+ producer.start()
+ consumer.start()
+ # let the threads do their work
+ sleep(argv[2])
+ run_flag[0] = False
+ consumer.join()
+ # verify that the solution was valid
+ calculate_results(send, recv)
+
+# parses and checks the command line arguments
+def parse_sys_argv():
+ try:
+  # there should be two command line arguments
+  assert len(argv) == 3
+  # convert &lt;buf_size&gt; and check
+  argv[1] = abs(int(argv[1]))
+  assert argv[1] &gt; 0
+  # convert &lt;run_time&gt; and check
+  argv[2] = abs(float(argv[2]))
+  assert argv[2] &gt; 0
+ except:
+  # print out usage information
+  print basename(argv[0]),
+  print '&lt;buf_size&gt; &lt;run_time&gt;'
+  # exits the program
+  exit(1)
+
+# called by the producer thread
+def produce(run_flag, queue, send):
+ while run_flag[0]:
+  # simulate production
+  sleep(random())
+  # put widget in buffer
+  item = Widget()
+  queue.put(item)
+  send.push(item)
+
+# called by the consumer thread
+def consume(run_flag, queue, recv, producer):
+ # consume items while running
+ while run_flag[0]:
+  do_consume(queue, recv)
+ # empty the queue to allow maximum room
+ while not queue.empty():
+  do_consume(queue, recv)
+ # wait for the producer to end
+ producer.join()
+ # consume any other items that might have been produced
+ while not queue.empty():
+  do_consume(queue, recv)
+
+# executes one consumption operation
+def do_consume(queue, recv):
+ # get a widget from the queue
+ recv.push(queue.get())
+ # simulate consumption
+ sleep(random())
+
+# verifies that send and recv were equal
+def calculate_results(send, recv):
+ print 'Solution has',
+ try:
+  # make sure that send and recv have the same length
+  assert len(send) == len(recv)
+  # check all of the contents of send and recv
+  while send:
+   # check the identity of the items in send and recv
+   assert send.pop() is recv.pop()
+  print 'passed.'
+ except:
+  print 'failed.'
+
+# starts the program
+if __name__ == '__main__':
+ main()
+ 
+ #6 Example 3 
+
+ from os.path import basename
+from Queue import Queue
+from random import random, seed
+from sys import argv, exit
+from threading import Thread
+from time import sleep
+
+################################################################################
+
+class Widget:
+ pass
+
+class Stack:
+ def __init__(self):
+  self.__stack = list()
+ def __len__(self):
+  return len(self.__stack)
+ def push(self, item):
+  self.__stack.append(item)
+ def pop(self):
+  return self.__stack.pop()
+
+################################################################################
+
+def main():
+ parse_argv()
+ run_flag, buffer_queue, producer_stack, consumer_stack, print_queue = [True], Queue(argv[1]), Stack(), Stack(), Queue()
+ producer_thread = Thread(target=producer, args=(run_flag, argv[3], buffer_queue, producer_stack, print_queue))
+ consumer_thread = Thread(target=consumer, args=(run_flag, producer_thread, buffer_queue, consumer_stack, argv[4], print_queue))
+ printer_thread = Thread(target=printer, args=(run_flag, consumer_thread, print_queue))
+ producer_thread.start()
+ consumer_thread.start()
+ printer_thread.start()
+ sleep(argv[2])
+ run_flag[0] = False
+ printer_thread.join()
+ check_results(producer_stack , consumer_stack)
+
+def parse_argv():
+ try:
+  assert len(argv) &gt; 4
+  argv[1] = abs(int(argv[1]))
+  argv[2] = abs(float(argv[2]))
+  assert argv[1] and argv[2]
+  argv[3] = abs(float(argv[3]))
+  argv[4] = abs(float(argv[4]))
+  if len(argv) &gt; 5:
+   seed(convert(' '.join(argv[5:])))
+ except:
+  print basename(argv[0]), '&lt;buff_size&gt; &lt;main_time&gt; &lt;prod_time&gt; &lt;cons_time&gt; [&lt;seed&gt;]'
+  exit(1)
+
+def convert(string):
+ number = 1
+ for character in string:
+  number &lt;&lt;= 8
+  number += ord(character)
+ return number
+
+def check_results(producer_stack , consumer_stack):
+ print 'Solution has',
+ try:
+  assert len(producer_stack) == len(consumer_stack)
+  while producer_stack:
+   assert producer_stack.pop() is consumer_stack.pop()
+  print 'passed.'
+ except:
+  print 'failed.'
+
+################################################################################
+
+def producer(run_flag, max_time, buffer_queue, producer_stack, print_queue):
+ while run_flag[0]:
+  sleep(random() * max_time)
+  widget = Widget()
+  buffer_queue.put(widget)
+  producer_stack.push(widget)
+  print_queue.put('Producer: %s Widget' % id(widget))
+
+def consumer(run_flag, producer_thread, buffer_queue, consumer_stack, max_time, print_queue):
+ while run_flag[0] or producer_thread.isAlive() or not buffer_queue.empty():
+  widget = buffer_queue.get()
+  consumer_stack.push(widget)
+  sleep(random() * max_time)
+  print_queue.put('Consumer: %s Widget' % id(widget))
+
+def printer(run_flag, consumer_thread, print_queue):
+ while run_flag[0] or consumer_thread.isAlive() or not print_queue.empty():
+  if print_queue.empty():
+   sleep(0.1)
+  else:
+   print print_queue.get()
+
+################################################################################
+
+if __name__ == '__main__':
+ main()
+ 
+ #7 Example 4 
+
+ import socket
+import sys
+import thread
+
+def main(setup, error):
+ sys.stderr = file(error, 'a')
+ for settings in parse(setup):
+  thread.start_new_thread(server, settings)
+ lock = thread.allocate_lock()
+ lock.acquire()
+ lock.acquire()
+
+def parse(setup):
+ settings = list()
+ for line in file(setup):
+  parts = line.split()
+  settings.append((parts[0], int(parts[1]), int(parts[2])))
+ return settings
+
+def server(*settings):
+ try:
+  dock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  dock_socket.bind(('', settings[2]))
+  dock_socket.listen(5)
+  while True:
+   client_socket = dock_socket.accept()[0]
+   server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+   server_socket.connect((settings[0], settings[1]))
+   thread.start_new_thread(forward, (client_socket, server_socket))
+   thread.start_new_thread(forward, (server_socket, client_socket))
+ finally:
+  thread.start_new_thread(server, settings)
+
+def forward(source, destination):
+ string = ' '
+ while string:
+  string = source.recv(1024)
+  if string:
+   destination.sendall(string)
+  else:
+   source.shutdown(socket.SHUT_RD)
+   destination.shutdown(socket.SHUT_WR)
+
+if __name__ == '__main__':
+ main('proxy.ini', 'error.log')
+ 
+ #8 Example 5 
+
+ # #include &lt;windows.h&gt;
+import thread
+# #include &lt;math.h&gt;
+import math
+# #include &lt;stdio.h&gt;
+import sys
+# #include &lt;stdlib.h&gt;
+import time
+
+# static int runFlag = TRUE;
+runFlag = True
+
+# void main(int argc, char *argv[]) {
+def main(argc, argv):
+ global runFlag
+ # unsigned int runTime
+ # PYTHON: NO CODE
+
+ # SYSTEMTIME now;
+ # PYTHON: NO CODE
+ # WORD stopTimeMinute, stopTimeSecond;
+ # PYTHON: NO CODE
+
+ # // Get command line argument, N
+ try:
+  N = abs(int(argv[1]))
+ except:
+  sys.exit(1)
+ # // Get the time the threads should run, runtime
+ try:
+  runTime = abs(int(argv[2]))
+ except:
+  sys.exit(1)
+ # // Calculate time to halt (learn better ways to do this later)
+ # GetSystemTime(&amp;now);
+ now = time.localtime()
+ # printf("mthread: Suite starting at system time
+ # %d:%d:%d\n", now.wHour, now.wMinute, now.wSecond);
+ sys.stdout.write('mthread: Suite starting at system time %d:%d:%d\n' \
+   % (now.tm_hour, now.tm_min, now.tm_sec))
+ # stopTimeSecond = (now.wSecond + (WORD) runTime) % 60;
+ stopTimeSecond = (now.tm_sec + runTime) % 60
+ # stopTimeMinute = now.wMinute + (now.wSecond +
+ # (WORD) runTime) / 60;
+ stopTimeMinute = now.tm_min + (now.tm_sec + runTime) / 60
+
+ # // For 1 to N
+ # for (i = 0; i &lt; N; i++) {
+ for i in range(N):
+  # // Create a new thread to execute simulated word
+  thread.start_new_thread(threadWork, ())
+  # Sleep(100);    // Let newly created thread run
+  time.sleep(0.1)
+ # }
+ # PYTHON: NO CODE
+
+ # // Cycle while children work ...
+ # while (runFlag) {
+ while runFlag:
+  # GetSystemTime(&amp;now);
+  now = time.localtime()
+  # if ((now.wMinute &gt;= stopTimeMinute)
+  #  &amp;&amp;
+  #  (now.wSecond &gt;= stopTimeSecond)
+  # )
+  if now.tm_min &gt;= stopTimeMinute \
+   and now.tm_sec &gt;= stopTimeSecond:
+   # runFlag = FALSE;
+   runFlag = False
+  # Sleep(1000);
+  time.sleep(1)
+ # }
+ # PYTHON: NO CODE
+ # Sleep(5000);
+ time.sleep(5)
+# }
+# PYTHON: NO CODE
+
+# // The code executed by each worker thread (simulated work)
+# DWORD WINAPI threadWork(LPVOID threadNo) {
+def threadWork():
+ threadNo = thread.get_ident()
+ # // Local variables
+ # double y;
+ # PYTHON: NO CODE
+ # const double x = 3.14159;
+ x = 3.14159
+ # const double e = 2.7183;
+ e = 2.7183
+ # int i;
+ # PYTHON: NO CODE
+ # const int napTime = 1000;    // in milliseconds
+ napTime = 1000
+ # const int busyTime = 40000;
+ busyTime = 40000
+ # DWORD result = 0;
+ result = 0
+
+ # // Create load
+ # while (runFlag) {
+ while runFlag:
+  # // Parameterized processor burst phase
+  # for (i = 0; i &lt; busyTime; i++)
+  for i in range(busyTime):
+   # y = pow(x, e);
+   y = math.pow(x, e)
+  # // Parameterized sleep phase
+  # Sleep(napTime);
+  time.sleep(napTime / 1000.0)
+  # // Write message to stdout
+  sys.stdout.write('Thread %s just woke up.\n' % threadNo)
+ # }
+ # PYTHON: NO CODE
+ # // Terminating
+ # return result;
+ return result
+# }
+# PYTHON: NO CODE
+
+if __name__ == '__main__':
+ main(len(sys.argv), sys.argv)
+ 
+ #9 Example 6 
+
+ import tkinter
+import _thread
+import time
+
+EPOCH_DELTA = 946684800
+MICREV_IN_DAY = 1000000
+MILREV_IN_DAY = 1000
+
+SECOND_IN_DAY = 86400
+DAY_IN_WEEK = 7
+WEEK_IN_MONTH = 4
+MONTH_IN_SEASON = 3
+SEASON_IN_YEAR = 4
+
+SECOND_IN_WEEK = SECOND_IN_DAY * DAY_IN_WEEK
+SECOND_IN_MONTH = SECOND_IN_WEEK * WEEK_IN_MONTH
+SECOND_IN_SEASON = SECOND_IN_MONTH * MONTH_IN_SEASON
+SECOND_IN_YEAR = SECOND_IN_SEASON * SEASON_IN_YEAR
+
+def seconds():
+ "Return seconds since the epoch."
+ return time.time() - EPOCH_DELTA
+
+def micrev(seconds):
+ "Convert from seconds to micrev."
+ x = seconds % SECOND_IN_DAY * MICREV_IN_DAY / SECOND_IN_DAY % MILREV_IN_DAY
+ return int(x)
+
+def milrev(seconds):
+ "Convert from seconds to milrev."
+ x = seconds % SECOND_IN_DAY * MILREV_IN_DAY / SECOND_IN_DAY
+ return int(x)
+
+def day(seconds):
+ "Convert from seconds to days."
+ x = seconds / SECOND_IN_DAY % DAY_IN_WEEK
+ return int(x)
+
+def week(seconds):
+ "Convert from seconds to weeks."
+ x = seconds / SECOND_IN_WEEK % WEEK_IN_MONTH
+ return int(x)
+
+def month(seconds):
+ "Convert from seconds to months."
+ x = seconds / SECOND_IN_MONTH % MONTH_IN_SEASON
+ return int(x)
+
+def season(seconds):
+ "Convert from seconds to seasons."
+ x = seconds / SECOND_IN_SEASON % SEASON_IN_YEAR
+ return int(x)
+
+def year(seconds):
+ "Convert from seconds to years."
+ x = seconds / SECOND_IN_YEAR
+ return int(x)
+
+UNITS = year, season, month, week, day, milrev, micrev
+
+def text(seconds, spec='{0}.{1}.{2}.{3}.{4}.{5:03}.{6:03}', unit=UNITS):
+ "Convert from seconds to text."
+ return spec.format(*[func(seconds) for func in unit])
+
+class Quantum_Timer:
+
+ "Quantum_Timer(function, *args, **kwargs) -&gt; Quantum_Timer"
+
+ def __init__(self, function, *args, **kwargs):
+  "Initialize the Quantum_Timer object."
+  self.__function = function
+  self.__args = args
+  self.__kwargs = kwargs
+  self.__thread = False
+  self.__lock = _thread.allocate_lock()
+
+ def start(self):
+  "Start the Quantum_Timer object."
+  with self.__lock:
+   self.__active = True
+   if not self.__thread:
+    self.__thread = True
+    _thread.start_new_thread(self.__run, ())
+
+ def stop(self):
+  "Stop the Quantum_Timer object."
+  with self.__lock:
+   self.__active = False
+
+ def __run(self):
+  "Private class method."
+  while True:
+   secs = time.clock()
+   plus = secs + 0.0864
+   over = plus % 0.0864
+   diff = plus - secs - over
+   time.sleep(diff)
+   with self.__lock:
+    if not self.__active:
+     self.__thread = False
+     break
+   self.__function(*self.__args, **self.__kwargs)
+
+def main():
+ root = tkinter.Tk()
+ root.resizable(False, False)
+ root.title('Time in Tessaressunago')
+ secs = tkinter.StringVar()
+ text = tkinter.Label(textvariable=secs, font=('helvetica', 16, 'bold'))
+ text.grid(padx=5, pady=5)
+ thread = Quantum_Timer(update, secs)
+ thread.start()
+ root.mainloop()
+
+def update(secs):
+ s = seconds()
+ t = text(s)
+ p = 1000000000 * 1.01 ** (s / SECOND_IN_YEAR)
+ secs.set('Time = {0}\nNational = {1}'.format(t, fix(p)))
+
+def fix(number, sep=','):
+ number = str(int(number))
+ string = ''
+ while number:
+  string = number[-1] + string
+  number = number[:-1]
+  if number and not (len(string) + 1) % 4:
+   string = sep + string
+ return string
+
+if __name__ == '__main__':
+ main()
+ 
+ #10 Example 7 
+
+ HOST = '127.0.0.1'
+PORT = 8080
+
+from Tkinter import *
+import tkColorChooser
+
+import socket
+import thread
+import cPickle
+
+################################################################################
+
+class ZSP:
+
+ 'ZSP(socket) -&gt; ZSP'
+
+ def __init__(self, socket):
+  'Initialize the Zero SPOTS Protocol object.'
+  self.__file = socket.makefile('b', 0)
+
+ def send(self, obj):
+  'Send one object.'
+  cPickle.dump(obj, self.__file, cPickle.HIGHEST_PROTOCOL)
+
+ def recv(self):
+  'Receive one object.'
+  return cPickle.load(self.__file)
+
+################################################################################
+
+def main():
+ global hold, fill, draw, look
+ hold = []
+ fill = '#000000'
+ connect()
+ root = Tk()
+ root.title('Paint 2.0')
+ root.resizable(False, False)
+ upper = LabelFrame(root, text='Your Canvas')
+ lower = LabelFrame(root, text='Their Canvas')
+ draw = Canvas(upper, bg='#ffffff', width=400, height=300, highlightthickness=0)
+ look = Canvas(lower, bg='#ffffff', width=400, height=300, highlightthickness=0)
+ cursor = Button(upper, text='Cursor Color', command=change_cursor)
+ canvas = Button(upper, text='Canvas Color', command=change_canvas)
+ draw.bind('&lt;Motion&gt;', motion)
+ draw.bind('&lt;ButtonPress-1&gt;', press)
+ draw.bind('&lt;ButtonRelease-1&gt;', release)
+ draw.bind('&lt;Button-3&gt;', delete)
+ upper.grid(padx=5, pady=5)
+ lower.grid(padx=5, pady=5)
+ draw.grid(row=0, column=0, padx=5, pady=5, columnspan=2)
+ look.grid(padx=5, pady=5)
+ cursor.grid(row=1, column=0, padx=5, pady=5, sticky=EW)
+ canvas.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+ root.mainloop()
+
+################################################################################
+
+def connect():
+ try:
+  start_client()
+ except:
+  start_server()
+ thread.start_new_thread(processor, ())
+
+def start_client():
+ global ZSP
+ server = socket.socket()
+ server.connect((HOST, PORT))
+ ZSP = ZSP(server)
+
+def start_server():
+ global ZSP
+ server = socket.socket()
+ server.bind(('', PORT))
+ server.listen(1)
+ ZSP = ZSP(server.accept()[0])
+
+def processor():
+ while True:
+  func, args, kwargs = ZSP.recv()
+  getattr(look, func)(*args, **kwargs)
+
+def call(func, *args, **kwargs):
+ ZSP.send((func, args, kwargs))
+
+################################################################################
+
+def change_cursor():
+ global fill
+ color = tkColorChooser.askcolor(color=fill)[1]
+ if color is not None:
+  fill = color
+
+def change_canvas():
+ color = tkColorChooser.askcolor(color=draw['bg'])[1]
+ if color is not None:
+  draw.config(bg=color)
+  call('config', bg=color)
+
+################################################################################
+
+def motion(event):
+ if hold:
+  hold.extend([event.x, event.y])
+  event.widget.create_line(hold[-4:], fill=fill, tag='TEMP')
+  call('create_line', hold[-4:], fill=fill, tag='TEMP')
+
+def press(event):
+ global hold
+ hold = [event.x, event.y]
+
+def release(event):
+ global hold
+ if len(hold) &gt; 2:
+  event.widget.delete('TEMP')
+  event.widget.create_line(hold, fill=fill, smooth=True)
+  call('delete', 'TEMP')
+  call('create_line', hold, fill=fill, smooth=True)
+ hold = []
+
+def delete(event):
+ event.widget.delete(ALL)
+ call('delete', ALL)
+
+################################################################################
+
+if __name__ == '__main__':
+ main()
+ 
+ #11 Example 8 
+
+ HOST = '127.0.0.1'
+PORT = 8080
+
+try:
+ from Tkinter import *
+except ImportError:
+ from tkinter import *
+
+try:
+ import tkColorChooser
+except ImportError:
+ import tkinter.colorchooser as tkColorChooser
+
+try:
+ import thread
+except ImportError:
+ import _thread as thread
+
+import socket
+import pickle
+import time
+import sys
+
+################################################################################
+
+class ZSP:
+
+ 'ZSP(socket) -&gt; ZSP'
+
+ def __init__(self, socket):
+  'Initialize the Zero SPOTS Protocol object.'
+  self.__o_file = socket.makefile('bw', 0)
+  self.__i_file = socket.makefile('br', 0)
+
+ def send(self, obj):
+  'Send one object.'
+  pickle.dump(obj, self.__o_file, pickle.HIGHEST_PROTOCOL)
+
+ def recv(self):
+  'Receive one object.'
+  return pickle.load(self.__i_file)
+
+################################################################################
+
+class QRP:
+
+ 'QRP(ZSP) -&gt; QRP'
+
+ def __init__(self, ZSP):
+  'Initialize the Query/Reply Protocol object.'
+  self.__ZSP = ZSP
+  self.__error = None
+  self.__Q_anchor = []
+  self.__Q_packet = []
+  self.__R_anchor = {}
+  self.__Q_lock = thread.allocate_lock()
+  self.__R_lock = thread.allocate_lock()
+  thread.start_new_thread(self.__thread, ())
+
+ def send_Q(self, ID, obj):
+  'Send one query.'
+  if self.__error:
+   raise self.__error
+  self.__ZSP.send((False, ID, obj))
+
+ def recv_Q(self, timeout=None):
+  'Receive one query.'
+  if self.__error:
+   raise self.__error
+  if timeout is not None:
+   if not isinstance(timeout, (float, int)):
+    raise TypeError('timeout must be of type float or int')
+   if not timeout &gt;= 0:
+    raise ValueError('timeout must be greater than or equal to 0')
+  self.__Q_lock.acquire()
+  try:
+   try:
+    if self.__Q_packet:
+     Q = True
+     ID, obj = self.__Q_packet.pop()
+    else:
+     Q = False
+     anchor = [thread.allocate_lock()]
+     anchor[0].acquire()
+     self.__Q_anchor.append(anchor)
+   finally:
+    self.__Q_lock.release()
+  except AttributeError:
+   raise self.__error
+  if Q:
+   return ID, obj
+  if timeout:
+   thread.start_new_thread(self.__Q_thread, (timeout, anchor))
+  anchor[0].acquire()
+  try:
+   Q = anchor[1]
+  except IndexError:
+   if self.__error:
+    raise self.__error
+   raise Warning
+  return Q
+
+ def send_R(self, ID, obj):
+  'Send one reply.'
+  if self.__error:
+   raise self.__error
+  self.__ZSP.send((True, ID, obj))
+
+ def recv_R(self, ID, timeout=None):
+  'Receive one reply.'
+  if self.__error:
+   raise self.__error
+  if timeout is not None:
+   if not isinstance(timeout, (float, int)):
+    raise TypeError('timeout must be of type float or int')
+   if not timeout &gt;= 0:
+    raise ValueError('timeout must be greater than or equal to 0')
+  anchor = [thread.allocate_lock()]
+  anchor[0].acquire()
+  self.__R_lock.acquire()
+  try:
+   try:
+    self.__R_anchor[ID] = anchor
+   finally:
+    self.__R_lock.release()
+  except AttributeError:
+   raise self.__error
+  if timeout:
+   thread.start_new_thread(self.__R_thread, (timeout, ID))
+  anchor[0].acquire()
+  try:
+   R = anchor[1]
+  except IndexError:
+   if self.__error:
+    raise self.__error
+   raise Warning
+  return R
+
+ def __thread(self):
+  'Private class method.'
+  try:
+   while True:
+    R, ID, obj = self.__ZSP.recv()
+    if R:
+     self.__R_lock.acquire()
+     if self.__R_anchor:
+      self.__R_anchor[ID].append(obj)
+      self.__R_anchor[ID][0].release()
+      del self.__R_anchor[ID]
+     self.__R_lock.release()
+    else:
+     self.__Q_lock.acquire()
+     if self.__Q_anchor:
+      anchor = self.__Q_anchor.pop()
+      anchor.append((ID, obj))
+      anchor[0].release()
+     else:
+      self.__Q_packet.append((ID, obj))
+     self.__Q_lock.release()
+  except Exception:
+   error = sys.exc_info()[1]
+   if isinstance(error, EOFError):
+    self.__error = EOFError
+   else:
+    self.__error = IOError
+   self.__Q_lock.acquire()
+   for anchor in self.__Q_anchor:
+    anchor[0].release()
+   del self.__Q_anchor
+   del self.__Q_packet
+   self.__Q_lock.release()
+   self.__R_lock.acquire()
+   for key in self.__R_anchor:
+    self.__R_anchor[key][0].release()
+   del self.__R_anchor
+   self.__R_lock.release()
+
+ def __Q_thread(self, timeout, anchor):
+  'Private class method.'
+  time.sleep(timeout)
+  self.__Q_lock.acquire()
+  if not self.__error and anchor in self.__Q_anchor:
+   anchor[0].release()
+   self.__Q_anchor.remove(anchor)
+  self.__Q_lock.release()
+
+ def __R_thread(self, timeout, ID):
+  'Private class method.'
+  time.sleep(timeout)
+  self.__R_lock.acquire()
+  if not self.__error and ID in self.__R_anchor:
+   self.__R_anchor[ID][0].release()
+   del self.__R_anchor[ID]
+  self.__R_lock.release()
+
+################################################################################
+
+class QRI:
+
+ 'QRI(QRP) -&gt; QRI'
+
+ def __init__(self, QRP):
+  'Initialize the Query/Reply Interface object.'
+  self.__QRP = QRP
+  self.__ID = 0
+  self.__lock = thread.allocate_lock()
+
+ def call(self, obj, timeout=None):
+  'Send one query and receive one reply.'
+  self.__lock.acquire()
+  ID = ''.join(chr(self.__ID &gt;&gt; shift &amp; 0xFF) for shift in range(24, -8, -8))
+  self.__ID = (self.__ID + 1) % (2 ** 32)
+  self.__lock.release()
+  self.__QRP.send_Q(ID, obj)
+  return self.__QRP.recv_R(ID, timeout)
+
+ def query(self, timeout=None):
+  'Receive one query.'
+  return self.__QRP.recv_Q(timeout)
+
+ def reply(self, ID, obj):
+  'Send one reply.'
+  self.__QRP.send_R(ID, obj)
+
+################################################################################
+
+def qri(socket):
+ 'Construct a QRI object.'
+ return QRI(QRP(ZSP(socket)))
+
+################################################################################
+
+def main():
+ global hold, fill, draw, look
+ hold = []
+ fill = '#000000'
+ connect()
+ root = Tk()
+ root.title('Paint 1.0')
+ root.resizable(False, False)
+ upper = LabelFrame(root, text='Your Canvas')
+ lower = LabelFrame(root, text='Their Canvas')
+ draw = Canvas(upper, bg='#ffffff', width=400, height=300, highlightthickness=0)
+ look = Canvas(lower, bg='#ffffff', width=400, height=300, highlightthickness=0)
+ cursor = Button(upper, text='Cursor Color', command=change_cursor)
+ canvas = Button(upper, text='Canvas Color', command=change_canvas)
+ draw.bind('&lt;Motion&gt;', motion)
+ draw.bind('&lt;ButtonPress-1&gt;', press)
+ draw.bind('&lt;ButtonRelease-1&gt;', release)
+ draw.bind('&lt;Button-3&gt;', delete)
+ upper.grid(padx=5, pady=5)
+ lower.grid(padx=5, pady=5)
+ draw.grid(row=0, column=0, padx=5, pady=5, columnspan=2)
+ look.grid(padx=5, pady=5)
+ cursor.grid(row=1, column=0, padx=5, pady=5, sticky=EW)
+ canvas.grid(row=1, column=1, padx=5, pady=5, sticky=EW)
+ root.mainloop()
+
+################################################################################
+
+def connect():
+ try:
+  start_client()
+ except:
+  start_server()
+ thread.start_new_thread(processor, ())
+
+def start_client():
+ global QRI
+ server = socket.socket()
+ server.connect((HOST, PORT))
+ QRI = qri(server)
+
+def start_server():
+ global QRI
+ server = socket.socket()
+ server.bind(('', PORT))
+ server.listen(1)
+ QRI = qri(server.accept()[0])
+
+def processor():
+ while True:
+  ID, (func, args, kwargs) = QRI.query()
+  getattr(look, func)(*args, **kwargs)
+
+def call(func, *args, **kwargs):
+ try:
+  QRI.call((func, args, kwargs), 0.05)
+ except:
+  pass
+
+################################################################################
+
+def change_cursor():
+ global fill
+ color = tkColorChooser.askcolor(color=fill)[1]
+ if color is not None:
+  fill = color
+
+def change_canvas():
+ color = tkColorChooser.askcolor(color=draw['bg'])[1]
+ if color is not None:
+  draw['bg'] = color
+  draw.config(bg=color)
+  call('config', bg=color)
+
+################################################################################
+
+def motion(event):
+ if hold:
+  hold.extend([event.x, event.y])
+  event.widget.create_line(hold[-4:], fill=fill, tag='TEMP')
+  call('create_line', hold[-4:], fill=fill, tag='TEMP')
+
+def press(event):
+ global hold
+ hold = [event.x, event.y]
+
+def release(event):
+ global hold
+ if len(hold) &gt; 2:
+  event.widget.delete('TEMP')
+  event.widget.create_line(hold, fill=fill, smooth=True)
+  call('delete', 'TEMP')
+  call('create_line', hold, fill=fill, smooth=True)
+ hold = []
+
+def delete(event):
+ event.widget.delete(ALL)
+ call('delete', ALL)
+
+################################################################################
+
+if __name__ == '__main__':
+ main()

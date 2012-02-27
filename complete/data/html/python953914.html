@@ -1,0 +1,229 @@
+<h3>Question (ID-953914):</h3><h2>how to program functions with alternative return value signatures in python? (next() for alternative iterators)</h2><p>e.g. so that these would both work - is it possible?</p>
+
+<pre><code>(val,VAL2) = func(args) 
+val = func(args)
+</code></pre>
+
+<p>Where <strong>val</strong> is <strong>not a tuple</strong></p>
+
+<p>For example I'd like these to work for my custom object <strong>something</strong></p>
+
+<pre><code>for item in something:
+    do_item(item) #where again item - is not a tuple
+
+for (item,key) in something:
+    do_more(key,item)
+</code></pre>
+
+<p>I thought that I need to implement next() function in two different ways... </p>
+
+<p><strong>edit:</strong> as follows from the answers below, this should not really be done.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>If you mean, can the function act differently based on the return types the caller is expecting, the answer is no (bar seriously nasty bytecode inspection).  In this case, you should provide two different iterators on your object, and write something like:</p>
+
+<pre><code>for item in something:  # Default iterator: returns non-tuple objects
+    do_something(item)
+
+for (item,key) in something.iter_pairs(): # iter_pairs returns different iterator
+    do_something_else(item, key)
+</code></pre>
+
+<p>eg. see the dictionary object, which uses this pattern.  <code>for key in mydict</code> iterates over the dictionary keys.  <code>for k,v in mydict.iteritems()</code> iterates over (key, value) pairs.</p>
+
+<p><strong>[Edit]</strong> Just in case anyone wants to see what I mean by "seriously nasty bytecode inspection", here's a quick implementation:</p>
+
+<pre><code>import inspect, opcode
+
+def num_expected_results():
+    """Return the number of items the caller is expecting in a tuple.
+
+    Returns None if a single value is expected, rather than a tuple.
+    """
+    f = inspect.currentframe(2)
+    code = map(ord, f.f_code.co_code)
+    pos = f.f_lasti
+    if code[pos] == opcode.opmap['GET_ITER']: pos += 1 # Skip this and the FOR_ITER
+    if code[pos] &gt; opcode.EXTENDED_ARG: pos +=5
+    elif code[pos] &gt; opcode.HAVE_ARGUMENT: pos +=3
+    else: pos += 1
+    if code[pos] == opcode.opmap['UNPACK_SEQUENCE']:
+        return code[pos+1] + (code[pos+2] &lt;&lt; 8)
+    return None
+</code></pre>
+
+<p>Usable something like:</p>
+
+<pre><code>class MagicDict(dict):
+    def __iter__(self):
+        if num_expected_results() == 2:
+            for k,v in self.iteritems():
+                yield k,v
+        else:
+            for k in self.iterkeys(): 
+                yield k
+
+d=MagicDict(foo=1, bar=2)
+
+print "Keys:"
+for key in d:
+    print "   ", key
+print "Values"    
+for k,v in d:
+    print "   ",k,v
+</code></pre>
+
+<p><strong>Disclaimer:</strong> This is incredibly hacky, insanely bad practice, and <em>will</em> cause other programmers to hunt you down and kill you if they ever see it in real code.  Only works on cpython (if that).  <strong>Never</strong> use this in production code (or for that matter, probably any code).</p>
+<br /><b>#1</b><br /><p>Have you tried that? It works.</p>
+
+<pre><code>def myfunction(data):
+    datalen = len(data)
+    result1 = data[:datalen/2]
+    result2 = data[datalen/2:]
+    return result1, result2
+
+
+a, b = myfunction('stuff')
+print a
+print b
+
+c = myfunction('other stuff')
+print c
+</code></pre>
+
+<p>In fact there is no such thing as "return signature". All functions return a single object. It seems that you are returning more than one, but in fact you wrap them into a container tuple object.</p>
+<br /><b>#2</b><br /><p>Update:</p>
+
+<p>Given the example use case, I'd write different generators to handle the cases:</p>
+
+<pre><code>class Something(object): 
+   def __init__(self): 
+       self.d = {'a' : 1, 
+               'b' : 2, 
+               'c' : 3} 
+
+   def items(self): 
+       for i in self.d.values(): 
+           yield i 
+
+  def items_keys(self): 
+      for k,i in self.d.items(): 
+          yield i,k 
+
+something = Something()
+
+for item in something.items():
+....:     print item
+....: 
+1
+3
+2
+
+for item,key in something.items_keys():
+....:     print key, " : ", item
+....: 
+a  :  1
+b  :  2
+c  :  3
+</code></pre>
+
+<p>Or</p>
+
+<p>You can return a tuple:</p>
+
+<pre><code>In [1]: def func(n):
+   ...:     return (n, n+1)
+   ...: 
+
+In [2]: a,b = func(1)
+
+In [3]: a
+Out[3]: 1
+
+In [4]: b
+Out[4]: 2
+
+In [5]: x = func(1)
+
+In [6]: x
+Out[6]: (1, 2)
+</code></pre>
+<br /><b>#3</b><br /><pre><code>&gt;&gt;&gt; def func(a,b):
+      return (a,b)
+
+&gt;&gt;&gt; x = func(1,2)
+&gt;&gt;&gt; x
+(1, 2)
+&gt;&gt;&gt; (y,z) = func(1,2)
+&gt;&gt;&gt; y
+1
+&gt;&gt;&gt; z
+2
+</code></pre>
+
+<p>That doesn't really answer your question.  The real answer is that the left side of the assignment doesn't affect the returned type of the function and can't be used to distinguish between functions with different return types.  As noted in other answers, the function can return different types from different return statements but it doesn't know what's on the other side of the equals sign. </p>
+
+<p>In the case of this function, it returns a tuple.  If you assign it to x, x has the value of the tuple.  (y, z) on the left side of the assignment is "tuple unpacking".  The tuple returned by func() is unpacked into y and z.</p>
+<br /><b>#4</b><br /><p>It's possible only if you're happy for <code>val</code> to be a 2-item tuple (or if <code>args</code> need not be the same in the two cases). The former is what would happen if the function just ended with something like <code>return 23, 45</code>. Here's an example of the latter idea:</p>
+
+<pre><code>def weirdfunc(how_many_returns):
+  assert 1 &lt;= how_many_returns &lt;= 4
+  return 'fee fie foo fum'.split()[:how_many_returns]
+
+var1, var2 = weirdfunc(2)  # var1 gets 'fee', var2 gets 'fie'
+
+var, = weirdfunc(1)  # var gets 'fee'
+</code></pre>
+<br /><b>#5</b><br /><p>Yes, both would work. In the first example, val1 and val2 would have the two values. In the second example, val would have a tuple. You can try this in your python interpreter:</p>
+
+<pre><code>&gt;&gt;&gt; def foo():
+...   return ( 1, 2 )
+...
+&gt;&gt;&gt; x = foo()
+&gt;&gt;&gt; (y,z) = foo()
+&gt;&gt;&gt; x
+(1, 2)
+&gt;&gt;&gt; y
+1
+&gt;&gt;&gt; z
+2
+</code></pre>
+<br /><b>#6</b><br /><p>Yes it's doable:</p>
+
+<pre><code>def a(b):
+if b &lt; 5:
+	return ("o", "k")
+else:
+	return "ko"
+</code></pre>
+
+<p>and the result:</p>
+
+<pre><code>&gt;&gt;&gt; b = a(4)
+&gt;&gt;&gt; b
+('o', 'k')
+&gt;&gt;&gt; b = a(6)
+&gt;&gt;&gt; b
+'ko'
+</code></pre>
+
+<p>I think the thing after is to be careful when you will use the values returned...</p>
+<br /><b>#7</b><br /><p>This is asking for major confusion. Instead you can follow <code>dict</code> with separate keys, values, items, etc. methods, or you can use a convention of naming unused variables with a single underscore. Examples:</p>
+
+<pre><code>for k in mydict.keys(): pass
+for k, v in mydict.items(): pass
+
+for a, b in myobj.foo(): pass
+for a, _ in myobj.foo(): pass
+for _, b in myobj.foo(): pass
+
+for _, _, _, d in [("even", "multiple", "underscores", "works")]:
+    print(d)
+
+for item in something: # or something.keys(), etc.
+    do_item(item)
+
+for item, key in something.items():
+    do_more(key, item)
+</code></pre>
+
+<p>If this doesn't fit your function, you should refactor it as two or more functions, because it's clearly trying to fulfill two or more different goals.</p>
+<br />

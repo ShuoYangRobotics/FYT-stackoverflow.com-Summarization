@@ -1,0 +1,237 @@
+Question (ID-4579908): cross-platform splitting of path in python I'd like something that has the same effect as this: 
+
+ &gt;&gt;&gt; path = "/foo/bar/baz/file"
+&gt;&gt;&gt; path_split = path.rsplit('/')[1:]
+&gt;&gt;&gt; path_split
+['foo', 'bar', 'baz', 'file']
+ 
+
+ But that will work with Windows paths too. I know that there is an os.path.split() but that doesn't do what I want, and I didn't see anything that does. 
+ Answers (Total-6): #0 Someone said "use os.path.split ". This got deleted unfortunately, but it is the right answer. 
+
+ 
+ os.path.split(path) 
+ 
+ Split the pathname path into a pair, (head, tail) where tail is the last pathname component and head is everything leading up to that. The tail part will never contain a slash; if path ends in a slash, tail will be empty. If there is no slash in path, head will be empty. If path is empty, both head and tail are empty. Trailing slashes are stripped from head unless it is the root (one or more slashes only). In all cases, join(head, tail) returns a path to the same location as path (but the strings may differ). 
+ 
+
+ So it's not just splitting the dirname and filename. You can apply it several times to get the full path in a portable and correct way. 
+
+ Please credit the original author if that answer gets undeleted. 
+ #1 Use the functionality provided in os.path , e.g. 
+
+ os.path.split(path)
+ 
+
+ Like written elsewhere you can call it multiple times to split longer paths. 
+ #2 The OP specified "will work with Windows paths too". There are a few wrinkles with Windows paths. 
+
+ Firstly, Windows has the concept of multiple drives, each with its own current working directory, and 'c:foo' and 'c:\\foo' are often not the same. Consequently it is a very good idea to separate out any drive designator first, using os.path.splitdrive(). Then reassembling the path (if required) can be done correctly by
+ drive + os.path.join(*other_pieces) 
+
+ Secondly, Windows paths can contain slashes or backslashes or a mixture. Consequently, using os.sep when parsing an unnormalised path is not useful. 
+
+ More generally: 
+
+ The results produced for 'foo' and 'foo/' should not be identical. 
+
+ The loop termination condition seems to be best expressed as "os.path.split() treated its input as unsplittable". 
+
+ Here's a suggested solution, with tests, including a comparison with @Spacedman's solution 
+
+ import os.path
+
+def os_path_split_asunder(path, debug=False):
+ parts = []
+ while True:
+  newpath, tail = os.path.split(path)
+  if debug: print repr(path), (newpath, tail)
+  if newpath == path:
+   assert not tail
+   if path: parts.append(path)
+   break
+  parts.append(tail)
+  path = newpath
+ parts.reverse()
+ return parts
+
+def spacedman_parts(path):
+ components = [] 
+ while True:
+  (path,tail) = os.path.split(path)
+  if tail == "":
+   components.reverse()
+   return components
+  components.append(tail)
+
+if __name__ == "__main__":
+ tests = [
+  '',
+  'foo',
+  'foo/',
+  'foo\\',
+  '/foo',
+  '\\foo',
+  'foo/bar',
+  '/',
+  'c:',
+  'c:/',
+  'c:foo',
+  'c:/foo',
+  'c:/users/john/foo.txt',
+  '/users/john/foo.txt',
+  'foo/bar/baz/loop',
+  'foo/bar/baz/',
+  '//hostname/foo/bar.txt',
+  ]
+ for i, test in enumerate(tests):
+  print "\nTest %d: %r" % (i, test)
+  drive, path = os.path.splitdrive(test)
+  print 'drive, path', repr(drive), repr(path)
+  a = os_path_split_asunder(path)
+  b = spacedman_parts(path)
+  print "a ... %r" % a
+  print "b ... %r" % b
+  print a == b
+ 
+
+ and here's the output (Python 2.7.1, Windows 7 Pro): 
+
+ Test 0: ''
+drive, path '' ''
+a ... []
+b ... []
+True
+
+Test 1: 'foo'
+drive, path '' 'foo'
+a ... ['foo']
+b ... ['foo']
+True
+
+Test 2: 'foo/'
+drive, path '' 'foo/'
+a ... ['foo', '']
+b ... []
+False
+
+Test 3: 'foo\\'
+drive, path '' 'foo\\'
+a ... ['foo', '']
+b ... []
+False
+
+Test 4: '/foo'
+drive, path '' '/foo'
+a ... ['/', 'foo']
+b ... ['foo']
+False
+
+Test 5: '\\foo'
+drive, path '' '\\foo'
+a ... ['\\', 'foo']
+b ... ['foo']
+False
+
+Test 6: 'foo/bar'
+drive, path '' 'foo/bar'
+a ... ['foo', 'bar']
+b ... ['foo', 'bar']
+True
+
+Test 7: '/'
+drive, path '' '/'
+a ... ['/']
+b ... []
+False
+
+Test 8: 'c:'
+drive, path 'c:' ''
+a ... []
+b ... []
+True
+
+Test 9: 'c:/'
+drive, path 'c:' '/'
+a ... ['/']
+b ... []
+False
+
+Test 10: 'c:foo'
+drive, path 'c:' 'foo'
+a ... ['foo']
+b ... ['foo']
+True
+
+Test 11: 'c:/foo'
+drive, path 'c:' '/foo'
+a ... ['/', 'foo']
+b ... ['foo']
+False
+
+Test 12: 'c:/users/john/foo.txt'
+drive, path 'c:' '/users/john/foo.txt'
+a ... ['/', 'users', 'john', 'foo.txt']
+b ... ['users', 'john', 'foo.txt']
+False
+
+Test 13: '/users/john/foo.txt'
+drive, path '' '/users/john/foo.txt'
+a ... ['/', 'users', 'john', 'foo.txt']
+b ... ['users', 'john', 'foo.txt']
+False
+
+Test 14: 'foo/bar/baz/loop'
+drive, path '' 'foo/bar/baz/loop'
+a ... ['foo', 'bar', 'baz', 'loop']
+b ... ['foo', 'bar', 'baz', 'loop']
+True
+
+Test 15: 'foo/bar/baz/'
+drive, path '' 'foo/bar/baz/'
+a ... ['foo', 'bar', 'baz', '']
+b ... []
+False
+
+Test 16: '//hostname/foo/bar.txt'
+drive, path '' '//hostname/foo/bar.txt'
+a ... ['//', 'hostname', 'foo', 'bar.txt']
+b ... ['hostname', 'foo', 'bar.txt']
+False
+ 
+ #3 Use the functionality provided in os.path, e.g. 
+
+ os.path.split(path)
+ 
+
+ (This answer was by someone else and was mysteriously and incorrectly deleted, since it's a working answer; if you want to split each part of the path apart, you can call it multiple times, and each call will pull a component off of the end.) 
+ #4 So keep using os.path.split until you get to what you want. Here's an ugly implementation using an infinite loop: 
+
+ import os.path
+def parts(path):
+ components = [] 
+ while True:
+  (path,tail) = os.path.split(path)
+  if tail == "":
+   components.reverse()
+   return components
+  components.append(tail)
+ 
+
+ Stick that in parts.py, import parts, and voila: 
+
+ &gt;&gt;&gt; parts.parts("foo/bar/baz/loop")
+['foo', 'bar', 'baz', 'loop']
+ 
+
+ Probably a nicer implementation using generators or recursion out there... 
+ #5 The os.path module offers a constant sep that that you can use with your algorithm: 
+
+ &gt;&gt;&gt; import os.path
+&gt;&gt;&gt; path = "/foo/bar/baz/file"
+&gt;&gt;&gt; path_split = path.rsplit(os.path.sep)[1:]
+&gt;&gt;&gt; path_split
+['foo', 'bar', 'baz', 'file']
+ 
+
+ In case you want to anticipate irregular paths (double seperators and such), you should use os.path.split multiple times as the other answers suggest.

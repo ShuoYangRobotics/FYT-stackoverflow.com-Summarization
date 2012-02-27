@@ -1,0 +1,256 @@
+Question (ID-4139508): In Python can one implement mixin behavior without using inheritance? Is there a reasonable way in Python to implement mixin behavior similar to that found in Ruby -- that is, without using inheritance? 
+
+ class Mixin(object):
+ def b(self): print "b()"
+ def c(self): print "c()"
+
+class Foo(object):
+ # Somehow mix in the behavior of the Mixin class,
+ # so that all of the methods below will run and
+ # the issubclass() test will be False.
+
+ def a(self): print "a()"
+
+f = Foo()
+f.a()
+f.b()
+f.c()
+print issubclass(Foo, Mixin)
+ 
+
+ I had a vague idea to do this with a class decorator, but my attempts led to confusion. Most of my searches on the topic have led in the direction of using inheritance (or in more complex scenarios, multiple inheritance) to achieve mixin behavior. 
+ Answers (Total-8): #0 You can add the methods as functions: 
+
+ Foo.b = Mixin.b.im_func
+Foo.c = Mixin.c.im_func
+ 
+ #1 def mixer(*args):
+ """Decorator for mixing mixins"""
+ def inner(cls):
+  for a,k in ((a,k) for a in args for k,v in vars(a).items() if callable(v)):
+   setattr(cls, k, getattr(a, k).im_func)
+  return cls
+ return inner
+
+class Mixin(object):
+ def b(self): print "b()"
+ def c(self): print "c()"
+
+class Mixin2(object):
+ def d(self): print "d()"
+ def e(self): print "e()"
+
+
+@mixer(Mixin, Mixin2)
+class Foo(object):
+ # Somehow mix in the behavior of the Mixin class,
+ # so that all of the methods below will run and
+ # the issubclass() test will be False.
+
+ def a(self): print "a()"
+
+f = Foo()
+f.a()
+f.b()
+f.c()
+f.d()
+f.e()
+print issubclass(Foo, Mixin)
+ 
+
+ output: 
+
+ a()
+b()
+c()
+d()
+e()
+False
+ 
+ #2 EDIT: Fixed what could (and probably should) be construed as a bug. Now it builds a new dict and then updates that from the class's dict. This prevents mixins from overwriting methods that are defined directly on the class. The code is still untested but should work. I'm busy ATM so I'll test it later. It worked fine except for a syntax error. In retrospect, I decided that I don't like it (even after my further improvements) and much prefer my other solution even if it is more complicated. The test code for that one applies here as well but I wont duplicate it. 
+
+ You could use a metaclass factory: 
+
+ import inspect
+
+ def add_mixins(*mixins):
+  Dummy = type('Dummy', mixins, {})
+  d = {}
+
+  for mixin in reversed(inspect.getmro(Dummy)):
+   d.update(mixin.__dict__)
+
+  class WithMixins(type):
+   def __new__(meta, classname, bases, classdict):
+    d.update(classdict)
+    return super(WithMixins, meta).__new__(meta, classname, bases, d)
+  return WithMixins 
+ 
+
+ then use it like: 
+
+ class Foo(object):
+  __metaclass__ = add_mixins(Mixin1, Mixin2)
+
+  # rest of the stuff
+ 
+ #3 I am not that familiar with Python, but from what I know about Python metaprogramming, you could actually do it pretty much the same way it is done in Ruby. 
+
+ In Ruby, a module basically consists of two things: a pointer to a method dictionary and a pointer to a constant dictionary. A class consists of three things: a pointer to a method dictionary, a pointer to a constant dictionary and a pointer to the superclass. 
+
+ When you mix in a module M into a class C , the following happens: 
+
+ 
+ an anonymous class α is created (this is called an include class ) 
+ α 's method dictionary and constant dictionary pointers are set equal to M 's 
+ α 's superclass pointer is set equal to C 's 
+ C 's superclass pointer is set to α 
+ 
+
+ In other words: a fake class which shares its behavior with the mixin is injected into the inheritance hierarchy. So, Ruby actually does use inheritance for mixin composition. 
+
+ I left out a couple of subleties above: first off, the module doesn't actually get inserted as C 's superclass, it gets inserted as C 's superclasses' (which is C 's singleton class) superclass. And secondly, if the mixin itself has mixed in other mixins, then those also get wrapped into fake classes which get inserted directly above α , and this process is applied recursively, in case the mixed in mixins in turn have mixins. 
+
+ Basically, the whole mixin hierarchy gets flattened into a straight line and spliced into the inheritance chain. 
+
+ AFAIK, Python actually allows you to change a class's superclass(es) after the fact (something which Ruby does not allow you to do), and it also gives you access to a class's dict (again, something that is impossible in Ruby), so you should be able to implement this yourself. 
+ #4 This one is based on the way it's done in ruby as explained by Jörg W Mittag . All of the wall of code after if __name__=='__main__' is test/demo code. There's actually only 13 lines of real code to it. 
+
+ import inspect
+
+def add_mixins(*mixins):
+ Dummy = type('Dummy', mixins, {})
+ d = {}
+
+ # Now get all the class attributes. Use reversed so that conflicts
+ # are resolved with the proper priority. This rules out the possibility
+ # of the mixins calling methods from their base classes that get overridden
+ # using super but is necessary for the subclass check to fail. If that wasn't a
+ # requirement, we would just use Dummy above (or use MI directly and
+ # forget all the metaclass stuff).
+
+ for base in reversed(inspect.getmro(Dummy)):
+  d.update(base.__dict__)
+
+ # Create the mixin class. This should be equivalent to creating the
+ # anonymous class in Ruby.
+ Mixin = type('Mixin', (object,), d)
+
+ class WithMixins(type):
+  def __new__(meta, classname, bases, classdict):
+   # The check below prevents an inheritance cycle from forming which
+   # leads to a TypeError when trying to inherit from the resulting
+   # class.
+   if not any(issubclass(base, Mixin) for base in bases):
+    # This should be the the equivalent of setting the superclass 
+    # pointers in Ruby.
+    bases = (Mixin,) + bases
+   return super(WithMixins, meta).__new__(meta, classname, bases,
+             classdict)
+
+ return WithMixins 
+
+
+if __name__ == '__main__':
+
+ class Mixin1(object):
+  def b(self): print "b()"
+  def c(self): print "c()"
+
+ class Mixin2(object):
+  def d(self): print "d()"
+  def e(self): print "e()"
+
+ class Mixin3Base(object):
+  def f(self): print "f()"
+
+ class Mixin3(Mixin3Base): pass
+
+ class Foo(object):
+  __metaclass__ = add_mixins(Mixin1, Mixin2, Mixin3)
+
+  def a(self): print "a()"
+
+ class Bar(Foo):
+  def f(self): print "Bar.f()"
+
+ def test_class(cls):
+  print "Testing {0}".format(cls.__name__)
+  f = cls()
+  f.a()
+  f.b()
+  f.c()
+  f.d()
+  f.e()
+  f.f()
+  print (issubclass(cls, Mixin1) or 
+    issubclass(cls, Mixin2) or
+    issubclass(cls, Mixin3))
+
+ test_class(Foo)
+ test_class(Bar)
+ 
+ #5 You could decorate the classes __getattr__ to check in the mixin. The problem is that all methods of the mixin would always require an object the type of the mixin as their first parameter, so you would have to decorate __init__ as well to create a mixin-object. I believe you could achieve this using a class decorator . 
+ #6 from functools import partial
+class Mixin(object):
+ @staticmethod
+ def b(self): print "b()"
+ @staticmethod
+ def c(self): print "c()"
+
+class Foo(object):
+ def __init__(self, mixin_cls):
+  self.delegate_cls = mixin_cls
+
+ def __getattr__(self, attr):
+  if hasattr(self.delegate_cls, attr):
+   return partial(getattr(self.delegate_cls, attr), self)
+
+ def a(self): print "a()"
+
+f = Foo(Mixin)
+f.a()
+f.b()
+f.c()
+print issubclass(Foo, Mixin)
+ 
+
+ This basically uses the Mixin class as a container to hold ad-hoc functions (not methods) that behave like methods by taking an object instance (self) as the first argument. __getattr__ will redirect missing calls to these methods-alike functions. 
+
+ This passes your simple tests as shown below. But I cannot guarantee it will do all the things you want. Make more thorough test to make sure. 
+
+ $ python mixin.py 
+a()
+b()
+c()
+False
+ 
+ #7 Composition? It seems like that would be the simplest way to handle this: either wrap your object in a decorator or just import the methods as an object into your class definition itself. This is what I usually do: put the methods that I want to share between classes in a file and then import the file. If I want to override some behavior I import a modified file with the same method names as the same object name. It's a little sloppy, but it works. 
+
+ For example, if I want the init_covers behavior from this file (bedg.py) 
+
+ import cove as cov
+
+
+def init_covers(n):
+ n.covers.append(cov.Cover((set([n.id]))))
+ id_list = []
+ for a in n.neighbors:
+  id_list.append(a.id)
+ n.covers.append(cov.Cover((set(id_list))))
+
+def update_degree(n):
+ for a in n.covers:
+  a.degree = 0
+  for b in n.covers:
+   if a != b:
+    a.degree += len(a.node_list.intersection(b.node_list)) 
+ 
+
+ In my bar class file I would do: import bedg as foo 
+
+ and then if I want to change my foo behaviors in another class that inherited bar, I write 
+
+ import bild as foo 
+
+ Like I say, it is sloppy.

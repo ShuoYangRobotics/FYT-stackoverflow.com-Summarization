@@ -1,0 +1,195 @@
+Question (ID-842856): What's the most efficient way to find one of several substrings in Python? I have a list of possible substrings, e.g. ['cat', 'fish', 'dog']. In practice the list contains hundreds of entries. 
+
+ I'm processing a string, and what I'm looking for is to find the index of first appearance of any of these substrings. 
+
+ To clarify, for '012cat' the result is 3, and for '0123dog789cat' the result is 4. 
+
+ I also need to know which substring was found (e.g. its index in the substring list or the text itself), or at least the length of the substring matched. 
+
+ There are obvious brute-force ways to achieve this, I wondered if there's any elegant Python/Regex solution for this. 
+
+ Thanks,
+Rax 
+ Answers (Total-6): #0 I would assume a regex is better than checking for each substring individually because conceptually the regular expression is modeled as a DFA, and so as the input is consumed all matches are being tested for at the same time (resulting in one scan of the input string). 
+
+ So, here is an example: 
+
+ import re
+
+def work():
+ to_find = re.compile("cat|fish|dog")
+ search_str = "blah fish cat dog haha"
+ match_obj = to_find.search(search_str)
+ the_index = match_obj.start() # produces 5, the index of fish
+ which_word_matched = match_obj.group() # "fish"
+ # Note, if no match, match_obj is None
+ 
+
+ It should be noted that you will want to form the regex (ie - call to re.compile()) as little as possible. The best case would be you know ahead of time what your searches are (or you compute them once/infrequently) and then save the result of re.compile somewhere. My example is just a simple nonsense function so you can see the usage of the regex. There are some more regex docs here: 
+
+ http://docs.python.org/library/re.html 
+
+ Hope this helps. 
+
+ UPDATE: I am unsure about how python implements regular expressions, but to answer Rax's question about whether or not there are limitations of re.compile() (for example, how many words you can try to "|" together to match at once), and the amount of time to run compile: neither of these seem to be an issue. I tried out this code, which is good enough to convince me. (I could have made this better by adding timing and reporting results, as well as throwing the list of words into a set to ensure there are no duplicates... but both of these improvements seem like overkill). This code ran basically instantaneously, and convinced me that I am able to search for 2000 words (of size 10), and that and of them will match appropriately. Here is the code: 
+
+ import random
+import re
+import string
+import sys
+
+def main(args):
+ words = []
+ letters_and_digits = "%s%s" % (string.letters, string.digits)
+ for i in range(2000):
+  chars = []
+  for j in range(10):
+   chars.append(random.choice(letters_and_digits))
+  words.append(("%s"*10) % tuple(chars))
+ search_for = re.compile("|".join(words))
+ first, middle, last = words[0], words[len(words) / 2], words[-1]
+ search_string = "%s, %s, %s" % (last, middle, first)
+ match_obj = search_for.search(search_string)
+ if match_obj is None:
+  print "Ahhhg"
+  return
+ index = match_obj.start()
+ which = match_obj.group()
+ if index != 0:
+  print "ahhhg"
+  return
+ if words[-1] != which:
+  print "ahhg"
+  return
+
+ print "success!!! Generated 2000 random words, compiled re, and was able to perform matches."
+
+if __name__ == "__main__":
+ main(sys.argv)
+ 
+
+ UPDATE: It should be noted that the order of of things ORed together in the regex matters . Have a look at the following test inspired by TZOTZIOY : 
+
+ &gt;&gt;&gt; search_str = "01catdog"
+&gt;&gt;&gt; test1 = re.compile("cat|catdog")
+&gt;&gt;&gt; match1 = test1.search(search_str)
+&gt;&gt;&gt; match1.group()
+'cat'
+&gt;&gt;&gt; match1.start()
+2
+&gt;&gt;&gt; test2 = re.compile("catdog|cat") # reverse order
+&gt;&gt;&gt; match2 = test2.search(search_str)
+&gt;&gt;&gt; match2.group()
+'catdog'
+&gt;&gt;&gt; match2.start()
+2
+ 
+
+ This suggests the order matters :-/. I am not sure what this means for Rax's application, but at least the behavior is known. 
+
+ UPDATE: I posted this questions about the implementation of regular expressions in Python which will hopefully give us some insight #1 subs = ['cat', 'fish', 'dog']
+sentences = ['0123dog789cat']
+
+import re
+
+subs = re.compile("|".join(subs))
+def search():
+ for sentence in sentences:
+  result = subs.search(sentence)
+  if result != None:
+   return (result.group(), result.span()[0])
+
+# ('dog', 4)
+ 
+ #2 This is a vague, theoretical answer with no code provided, but I hope it can point you in the right direction. 
+
+ First, you will need a more efficient lookup for your substring list. I would recommend some sort of tree structure. Start with a root, then add an 'a' node if any substrings start with 'a' , add a 'b' node if any substrings start with 'b' , and so on. For each of these nodes, keep adding subnodes. 
+
+ For example, if you have a substring with the word "ant", you should have a root node, a child node 'a' , a grandchild node 'n' , and a great grandchild node 't' . 
+
+ Nodes should be easy enough to make. 
+
+ class Node(object):
+ children = []
+
+ def __init__(self, name):
+  self.name = name
+ 
+
+ where name is a character. 
+
+ Iterate through your strings letter by letter. Keep track of which letter you're on. At each letter, try to use the next few letters to traverse the tree. If you're successful, your letter number will be the position of the substring, and your traversal order will indicate the substring that was found. 
+
+ Clarifying edit: DFAs should be much faster than this method, and so I should endorse Tom's answer . I'm only keeping this answer up in case your substring list changes often, in which case using a tree might be faster. 
+ #3 I just want to point out the time difference between DisplacedAussie's answer and Tom's answer. Both were fast when used once, so you shouldn't have any noticeable wait for either, but when you time them: 
+
+ import random
+import re
+import string
+
+words = []
+letters_and_digits = "%s%s" % (string.letters, string.digits)
+for i in range(2000):
+ chars = []
+ for j in range(10):
+  chars.append(random.choice(letters_and_digits))
+ words.append(("%s"*10) % tuple(chars))
+search_for = re.compile("|".join(words))
+first, middle, last = words[0], words[len(words) / 2], words[-1]
+search_string = "%s, %s, %s" % (last, middle, first)
+
+def _search():
+ match_obj = search_for.search(search_string)
+ # Note, if no match, match_obj is None
+ if match_obj is not None:
+   return (match_obj.start(), match_obj.group())
+
+def _map():
+ search_for = search_for.pattern.split("|")
+ found = map(lambda x: (search_string.index(x), x), filter(lambda x: x in search_string, search_for))
+ if found:
+  return min(found, key=lambda x: x[0])
+
+
+if __name__ == '__main__':
+ from timeit import Timer
+
+
+ t = Timer("_search(search_for, search_string)", "from __main__ import _search, search_for, search_string")
+ print _search(search_for, search_string)
+ print t.timeit()
+
+ t = Timer("_map(search_for, search_string)", "from __main__ import _map, search_for, search_string")
+ print _map(search_for, search_string)
+ print t.timeit()
+ 
+
+ Outputs: 
+
+ (0, '841EzpjttV')
+14.3660159111
+(0, '841EzpjttV')
+# I couldn't wait this long
+ 
+
+ I would go with Tom's answer, for both readability, and speed. 
+ #4 First of all, I would suggest you to sort the initial list in ascending order. Because scanning for a shorter substring is faster that scanning for a longer substring. 
+ #5 How about this one. 
+
+ &gt;&gt;&gt; substrings = ['cat', 'fish', 'dog']
+&gt;&gt;&gt; _string = '0123dog789cat'
+&gt;&gt;&gt; found = map(lambda x: (_string.index(x), x), filter(lambda x: x in _string, substrings))
+[(10, 'cat'), (4, 'dog')]
+&gt;&gt;&gt; if found:
+&gt;&gt;&gt;  min(found, key=lambda x: x[0])
+(4, 'dog')
+ 
+
+ Obviously, you could return something other than a tuple. 
+
+ This works by: 
+
+ 
+ Filtering the list of substrings down to those that are in the string 
+ Building a list of tuples containing the index of the substring, and the substring 
+ If a substring has been found, find the minimum value based on the index

@@ -1,0 +1,102 @@
+Question (ID-5236364): How to parallelize list-comprehension calculations in Python? Both list comprehensions and map-calculations should -- at least in theory -- be relatively easy to parallelize: each calculation inside a list-comprehension could be done independent of the calculation of all the other elements. For example in the expression 
+
+ [ x*x for x in range(1000) ]
+ 
+
+ each x*x-Calculation could (at least in theory) be done in parallel. 
+
+ My question is: Is there any Python-Module / Python-Implementation / Python Programming-Trick to parallelize a list-comprehension calculation (in order to use all 16 / 32 / ... cores or distribute the calculation over a Computer-Grid or over a Cloud)? 
+ Answers (Total-7): #0 As Ken said, no, it can't, but with 2.6's multiprocessing module, it's pretty easy to parallelize computations. 
+
+ import multiprocessing
+
+try:
+ cpus = multiprocessing.cpu_count()
+except NotImplementedError:
+ cpus = 2 # arbitrary default
+
+
+def square(n):
+ return n * n
+
+pool = multiprocessing.Pool(processes=cpus)
+print pool.map(square, xrange(1000))
+ 
+
+ There are also examples in the documentation that shows how to do this using Managers, which should allow for distributed computations as well. 
+ #1 No, because list comprehension itself is a sort of a C-optimized macro. If you pull it out and parallelize it, then it's not a list comprehension, it's just a good old fashioned MapReduce . 
+
+ But you can easily parallelize your example. Here's a good tutorial on using MapReduce with Python's parallelization library: 
+
+ http://mikecvet.wordpress.com/2010/07/02/parallel-mapreduce-in-python/ 
+ #2 Hmmm... 
+
+ Using the futures.{Thread,Process}PoolExecutor.map(func, *iterables, timeout=None) and futures.as_completed(future_instances, timeout=None) functions from the new 3.2 concurrent.futures package couldn't help ? 
+
+ It's also available as a 2.6+ backport . 
+
+ Regards, Georges 
+ #3 (possibly off-topic) 
+
+ On automatical parallelisation of list comprehenstion 
+
+ IMHO, effective automatic parallisation of list comprehension would be impossible without additional information (such as those provided using directives in OpenMP), or limiting it to expressions that involve only built-in types/methods. 
+
+ Unless there is a guarantee that the processing done on each list item has no side effects, there is a possibility that the results will be invalid (or at least different) if done out of order. 
+
+ # Artificial example
+counter = 0
+
+def g(x): # func with side-effect
+ global counter
+ counter = counter + 1
+ return x + counter
+
+vals = [g(i) for i in range(100)] # diff result when not done in order
+ 
+
+ There is also the issue of task distribution. How should the problem space be decomposed? 
+
+ If the processing of each element forms a task (~ task farm), then when there are many elements each involving trivial calculation, the overheads of managing the tasks will swamps out the performance gains of parallelisation. 
+
+ One could also take the data decomposition approach where the problem space is divided equally among the available processes. 
+
+ The fact that list comprehension also works with generators makes this slightly tricky, however this is probably not a show stopper if the overheads of pre-iterating it is acceptable. Of course, there is also a possibility of generators with side-effects which can change the outcome if subsequent items are prematurely iterated. Very unlikely, but possible. 
+
+ A bigger concern would be load imbalance across processes. There is no guarantee that each element would take the same amount of time to process, so statically partitioned data may result in one process doing most of the work while the idle your time away. 
+
+ Breaking the list down to smaller chunks and handing them as each child process is available is a good compromise, however, a good selection of chunk size would be application dependent hence not doable without more information from the user. 
+
+ Alternatives 
+
+ As mentioned in several other answers, there are many approaches and parallel computing modules/frameworks to choose from depending on one requirements. 
+
+ Having used only MPI (in C) with no experience using Python for parallel processing, I am not in a position to vouch for any (although, upon a quick scan through,
+ multiprocessing , jug , pp and pyro stand out). 
+
+ If a requirement is to stick as close as possible to list comprehension, then jug seems to be the closest match. From the tutorial , distributing tasks across multiple instances can be as simple as: 
+
+ from jug.task import Task
+from yourmodule import process_data
+tasks = [Task(process_data,infile) for infile in glob('*.dat')]
+ 
+
+ While that does something similar to multiprocessing.Pool.map() , jug can use different backends for synchronising process and storing intermediate results (redis, filesystem, in-memory) which means the processes can span across nodes in a cluster. 
+ #4 There is a comprehensive list of parallel packages for Python here: 
+
+ http://wiki.python.org/moin/ParallelProcessing 
+
+ I'm not sure if any handle the splitting of a list comprehension construct directly, but it should be trivial to formulate the same problem in a non-list comprehension way that can be easily forked to a number of different processors. I'm not familiar with cloud computing parallelization, but I've had some success with mpi4py on multi-core machines and over clusters. The biggest issue that you'll have to think about is whether the communication overhead is going to kill any gains you get from parallelizing the problem. 
+
+ Edit: The following might also be of interest: 
+
+ http://www.mblondel.org/journal/2009/11/27/easy-parallelization-with-data-decomposition/ 
+ #5 Not within a list comprehension AFAIK. 
+
+ You could certainly do it with a traditional for loop and the multiprocessing/threading modules. 
+ #6 For shared-memory parallelism, I recommend joblib : 
+
+ from joblib import delayed, Parallel
+
+def square(x): return x*x
+values = Parallel(n_jobs=NUM_CPUS)(delayed(square)(x) for x in range(1000))

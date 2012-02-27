@@ -1,0 +1,183 @@
+Question (ID-1717393): Is this simple python code thread safe? I want to create a non-thread-safe chunk of code for experimentation, and this is the function that 2 threads are going to be called. 
+
+ c = 0
+
+def increment():
+ c += 1
+
+def decrement():
+ c -= 1
+ 
+
+ Is this code thread safe? 
+
+ If not, may I understand why it is not thread safe, and what kind of statements usually lead to non-thread-safe operations. 
+
+ If it is thread-safe, how can I make it explicitly non-thread-safe? 
+
+ Thanks! 
+ Answers (Total-8): #0 (note: you would need global c in each function to make your code work.) 
+
+ 
+ Is this code thread safe? 
+ 
+
+ No. Only a single bytecode instruction is ‘atomic’ in CPython, and a += may not result in a single opcode, even when the values involved are simple integers: 
+
+ &gt;&gt;&gt; c= 0
+&gt;&gt;&gt; def inc():
+...  global c
+...  c+= 1
+
+&gt;&gt;&gt; import dis
+&gt;&gt;&gt; dis.dis(inc)
+
+ 3   0 LOAD_GLOBAL    0 (c)
+    3 LOAD_CONST    1 (1)
+    6 INPLACE_ADD   
+    7 STORE_GLOBAL    0 (c)
+    10 LOAD_CONST    0 (None)
+    13 RETURN_VALUE
+ 
+
+ So one thread could get to index 6 with c and 1 loaded, give up the GIL and let another thread in, which executes an inc and sleeps, returning the GIL to the first thread, which now has the wrong value. 
+
+ In any case, what's atomic is an implementation detail which you shouldn't rely on. Bytecodes may change in future versions of CPython, and the results will be totally different in other implementations of Python that do not rely on a GIL. If you need thread safety, you need a locking mechanism. 
+ #1 Single opcodes are thread-safe because of the GIL but nothing else: 
+
+ import time
+class something(object):
+ def __init__(self,c):
+  self.c=c
+ def inc(self):
+  new = self.c+1 
+  # if the thread is interrupted by another inc() call its result is wrong
+  time.sleep(0.001) # sleep makes the os continue another thread
+  self.c = new
+
+
+x = something(0)
+import threading
+
+for _ in range(10000):
+ threading.Thread(target=x.inc).start()
+
+print x.c # ~900 here, instead of 10000
+ 
+
+ Every resource shared by multiple threads must have a lock. 
+ #2 Short answer: no. 
+
+ Long answer: generally not. 
+
+ While CPython's GIL makes single opcodes thread-safe , this is no general behaviour. You may not assume that even simple operations like an addition is a atomic instruction. The addition may only be half done when another thread runs. 
+
+ And as soon as your functions access a variable in more than one opcode, your thread safety is gone. You can generate thread safety, if you wrap your function bodies in locks . But be aware that locks may be computationally costly and may generate deadlocks. 
+ #3 If you actually want to make your code not thread-safe, and have good chance of "bad" stuff actually happening without you trying like ten thousand times (or one time when you real don't want "bad" stuff to happen), you can 'jitter' your code with explicit sleeps: 
+
+ def íncrement():
+ global c
+ x = c
+ from time import sleep
+ sleep(0.1)
+ c = x + 1
+ 
+ #4 No, this code is absolutely, demonstrably not threadsafe. 
+
+ import threading
+
+i = 0
+
+def test():
+ global i
+ for x in range(100000):
+  i += 1
+
+threads = [threading.Thread(target=test) for t in range(10)]
+for t in threads:
+ t.start()
+
+for t in threads:
+ t.join()
+
+assert i == 1000000, i
+ 
+
+ fails consistently. 
+
+ i += 1 resolves to four opcodes: load i, load 1, add the two, and store it back to i. The Python interpreter switches active threads (by releasing the GIL from one thread so another thread can have it) every 100 opcodes. (Both of these are implementation details.) The race condition occurs when the 100-opcode preemption happens between loading and storing, allowing another thread to start incrementing the counter. When it gets back to the suspended thread, it continues with the old value of "i" and undoes the increments run by other threads in the meantime. 
+
+ Making it threadsafe is straightforward; add a lock: 
+
+ #!/usr/bin/python
+import threading
+i = 0
+i_lock = threading.Lock()
+
+def test():
+ global i
+ i_lock.acquire()
+ try:
+  for x in range(100000):
+   i += 1
+ finally:
+  i_lock.release()
+
+threads = [threading.Thread(target=test) for t in range(10)]
+for t in threads:
+ t.start()
+
+for t in threads:
+ t.join()
+
+assert i == 1000000, i
+ 
+ #5 Are you sure that the functions increment and decrement execute without any error? 
+
+ I think it should raise an UnboundLocalError because you have to explicitly tell Python that you want to use the global variable named 'c'. 
+
+ So change increment ( also decrement ) to the following: 
+
+ def increment():
+ global c
+ c += 1
+ 
+
+ I think as is your code is thread unsafe. This article about thread synchronisation mechanisms in Python may be helpful. 
+ #6 You can increase the likelyhood of seeing race conditions by using a sleep in the critical parts 
+
+ from time import sleep
+c = 0
+
+def increment():
+ global c
+ c_ = c
+ sleep(0.1)
+ c = c+1
+
+def decrement():
+ global c
+ c_ = c
+ sleep(0.1)
+ c = c_-1
+ 
+ #7 To be sure I recommend to use a lock: 
+
+ import threading
+
+class ThreadSafeCounter():
+ def __init__(self):
+  self.lock = threading.Lock()
+  self.counter=0
+
+ def increment(self):
+  with self.lock:
+   self.counter+=1
+
+
+ def decrement(self):
+  with self.lock:
+   self.counter-=1
+ 
+
+ The synchronized decorator can also help to keep the code easy to read.

@@ -1,0 +1,244 @@
+<h3>Question (ID-467985):</h3><h2>Adding a generic image field onto a ModelForm in django</h2><p>I have two models, <code>Room</code> and <code>Image</code>.  <code>Image</code> is a generic model that can tack onto any other model.  I want to give users a form to upload an image when they post information about a room.  I've written code that works, but I'm afraid I've done it the hard way, and specifically in a way that violates DRY.</p>
+
+<p>Was hoping someone who's a little more familiar with django forms could point out where I've gone wrong. </p>
+
+<p><strong>Update:</strong></p>
+
+<p>I've tried to clarify why I chose this design in comments to the current answers.  To summarize: </p>
+
+<p>I didn't simply put an <code>ImageField</code> on the <code>Room</code> model because I wanted more than one image associated with the Room model.  I chose a generic Image model because I wanted to add images to several different models.  The alternatives I considered were were multiple foreign keys on a single <code>Image</code> class, which seemed messy, or multiple <code>Image</code> classes, which I thought would clutter my schema.  I didn't make this clear in my first post, so sorry about that.</p>
+
+<p>Seeing as none of the answers so far has addressed how to make this a little more DRY I did come up with my own solution which was to add the upload path as a class attribute on the image model and reference that every time it's needed.</p>
+
+<pre><code># Models
+class Image(models.Model):
+    content_type = models.ForeignKey(ContentType)
+    object_id = models.PositiveIntegerField()
+    content_object = generic.GenericForeignKey('content_type', 'object_id')
+    image = models.ImageField(_('Image'),
+                                height_field='',
+                                width_field='',
+                                upload_to='uploads/images',
+                                max_length=200)
+class Room(models.Model):
+    name = models.CharField(max_length=50)
+    image_set = generic.GenericRelation('Image') 
+
+# The form
+class AddRoomForm(forms.ModelForm):
+    image_1 = forms.ImageField()
+
+    class Meta:
+        model = Room
+
+# The view
+def handle_uploaded_file(f):
+
+    # DRY violation, I've already specified the upload path in the image model
+    upload_suffix = join('uploads/images', f.name)
+    upload_path = join(settings.MEDIA_ROOT, upload_suffix)
+    destination = open(upload_path, 'wb+')
+    for chunk in f.chunks():
+        destination.write(chunk)
+    destination.close()
+    return upload_suffix
+
+def add_room(request, apartment_id, form_class=AddRoomForm, template='apartments/add_room.html'):
+    apartment  = Apartment.objects.get(id=apartment_id)
+
+    if request.method == 'POST':
+        form = form_class(request.POST, request.FILES)
+        if form.is_valid():
+            room = form.save()
+            image_1 = form.cleaned_data['image_1']
+
+            # Instead of writing a special function to handle the image, 
+            # shouldn't I just be able to pass it straight into Image.objects.create
+            # ...but it doesn't seem to work for some reason, wrong syntax perhaps?
+
+            upload_path = handle_uploaded_file(image_1)
+            image = Image.objects.create(content_object=room, image=upload_path)
+            return HttpResponseRedirect(room.get_absolute_url())
+    else:
+        form = form_class()
+    context = {'form': form, }
+    return direct_to_template(request, template, extra_context=context)
+</code></pre>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Why don't you do just use a ImageField? I don't see the need for the "Image" class.</p>
+
+<pre><code># model
+class Room(models.Model):
+    name = models.CharField(max_length=50)
+    image = models.ImageField(upload_to="uploads/images/")
+
+
+# form
+from django import forms
+
+class UploadFileForm(forms.Form):
+    name = forms.CharField(max_length=50)
+    image  = forms.FileField()
+</code></pre>
+
+<p>Take a look at <a href="http://docs.djangoproject.com/en/dev/topics/http/file-uploads/#basic-file-uploads" rel="nofollow">Basic file uploads</a> and <a href="http://docs.djangoproject.com/en/dev/faq/usage/#how-do-i-use-image-and-file-fields" rel="nofollow">How do I use image and file fields?</a></p>
+<br /><b>#1</b><br /><p>You don't have to use the Image class. As <a href="http://stackoverflow.com/users/30300/dzpm">DZPM</a> suggested, convert the image field to an ImageField. You also need to make some changes to the view.</p>
+
+<p>Instead of using an upload handler, you can create a Image object with the uploaded data and attach the Image object to the Room object.</p>
+
+<p>To save the Image object you need to do something like this in the view:</p>
+
+<pre><code>from django.core.files.base import ContentFile
+
+if request.FILES.has_key('image_1'):
+    image_obj = Image()
+    image_obj.file.save(request.FILES['image_1'].name,\
+                        ContentFile(request.FILES['image_1'].read()))
+    image_obj.save()
+    room_obj.image_set.create(image_obj)
+    room_obj.save()
+</code></pre>
+
+<p>Also, I think instead of the GenericRelation, you should use a ManyToManyField, in which case the syntax for adding an Image to a Room will change slightly.</p>
+<br /><b>#2</b><br /><p>What about using two forms on the page: one for the room and one for the image?</p>
+
+<p>You'll just have to make the generic foreign key fields of the image form not required, and fill in their values in the view after saving the room.</p>
+<br /><b>#3</b><br /><p>Django does support your use case at least up to a point:</p>
+
+<ul>
+<li>formsets display repeated forms</li>
+<li>model formsets handle repeated model forms</li>
+<li>inline formsets bind model formsets to related objects of an instance</li>
+<li><em>generic inline formsets</em> do the same for generic relations</li>
+</ul>
+
+<p>Generic inline formsets were introduced in <a href="http://code.djangoproject.com/changeset/8279" rel="nofollow">changeset [8279]</a>. See <a href="http://code.djangoproject.com/changeset/8279#file4" rel="nofollow">the changes to unit tests</a> to see how they are used.</p>
+
+<p>With generic inline formsets you'll also be able to display multiple already saved images for existing rooms in your form.</p>
+
+<p>Inline formsets seem to expect an existing parent instance in the <code>instance=</code> argument. The admin interface does let you fill in inlines before saving the parent instance, so there must be a way to achieve that. I've just never tried that myself.</p>
+<br /><b>#4</b><br /><p>I found this page look for a solution to this same problem.</p>
+
+<p>Here is my info -- hopefully helps some.</p>
+
+<p>MODELS: Image, Review, Manufacturer, Profile</p>
+
+<p>I want Review, Manufacturer, Profile to have a relationship to the Image model. But you have to beable to have multiple Images per object. (Ie, One Review can have 5 images a different Review can have 3, etc)</p>
+
+<p>Originally I did a </p>
+
+<pre><code>images = ManyToManyField(Image)
+</code></pre>
+
+<p>in each of the other models. This works fine, but sucks for admin (combo select box). This may be a solution for you though. I dont like it for what I'm trying to do.</p>
+
+<p>The other thing I'm working on now is having multiple foreign keys.</p>
+
+<pre><code>class Image(models.Model):
+    description = models.TextField(blank=True)
+    image = models.ImageField(upload_to="media/")
+    user_profile = models.ForeignKey(UserProfile)
+    mfgr = models.ForeignKey(Manufacturer)
+    review = models.ForeignKey(Review)
+</code></pre>
+
+<p>but like you said. This is pretty sloppy looking and I just dont like it.</p>
+
+<p>One other thing I just found but don't have my brain completely wrapped around (and not sure how transparent it is after implementation is Generic Relationships (or Generic Foreign Keys), which may be a solution. Well once I comprehend it all. Need more caffeine.</p>
+
+<p><a href="http://www.djangoproject.com/documentation/models/generic_relations/" rel="nofollow">http://www.djangoproject.com/documentation/models/generic_relations/</a></p>
+
+<p>Let me know if you get this sorted out or any of this helps. Thanks!</p>
+
+<p>Let me know if this helps or you have a different solutions.</p>
+<br /><b>#5</b><br /><p>Ok I figured it out with some more reading... I feel like you want to do exactly what I have done so here it is.</p>
+
+<p>I'll be using GenericForeignKeys for this.</p>
+
+<p>First the imports for <code>models.py</code></p>
+
+<pre><code>from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes import generic
+</code></pre>
+
+<p>Now add the following to your Image Model</p>
+
+<pre><code>class Image(models.Model):
+    content_type = models.ForeignKey(ContentType)
+    object_id = models.PositiveIntegerField()
+    content_object = generic.GenericForeignKey()
+</code></pre>
+
+<p>This lets this model be just that, a Generic Foreign Key for any number of models.
+Then add the following to all the models you want to have related images</p>
+
+<pre><code>images = generic.GenericRelation(Image)
+</code></pre>
+
+<p>Now in admin.py you need to add the following things.</p>
+
+<pre><code>from django.contrib.contenttypes.generic import GenericTabularInline
+
+class ImageInline(GenericTabularInline):
+    model = Image
+    extra = 3
+    ct_field_name = 'content_type'
+    id_field_name = 'object_id'
+</code></pre>
+
+<p>And then include it in a admin declaration</p>
+
+<pre><code>class ReviewAdmin(admin.ModelAdmin):
+    inlines = [ImageInline]
+</code></pre>
+
+<p>And thats it. Its working great over here. Hope this helps man!
+.adam.</p>
+<br /><b>#6</b><br /><p>Use two forms, one for the room and one for the image:</p>
+
+<p>class Image(models.Model)</p>
+
+<pre><code>content_type = models.ForeignKey(ContentType)
+object_id = models.PositiveIntegerField()
+content_object = generic.GenericForeignKey('content_type', 'object_id')
+image = models.ImageField(upload_to='')
+</code></pre>
+
+<p>class UploadImage(forms.ModelForm):</p>
+
+<pre><code>class Meta:
+    model = Image
+    fields = ('image')
+</code></pre>
+
+<p>class Room(models.Model):</p>
+
+<pre><code>name = models.CharField(max_length=50)
+images = models.ManyToManyField(Image) 
+</code></pre>
+
+<p>class RoomForm(forms.ModelForm):</p>
+
+<pre><code>class Meta:
+    model = Room
+</code></pre>
+
+<p>in the views</p>
+
+<p>if request.method == "POST":</p>
+
+<pre><code>    ##2 form, una per l'annuncio ed una per la fotografia
+    form = RoomForm(request.POST)
+    image_form = UploadImage(request.POST, request.FILES)
+    #my_logger.debug('form.is_valid() : ' + str(form.is_valid()))
+    if form.is_valid() and image_form.is_valid():
+        ##save room
+        room = room.save()
+
+        ##save image
+        image = image_form.save()
+
+        ##ManyToMany
+        room.images = [image]
+        room.save()
+</code></pre>
+<br />

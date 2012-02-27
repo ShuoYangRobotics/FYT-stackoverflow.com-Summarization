@@ -1,0 +1,172 @@
+Question (ID-653496): How can I cluster a graph in Python? Let G be a graph. So G is a set of nodes and set of links. I need to find a fast way to partition the graph. The graph I am now working has only 120*160 nodes, but I might soon be working on an equivalent problem, in another context (not medicine, but website development), with millions of nodes. 
+
+ So, what I did was to store all the links into a graph matrix: 
+
+ M=numpy.mat(numpy.zeros((len(data.keys()),len(data.keys()))))
+ 
+
+ Now M holds a 1 in position s,t, if node s is connected to node t. I make sure M is symmetrical M[s,t]=M[t,s] and each node links to itself M[s,s]=1. 
+
+ If I remember well if I multiply M with M, the results is a matrix that represents the graph that connects vertexes that are reached on through two steps. 
+
+ So I keep on multplying M with itself, until the number of zeros in the matrix do not decrease any longer. Now I have the list of the connected components. 
+And now I need to cluster this matrix. 
+
+ Up to now I am pretty satisfied with the algorithm. I think it is easy, elegant, and reasonably fast. I am having trouble with this part. 
+
+ Essentially I need to split this graph into its connected components. 
+
+ I can go through all the nodes, and see what are they connected to. 
+
+ But what about sorting the matrix reordering the lines. But I don't know if it is possible to do it. 
+
+ What follows is the code so far: 
+
+ def findzeros(M):
+ nZeros=0
+ for t in M.flat:
+  if not t:
+   nZeros+=1
+ return nZeros
+
+M=numpy.mat(numpy.zeros((len(data.keys()),len(data.keys())))) 
+for s in data.keys():
+ MatrixCells[s,s]=1
+ for t in data.keys():
+  if t&lt;s:
+   if (scipy.corrcoef(data[t],data[s])[0,1])&gt;threashold:
+    M[s,t]=1
+    M[t,s]=1
+
+nZeros=findzeros(M)
+M2=M*M
+nZeros2=findzeros(M2)
+
+while (nZeros-nZeros2):
+ nZeros=nZeros2
+ M=M2
+ M2=M*M
+ nZeros2=findzeros(M2)
+ 
+
+ 
+
+ Edit: 
+
+ It has been suggested that I use SVD decomposition. Here is a simple example of the problem on a 5x5 graph. We shall use this since with the 19200x19200 square matrix is not that easy to see the clusters. 
+
+ import numpy
+import scipy
+
+M=numpy.mat(numpy.zeros((5,5)))
+
+M[1,3]=1
+M[3,1]=1
+M[1,1]=1
+M[2,2]=1
+M[3,3]=1
+M[4,4]=1
+M[0,0]=1
+
+print M
+
+u,s,vh = numpy.linalg.linalg.svd(M)
+print u
+print s
+print vh
+ 
+
+ Essentially there are 4 clusters here: (0),(1,3),(2),(4)
+But I still don't see how the svn can help in this context. 
+ Answers (Total-7): #0 In SciPy you can use sparse matrices . Also note, that there are more efficient ways of multiplying matrix by itself. Anyway, what you're trying to do can by done by SVD decomposition. 
+
+ Introduction with useful links . 
+ #1 Why not use a real graph library, like Python-Graph ? It has a function to determine connected components (though no example is provided). I'd imagine a dedicated library is going to be faster than whatever ad-hoc graph code you've cooked up. 
+
+ EDIT: NetworkX seems like it might be a better choice than python-graph; its documentation (here for the connected components function) certainly is. 
+ #2 Looks like there is a library PyMetis , which will partition your graph for you, given a list of links. It should be fairly easy to extract the list of links from your graph by passing it your original list of linked nodes (not the matrix-multiply-derived one). 
+
+ Repeatedly performing M' = MM will not be efficient for large orders of M. A full matrix-multiply for matrices of order N will cost N multiplications and N-1 additions per element, of which there are N 2 , that is O(N 3 ) operations. If you are scaling that to "millions of nodes", that would be O(10 18 ) operations per matrix-matrix multiplication, of which you want to do several. 
+
+ In short, you don't want to do it this way. The SVD suggestion from Vartec would be the only appropriate choice there. Your best option is just to use PyMetis, and not try to reinvent graph-partitioning. 
+ #3 Here's some naive implementation, which finds the connected components using depth first search , i wrote some time ago. Although it's very simple, it scales well to ten thousands of vertices and edges... 
+
+ 
+import sys
+from operator import gt, lt
+
+class Graph(object):
+ def __init__(self):
+  self.nodes = set()
+  self.edges = {}
+  self.cluster_lookup = {}
+  self.no_link = {}
+
+ def add_edge(self, n1, n2, w):
+  self.nodes.add(n1)
+  self.nodes.add(n2)
+  self.edges.setdefault(n1, {}).update({n2: w})
+  self.edges.setdefault(n2, {}).update({n1: w})
+
+ def connected_components(self, threshold=0.9, op=lt):
+  nodes = set(self.nodes)
+  components, visited = [], set()
+  while len(nodes) > 0:
+   connected, visited = self.dfs(nodes.pop(), visited, threshold, op)
+   connected = set(connected)
+   for node in connected:
+    if node in nodes:
+     nodes.remove(node)
+
+   subgraph = Graph()
+   subgraph.nodes = connected
+   subgraph.no_link = self.no_link
+   for s in subgraph.nodes:
+    for k, v in self.edges.get(s, {}).iteritems():
+     if k in subgraph.nodes:
+      subgraph.edges.setdefault(s, {}).update({k: v})
+    if s in self.cluster_lookup:
+     subgraph.cluster_lookup[s] = self.cluster_lookup[s]
+
+   components.append(subgraph)
+  return components
+
+ def dfs(self, v, visited, threshold, op=lt, first=None):
+  aux = [v]
+  visited.add(v)
+  if first is None:
+   first = v
+  for i in (n for n, w in self.edges.get(v, {}).iteritems()
+     if op(w, threshold) and n not in visited):
+   x, y = self.dfs(i, visited, threshold, op, first)
+   aux.extend(x)
+   visited = visited.union(y)
+  return aux, visited
+
+def main(args):
+ graph = Graph()
+ # first component
+ graph.add_edge(0, 1, 1.0)
+ graph.add_edge(1, 2, 1.0)
+ graph.add_edge(2, 0, 1.0)
+
+ # second component
+ graph.add_edge(3, 4, 1.0)
+ graph.add_edge(4, 5, 1.0)
+ graph.add_edge(5, 3, 1.0)
+
+ first, second = graph.connected_components(op=gt)
+ print first.nodes
+ print second.nodes
+
+if __name__ == '__main__':
+ main(sys.argv)
+ 
+ #4 As others have pointed out, no need to reinvent the wheel. A lot of thought has been put into optimal clustering techniques. Here is one well-known clustering program. 
+ #5 The SVD algorithm is not applicable here, but otherwise Phil H is correct. 
+ #6 Finding an optimal graph partition is an NP-hard problem, so whatever the algorithm, it is going to be a heuristic. Not surprisingly, different clustering algorithms produce (wildly) different results. 
+
+ Python implementation of Newman's modularity algorithm:
+ modularity 
+
+ Also: MCL , MCODE , CFinder , NeMo , clusterONE

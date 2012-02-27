@@ -1,0 +1,347 @@
+<h3>Question (ID-3109289):</h3><h2>how can python function access its own attributes?</h2><p><strong>is it possible to access the python function object attributes from within the function scope?</strong></p>
+
+<p>e.g. let's have</p>
+
+<pre><code>def f():
+    return SOMETHING
+
+f._x = "foo"
+f()           # -&gt; "foo"
+</code></pre>
+
+<p>now, what SOMETHING has to be, if we want to have the _x attribute content "foo" returned? if it's even possible (simply)</p>
+
+<p>thanks</p>
+
+<p><strong>UPDATE:</strong></p>
+
+<p>i'd like the following work also:</p>
+
+<pre><code>g = f
+del f
+g()          # -&gt; "foo"
+</code></pre>
+
+<p><strong>UPDATE 2:</strong></p>
+
+<p>Statement that it is not possible (if it is the case), and why, is more satisfying than providing a way how to fake it e.g. with a different object than a function</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><h2>Solution</h2>
+
+<p>Make one of the function's default arguments be a reference to the function itself.</p>
+
+<pre><code>def f(self):
+    return self.x
+f.func_defaults = (f,)
+</code></pre>
+
+<p>Example usage:</p>
+
+<pre><code>&gt;&gt;&gt; f.x = 17
+&gt;&gt;&gt; b = f
+&gt;&gt;&gt; del f
+&gt;&gt;&gt; b()
+17
+</code></pre>
+
+<h2>Explanation</h2>
+
+<p>The original poster wanted a solution that does not require a global name lookup.  The simple solution</p>
+
+<pre><code>def f():
+    return f.x
+</code></pre>
+
+<p>performs a lookup of the global variable <code>f</code> on each call, which does not meet the requirements.  If <code>f</code> is deleted, then the function fails.  The more complicated <code>inspect</code> proposal fails in the same way.</p>
+
+<p>What we want is to perform <em>early binding</em> and store the bound reference within the object itself.  The following is conceptually what we are doing:</p>
+
+<pre><code>def f(self=f):
+    return self.x
+</code></pre>
+
+<p>In the above, <code>self</code> is a local variable, so no global lookup is performed.  However, we can't write the code as-is, because <code>f</code> is not yet defined when we try to bind the default value of <code>self</code> to it.  Instead, we set the default value after <code>f</code> is defined.</p>
+
+<h2>Decorator</h2>
+
+<p>Here's a simple decorator to do this for you.  Note that the <code>self</code> argument must come last, unlike methods, where <code>self</code> comes first.  This also means that you must give a default value if any of your other arguments take a default value.</p>
+
+<pre><code>def self_reference(f):
+    f.func_defaults = f.func_defaults[:-1] + (f,)
+    return f
+
+@self_reference
+def foo(verb, adverb='swiftly', self=None):
+    return '%s %s %s' % (self.subject, verb, adverb)
+</code></pre>
+
+<p>Example:</p>
+
+<pre><code>&gt;&gt;&gt; foo.subject = 'Fred'
+&gt;&gt;&gt; bar = foo
+&gt;&gt;&gt; del foo
+&gt;&gt;&gt; bar('runs')
+'Fred runs swiftly'
+</code></pre>
+<br /><b>#1</b><br /><p>You could just use a class to do this</p>
+
+<pre><code>&gt;&gt;&gt; class F(object):
+...     def __call__(self, *args, **kw):
+...         return self._x
+... 
+&gt;&gt;&gt; f=F()
+&gt;&gt;&gt; f._x = "foo"
+&gt;&gt;&gt; f()
+'foo'
+&gt;&gt;&gt; g=f
+&gt;&gt;&gt; del f
+&gt;&gt;&gt; g()
+'foo'
+</code></pre>
+<br /><b>#2</b><br /><p>Well, let's look at what function is:</p>
+
+<pre><code>&gt;&gt;&gt; def foo():
+...     return x
+... 
+&gt;&gt;&gt; foo.x = 777
+&gt;&gt;&gt; foo.x
+777
+&gt;&gt;&gt; foo()
+Traceback (most recent call last):
+  File "&lt;interactive input&gt;", line 1, in &lt;module&gt;
+  File "&lt;interactive input&gt;", line 2, in foo
+NameError: global name 'x' is not defined
+&gt;&gt;&gt; dir(foo)
+['__call__', '__class__', '__delattr__', '__dict__', '__doc__', '__get__', 
+'__getattribute__', '__hash__', '__init__', '__module__', '__name__', '__new__', 
+'__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__str__', 
+'func_closure', 'func_code', 'func_defaults', 'func_dict', 'func_doc', 
+'func_globals', 'func_name', 'x']
+&gt;&gt;&gt; getattr(foo, 'x')
+777
+</code></pre>
+
+<p>Aha! So the attribute was added to the function object but it won't see it because it is looking for global <code>x</code> instead.</p>
+
+<p>We can try to grab the frame of the function execution and try to look what's there (essentially what Anthony Kong suggested but w/o <code>inspect</code> module):</p>
+
+<pre><code>&gt;&gt;&gt; def foo():
+...     import sys
+...     return sys._getframe()
+... 
+&gt;&gt;&gt; fr = foo()
+&gt;&gt;&gt; dir(fr)
+['__class__', '__delattr__', '__doc__', '__getattribute__', '__hash__', '__init__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__str__', 'f_back', 'f_builtins', 'f_code', 'f_exc_traceback', 'f_exc_type', 'f_exc_value', 'f_globals', 'f_lasti', 'f_lineno', 'f_locals', 'f_restricted', 'f_trace']
+&gt;&gt;&gt; fr.f_locals
+{'sys': &lt;module 'sys' (built-in)&gt;}
+&gt;&gt;&gt; fr.f_code
+&lt;code object foo at 01753020, file "&lt;interactive input&gt;", line 1&gt;
+&gt;&gt;&gt; fr.f_code.co_code
+'d\x01\x00d\x00\x00k\x00\x00}\x00\x00|\x00\x00i\x01\x00\x83\x00\x00S'
+&gt;&gt;&gt; fr.f_code.co_name
+'foo'
+</code></pre>
+
+<p>Aha! So maybe we can get the name of the function from the name of the code block and then look in round-about way for the attribute? Sure enough:</p>
+
+<pre><code>&gt;&gt;&gt; getattr(fr.f_globals[fr.f_code.co_name], 'x')
+777
+&gt;&gt;&gt; fr.f_globals[fr.f_code.co_name].x
+777
+&gt;&gt;&gt; def foo():
+...     import sys
+...     frm = sys._getframe()
+...     return frm.f_globals[frm.f_code.co_name].x
+... 
+&gt;&gt;&gt; foo.x=777
+&gt;&gt;&gt; foo()
+777
+</code></pre>
+
+<p>That's great! But would it stand the renaming and deletion of original function?</p>
+
+<pre><code>&gt;&gt;&gt; g = foo
+&gt;&gt;&gt; g.func_name
+'foo'
+&gt;&gt;&gt; g.func_code.co_name
+'foo'
+</code></pre>
+
+<p>Ah, very doubtful. The function object and its code object still insist they are called <code>foo</code>. Sure enough, here is where it breaks:</p>
+
+<pre><code>&gt;&gt;&gt; g.x
+777
+&gt;&gt;&gt; g.x=888
+&gt;&gt;&gt; foo.x
+888
+&gt;&gt;&gt; g()
+888
+&gt;&gt;&gt; del foo
+&gt;&gt;&gt; g()
+Traceback (most recent call last):
+  File "&lt;interactive input&gt;", line 1, in &lt;module&gt;
+  File "&lt;interactive input&gt;", line 4, in foo
+KeyError: 'foo'
+</code></pre>
+
+<p>Dang! So in general it can't be done through introspection via the execution frames. The problems seems to be that there is a difference between <em>function object</em> and <em>code object</em> - code objects are what is executed and is just one attribute <code>func_code</code> of the function-object and as such has no access to the <code>func_dict</code> attribute, where our attribute <code>x</code> is:</p>
+
+<pre><code>&gt;&gt;&gt; g
+&lt;function foo at 0x0173AE30&gt;
+&gt;&gt;&gt; type(g)
+&lt;type 'function'&gt;
+&gt;&gt;&gt; g.func_code
+&lt;code object foo at 017532F0, file "&lt;interactive input&gt;", line 1&gt;
+&gt;&gt;&gt; type(g.func_code)
+&lt;type 'code'&gt;
+&gt;&gt;&gt; g.func_dict
+{'x': 888}
+</code></pre>
+
+<p>There is of course other chicanery you can do so that it seems as function - in particular the trick with class definition... but that is not a function per se. It all depends on what do you really need to do with that.</p>
+<br /><b>#3</b><br /><p>As a workaround you could use a factory function to fix your scope:</p>
+
+<pre><code>def factory():
+    def inner():
+        print inner.x
+    return inner
+
+
+&gt;&gt;&gt; foo=factory()
+&gt;&gt;&gt; foo.x=11
+&gt;&gt;&gt; foo()
+11
+&gt;&gt;&gt; bar = foo
+&gt;&gt;&gt; del foo
+&gt;&gt;&gt; bar()
+11
+</code></pre>
+<br /><b>#4</b><br /><p>I doubt this is the <em>best</em> way to accomplish this, but you can access the attributes by using the method's name within the method:</p>
+
+<pre><code>&gt;&gt;&gt; def foo():
+...   print foo.x
+... 
+&gt;&gt;&gt; foo()
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "&lt;stdin&gt;", line 2, in foo
+AttributeError: 'function' object has no attribute 'x'
+&gt;&gt;&gt; foo.x = 5
+&gt;&gt;&gt; foo()
+5
+</code></pre>
+<br /><b>#5</b><br /><p>The answer is rather simple. Just use the fact name is looked for at execution time, not compile time:</p>
+
+<pre><code>def f():
+    return f._x
+
+f._x = "foo"
+f()           # -&gt; "foo"
+</code></pre>
+<br /><b>#6</b><br /><p>Why would you want to do such a thing? Why not passing it as parameter?</p>
+
+<pre><code>def f(SOMETHING):
+    return SOMETHING
+
+f('foo') 
+</code></pre>
+
+<p>Although functions are first class objects, I would not treat them as such in the sense of using properties. This is what classes are for.</p>
+
+<p>It definitely does not increase readability of your code!</p>
+<br /><b>#7</b><br /><p>If you want it to be totally independent of the function name, you need some frame magic. For example:</p>
+
+<pre><code>def f2():
+    import inspect
+    frame = inspect.currentframe()
+    fname = frame.f_code.co_name
+    fobj = frame.f_globals[fname]
+    print fobj._x
+
+
+f2._x = 2
+f2() 
+</code></pre>
+<br /><b>#8</b><br /><p>Here's a decorator that injects current_fun into the functions globals before executing the function. It's quite the hack, but also quite effective.</p>
+
+<pre><code>from functools import wraps
+
+
+def introspective(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        exists = 'current_fun' in f.func_globals
+        old = f.func_globals.get('current_fun',None)
+        f.func_globals['current_fun'] = wrapper
+        try:
+            return f(*args, **kwargs)
+        finally:
+            if exists:
+                f.func_globals['current_fun'] = old
+            else:
+                del f.func_globals['current_fun']
+    return wrapper
+
+@introspective
+def f():
+    print 'func_dict is ',current_fun.func_dict
+    print '__dict__ is ',current_fun.__dict__
+    print 'x is ',current_fun.x
+</code></pre>
+
+<p>Here's a usage example</p>
+
+<pre><code>In [41]: f.x = 'x'
+
+In [42]: f()
+func_dict is  {'x': 'x'}
+__dict__ is  {'x': 'x'}
+x is  x
+
+In [43]: g = f
+
+In [44]: del f
+
+In [45]: g()
+func_dict is  {'x': 'x'}
+__dict__ is  {'x': 'x'}
+x is  x
+</code></pre>
+<br /><b>#9</b><br /><p>This uses a bit of a hackish approach, but it's possibly the most correct so far given that it works with the <code>g()</code> call as well.  It works because it's relying on whatever bytecode inspection is performed by the <a href="http://docs.python.org/release/2.6.5/library/dis.html#module-dis" rel="nofollow">dis</a> module, as a shortcut.</p>
+
+<p>It looks more hackish than it really is partly because the <code>dis.disassemble()</code> call prints to stdout, so I redirect that into a StringIO.  I use <code>disassemble()</code> for its feature of highlighting the last instruction (add a <code>print text</code> line in there to see how it looks) and that makes it easier to grab the previous <code>LOAD_NAME</code> and the variable it used.</p>
+
+<p>It would be possible to use a cleaner bytecode inspection library to do this without using the <code>dis</code> module at all, but this proves that it's possible.  This might not be the most robust approach, but then again maybe it will work in most cases.  I haven't spent enough time poking into Python internals or bytecode to know whether most <code>CALL_FUNCTION</code> bytecodes are preceded immediately by instructions that the regex trick would pick out.</p>
+
+<pre><code>import inspect
+import dis
+import re
+import sys
+import StringIO
+
+def f():
+    caller = inspect.stack()[1][0]
+    sys.stdout = StringIO.StringIO()
+    dis.disassemble(caller.f_code, caller.f_lasti)
+    text = sys.stdout.getvalue()
+    sys.stdout = sys.__stdout__
+    match = re.search(r'LOAD_NAME.*\((.*?)\)\s+--&gt;', text)
+    name = match.group(1)
+    try:
+        func = caller.f_locals[name]
+    except KeyError:
+        func = caller.f_globals[name]
+    return func._x
+
+f._x = 'foo'
+print 'call f():', f()
+g = f
+del f
+print 'call g():', g()
+</code></pre>
+
+<p>This generates the following output:</p>
+
+<pre><code>call f(): foo
+call g(): foo
+</code></pre>
+<br />

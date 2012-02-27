@@ -1,0 +1,188 @@
+Question (ID-50394): What Python way would you suggest to check whois database records? I'm trying to get a webservice up and running that actually requires to check whois databases. What I'm doing right now is ugly and I'd like to avoid it as much as I can: I call gwhois command and parse its output. Ugly. 
+
+ I did some search to try to find a pythonic way to do this task. Generally I got quite much nothing - this old discussion list link has a way to check if domain exist. Quite not what I was looking for... But still, it was best anwser Google gave me - everything else is just a bunch of unanwsered questions. 
+
+ Any of you have succeeded to get some method up and running? I'd very much appreciate some tips, or should I just do it the opensource-way, sit down and code something by myself? :) 
+ Answers (Total-8): #0 Look at this:
+ http://code.google.com/p/pywhois/ 
+
+ pywhois - Python module for retrieving WHOIS information of domains 
+
+ Goal:
+- Create a simple importable Python module which will produce parsed WHOIS data for a given domain.
+- Able to extract data for all the popular TLDs (com, org, net, ...)
+- Query a WHOIS server directly instead of going through an intermediate web service like many others do.
+- Works with Python 2.4+ and no external dependencies 
+
+ Example: 
+
+ &gt;&gt;&gt; import pywhois
+&gt;&gt;&gt; w = pywhois.whois('google.com')
+&gt;&gt;&gt; w.expiration_date
+['14-sep-2011']
+&gt;&gt;&gt; w.emails
+['contact-admin@google.com',
+ 'dns-admin@google.com',
+ 'dns-admin@google.com',
+ 'dns-admin@google.com']
+&gt;&gt;&gt; print w
+...
+ 
+ #1 There's nothing wrong with using a command line utility to do what you want. If you put a nice wrapper around the service, you can implement the internals however you want! For example: 
+
+ class Whois(object):
+ _whois_by_query_cache = {}
+
+ def __init__(self, query):
+  """Initializes the instance variables to defaults. See :meth:`lookup`
+  for details on how to submit the query."""
+  self.query = query
+  self.domain = None
+  # ... other fields.
+
+ def lookup(self):
+  """Submits the `whois` query and stores results internally."""
+  # ... implementation
+ 
+
+ Now, whether or not you roll your own using urllib, wrap around a command line utility (like you're doing), or import a third party library and use that (like you're saying ), this interface stays the same. 
+
+ This approach is generally not considered ugly at all -- sometimes command utilities do what you want and you should be able to leverage them . If speed ends up being a bottleneck, your abstraction makes the process of switching to a native Python implementation transparent to your client code. 
+
+ Practicality beats purity -- that's what's Pythonic. :) 
+ #2 Here is the whois client re-implemented in Python:
+ http://code.activestate.com/recipes/577364-whois-client/ 
+ #3 I don't know if gwhois does something special with the server output; however, you can plainly connect to the whois server on port whois (43), send your query, read all the data in the reply and parse them. To make life a little easier, you could use the telnetlib.Telnet class (even if the whois protocol is much simpler than the telnet protocol) instead of plain sockets. 
+
+ The tricky parts: 
+
+ 
+ which whois server will you ask? RIPE, ARIN, APNIC, LACNIC, AFRINIC, JPNIC, VERIO etc LACNIC could be a useful fallback, since they tend to reply with useful data to requests outside of their domain. 
+ what are the exact options and arguments for each whois server? some offer help, others don't. In general, plain domain names work without any special options. 
+ 
+ #4 import socket
+socket.gethostbyname_ex('url.com')
+ 
+
+ if it returns a gaierror you know know it's not registered with any DNS 
+ #5 Another way to do it is to use urllib2 module to parse some other page's whois service (many sites like that exist). But that seems like even more of a hack that what you do now, and would give you a dependency on whatever whois site you chose, which is bad. 
+
+ I hate to say it, but unless you want to re-implement whois in your program (which would be re-inventing the wheel), running whois on the OS and parsing the output (ie what you are doing now) seems like the right way to do it. 
+ #6 Parsing another webpage woulnd't be as bad (assuming their html woulnd't be very bad), but it would actually tie me to them - if they're down, I'm down :) 
+
+ Actually I found some old project on sourceforge: rwhois.py . What scares me a bit is that their last update is from 2003. But, it might seem as a good place to start reimplementation of what I do right now... Well, I felt obligued to post the link to this project anyway, just for further reference. 
+ #7 here is a ready-to-use solution that works for me; written for Python 3.1 (when backporting to Py2.x, take special care of the bytes / Unicode text distinctions). your single point of access is the method DRWHO.whois() , which expects a domain name to be passed in; it will then try to resolve the name using the provider configured as DRWHO.whois_providers[ '*' ] (a more complete solution could differentiate providers according to the top level domain). DRWHO.whois() will return a dictionary with a single entry text , which contains the response text sent back by the WHOIS server. Again, a more complete solution would then try and parse the text (which must be done separately for each provider, as there is no standard format) and return a more structured format (e.g., set a flag available which specifies whether or not the domain looks available). have fun! 
+
+ ##########################################################################
+import asyncore as         _sys_asyncore
+from asyncore import loop as       _sys_asyncore_loop
+import socket as          _sys_socket
+
+
+
+##########################################################################
+class _Whois_request( _sys_asyncore.dispatcher_with_send, object ):
+ # simple whois requester
+ # original code by Frederik Lundh
+
+ #-----------------------------------------------------------------------
+ whoisPort = 43
+
+ #-----------------------------------------------------------------------
+ def __init__(self, consumer, host, provider ):
+ _sys_asyncore.dispatcher_with_send.__init__(self)
+ self.consumer = consumer
+ self.query = host
+ self.create_socket( _sys_socket.AF_INET, _sys_socket.SOCK_STREAM )
+ self.connect( ( provider, self.whoisPort, ) )
+
+ #-----------------------------------------------------------------------
+ def handle_connect(self):
+ self.send( bytes( '%s\r\n' % ( self.query, ), 'utf-8' ) )
+
+ #-----------------------------------------------------------------------
+ def handle_expt(self):
+ self.close() # connection failed, shutdown
+ self.consumer.abort()
+
+ #-----------------------------------------------------------------------
+ def handle_read(self):
+ # get data from server
+ self.consumer.feed( self.recv( 2048 ) )
+
+ #-----------------------------------------------------------------------
+ def handle_close(self):
+ self.close()
+ self.consumer.close()
+
+
+##########################################################################
+class _Whois_consumer( object ):
+ # original code by Frederik Lundh
+
+ #-----------------------------------------------------------------------
+ def __init__( self, host, provider, result ):
+ self.texts_as_bytes = []
+ self.host   = host
+ self.provider  = provider
+ self.result   = result
+
+ #-----------------------------------------------------------------------
+ def feed( self, text ):
+ self.texts_as_bytes.append( text.strip() )
+
+ #-----------------------------------------------------------------------
+ def abort(self):
+ del self.texts_as_bytes[:]
+ self.finalize()
+
+ #-----------------------------------------------------------------------
+ def close(self):
+ self.finalize()
+
+ #-----------------------------------------------------------------------
+ def finalize( self ):
+ # join bytestrings and decode them (witha a guessed encoding):
+ text_as_bytes   = b'\n'.join( self.texts_as_bytes )
+ self.result[ 'text' ] = text_as_bytes.decode( 'utf-8' )
+
+
+##########################################################################
+class DRWHO:
+
+ #-----------------------------------------------------------------------
+ whois_providers = {
+ '~isa': 'DRWHO/whois-providers',
+ '*':  'whois.opensrs.net', }
+
+ #-----------------------------------------------------------------------
+ def whois( self, domain ):
+ R   = {}
+ provider = self._get_whois_provider( '*' )
+ self._fetch_whois( provider, domain, R )
+ return R
+
+ #-----------------------------------------------------------------------
+ def _get_whois_provider( self, top_level_domain ):
+ providers = self.whois_providers
+ R   = providers.get( top_level_domain, None )
+ if R is None:
+  R = providers[ '*' ]
+ return R
+
+ #-----------------------------------------------------------------------
+ def _fetch_whois( self, provider, domain, pod ):
+ #.....................................................................
+ consumer = _Whois_consumer(   domain, provider, pod )
+ request = _Whois_request( consumer, domain, provider )
+ #.....................................................................
+ _sys_asyncore_loop() # loops until requests have been processed
+
+
+#=========================================================================
+DRWHO = DRWHO()
+
+
+domain = 'example.com'
+whois  = DRWHO.whois( domain )
+print( whois[ 'text' ] )

@@ -1,0 +1,85 @@
+<h3>Question ( ID-2234303 ) : </h3><h2>Emulate <span style="background-color:yellow;">floating</span> point string conversion behaviour of Linux on Windows </h2><p>I 've encountered an annoying problem in outputting a <span style="background-color:yellow;">floating</span> point number. When I <span style="background-color:yellow;">format</span> 11.545 with a precision of 2 <span style="background-color:yellow;">decimal</span> points on Windows it outputs " 11.55 " , as I would expect. However , when I do the same on Linux the output is " 11.54 " ! </p>
+<p>I originally encountered the problem in Python , but <span style="background-color:yellow;">further</span> investigation showed that the difference is in the underlying C runtime library. ( The architecture is x86-x64 in both cases. ) Running the <span style="background-color:yellow;">following</span> line of C produces the different results on Windows and Linux , same as it does in Python . </p>
+<pre><code>printf("%.2f", 11.545);
+</code></pre>
+<p>To shed more light on this I printed the number to 20 <span style="background-color:yellow;">decimal</span> places ( " % .20f " ) : </p>
+<pre><code>Windows: 11.54500000000000000000
+Linux:   11.54499999999999992895
+</code></pre>
+<p>I know that 11.545 can not be stored precisely as a binary number. So what appears to be happening is that Linux outputs the number it 's actually stored with the best possible precision , while Windows outputs the simplest <span style="background-color:yellow;">decimal</span> representation of it , ie. tries to guess what the user most likely meant . </p>
+<p>My question is : is there any ( reasonable ) way to emulate the Linux behaviour on Windows ? </p>
+<p>( While the Windows behaviour is certainly the intuitive one , in my case I actually need to compare the output of a Windows program with that of a Linux program and the Windows one is the only one I can change. By the way , I tried to look at the Windows source of printf , but the actual <span style="background-color:yellow;">function</span> that does the <span style="background-color:yellow;">float-&gt</span> ; string conversion is _cfltcvt_l and its source does n't appear to be available. ) </p>
+<p>EDIT : the plot thickens ! The theory about this being caused by an imprecise representation might be wrong , because 0.125 does have an exact binary representation and it 's still different when output with ' % .2f ' % 0.125 : </p>
+<pre><code>Windows: 0.13
+Linux:   0.12
+</code></pre>
+<p>However , round ( 0.125 , 2 ) returns 0.13 on both Windows and Linux . </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>First of all it sounds like Windows has it wrong right in this case ( not that this really matters ) . The C Standard requires that the value output by % .2f is rounded to the appropriate number of digits . The best known algorithm <span style="background-color:yellow;">for</span> this is dtoa implemented by David M. Gay . You can probably port this to Windows or <span style="background-color:yellow;">find</span> a native implementation . </p>
+<p>If you have n't already read " How to Print Floating-Point Numbers Accurately " by Steele and White , <span style="background-color:yellow;">find</span> a copy and read it. It is definitely an enlightening read. Make sure to <span style="background-color:yellow;">find</span> the original <span style="background-color:yellow;">from</span> the late 70 's. I think that I purchased mine <span style="background-color:yellow;">from</span> ACM or IEEE at some point . </p>
+<br /><b># 1 </b><br /><p>I do n't think Windows is doing anything especially clever ( like trying to reinterpret the <span style="background-color:yellow;">float</span> in base 10 ) here : I 'd guess that it 's simply computing the <span style="background-color:yellow;">first</span> 17 significant digits accurately ( which would give '11.545000000000000 ' ) and then tacking extra zeros on the end to make up the requested number of places after the point . </p>
+<p>As others have said , the different results <span style="background-color:yellow;">for</span> 0.125 come <span style="background-color:yellow;">from</span> Windows using round-half-up and Linux using round-half-to-even . </p>
+<p>Note that <span style="background-color:yellow;">for</span> Python 3.1 ( and Python 2.7 , when it appears ) , the result of <span style="background-color:yellow;">formatting</span> a <span style="background-color:yellow;">float</span> will be platform independent ( except possibly on unusual platforms ) . </p>
+<br /><b># 2 </b><br /><p>The <span style="background-color:yellow;">decimal</span> module gives you access to several rounding modes : </p>
+<pre><code>import decimal
+
+fs = ['11.544','11.545','11.546']
+
+def convert(f,nd):
+    # we want 'nd' beyond the dec point
+    nd = f.find('.') + nd
+    c1 = decimal.getcontext().copy()
+    c1.rounding = decimal.ROUND_HALF_UP
+    c1.prec = nd
+    d1 = c1.create_decimal(f)
+    c2 = decimal.getcontext().copy()
+    c2.rounding = decimal.ROUND_HALF_DOWN
+    c2.prec = nd   
+    d2 = c2.create_decimal(f)
+    print d1, d2
+
+for f in fs:
+    convert(f,2)
+</code></pre>
+<p>You can construct a <span style="background-color:yellow;">decimal</span> <span style="background-color:yellow;">from</span> an int or a string. In your case <span style="background-color:yellow;">feed</span> it a string with more digits than you want and truncate by setting context.prec . </p>
+<p>Here is a link to a pymotw post w/ a detailed overview of the <span style="background-color:yellow;">decimal</span> module : </p>
+<p>http : //broadcast.oreilly.com/2009/08/pymotw-decimal---fixed-and-flo.html </p>
+<br /><b># 3 </b><br /><p>Consider comparing <span style="background-color:yellow;">floating</span> point numbers with some tolerance/epsilon instead. This is much more robust than trying to match exactly . </p>
+<p>What I mean is , except saying that two <span style="background-color:yellow;">floats</span> are equal when : </p>
+<pre><code>f1 == f2
+</code></pre>
+<p>Say they 're equal when : </p>
+<pre><code>fabs(f1 - f2) < eps
+</code></pre>
+<p>For some small eps . More details on this issue can be <span style="background-color:yellow;">found</span> here . </p>
+<br /><b># 4 </b><br /><p>You could try subtracting ( or adding <span style="background-color:yellow;">for</span> a negative number ) a small delta that will have no effect on the rounding <span style="background-color:yellow;">for</span> numbers <span style="background-color:yellow;">far</span> enough away <span style="background-color:yellow;">from</span> the precision . </p>
+<p>For example , if you 're rounding with % .2f , try this version on Windows : </p>
+<pre><code>printf("%.2f", 11.545 - 0.001);
+</code></pre>
+<p>Floating point numbers are notoriously problematic if you do n't know what 's happening under the covers. In that case , your best bet is to write ( or use ) a <span style="background-color:yellow;">decimal</span> type library to alleviate the problems . </p>
+<hr />
+<p>The example program : </p>
+<pre><code>#include <stdio.h>
+int main (void) {
+    printf("%.20f\n", 11.545);
+    printf("%.2f\n", 11.545);
+    printf("%.2f\n", 11.545 + 0.001);
+    return 0;
+}
+</code></pre>
+<p>outputs this in my Cygwin environment : </p>
+<pre><code>11.54499999999999992895
+11.54
+11.55
+</code></pre>
+<p>which is okay <span style="background-color:yellow;">for</span> your specific case ( it 's going the wrong way but should hopefully apply in the other direction as well : you need to test it ) but you should check your entire possible input range if you want to be certain this will work <span style="background-color:yellow;">for</span> all your cases . </p>
+<hr />
+<p>Update : </p>
+<p>Evgeny , based on your comment : </p>
+<blockquote>It works <span style="background-color:yellow;">for</span> this specific case , but not as a general solution. For instance if the number I want to <span style="background-color:yellow;">format</span> is 0.545 instead of 11.545 then ' % .2f ' % ( 0.545 - 0.001 ) returns " 0.54 " , while ' % .2f ' % 0.545 on Linux correctly returns " 0.55 " . </blockquote>
+<p>that 's why I said you would have to check the entire range to see if it would work , and why I stated a <span style="background-color:yellow;">decimal</span> data type would be preferable . </p>
+<p>If you want <span style="background-color:yellow;">decimal</span> accuracy , that 's what you 'll have to do. But you might want to consider the cases in that range where Linux goes the other way too ( as per your comment ) - there may be situation where Linux and Windows disagree in the opposite direction to what you 've <span style="background-color:yellow;">found</span> - a <span style="background-color:yellow;">decimal</span> type probably wo n't solve that . </p>
+<p>You may need to make your comparison tools a little more intelligent inasmuch as they can ignore a difference of 1 in the <span style="background-color:yellow;">final</span> <span style="background-color:yellow;">fractional</span> place . </p>
+<br /><b># 5 </b><br /><p>You may be able to do subtract a tiny amount <span style="background-color:yellow;">from</span> the value to <span style="background-color:yellow;">force</span> the rounding down </p>
+<pre><code>print "%.2f"%(11.545-1e-12)
+</code></pre>
+<br />

@@ -1,0 +1,53 @@
+Question (ID-1353206): Django: How can you stop long queries from killing your database? I'm using Django 1.1 with Mysql 5.* and MyISAM tables. 
+
+ Some of my queries can take a TON of time for outliers in my data set. These lock the tables and shut the site down. Other times it seems some users cancel the request before it is done and some queries will be stuck in the "Preparing" phase locking all other queries out. 
+
+ I'm going to try to track down all the corner cases, but its nice to have a safety net so the site doesn't come down. 
+
+ How do I avoid this? Can I set maximum query times? 
+ Answers (Total-6): #0 Unfortunately MySQL doesn't allow you an easy way to avoid this. A common method is basically to write a script that checks all running processes every X seconds (based on what you think is "long") and kill ones it sees are running too long. You can at least get some basic diagnostics, however, by setting log_slow_queries in MySQL which will write all queries that take longer than 10 seconds into a log. If that's too long for what you regard as "slow" for your purposes, you can set long_query_time to a value other than 10 to change the threshold. 
+ #1 It seems that the only reliable way to abort a query is the kill command . A less drastic measure is to close the connection (and reopen a new one); this will terminate queries as soon as they try to send some output to the client. 
+ #2 Do you know what the queries are? Maybe you could optimise the SQL or put some indexes on your tables? 
+ #3 I'm doing a Django DB-replication app and have the same predicament, queries across a WAN can sometimes just seem to hang if the network latency increases. 
+
+ From http://code.activestate.com/recipes/576780/ 
+
+ Recipe 576780: Timeout for (nearly) any callable 
+
+ Create a time limited version of any callable. 
+
+  For example, to limit function f to t seconds,
+ first create a time limited version of f.
+
+  from timelimited import *
+
+  f_t = TimeLimited(f, t)
+
+ Then, instead of invoking f(...), use f_t like
+
+  try:
+   r = f_t(...)
+  except TimeLimitExpired:
+   r = ... # timed out
+ 
+
+ Use it the following way for example: 
+
+ def _run_timed_query(cursor, log_msg, timeout, query_string, *query_args):
+ """Run a timed query, do error handling and logging"""
+ import sys
+ import traceback
+ from timelimited import *
+
+ try:
+  return TimeLimited(cursor.execute, timeout)(query_string, *query_args)
+ except TimeLimitExpired:
+  logger_ec.error('%s; Timeout error.' % log_msg)
+  raise TimeLimitExpired
+ except:
+  (exc_type, exc_info, tb) = sys.exc_info()
+  logger_ec.error('%s; %s.' % (log_msg, traceback.format_exception(exc_type, exc_info, None)[0]))
+  raise exc_type
+ 
+ #4 Use InnoDB Tables, they do row-locking instead of table-locking . 
+ #5 You shouldn't write queries like that, at least not to run against your live database. Mysql has a "slow queries" pararameter which you can use to identify the queries that are killing you. Most of the time, these slow queries are either buggy or can be speeded up by defining a new index or two.

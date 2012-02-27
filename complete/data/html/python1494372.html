@@ -1,0 +1,350 @@
+<h3>Question (ID-1494372):</h3><h2>asn.1 parser in C/Python</h2><p>I am looking for a solution to parse asn.1 spec files and generate a decoder from those.</p>
+
+<p>Ideally I would like to work with Python modules, but if nothing is available I would use C/C++ libraries and interface them with Python with the plethora of solutions out there.</p>
+
+<p>In the past I have been using pyasn1 and building everything by hand but that has become too unwieldly. </p>
+
+<p>I have also looked superficially to libtasn1 and asn1c. The first one had problems parsing even the simplest of files. The second has a good parser but generating C code for decoding seems too complex; the solution worked well with straightforward specs but choked on complex ones. </p>
+
+<p>Any other good alternatives I may have overlooked?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I wrote such parser a few years ago. It generates python classes for pyasn1 library. I used in on ericsson doc to make parser for their CDRs.</p>
+
+<p>I'll try posting the code here now.</p>
+
+<pre><code>import sys
+from pyparsing import *
+
+OpenBracket = Regex("[({]").suppress()
+CloseBracket = Regex("[)}]").suppress()
+
+def Enclose(val):
+  return OpenBracket + val + CloseBracket
+
+def SetDefType(typekw):
+  def f(a, b, c):
+    c["defType"] = typekw
+  return f
+
+def NoDashes(a, b, c):
+  return c[0].replace("-", "_")
+
+def DefineTypeDef(typekw, typename, typedef):
+  return typename.addParseAction(SetDefType(typekw)).setResultsName("definitionType") - \
+    Optional(Enclose(typedef).setResultsName("definition"))
+
+
+
+SizeConstraintBodyOpt = Word(nums).setResultsName("minSize") - \
+  Optional(Suppress(Literal("..")) - Word(nums + "n").setResultsName("maxSize"))
+
+SizeConstraint = Group(Keyword("SIZE").suppress() - Enclose(SizeConstraintBodyOpt)).setResultsName("sizeConstraint")
+
+Constraints = Group(delimitedList(SizeConstraint)).setResultsName("constraints")
+
+DefinitionBody = Forward()
+
+TagPrefix = Enclose(Word(nums).setResultsName("tagID")) - Keyword("IMPLICIT").setResultsName("tagFormat")
+
+OptionalSuffix = Optional(Keyword("OPTIONAL").setResultsName("isOptional"))
+JunkPrefix = Optional("--F--").suppress()
+AName = Word(alphanums + "-").setParseAction(NoDashes).setResultsName("name")
+
+SingleElement = Group(JunkPrefix - AName - Optional(TagPrefix) - DefinitionBody.setResultsName("typedef") - OptionalSuffix)
+
+NamedTypes = Dict(delimitedList(SingleElement)).setResultsName("namedTypes")
+
+SetBody = DefineTypeDef("Set", Keyword("SET"), NamedTypes)
+SequenceBody = DefineTypeDef("Sequence", Keyword("SEQUENCE"), NamedTypes)
+ChoiceBody = DefineTypeDef("Choice", Keyword("CHOICE"), NamedTypes)
+
+SetOfBody = (Keyword("SET") + Optional(SizeConstraint) + Keyword("OF")).setParseAction(SetDefType("SetOf")) + Group(DefinitionBody).setResultsName("typedef")
+SequenceOfBody = (Keyword("SEQUENCE") + Optional(SizeConstraint) + Keyword("OF")).setParseAction(SetDefType("SequenceOf")) + Group(DefinitionBody).setResultsName("typedef")
+
+CustomBody = DefineTypeDef("constructed", Word(alphanums + "-").setParseAction(NoDashes), Constraints)
+NullBody = DefineTypeDef("Null", Keyword("NULL"), Constraints)
+
+OctetStringBody = DefineTypeDef("OctetString", Regex("OCTET STRING"), Constraints)
+IA5StringBody = DefineTypeDef("IA5String", Keyword("IA5STRING"), Constraints)
+
+EnumElement = Group(Word(printables).setResultsName("name") - Enclose(Word(nums).setResultsName("value")))
+NamedValues = Dict(delimitedList(EnumElement)).setResultsName("namedValues")
+EnumBody = DefineTypeDef("Enum", Keyword("ENUMERATED"), NamedValues)
+
+BitStringBody = DefineTypeDef("BitString", Keyword("BIT") + Keyword("STRING"), NamedValues)
+
+DefinitionBody &lt;&lt; (OctetStringBody | SetOfBody | SetBody | ChoiceBody | SequenceOfBody | SequenceBody | EnumBody | BitStringBody | IA5StringBody | NullBody | CustomBody)
+
+Definition = AName - Literal("::=").suppress() - Optional(TagPrefix) - DefinitionBody
+
+Definitions = Dict(ZeroOrMore(Group(Definition)))
+
+pf = Definitions.parseFile(sys.argv[1])
+
+TypeDeps = {}
+TypeDefs = {}
+
+def SizeConstraintHelper(size):
+  s2 = s1 = size.get("minSize")
+  s2 = size.get("maxSize", s2)
+  try:
+    return("constraint.ValueSizeConstraint(%s, %s)" % (int(s1), int(s2)))
+  except ValueError:
+    pass
+
+ConstraintMap = {
+  'sizeConstraint' : SizeConstraintHelper,
+}
+
+def ConstraintHelper(c):
+  result = []
+  for key, value in c.items():
+    r = ConstraintMap[key](value)
+    if r:
+      result.append(r)
+  return result
+
+def GenerateConstraints(c, ancestor, element, level=1):
+  result = ConstraintHelper(c)
+  if result:
+    return [ "subtypeSpec = %s" % " + ".join(["%s.subtypeSpec" % ancestor] + result) ]
+  return []
+
+def GenerateNamedValues(definitions, ancestor, element, level=1):
+  result = [ "namedValues = namedval.NamedValues(" ]
+  for kw in definitions:
+    result.append("  ('%s', %s)," % (kw["name"], kw["value"]))
+  result.append(")")
+  return result
+
+OptMap = {
+  False: "",
+  True: "Optional",
+}
+
+def GenerateNamedTypesList(definitions, element, level=1):
+  result = []
+  for val in definitions:
+    name = val["name"]
+    typename = None
+
+    isOptional = bool(val.get("isOptional"))
+
+    subtype = []
+    constraints = val.get("constraints")
+    if constraints:
+      cg = ConstraintHelper(constraints)
+      subtype.append("subtypeSpec=%s" % " + ".join(cg))
+    tagId = val.get("tagID")
+    if tagId:
+      subtype.append("implicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, %s)" % tagId)
+
+    if subtype:
+      subtype = ".subtype(%s)" % ", ".join(subtype)
+    else:
+      subtype = ""
+
+    cbody = []
+    if val["defType"] == "constructed":
+      typename = val["typedef"]
+      element["_d"].append(typename)
+    elif val["defType"] == "Null":
+      typename = "univ.Null"
+    elif val["defType"] == "SequenceOf":
+      typename = "univ.SequenceOf"
+      print val.items()
+      cbody = [ "  componentType=%s()" % val["typedef"]["definitionType"] ]
+    elif val["defType"] == "Choice":
+      typename = "univ.Choice"
+      indef = val.get("definition")
+      if indef:
+        cbody = [ "  %s" % x for x in GenerateClassDefinition(indef, name, typename, element) ]
+    construct = [ "namedtype.%sNamedType('%s', %s(" % (OptMap[isOptional], name, typename), ")%s)," % subtype ]
+    if not cbody:
+      result.append("%s%s%s" % ("  " * level, construct[0], construct[1]))
+    else:
+      result.append("  %s" % construct[0])
+      result.extend(cbody)
+      result.append("  %s" % construct[1])
+  return result
+
+
+
+def GenerateNamedTypes(definitions, ancestor, element, level=1):
+  result = [ "componentType = namedtype.NamedTypes(" ]
+  result.extend(GenerateNamedTypesList(definitions, element))
+  result.append(")")
+  return result
+
+
+defmap = {
+  'constraints' : GenerateConstraints,
+  'namedValues' : GenerateNamedValues,
+  'namedTypes' : GenerateNamedTypes,
+}
+
+def GenerateClassDefinition(definition, name, ancestor, element, level=1):
+  result = []
+  for defkey, defval in definition.items():
+    if defval:
+      fn = defmap.get(defkey)
+      if fn:
+        result.extend(fn(defval, ancestor, element, level))
+  return ["  %s" % x for x in result]
+
+def GenerateClass(element, ancestor):
+  name = element["name"]
+
+  top = "class %s(%s):" % (name, ancestor)
+  definition = element.get("definition")
+  body = []
+  if definition:
+    body = GenerateClassDefinition(definition, name, ancestor, element)
+  else:
+    typedef = element.get("typedef")
+    if typedef:
+      element["_d"].append(typedef["definitionType"])
+      body.append("  componentType = %s()" % typedef["definitionType"])
+      szc = element.get('sizeConstraint')
+      if szc:
+        body.extend(GenerateConstraints({ 'sizeConstraint' : szc }, ancestor, element))
+
+  if not body:
+    body.append("  pass")
+
+  TypeDeps[name] = list(frozenset(element["_d"]))
+
+  return "\n".join([top] + body)
+
+StaticMap = {
+  "Null" : "univ.Null",
+  "Enum" : "univ.Enumerated",
+  "OctetString" : "univ.OctetString",
+  "IA5String" : "char.IA5String",
+  "Set" : "univ.Set",
+  "Sequence" : "univ.Sequence",
+  "Choice" : "univ.Choice",
+  "SetOf" : "univ.SetOf",
+  "BitString" : "univ.BitString",
+  "SequenceOf" : "univ.SequenceOf",
+}
+
+def StaticConstructor(x):
+  x["_d"] = []
+  if x["defType"] == "constructed":
+    dt = x["definitionType"]
+    x["_d"].append(dt)
+  else:
+    dt = StaticMap[x["defType"]]
+  return GenerateClass(x, dt)
+
+
+for element in pf:
+  TypeDefs[element["name"]] = StaticConstructor(element)
+
+while TypeDefs:
+  ready = [ k for k, v in TypeDeps.items() if len(v) == 0 ]
+  if not ready:
+    x = list()
+    for a in TypeDeps.values():
+      x.extend(a)
+    x = frozenset(x) - frozenset(TypeDeps.keys())
+
+    print TypeDefs
+
+    raise ValueError, sorted(x)
+
+  for t in ready:
+    for v in TypeDeps.values():
+      try:
+        v.remove(t)
+      except ValueError:
+        pass
+
+    del TypeDeps[t]
+    print TypeDefs[t]
+    print
+    print
+
+    del TypeDefs[t]
+</code></pre>
+
+<p>This will take a file with syntax, similar to this one:</p>
+
+<pre><code>CarrierInfo ::= OCTET STRING (SIZE(2..3))
+ChargeAreaCode ::= OCTET STRING (SIZE(3))
+ChargeInformation ::= OCTET STRING (SIZE(2..33))
+ChargedParty ::= ENUMERATED
+
+ (chargingOfCallingSubscriber  (0),
+  chargingOfCalledSubscriber   (1),
+  noCharging                   (2))
+ChargingOrigin ::= OCTET STRING (SIZE(1))
+Counter ::= OCTET STRING (SIZE(1..4))
+Date ::= OCTET STRING (SIZE(3..4))
+</code></pre>
+
+<p>You will need to add this line on top of the generated file:</p>
+
+<pre><code>from pyasn1.type import univ, namedtype, namedval, constraint, tag, char
+</code></pre>
+
+<p>And name the result defs.py. Then, I attached a bunch of prettyprinters to the defs (if you don't have just skip it)</p>
+
+<pre><code>import defs, parsers
+
+def rplPrettyOut(self, value):
+  return repr(self.decval(value))
+
+for name in dir(parsers):
+  if (not name.startswith("_")) and hasattr(defs, name):
+    target = getattr(defs, name)
+    target.prettyOut = rplPrettyOut
+    target.decval = getattr(parsers, name)
+</code></pre>
+
+<p>Then, it's down to:</p>
+
+<pre><code>  def ParseBlock(self, block):
+    while block and block[0] != '\x00':
+      result, block = pyasn1.codec.ber.decoder.decode(block, asn1Spec=parserimp.defs.CallDataRecord())
+      yield result
+</code></pre>
+
+<p>If you're still interested I'll put the code somewhere. In fact, I'll put it somewhere in any case - but if you're interested just let me know and I'll point you there.</p>
+<br /><b>#1</b><br /><p>Never tried them but:</p>
+
+<ul>
+<li><a href="http://asn1c.sourceforge.net/" rel="nofollow">asn1c</a></li>
+<li><a href="http://svn.debian.org/wsvn/collab-maint/deb-maint/snacc/" rel="nofollow">snacc</a></li>
+</ul>
+
+<p>Both seems to do what you want (C, not Python).</p>
+<br /><b>#2</b><br /><p>There is an <a href="http://www.antlr.org/grammar/1231433381400/ASN.g" rel="nofollow">ANTLR ASN.1 grammar</a>; using ANTLR, you should be able to make an ASN.1 parser out of it. Generating code for pyasn1 is left as an exercise to the poster :-)</p>
+<br /><b>#3</b><br /><p>I have done a similar job using asn1c and building around it a Pyrex extension. The wrapped structure is described in <a href="http://www.3gpp.org/ftp/Specs/html-info/32401.htm" rel="nofollow">3GPP TS 32.401</a>.</p>
+
+<p>With Pyrex you can write a wrapper thick enough to convert between native Python data types and the correct ASN.1 representations (wrapper generators, such SWIG, tend to not perform complex operations on the type). The wrapper I wrote also tracked the ownership of the underlying C data structures (e.g. accessing to a sub-structure, a Python object was returned, but there was no copy of the underlying data, only reference sharing).</p>
+
+<p>The wrapper was eventually written in a kind of semi-automatic way, but because that has been my only job with ASN.1 I never did the step of completely automatize the code generation.</p>
+
+<p>You can try to use other Python-C wrappers and perform a completely automatic conversion: the job would be less, but then you would move complexity (and repetitive error-prone operations) to the structure users: for this reason I preferred the Pyrex way. asn1c was definitely a good choice.</p>
+<br /><b>#4</b><br /><p>I have experience with <a href="http://pyasn1.sourceforge.net/" rel="nofollow">pyasn1</a> and it's enough to parse quite complex grammars. A grammar is expressed with python structure, so no need to run code generator.</p>
+<br /><b>#5</b><br /><p>I'm the author of LEPL, a parser written in Python, and what you want to do is one of the things on my "TODO" list.</p>
+
+<p>I will not be doing this soon, but you might consider using LEPL to construct your solution because:</p>
+
+<p>1 - it's a pure Python solution (which makes life simpler)</p>
+
+<p>2 - it can already parse binary data as well as text, so you would only need to use a single tool - the same parser that you would use to parse the ASN1 spec would then be used to parse the binary data</p>
+
+<p>The main downsides are that:</p>
+
+<p>1 - it's a fairly new package, so it may be buggier than some, and the support community is not that large</p>
+
+<p>2 - it is restricted to Python 2.6 and up (and the binary parser only works with Python 3 and up).</p>
+
+<p>For more information, please see <a href="http://www.acooke.org/lepl" rel="nofollow">http://www.acooke.org/lepl</a> - in particular,for binary parsing see the relevant section of the manual (I cannot link directly to that as Stack Overflow seems to think I am spamming)</p>
+
+<p>Andrew</p>
+
+<p>PS  The main reason this is not something I have already started is that the ASN 1 specs are not freely available, as far as I know.  If you have access to them, and it is not illegal(!), a copy would be greatly appreciated (unfortunately I am currently working on another project, so this would still take time to implement, but it would help me get this working sooner...).</p>
+<br />

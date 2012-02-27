@@ -1,0 +1,93 @@
+<h3>Question ( ID-2466401 ) : </h3><h2>How to generate SSH <span style="background-color:yellow;">key</span> pairs with Python </h2><p>I 'm attempting to write a script to generate SSH Identity <span style="background-color:yellow;">key</span> pairs for me . </p>
+<pre><code>from M2Crypto import RSA
+key = RSA.gen_key(1024, 65337)
+key.save_key("/tmp/my.key", cipher=None)
+</code></pre>
+<p>The file /tmp/my.key looks great now . </p>
+<p>By running ssh-keygen -y -f /tmp/my.key &gt ; /tmp/my.key.pub I can extract the public <span style="background-color:yellow;">key</span> . </p>
+<p>My question is how can I extract the public <span style="background-color:yellow;">key</span> from python ? Using <span style="background-color:yellow;">key.save_pub_key</span> ( " /tmp/my.key.pub " ) saves something like : </p>
+<pre><code>-----BEGIN PUBLIC KEY-----
+MFwwDQYJKoZIhvcNAQEBBQADASDASDASDASDBarYRsmMazM1hd7a+u3QeMP
+...
+FZQ7Ic+BmmeWHvvVP4Yjyu1t6vAut7mKkaDeKbT3yiGVUgAEUaWMXqECAwEAAQ==
+-----END PUBLIC KEY-----
+</code></pre>
+<p>When I 'm looking for something like : </p>
+<pre><code>ssh-rsa AAAABCASDDBM$%3WEAv/3%$F ..... OSDFKJSL43$%^DFg==
+</code></pre>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>How about using <span style="background-color:yellow;">subprocess</span> to invoke ssh-keygen ? </p>
+<pre><code>from subprocess import Popen, PIPE
+import shlex
+
+def get_pub_key(path):
+    args = shlex.split('ssh-keygen -y -f')
+    args.append(path)
+    p = Popen(args, stdout=PIPE)
+    stdout = p.communicate()[0]
+    if p.returncode != 0:
+        raise Exception("Error handling would be nice, eh?")
+    return stdout.strip()
+
+print get_pub_key('/tmp/my.key')
+</code></pre>
+<p>The above little program will produce an output like this : </p>
+<pre>ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA ... 9Jbn6D74JOKpaOU050ltyNRw==
+</pre>
+<br /><b># 1 </b><br /><p>The <span style="background-color:yellow;">key</span> used by ssh is just <span style="background-color:yellow;">base64</span> encoded , i do n't know <span style="background-color:yellow;">M2Crypto</span> very much , but after a quick overview it seems you could do what you want this way : </p>
+<pre><code>import os
+from base64 import b64encode
+from M2Crypto import RSA            
+
+key = RSA.gen_key(1024, 65537)
+raw_key = key.pub()[1]
+b64key = b64encode(raw_key)
+
+username = os.getlogin()
+hostname = os.uname()[1]
+keystring = 'ssh-rsa %s %s@%s' % (b64key, username, hostname)
+
+with open(os.getenv('HOME')+'/.ssh/id_rsa.pub') as keyfile:
+    keyfile.write(keystring)
+</code></pre>
+<p>I did n't test the generated <span style="background-color:yellow;">key</span> with SSH , so please let me know if it works ( it should i think ) </p>
+<br /><b># 2 </b><br /><p>I do n't know the specifics of the SSH pubkey file , but comparing the <span style="background-color:yellow;">base64</span> decoded version of ssh-keygen output to the contents of <span style="background-color:yellow;">key.pub</span> ( ) the format of the <span style="background-color:yellow;">keyfile</span> is </p>
+<pre><code>b64encode('\x00\x00\x00\x07ssh-rsa%s%s' % (key.pub()[0], key.pub()[1]))
+</code></pre>
+<br /><b># 3 </b><br /><p>Can you get the AAAA...Dfg = = string out of it while it 's an object ? If so , you could simply open a file yourself and save that instead of using the built in save_pub_key function . </p>
+<br /><b># 4 </b><br /><p>Just guessing... but have you tried something like this ? : </p>
+<pre><code>print "ssh-rsa " + "".join([ l.strip() for l in open('/tmp/my.key.pub') if not l.startswith('-----')])
+</code></pre>
+<br /><b># 5 </b><br /><p>I do n't know of such a library in Python . </p>
+<p>You might find the paramiko library useful ( also available from PyPI ) . It implements the SSH protocol , and has functionality for handling existing <span style="background-color:yellow;">keys</span> , but not generating them . </p>
+<p>Generation of <span style="background-color:yellow;">keys</span> might be a useful addition to that library ( you could work with the developers to incorporate it into the library ) , and an easier start than doing it from scratch . </p>
+<br /><b># 6 </b><br /><p>This code works for me : </p>
+<pre><code>import os
+from Crypto.PublicKey import RSA
+
+key = RSA.generate(2048, os.urandom)
+
+# Create public key.                                                                                                                                               
+ssh_rsa = '00000007' + base64.b16encode('ssh-rsa')
+
+# Exponent.                                                                                                                                                        
+exponent = '%x' % (key.e, )
+if len(exponent) % 2:
+    exponent = '0' + exponent
+
+ssh_rsa += '%08x' % (len(exponent) / 2, )
+ssh_rsa += exponent
+
+modulus = '%x' % (key.n, )
+if len(modulus) % 2:
+    modulus = '0' + modulus
+
+if modulus[0] in '89abcdef':
+    modulus = '00' + modulus
+
+ssh_rsa += '%08x' % (len(modulus) / 2, )
+ssh_rsa += modulus
+
+public_key = 'ssh-rsa %s' % (
+    base64.b64encode(base64.b16decode(ssh_rsa.upper())), )
+</code></pre>
+<br />

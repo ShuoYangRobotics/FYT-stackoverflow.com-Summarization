@@ -1,0 +1,107 @@
+Question (ID-1687344): How do you generate random unique identifiers in a multi process and multi thread environment? Every solution I come up with is not thread save. 
+
+ def uuid(cls,db):
+ u = hexlify(os.urandom(8)).decode('ascii')
+ db.execute('SELECT sid FROM sessions WHERE sid=?',(u,))
+ if db.fetch(): u=cls.uuid(db)
+ else: db.execute('INSERT INTO sessions (sid) VALUES (?)',(u,))
+ return u
+ 
+ Answers (Total-9): #0 import os, threading, Queue
+
+def idmaker(aqueue):
+ while True:
+ u = hexlify(os.urandom(8)).decode('ascii')
+ aqueue.put(u)
+
+idqueue = Queue.Queue(2)
+
+t = threading.Thread(target=idmaker, args=(idqueue,))
+t.daemon = True
+t.start()
+
+def idgetter():
+ return idqueue.get()
+ 
+
+ Queue is often the best way to synchronize threads in Python -- that's frequent enough that when designing a multi-thread system your first thought should be "how could I best do this with Queues". The underlying idea is to dedicate a thread to entirely "own" a shared resource or subsystem, and have all other "worker" threads access the resource only by gets and/or puts on Queues used by that dedicated thread (Queue is intrinsically threadsafe). 
+
+ Here, we make an idqueue with a length of only 2 (we don't want the id generation to go wild, making a lot of ids beforehand, which wastes memory and exhausts the entropy pool -- not sure if 2 is optimal, but the sweet spot is definitely going to be a pretty small integer;-), so the id generator thread will block when trying to add the third one, and wait until some space opens in the queue. idgetter (which could also be simply defined by a top-level assignment, idgetter = idqueue.get ) will normally find an id already there and waiting (and make space for the next one!) -- if not, it intrinsically blocks and waits, waking up as soon as the id generator has placed a new id in the queue. 
+ #1 Your algorithm is OK (thread safe as far as your DB API module is safe) and probably is the best way to go. It will never give you duplicate (assuming you have PRIMARY or UNIQUE key on sid), but you have a neglectfully small chance to get IntegrityError exception on INSERT. But your code doesn't look good. It's better to use a loop with limited number of attempts instead of recursion (which in case of some error in the code could become infinite): 
+
+ for i in range(MAX_ATTEMPTS):
+ sid = os.urandom(8).decode('hex')
+ db.execute('SELECT COUNT(*) FROM sessions WHERE sid=?', (sid,))
+ if not db.fetchone()[0]:
+  # You can catch IntegrityError here and continue, but there are reasons
+  # to avoid this.
+  db.execute('INSERT INTO sessions (sid) VALUES (?)', (sid,))
+  break
+else:
+ raise RuntimeError('Failed to generate unique session ID')
+ 
+
+ You can raise the number of random characters read used to make chance to fail even smaller. base64.urlsafe_b64encode() is your friend if you'd like to make SID shorter, but then you have to insure your database uses case-sensitive comparison for this columns (MySQL's VARCHAR is not suitable unless you set binary collation for it, but VARBINARY is OK). 
+ #2 I'm suggesting just a small modification to the accepted answer by Denis: 
+
+ for i in range(MAX_ATTEMPTS):
+ sid = os.urandom(8).decode('hex')
+ try:
+  db.execute('INSERT INTO sessions (sid) VALUES (?)', (sid,))
+ except IntegrityError:
+  continue
+ break
+else:
+ raise RuntimeError('Failed to generate unique session ID')
+ 
+
+ We simply attempt the insert without explicitly checking for the generated ID. The insert will very rarely fail, so we most often only have to make the one database call, instead of two. 
+
+ This will improve efficiency by making fewer database calls, without compromising thread-safety (as this will effectively be handled by the database engine). 
+ #3 If you require thread safety why not put you random number generator a function that uses a shared lock: 
+
+ import threading
+lock = threading.Lock()
+def get_random_number(lock)
+ with lock:
+  print "This can only be done by one thread at a time"
+ 
+
+ If all the threads calling get_random_number use the same lock instance, then only one of them at time can create a random number. 
+
+ Of course you have also just created a bottle neck in your application with this solution. There are other solutions depending on your requirements such as creating blocks of unique identifiers then consuming them in parallel. 
+ #4 No need to call the database I'd think: 
+
+ &gt;&gt;&gt; import uuid
+
+# make a UUID based on the host ID and current time
+&gt;&gt;&gt; uuid.uuid1()
+UUID('a8098c1a-f86e-11da-bd1a-00112444be1e')
+ 
+
+ From this page . 
+ #5 I'd start with a thread-unique ID and (somehow) concatenate that with a thread-local counter, then feed it through a cryptographic hash algorithm. 
+ #6 If you absolutely need to verify uid against database and avoid race conditions, use transactions: 
+
+ BEGIN TRANSACTION
+SELECT COUNT(*) FROM sessions WHERE sid=%s
+INSERT INTO sessions (sid,...) VALUES (%s,...)
+COMMIT
+ 
+ #7 Is there not a unique piece of data in each thread? It is difficult for me to imagine two threads with exactly the same data. Though I don't discount the possibility. 
+
+ In the past when I have done things of this nature there is usually something unique about the thread. User name or client name or something of that nature. The solution for me was to concatenate the UserName, for example, and the current time in milliseconds then hash that string and get a hex digest of the hash. This gives one a nice string that is always the same length. 
+
+ There is a really remote possibility that two different John Smith's (or whatever) in two threads generate the id in the same millisecond. If that possibility makes one nervous then the locking route as mentioned may be needed. 
+
+ As was already mentioned there are already routines to get a GUID. I personally like fiddling with hash functions so I have rolled my own in the way mentioned on large multi threaded systems with success. 
+
+ It is ultimately up to you to decide if you really have threads with duplicate data. Be sure to choose a good hashing algorithm. I have used md5 successfully but I have read that it is possible to generate a hash collision with md5 though I have never done it. Lately I have been using sha1. 
+ #8 mkdtemp should be thread-safe,simple and secure : 
+
+ def uuid():
+ import tempfile,os
+ _tdir = tempfile.mkdtemp(prefix='uuid_')
+ _uuid = os.path.basename(_tdir)
+ os.rmdir(_tdir)
+ return _uuid

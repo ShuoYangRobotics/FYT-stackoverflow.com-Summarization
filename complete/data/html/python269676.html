@@ -1,0 +1,151 @@
+<h3>Question (ID-269676):</h3><h2>How can I Cause a Deadlock in MySQL for Testing Purposes</h2><p>I want to make my Python library working with MySQLdb be able to detect deadlocks and try again.  I believe I've coded a good solution, and now I want to test it.</p>
+
+<p>Any ideas for the simplest queries I could run using MySQLdb to create a deadlock condition would be?</p>
+
+<p>system info:</p>
+
+<ul>
+<li>MySQL 5.0.19 </li>
+<li>Client 5.1.11 </li>
+<li>Windows XP</li>
+<li>Python 2.4 / MySQLdb 1.2.1 p2</li>
+</ul>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You want something along the following lines.</p>
+
+<p><strong>parent.py</strong></p>
+
+<pre><code>import subprocess
+c1= subprocess.Popen( ["python", "child.py", "1"], stdin=subprocess.PIPE, stdout=subprocess.PIPE )
+c2= subprocess.Popen( ["python", "child.py", "2"], stdin=subprocess.PIPE, stdout=subprocess.PIPE )
+out1, err1= c1.communicate( "to 1: hit it!" )
+print " 1:", repr(out1)
+print "*1:", repr(err1)
+out2, err2= c2.communicate( "to 2: ready, set, go!" )
+print " 2:", repr(out2)
+print "*2:", repr(err2)
+out1, err1= c1.communicate()
+print " 1:", repr(out1)
+print "*1:", repr(err1)
+out2, err2= c2.communicate()
+print " 2:", repr(out2)
+print "*2:", repr(err2)
+c1.wait()
+c2.wait()
+</code></pre>
+
+<p><strong>child.py</strong></p>
+
+<pre><code>import yourDBconnection as dbapi2
+
+def child1():
+    print "Child 1 start"
+    conn= dbapi2.connect( ... )
+    c1= conn.cursor()
+    conn.begin() # turn off autocommit, start a transaction
+    ra= c1.execute( "UPDATE A SET AC1='Achgd' WHERE AC1='AC1-1'" )
+    print ra
+    print "Child1", raw_input()
+    rb= c1.execute( "UPDATE B SET BC1='Bchgd' WHERE BC1='BC1-1'" )
+    print rb
+    c1.close()
+    print "Child 1 finished"
+
+def child2():
+    print "Child 2 start"
+    conn= dbapi2.connect( ... )
+    c1= conn.cursor()
+    conn.begin() # turn off autocommit, start a transaction
+    rb= c1.execute( "UPDATE B SET BC1='Bchgd' WHERE BC1='BC1-1'" )
+    print rb
+    print "Child2", raw_input()
+    ra= c1.execute( "UPDATE A SET AC1='Achgd' WHERE AC1='AC1-1'" )
+    print ta
+    c1.close()
+    print "Child 2 finish"
+
+try:
+    if sys.argv[1] == "1":
+        child1()
+    else:
+        child2()
+except Exception, e:
+    print repr(e)
+</code></pre>
+
+<p>Note the symmetry.  Each child starts out holding one resource.  Then they attempt to get someone else's held resource.  You can, for fun, have 3 children and 3 resources for a really vicious circle.</p>
+
+<p>Note that difficulty in contriving a situation in which deadlock occurs.  If your transactions are short -- and consistent -- deadlock is very difficult to achieve.  Deadlock requires (a) transaction which hold locks for a long time AND (b) transactions which acquire locks in an inconsistent order.   I have found it easiest to prevent deadlocks by keeping my transactions short and consistent.</p>
+
+<p>Also note the non-determinism.  You can't predict which child will die with a deadlock and which will continue after the other died.  Only one of the two need to die to release needed resources for the other.  Some RDBMS's claim that there's a rule based on number of resources held blah blah blah, but in general, you'll never know how the victim was chosen.</p>
+
+<p>Because of the two writes being in a specific order, you sort of expect child 1 to die first.  However, you can't guarantee that.  It's not deadlock until child 2 tries to get child 1's resources -- the sequence of who acquired first may not determine who dies.</p>
+
+<p>Also note that these are processes, not threads.  Threads -- because of the Python GIL -- might be inadvertently synchronized and would require lots of calls to <code>time.sleep( 0.001 )</code> to give the other thread a chance to catch up.  Processes -- for this -- are slightly simpler because they're fully independent.</p>
+<br /><b>#1</b><br /><p>I'm not familar with Python, so excuse my incorrect language If I'm saying this wrong... but open two sessions (in separate windows, or from separate Python processes - from separate boxes would work ... )  Then ... </p>
+
+<p>. In Session A:</p>
+
+<pre><code>   Begin Transaction 
+      Insert TableA()  Values()...
+</code></pre>
+
+<p>. Then In Session B:</p>
+
+<pre><code>Begin Transaction
+  Insert TableB() Values()... 
+  Insert TableA() Values() ...
+</code></pre>
+
+<p>. Then go back to session A</p>
+
+<pre><code>  Insert TableB() Values () ...
+</code></pre>
+
+<p>You'll get a deadlock... </p>
+<br /><b>#2</b><br /><p>Not sure if either above is correct.
+Check out this:</p>
+
+<p><a href="http://www.xaprb.com/blog/2006/08/08/how-to-deliberately-cause-a-deadlock-in-mysql/" rel="nofollow">http://www.xaprb.com/blog/2006/08/08/how-to-deliberately-cause-a-deadlock-in-mysql/</a></p>
+<br /><b>#3</b><br /><p>you can always run LOCK TABLE tablename from another session (mysql CLI for instance). That might do the trick.</p>
+
+<p>It will remain locked until you release it or disconnect the session.</p>
+<br /><b>#4</b><br /><p>@s.lott</p>
+
+<p>Looks promising but here's what I get when I run it:</p>
+
+<pre><code> 1: 'Child 1 start\r\n0\r\nChild1 to 1: hit it!\r\n0\r\nChild 1 finished\r\n'
+*1: None
+ 2: 'Child 1 start\r\n0\r\nChild1 to 2: ready, set, go!\r\n0\r\nChild 1 finished
+\r\n'
+*2: None
+ 1: ''
+*1: None
+ 2: ''
+*2: None
+</code></pre>
+
+<p>(I couldn't comment this on your post since there's no formatting in comments)</p>
+<br /><b>#5</b><br /><p>Here's some pseudocode for how i do it in PHP:</p>
+
+<p>Script 1:</p>
+
+<pre><code>START TRANSACTION;
+INSERT INTO table &lt;anything you want&gt;;
+SLEEP(5);
+UPDATE table SET field = 'foo';
+COMMIT;
+</code></pre>
+
+<p>Script 2:</p>
+
+<pre><code>START TRANSACTION;
+UPDATE table SET field = 'foo';
+SLEEP(5);
+INSERT INTO table &lt;anything you want&gt;;
+COMMIT;
+</code></pre>
+
+<p>Execute script 1 and then immediately execute script 2 in another terminal. You'll get a deadlock if the database table already has some data in it (In other words, it starts deadlocking after the second time you try this).</p>
+
+<p>Note that if mysql won't honor the SLEEP() command, use Python's equivalent in the application itself.</p>
+<br />

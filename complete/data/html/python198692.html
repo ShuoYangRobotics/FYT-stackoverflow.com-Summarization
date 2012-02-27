@@ -1,0 +1,91 @@
+<h3>Question (ID-198692):</h3><h2>Can I pickle a python dictionary into a sqlite3 text field?</h2><p>Any gotchas I should be aware of?  Can I store it in a text field, or do I need to use a blob?
+(I'm not overly familiar with either pickle or sqlite, so I wanted to make sure I'm barking up the right tree with some of my high-level design ideas.)</p>
+<br /><h3>Answers (Total-12):</h3><b>#0</b><br /><p>If you want to store a pickled object, you'll need to use a blob, since it is binary data. However, you can, say, base64 encode the pickled object to get a string that can be stored in a text field.</p>
+
+<p>Generally, though, doing this sort of thing is indicative of bad design, since you're storing opaque data you lose the ability to use SQL to do any useful manipulation on that data. Although without knowing what you're actually doing, I can't really make a moral call on it.</p>
+<br /><b>#1</b><br /><p>I needed to achieve the same thing too.  </p>
+
+<p>I turns out it caused me quite a headache before I finally figured out, <a href="http://coding.derkeiler.com/Archive/Python/comp.lang.python/2008-12/msg00352.html">thanks to this post</a>, how to actually make it work in a binary format.</p>
+
+<h3>To insert/update:</h3>
+
+<pre><code>pdata = cPickle.dumps(data, cPickle.HIGHEST_PROTOCOL)
+curr.execute("insert into table (data) values (:data)", sqlite3.Binary(pdata))
+</code></pre>
+
+<p>You must specify the second argument to dumps to force a binary pickling.<br>
+Also note the <strong>sqlite3.Binary</strong> to make it fit in the BLOB field.</p>
+
+<h3>To retrieve data:</h3>
+
+<pre><code>curr.execute("select data from table limit 1")
+for row in curr:
+  data = cPickle.loads(str(row['data']))
+</code></pre>
+
+<p>When retrieving a BLOB field, sqlite3 gets a 'buffer' python type, that needs to be strinyfied using <strong>str</strong> before being passed to the loads method.</p>
+<br /><b>#2</b><br /><p>I wrote a blog about this idea, except instead of a pickle, I used json, since I wanted it to be interoperable with perl and other programs.  </p>
+
+<p><a href="http://writeonly.wordpress.com/2008/12/05/simple-object-db-using-json-and-python-sqlite/" rel="nofollow">http://writeonly.wordpress.com/2008/12/05/simple-object-db-using-json-and-python-sqlite/</a></p>
+
+<p>Architecturally, this is a quick and dirty way to get persistence, transactions, and the like for arbitrary data structures.  I have found this combination to be really useful when I want persistence, and don't need to do much in the sql layer with the data (or it's very complex to deal with in sql, and simple with generators).  </p>
+
+<p>The code itself is pretty simple:</p>
+
+<pre><code>#  register the "loader" to get the data back out.
+sqlite3.register_converter("pickle", cPickle.loads)
+</code></pre>
+
+<p>Then, when you wnat to dump it into the db, </p>
+
+<pre><code>p_string = p.dumps( dict(a=1,b=[1,2,3]))  
+conn.execute(''' 
+   create table snapshot( 
+      id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        mydata pickle); 
+''')  
+
+conn.execute(''' 
+    insert into snapshot values 
+    (null, ?)''', (p_string,))
+''')
+</code></pre>
+<br /><b>#3</b><br /><p>Pickle has both text and binary output formats. If you use the text-based format you can store it in a TEXT field, but it'll have to be a BLOB if you use the (more efficient) binary format.</p>
+<br /><b>#4</b><br /><p>Since Pickle can dump your object graph to a string it should be possible. </p>
+
+<p>Be aware though that TEXT fields in SQLite uses database encoding so you might need to convert it to a simple string before you un-pickle.</p>
+<br /><b>#5</b><br /><p>If a dictionary can be pickled, it can be stored in text/blob field as well.</p>
+
+<p>Just be aware of the dictionaries that can't be pickled (aka that contain unpickable objects).</p>
+<br /><b>#6</b><br /><p>Yes, you can store a pickled object in a TEXT or BLOB field in an SQLite3 database, as others have explained.</p>
+
+<p>Just be aware that some object <strong>cannot be pickled</strong>.  The built-in container types can (dict, set, list, tuple, etc.).  But some objects, such as file handles, refer to state that is external to their own data structures, and other extension types have similar problems.</p>
+
+<p>Since a dictionary can contain arbitrary nested data structures, it might not be pickle-able.</p>
+<br /><b>#7</b><br /><p>I have to agree with some of the comments here.  Be careful and make sure you really want to save pickle data in a db, there's probably a better way.</p>
+
+<p>In any case I had trouble in the past trying to save binary data in the sqlite db.
+Apparently you have to use the sqlite3.Binary() to prep the data for sqlite.</p>
+
+<p>Here's some sample code:</p>
+
+<pre><code>query = u'''insert into testtable VALUES(?)'''
+b = sqlite3.Binary(binarydata)
+cur.execute(query,(b,))
+con.commit()
+</code></pre>
+<br /><b>#8</b><br /><p>SpoonMeiser is correct, you need to have a strong reason to pickle into a database.  </p>
+
+<p>It's not difficult to write Python objects that implement persistence with SQLite.  Then you can use the SQLite CLI to fiddle with the data as well.  Which in my experience is worth the extra bit of work, since many debug and admin functions can be simply performed from the CLI rather than writing specific Python code.</p>
+
+<p>In the early stages of a project, I did what you propose and ended up re-writing with a Python class for each business object (note: I didn't say for each table!) This way the body of the application can focus on "what" needs to be done rather than "how" it is done.</p>
+<br /><b>#9</b><br /><p>The other option, considering that your requirement is to save a dict and then spit it back out for the user's "viewing pleasure", is to use the <code>shelve</code> module which will let you persist any pickleable data to file. The python docs are <a href="http://docs.python.org/library/shelve.html#example" rel="nofollow">here</a>.</p>
+<br /><b>#10</b><br /><p>Depending on what you're working on, you might want to look into the <a href="http://pypi.python.org/pypi/shove" rel="nofollow">shove</a> module. It does something similar, where it auto-stores Python objects inside a sqlite database (and all sorts of other options) and pretends to be a dictionary (just like the <a href="http://www.python.org/doc/2.5.2/lib/module-shelve.html" rel="nofollow">shelve</a> module).</p>
+<br /><b>#11</b><br /><p>See this solution at SourceForge:</p>
+
+<p>y_serial.py module :: warehouse Python objects with SQLite</p>
+
+<p>"Serialization + persistance :: in a few lines of code, compress and annotate Python objects into SQLite; then later retrieve them chronologically by keywords without any SQL. Most useful "standard" module for a database to store schema-less data."</p>
+
+<p><a href="http://yserial.sourceforge.net" rel="nofollow">http://yserial.sourceforge.net</a></p>
+<br />

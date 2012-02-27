@@ -1,0 +1,112 @@
+Question (ID-1214496): How to get environment from a subprocess in Python I want to call a process via a python program, however, this process need some specific environment variables that are set by another process. How can I get the first process environment variables to pass them to the second? 
+
+ This is what the program look like: 
+
+ import subprocess
+
+subprocess.call(['proc1']) # this set env. variables for proc2
+subprocess.call(['proc2']) # this must have env. variables set by proc1 to work
+ 
+
+ but the to process don't share the same environment. Note that these programs aren't mine (the first is big and ugly .bat file and the second a proprietary soft) so I can't modify them (ok, I can extract all that I need from the .bat but it's very combersome). 
+
+ N.B.: I am using Windows, but I prefer a cross-platform solution (but my problem wouldn't happen on a Unix-like ...) 
+ Answers (Total-6): #0 Here's an example of how you can extract environment variables from a batch or cmd file without creating a wrapper script. Enjoy. 
+
+ from __future__ import print_function
+import sys
+import subprocess
+import itertools
+
+def validate_pair(ob):
+ try:
+  if not (len(ob) == 2):
+   print("Unexpected result:", ob, file=sys.stderr)
+   raise ValueError
+ except:
+  return False
+ return True
+
+def consume(iter):
+ try:
+  while True: next(iter)
+ except StopIteration:
+  pass
+
+def get_environment_from_batch_command(env_cmd, initial=None):
+ """
+ Take a command (either a single command or list of arguments)
+ and return the environment created after running that command.
+ Note that if the command must be a batch file or .cmd file, or the
+ changes to the environment will not be captured.
+
+ If initial is supplied, it is used as the initial environment passed
+ to the child process.
+ """
+ if not isinstance(env_cmd, (list, tuple)):
+  env_cmd = [env_cmd]
+ # construct the command that will alter the environment
+ env_cmd = subprocess.list2cmdline(env_cmd)
+ # create a tag so we can tell in the output when the proc is done
+ tag = 'Done running command'
+ # construct a cmd.exe command to do accomplish this
+ cmd = 'cmd.exe /s /c "{env_cmd} &amp;&amp; echo "{tag}" &amp;&amp; set"'.format(**vars())
+ # launch the process
+ proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, env=initial)
+ # parse the output sent to stdout
+ lines = proc.stdout
+ # consume whatever output occurs until the tag is reached
+ consume(itertools.takewhile(lambda l: tag not in l, lines))
+ # define a way to handle each KEY=VALUE line
+ handle_line = lambda l: l.rstrip().split('=',1)
+ # parse key/values into pairs
+ pairs = map(handle_line, lines)
+ # make sure the pairs are valid
+ valid_pairs = filter(validate_pair, pairs)
+ # construct a dictionary of the pairs
+ result = dict(valid_pairs)
+ # let the process finish
+ proc.communicate()
+ return result
+ 
+
+ So to answer your question, you would create a .py file that does the following: 
+
+ env = get_environment_from_batch_command('proc1')
+subprocess.Popen('proc2', env=env)
+ 
+ #1 Since you're apparently in Windows, you need a Windows answer. 
+
+ Create a wrapper batch file, eg. "run_program.bat", and run both programs: 
+
+ @echo off
+call proc1.bat
+proc2
+ 
+
+ The script will run and set its environment variables. Both scripts run in the same interpreter (cmd.exe instance), so the variables prog1.bat sets will be set when prog2 is executed. 
+
+ Not terribly pretty, but it'll work. 
+
+ (Unix people, you can do the same thing in a bash script: "source file.sh".) 
+ #2 As you say, processes don't share the environment - so what you literally ask is not possible, not only in Python, but with any programming language. 
+
+ What you can do is to put the environment variables in a file, or in a pipe, and either 
+
+ 
+ have the parent process read them, and pass them to proc2 before proc2 is created, or 
+ have proc2 read them, and set them locally 
+ 
+
+ The latter would require cooperation from proc2; the former requires that the variables become known before proc2 is started. 
+ #3 Environment is inherited from the parent process. Set the environment you need in the main script, not a subprocess (child). 
+ #4 Two things spring to mind: (1) make the processes share the same environment, by combining them somehow into the same process, or (2) have the first process produce output that contains the relevant environment variables, that way Python can read it and construct the environment for the second process. I think (though I'm not 100% sure) that there isn't any way to get the environment from a subprocess as you're hoping to do. 
+ #5 The Python standard module multiprocessing have a Queues system that allow you to pass pickle-able object to be passed through processes. Also processes can exchange messages (a pickled object) using os.pipe. Remember that resources (e.g : database connection) and handle (e.g : file handles) can't be pickled. 
+
+ You may find this link interesting :
+ Communication between processes with multiprocessing 
+
+ Also the PyMOTw about multiprocessing worth mentioning :
+ multiprocessing Basics 
+
+ sorry for my spelling

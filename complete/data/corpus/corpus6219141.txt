@@ -1,0 +1,177 @@
+Question (ID-6219141): Searching for a string in a large text file - profiling various methods in python This question has been asked many times. After spending some time reading the answers, I did some quick profiling to try out the various methods mentioned previously... 
+
+ 
+ 
+ I have a 600 MB file with 6 million lines of strings (Category paths from DMOZ project). 
+ The entry on each line is unique. 
+ I want to load the file once &amp; keep searching for matches in the data 
+ 
+ 
+
+ The three methods that I tried below list the time taken to load the file, search time for a negative match &amp; memory usage in the task manager 
+
+ 
+
+ 1) set :
+ (i) data = set(f.read().splitlines())
+ (ii) result = search_str in data 
+ 
+
+ 
+ Load time ~ 10s, Search time ~ 0.0s, Memory usage ~ 1.2GB 
+ 
+
+ 
+
+ 2) list :
+ (i) data = f.read().splitlines()
+ (ii) result = search_str in data
+ 
+
+ 
+ Load time ~ 6s, Search time ~ 0.36s, Memory usage ~ 1.2GB 
+ 
+
+ 
+
+ 3) mmap :
+ (i) data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+ (ii) result = data.find(search_str)
+ 
+
+ 
+ Load time ~ 0s, Search time ~ 5.4s, Memory usage ~ NA 
+ 
+
+ 
+
+ 4) Hash lookup (using code from @alienhard below): 
+ 
+
+ 
+ Load time ~ 65s, Search time ~ 0.0s, Memory usage ~ 250MB 
+ 
+
+ 
+
+ 5) File search (using code from @EOL below): 
+ with open('input.txt') as f:
+  print search_str in f #search_str ends with the ('\n' or '\r\n') as in the file
+ 
+
+ 
+ Load time ~ 0s, Search time ~ 3.2s, Memory usage ~ NA 
+ 
+
+ 
+
+ 6) sqlite (with primary index on url): 
+ 
+
+ 
+ Load time ~ 0s, Search time ~ 0.0s, Memory usage ~ NA 
+ 
+
+ 
+
+ For my use case, it seems like going with the set is the best option as long as I have sufficient memory available. I was hoping to get some comments on these questions : 
+
+ 
+ 
+ A better alternative e.g. sqlite ? 
+ Ways to improve the search time using mmap . I have a 64-bit setup. 
+ [edit] e.g. bloom filters 
+ As the file size grows to a couple of GB, is there any way I can keep using 'set' e.g. split it in batches .. 
+ 
+ 
+
+ [edit 1] P.S. I need to search frequently, add/remove values and cannot use a hash table alone because I need to retrieve the modified values later. 
+
+ Any comments/suggestions are welcome ! 
+
+ [edit 2] Update with results from methods suggested in answers
+[edit 3] Update with sqlite results 
+
+ Solution : Based on all the profiling &amp; feeback, I think I'll go with sqlite. Second alternative being method 4. One downside of sqlite is that the database size is more than double of the original csv file with urls. This is due to the primary index on url 
+ Answers (Total-6): #0 Variant 1 is great if you need to launch many sequential searches. Since set is internally a hash table, it's rather good at search. It takes time to build, though, and only works well if your data fit into RAM. 
+
+ Variant 3 is good for very big files, because you have plenty of address space to map them and OS caches enough data. You do a full scan; it can become rather slow once your data stop to fit into RAM. 
+
+ SQLite is definitely a nice idea if you need several searches in row and you can't fit the data into RAM. Load your strings into a table, build an index, and SQLite builds a nice b-tree for you. The tree can fit into RAM even if data don't (it's a bit like what @alienhard proposed), and even if it doesn't, the amount if I/O needed is dramatically lower. Of course, you need to create a disk-based SQLite database. I doubt that memory-based SQLite will beat Variant 1 significantly. 
+ #1 Custom hash table search with externalized strings 
+
+ To get fast access time and a lower memory consumption you could do the following: 
+
+ 
+ for each line compute a string hash and add it to a hash table, e.g., index[hash] = position (do not store the string). If there is a collision, store all file positions for that key in a list. 
+ to look up a string, compute its hash and look it up in the table. If the key is found, read the string at position from the file to verify you really have a match. If there are multiple positions check each one until you find a match or none. 
+ 
+
+ Edit 1: replaced line_number by position (as pointed out by a commenter, one obviously needs the actual position and not line numbers) 
+
+ Edit 2: provide code for an implementation with a custom hash table, which shows that this approach is more memory efficient than the other approaches mentioned: 
+
+ from collections import namedtuple 
+Node = namedtuple('Node', ['pos', 'next'])
+
+def build_table(f, size):
+ table = [ None ] * size
+ while True:
+  pos = f.tell()
+  line = f.readline()
+  if not line: break
+  i = hash(line) % size
+  if table[i] is None:
+   table[i] = pos
+  else:
+   table[i] = Node(pos, table[i])
+ return table
+
+def search(string, table, f):
+ i = hash(string) % len(table)
+ entry = table[i]
+ while entry is not None:
+  pos = entry.pos if isinstance(entry, Node) else entry
+  f.seek(pos)
+  if f.readline() == string:
+   return True
+  entry = entry.next if isinstance(entry, Node) else None
+ return False
+
+SIZE = 2**24
+with open('data.txt', 'r') as f:
+ table = build_table(f, SIZE)
+ print search('Some test string\n', table, f)
+ 
+
+ The hash of a line is only used to index into the table (if we used a normal dict, the hashes would also be stored as keys). The file position of the line is stored at the given index. Collisions are resolved with chaining, i.e., we create a linked list. However, the first entry is never wrapped in a node (this optimization makes the code a bit more complicated but it saves quite some space). 
+
+ For a file with 6 million lines I chose a hash table size of 2^24. With my test data I got 933132 collisions. (A hash table of half the size was comparable in memory consumption, but resulted in more collisions. Since more collisions means more file access for searches, I would rather use a large table.) 
+
+ Hash table: 128MB (sys.getsizeof([None]*(2**24)))
+Nodes:  64MB (sys.getsizeof(Node(None, None)) * 933132)
+Pos ints: 138MB (6000000 * 24)
+-----------------
+TOTAL:  330MB (real memory usage of python process was ~350MB)
+ 
+ #2 You could also try 
+
+ with open('input.txt') as f:
+ print search_str in f
+ 
+
+ with search_str ending with the proper newline sequence('\n' or '\r\n'). This should use little memory, as the file is read progressively. It should also be quite fast, since only part of the file is read. 
+ #3 I would guess many of the paths start out the same on DMOZ.
+You should use a trie data structure and store the individual characters on nodes. 
+
+ Tries have O(m) lookup time (where m is the key length) also save a lot of space, when saving large dictionaries or tree like data. 
+
+ You could also store path parts on nodes to reduce node count — this is called Patricia Trie. But that makes the lookup slower by the average string length comparison time. See SO question Trie (Prefix Tree) in Python for more info about implementations. 
+
+ There are a couple of trie implementations on Python Package Index, but they are not very good. I have written one in Ruby and in Common Lisp, which is especially well suited for this task – if you ask nicely, I could maybe publish it as open source... :-) 
+ #4 what about a text indexing solution ? 
+
+ I would use Lucene in the Java world but there is a python engine called Whoosh 
+
+ https://bitbucket.org/mchaput/whoosh/wiki/Home 
+ #5 Without building an index file your searching will be to slow, and this is not so simple task. So better to use already developed software. The best way will be use Sphinx Search Engine .

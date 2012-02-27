@@ -1,0 +1,273 @@
+Question (ID-4044353): Script to convert Huge Three column table into table I have a set of data (csv files) in the following 3 column format: 
+
+ A, B, C
+3277,4733,54.1 
+3278,4741,51.0 
+3278,4750,28.4 
+3278,4768,36.0 
+3278,4776,50.1 
+3278,4784,51.4 
+3279,4792,82.6 
+3279,4806,78.2 
+3279,4814,36.4 
+ 
+
+ And I need to get a three-way contingency table like: (sorry, this doesn't look completely good) 
+
+ A /B  4733  4741  4750  4768  4776  4784  4792  4806  4814
+3277 C 54.1            
+3278     51  28.4  36  50.1  51.4     
+3279                 82.6  78.2  36.4
+ 
+
+ Similarly to an excel "pivot table", OpenOffice data pilot, or R "table(x,y,z)" 
+
+ The problem is that my dataset is HUGE (more than 500,000 total rows, with about 400 different factors in A and B. (OOo, MSO and R limits prevent from achieving this) 
+
+ I am sure a Python script could be used to create such a table. both A and B are numbers (but can be treated as strings). 
+
+ Anyone has dealt with this? 
+(pseudocode or code in C or Java is also welcomed ... but I prefer python as it is faster to implement :) 
+
+ Edit: 
+Almost have it, thanks to John Machin. The following Python script almost provides what I am looking for, however, when writing the output file I can see that the values in the "headers" I am writing (taken from the first row) do not correspond to the other rows. 
+
+ from collections import defaultdict as dd
+d = dd(lambda: dd(float))
+
+input = open("input.txt")
+output = open("output.txt","w")
+while 1:
+ line = input.readline()
+ if not line:
+  break
+ line = line.strip('\n').strip('\r')
+ splitLine = line.split(',')
+ if (len(splitLine) &lt;3):
+  break
+ d[splitLine[0]][splitLine[1]] = splitLine[2]
+
+output.write("\t")
+for k,v in d.items()[0][1].items():
+ output.write(str(k)+"\t")
+output.write("\n")
+for k,v in d.items():
+ output.write(k+"\t")
+ for k2,v2 in v.items():
+  output.write(str(v2)+"\t")
+ output.write("\n")
+ 
+ Answers (Total-6): #0 When all you have is a hammer . . . . . 
+
+ Conceptually, what you are trying to do is simple but because of the size of your data, it is computationally difficult. I tend to use R for it's analytic and graphics capacity, not it's data wrangling skills. When I need to move around a bunch of data, I usually just stick everything into a database. 
+
+ Lately I have had quite a bit of success with SQLite and R. The best part is that you can actually use R to read in your data, which makes it easy to import large SPSS files or other sources of data that SQLite can't really handle but R can. 
+
+ http://cran.r-project.org/web/packages/RSQLite/index.html 
+
+ Here's my recommended work flow. 
+
+ 
+ Import your data into R. (Done) 
+ Library(RSQLite) 
+ Move your data frame to SQLite. 
+ Create Indexes on columns A and B. 
+ Create a view that builds your table. 
+ Query your view from R and coerce the returns into a table. 
+ 
+ #1 In R I can do this: 
+
+ N &lt;- 1000000
+x &lt;- sample(1:400,N,TRUE)
+y &lt;- sample(1:400,N,TRUE)
+z &lt;- sample(1:400,N,TRUE)
+
+w &lt;- table(x,y,z)
+ 
+
+ And memory peak is lower then 800MB. 
+
+ So what limitations you have? 
+
+ 
+
+ EDIT. This peace of R-code: 
+
+ N &lt;- 1000000
+mydata &lt;- data.frame(
+ A=sample(runif(400),N,TRUE),
+ B=sample(runif(400),N,TRUE),
+ C=runif(N)
+)
+
+require(reshape)
+results &lt;- cast(mydata, A~B, value="C")
+write.table(as.matrix(results),na="",sep="\t",file="results.txt")
+ 
+
+ create what you want with less then 300MB of RAM. 
+
+ On my data it gives warning cause there are non-unique A-B combinations but for yours should be ok. 
+ #2 Whole new story deserves a whole new answer. 
+
+ Don't need defaultdict, don't even want defaultdict, because using it carelessly would suck memory like the Death Star's tractor beam. 
+
+ This code is untested, may not even compile; I may have swapped rows and columns somewhere; fixes/explanations later ... must rush ... 
+
+ d = {}
+col_label_set = set()
+row_label_set = set()
+input = open("input.txt")
+output = open("output.txt","w")
+for line in input:
+ line = line.strip()
+ splat = line.split(',')
+ if len(splat) != 3:
+  break # error message???
+ k1, k2, v = splat
+ try:
+  subdict = d[k1]
+ except KeyError:
+  subdict = {}
+  d[k1] = subdict
+ subdict[k2] = v
+ row_label_set.add(k1)
+ col_label_set.add(k2)
+col_labels = sorted(col_label_set)
+row_labels = sorted(row_label_set
+output.write("\t")
+for v in col_labels::
+ output.write(v + "\t")
+output.write("\n")
+for r in row_labels:
+ output.write(r + "\t")
+ for c in col_labels:
+  output.write(d[r].get(c, "") + "\t")
+ output.write("\n")
+ 
+
+ Update Here's a fixed and refactored version, tested to the extent shown: 
+
+ class SparseTable(object):
+
+ def __init__(self, iterable):
+  d = {}
+  col_label_set = set()
+  for row_label, col_label, value in iterable:
+   try:
+    subdict = d[row_label]
+   except KeyError:
+    subdict = {}
+    d[row_label] = subdict
+   subdict[col_label] = value
+   col_label_set.add(col_label)
+  self.d = d
+  self.col_label_set = col_label_set
+
+ def tabulate(self, row_writer, corner_label=u"", missing=u""):
+  d = self.d
+  col_labels = sorted(self.col_label_set)
+  row_labels = sorted(d.iterkeys())
+  orow = [corner_label] + col_labels
+  row_writer(orow)
+  for row_label in row_labels:
+   orow = [row_label]
+   subdict = d[row_label]
+   for col_label in col_labels:
+    orow.append(subdict.get(col_label, missing))
+   row_writer(orow)
+
+if __name__ == "__main__":
+
+ import sys
+
+ test_data = u"""
+ 3277,4733,54.1
+ 3278,4741,51.0
+ 3278,4750,28.4
+ 3278,4768,36.0
+ 3278,4776,50.1
+ 3278,4784,51.4
+ 3279,4792,82.6
+ 3279,4806,78.2
+ 3279,4814,36.4
+ """.splitlines(True)
+
+ def my_writer(row):
+  sys.stdout.write(u"\t".join(row))
+  sys.stdout.write(u"\n")
+
+ def my_reader(iterable):
+  for line in iterable:
+   line = line.strip()
+   if not line: continue
+   splat = line.split(u",")
+   if len(splat) != 3:
+    raise ValueError(u"expected 3 fields, found %d" % len(splat))
+   yield splat
+
+ table = SparseTable(my_reader(test_data))
+ table.tabulate(my_writer, u"A/B", u"....")
+ 
+
+ Here's the output: 
+
+ A/B  4733 4741 4750 4768 4776 4784 4792 4806 4814
+3277 54.1 .... .... .... .... .... .... .... ....
+3278 .... 51.0 28.4 36.0 50.1 51.4 .... .... ....
+3279 .... .... .... .... .... .... 82.6 78.2 36.4
+ 
+ #3 If you could use table(x,y,z) in R, then how about trying out the R out of memory packages that handle such huge data sets? Use the read.big.matrix function in the package bigmemory to read in the data set and the bigtable function in the package bigtabulate to create the table. 
+
+ See vignettes . 
+ #4 Your example of desired output doesn't look like a 3-way contingency table to me. That would be a mapping from (key1, key2, key3) to a count of occurences. Your example looks like a mapping from (key1, key2) to some number. You don't say what to do when (key1, key2) is duplicated: average, total, something else? 
+
+ Assuming that you want a total, here's one memory-saving approach in Python, using nested defaultdict s: 
+
+ &gt;&gt;&gt; from collections import defaultdict as dd
+&gt;&gt;&gt; d = dd(lambda: dd(float))
+&gt;&gt;&gt; d[3277][4733] += 54.1
+&gt;&gt;&gt; d
+defaultdict(&lt;function &lt;lambda&gt; at 0x00D61DF0&gt;, {3277: defaultdict(&lt;type 'float'&gt;, {4733: 54.1})})
+&gt;&gt;&gt; d[3278][4741] += 51.0
+&gt;&gt;&gt; d
+defaultdict(&lt;function &lt;lambda&gt; at 0x00D61DF0&gt;, {3277: defaultdict(&lt;type 'float'&gt;, {4733: 54.1}), 3278: defaultdict(&lt;type 'float'&gt;, {4741: 51.0})})
+&gt;&gt;&gt;
+ 
+
+ and another approach using a single defaultdict with a composite key: 
+
+ &gt;&gt;&gt; d2 = dd(float)
+&gt;&gt;&gt; d2[3277,4733] += 54.1
+&gt;&gt;&gt; d2
+defaultdict(&lt;type 'float'&gt;, {(3277, 4733): 54.1})
+&gt;&gt;&gt; d2[3278,4741] += 51.0
+&gt;&gt;&gt; d2
+defaultdict(&lt;type 'float'&gt;, {(3277, 4733): 54.1, (3278, 4741): 51.0})
+&gt;&gt;&gt;
+ 
+
+ It might help if you were to say what you want to do with this data after you've got it grouped together ... 
+
+ If you want (for example) an average, you have two options: (1) two data structures, one for total, one for count, then do "average = total - count" (2) sort your data on the first 2 columns, user itertools.groupby to collect your duplicates together, do your calculation, and add the results into your "average" data structure. Which of these approaches would use less memory is hard to tell; Python being Python you could try both rather quickly. 
+ #5 A small subclasse of dict can provide you a confortable object to work with the table.
+500.000 items should not be a problem on a desktop PC - if you happen to have 500.000.000 items, a similar class could map from the keys to positions in the file itself (that would be way more cool to implement :-) ) 
+
+ import csv
+class ContingencyTable(dict):
+ def __init__(self):
+  self.a_keys=set()
+  self.b_keys=set()
+  dict.__init__(self)
+ def __setitem__(self, key,value):
+  self.a_keys.add(key[0])
+  self.b_keys.add(key[1])
+  dict.__setitem__(self, key, value)
+ def feed(self, file):
+  reader = csv.reader(file)
+  reader.next()
+  for a, b, c in reader:
+   self[int(a),int(b)] = float(c)
+
+table = ContingencyTable()
+table.feed(open("yourfile.csv"))

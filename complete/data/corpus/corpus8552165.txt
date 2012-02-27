@@ -1,0 +1,233 @@
+Question (ID-8552165): Importing a python module without actually executing it In the context of a complex application, I need to import user-supplied 'scripts'. Ideally, a script would have 
+
+ def init():
+ blah
+
+def execute():
+ more blah
+
+def cleanup():
+ yadda
+ 
+
+ so I'd just 
+
+ import imp
+fname, path, desc = imp.find_module(userscript)
+foo = imp.load_module(userscript, fname, path, desc)
+foo.init()
+ 
+
+ However, as we all know, the user's script is executed as soon as load_module runs. 
+Which means, a script can be something like this: 
+
+ def init():
+ blah
+
+yadda
+ 
+
+ yielding to the yadda part being called as soon as I import the script. 
+
+ What I need is a way to: 
+
+ 
+ check first whether it has init(), execute() and cleanup() 
+ if they exist, all is well 
+ if they don't exist, complain 
+ don't run any other code, or at least not until I know there's no init() 
+ 
+
+ Normally I'd force the use the same old if __name__ == '__main__' trick, but I have little control on the user-supplied script, so I'm looking for a relatively painless solution. I have seen all sorts of complicated tricks, including parsing the script, but nothing really simple. I'm surprised it does not exist.. or maybe I'm not getting something. 
+
+ Thanks. 
+ Answers (Total-6): #0 My attempt using the ast module: 
+
+ import ast
+
+# which syntax elements are allowed at module level?
+whitelist = [
+ # docstring
+ lambda x: isinstance(x, ast.Expr) \
+    and isinstance(x.value, ast.Str),
+ # import
+ lambda x: isinstance(x, ast.Import),
+ # class
+ lambda x: isinstance(x, ast.ClassDef),
+ # function
+ lambda x: isinstance(x, ast.FunctionDef),
+]
+
+def validate(source, required_functions):
+ tree = ast.parse(source)
+
+ functions = set()
+ required_functions = set(required_functions)
+
+ for item in tree.body:
+ if isinstance(item, ast.FunctionDef):
+  functions.add(item.name)
+  continue
+
+ if all(not checker(item) for checker in whitelist):
+  return False
+
+ # at least the required functions must be there
+ return len(required_functions - functions) == 0
+
+
+if __name__ == "__main__":
+ required_funcs = [ "init", "execute", "cleanup" ]
+ with open("/tmp/test.py", "rb") as f:
+ print("yay!" if validate(f.read(), required_funcs) else "d'oh!")
+ 
+ #1 I'd first of all not require some functions, but a class that conforms to a specified interface, using either the abc module, or zope.interface . This forces the maker of the module to supply the functions you want. 
+
+ Secondly, I would not bother looking for module-level code. It's the module-makers problem if he does this. It's too much work with no actual benefit. 
+
+ If you are worried about security issues, you need to sandbox the code somehow anyway. 
+ #2 Not sure if you'll consider this elegant, but it is somewhat intelligent in the sense that it recognizes when def init are tokens and not just part of a tricky multi-line string: 
+
+ '''
+def init does not define init...
+'''
+ 
+
+ It will not recognize when init is defined in tricky alternate ways such as 
+
+ init = lambda ...
+ 
+
+ or 
+
+ codestr='def i'+'nit ...'
+exec(codestr)
+ 
+
+ The only way to handle all such cases is to run the code (e.g. in a sandbox or by importing) and inspect the result. 
+
+ 
+
+ import tokenize
+import token
+import io
+import collections
+
+userscript = '''\
+def init():
+ blah
+
+"""
+def execute():
+ more blah
+"""
+
+yadda
+'''
+
+class Token(object):
+ def __init__(self, tok):
+  toknum, tokval, (srow, scol), (erow, ecol), line = tok
+  self.toknum = toknum
+  self.tokname = token.tok_name[toknum]
+  self.tokval = tokval
+  self.srow = srow
+  self.scol = scol
+  self.erow = erow
+  self.ecol = ecol
+  self.line = line 
+
+class Validator(object):
+ def __init__(self, codestr):
+  self.codestr = codestr
+  self.toks = collections.deque(maxlen = 2)
+  self.names = set()
+ def validate(self):
+  tokens = tokenize.generate_tokens(io.StringIO(self.codestr).readline)
+  self.toks.append(Token(next(tokens)))
+  for tok in tokens:
+   self.toks.append(Token(tok))   
+   if (self.toks[0].tokname == 'NAME'  # First token is a name
+    and self.toks[0].scol == 0   # First token starts at col 0
+    and self.toks[0].tokval == 'def' # First token is 'def'
+    and self.toks[1].tokname == 'NAME' # Next token is a name
+    ):
+    self.names.add(self.toks[1].tokval)
+  delta = set(['init', 'cleanup', 'execute']) - self.names
+  if delta:
+   raise ValueError('{n} not defined'.format(n = ' and '.join(delta)))
+
+v = Validator(userscript)
+v.validate()
+ 
+
+ yields 
+
+ ValueError: execute and cleanup not defined
+ 
+ #3 Here's a simpler (and more naive) alternative to the AST approach: 
+
+ import sys
+from imp import find_module, new_module, PY_SOURCE
+
+
+EXPECTED = ("init", "execute", "cleanup")
+
+def import_script(name):
+ fileobj, path, description = find_module(name)
+
+ if description[2] != PY_SOURCE:
+  raise ImportError("no source file found")
+
+ code = compile(fileobj.read(), path, "exec")
+
+ expected = list(EXPECTED)
+ for const in code.co_consts:
+  if isinstance(const, type(code)) and const.co_name in expected:
+   expected.remove(const.co_name)
+ if expected:
+  raise ImportError("missing expected function: {}".format(expected))
+
+ module = new_module(name)
+ exec(code, module.__dict__)
+ sys.modules[name] = module
+ return module
+ 
+
+ Keep in mind, this is a very direct way of doing it and circumvents extensions to Python's import machinery. 
+ #4 One very simple solution could be to check the first characters of every line of code: The only permitted should be: 
+
+ 
+ def init(): 
+ def execute(): 
+ def cleanup(): 
+ lines starting with 4 spaces 
+ [optionally]: lines starting with # 
+ 
+
+ This is very primitive but it fulfills your requirements... 
+
+ Update : After a second though about it I realized that it isn't so easy after all. Consider for example this piece of code: 
+
+ def init():
+ v = """abc
+def
+ghi"""
+ print(v)
+ 
+
+ This means that you'd need a more complex code parsing algorithm... so forget about my solution... 
+ #5 A solution to 1 to 3, ( not the yadda part ) is to hand out "generic_class.py" with all the methods that you need. So, 
+
+ class Generic(object):
+
+ def __init__(self):
+  return
+
+ def execute(self):
+  return
+
+ # etc
+ 
+
+ You can then check for the existence of "generic" in what you've imported. If it doesn't exist you can ignore it and if it does then you know exactly what's there. Anything extra will never be called unless it's called from within one of your pre-defined methods.

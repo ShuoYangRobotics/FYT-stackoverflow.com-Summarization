@@ -1,0 +1,187 @@
+Question (ID-2006190): python equivalent of '#define func() ' or how to comment out a function call in python my python code is interlaced with lots of function calls used for (debugging|profiling|tracing etc.)
+for example: 
+
+ import logging
+
+logging.root.setLevel(logging.DEBUG)
+logging.debug('hello')
+j = 0
+for i in range(10):
+ j += i
+ logging.debug('i %d j %d' % (i,j))
+print(j)
+logging.debug('bye')
+ 
+
+ i want to #define these resource consuming functions out of the code. something like the c equivalent 
+
+ #define logging.debug(val)
+ 
+
+ yes, i know the logging module logging level mechanism can be used to mask out loggings below set log level. but, im asking for a general way to have the python interpreter skip functions (that take time to run even if they dont do much) 
+
+ one idea is to redefine the functions i want to comment out into empty functions: 
+
+ def lazy(*args): pass
+logging.debug = lazy
+ 
+
+ the above idea still calls a function, and may create a myriad of other problems 
+ Answers (Total-9): #0 Python does not have a preprocessor, although you could run your python source through an external preprocessor to get the same effect - e.g. sed "/logging.debug/d" will strip out all the debug logging commands. This is not very elegant though - you will end up needing some sort of build system to run all your modules through the preprocessor and perhaps create a new directory tree of the processed .py files before running the main script. 
+
+ Alternatively if you put all your debug statements in an if __debug__: block they will get optimised out when python is run with the -O (optimise) flag. 
+
+ As an aside, I checked the code with the dis module to ensure that it did get optimised away. I discovered that both 
+
+ if __debug__: doStuff()
+ 
+
+ and 
+
+ if 0: doStuff()
+ 
+
+ are optimised, but 
+
+ if False: doStuff()
+ 
+
+ is not. This is because False is a regular Python object, and you can in fact do this: 
+
+ &gt;&gt;&gt; False = True
+&gt;&gt;&gt; if False: print "Illogical, captain"
+Illogical, captain
+ 
+
+ Which seems to me a flaw in the language - hopefully it is fixed in Python 3. 
+
+ Edit: 
+
+ This is fixed in Python 3: Assigning to True or False now gives a SyntaxError .
+Since True and False are constants in Python 3, it means that if False: doStuff() is now optimised: 
+
+ &gt;&gt;&gt; def f():
+...  if False: print( "illogical")
+... 
+&gt;&gt;&gt; dis.dis(f)
+ 2   0 LOAD_CONST    0 (None) 
+    3 RETURN_VALUE   
+ 
+ #1 Well, you can always implement your own simple preprocessor that does the trick. Or, even better, you can use an already existing one. Say http://code.google.com/p/preprocess/ 
+ #2 Although I think the question is perfectly clear and valid (notwithstanding the many responses that suggest otherwise), the short answer is "there's no support in Python for this". 
+
+ The only potential solution other than the preprocessor suggestion would be to use some bytecode hacking . I won't even begin to imagine how this should work in terms of the high-level API, but at a low level you could imagine examining code objects for particular sequences of instructions and re-writing them to eliminate them. 
+
+ For example, look at the following two functions: 
+
+ &gt;&gt;&gt; def func():
+... if debug: # analogous to if __debug__:
+...  foo
+&gt;&gt;&gt; dis.dis(func)
+ 2   0 LOAD_GLOBAL    0 (debug)
+    3 JUMP_IF_FALSE   8 (to 14)
+    6 POP_TOP
+
+ 3   7 LOAD_GLOBAL    1 (foo)
+    10 POP_TOP
+    11 JUMP_FORWARD    1 (to 15)
+  &gt;&gt; 14 POP_TOP
+  &gt;&gt; 15 LOAD_CONST    0 (None)
+    18 RETURN_VALUE
+ 
+
+ Here you could scan for the LOAD_GLOBAL of debug , and eliminate it and everything up to the JUMP_IF_FALSE target. 
+
+ This one is the more traditional C-style debug() function that gets nicely obliterated by a preprocessor: 
+
+ &gt;&gt;&gt; def func2():
+... debug('bar', baz)
+&gt;&gt;&gt; dis.dis(func2)
+ 2   0 LOAD_GLOBAL    0 (debug)
+    3 LOAD_CONST    1 ('bar')
+    6 LOAD_GLOBAL    1 (baz)
+    9 CALL_FUNCTION   2
+    12 POP_TOP
+    13 LOAD_CONST    0 (None)
+    16 RETURN_VALUE
+ 
+
+ Here you would look for LOAD_GLOBAL of debug and wipe everything up to the corresponding CALL_FUNCTION . 
+
+ Of course, both of those descriptions of what you would do are far simpler than what you'd really need for all but the most simplistic patterns of use, but I think it would be feasible. Would make a cute project, if nobody's already done it. 
+ #3 Use a module scoped variable? 
+
+ from config_module import debug_flag 
+
+ and use this "variable" to gate access to the logging function(s). You would build yourself a logging module that uses the debug_flag to gate the logging functionality. 
+ #4 I think that completely aboiding the calling on a function is not posible, as Python works in a different way that C. The #define takes place in the pre-compiler, before the code is compiled. In Python, there's no such thing. 
+
+ If you want to completely remove the calling to debug in a work environment, I think the only way if to actually change the code before execution. With a script previous to execution you could comment/uncomment the debug lines. 
+
+ Something like this: 
+
+ File logging.py 
+
+ #Main module
+def log():
+ print 'logging'
+
+def main():
+ log()
+ print 'Hello'
+ log()
+ 
+
+ File call_log.py 
+
+ import re
+#To log or not to log, that's the question
+log = True
+
+#Change the loging
+with open('logging.py') as f:
+ new_data = []
+ for line in f:
+  if not log and re.match(r'\s*log.*', line):
+   #Comment
+   line = '#' + line
+  if log and re.match(r'#\s*log.*', line):
+   #Uncomment
+   line = line[1:]
+  new_data.append(line)
+
+#Save file with adequate log level
+with open('logging.py', 'w') as f:
+ f.write(''.join(new_data))
+
+
+#Call the module
+import logging
+logging.main()
+ 
+
+ Of course, it has its problems, specially if there are a lot of modules and are complex, but could be usable if you need to absolutely avoid the calling to a function. 
+ #5 Before you do this, have you profiled to verify that the logging is actually taking a substantial amount of time? You may find that you spend more time trying to remove the calls than you save. 
+
+ Next, have you tried something like Psyco ? If you've got things set up so logging is disabled, then Psyco may be able to optimise away most of the overhead of calling the logging function, noticing that it will always return without action. 
+
+ If you still find logging taking an appreciable amount of time, you might then want to look at overriding the logging function inside critical loops, possibly by binding a local variable to either the logging function or a dummy function as appropriate (or by checking for None before calling it). 
+ #6 define a function that does nothing, ie 
+
+ def nuzzing(*args, **kwargs): pass
+ 
+
+ Then just overload all the functions you want to get rid of with your function, ala 
+
+ logging.debug = nuzzing
+ 
+ #7 I like the 'if _ debug ' solution except that putting it in front of every call is a bit distracting and ugly. I had this same problem and overcame it by writing a script which automatically parses your source files and replaces logging statements with pass statements (and commented out copies of the logging statements). It can also undo this conversion. 
+
+ I use it when I deploy new code to a production environment when there are lots of logging statements which I don't need in a production setting and they are affecting performance. 
+
+ You can find the script here: http://dound.com/2010/02/python-logging-performance/ 
+ #8 You can't skip function calls. You could redefine these as empty though, e.g. by creating another logging object that provides the same interface, but with empty functions. 
+
+ But by far the cleanest approach is to ignore the low priority log messages (as you suggested): 
+
+ logging.root.setLevel(logging.CRITICAL)

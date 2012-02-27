@@ -1,0 +1,837 @@
+Question (ID-5160965): How to obtain the root of a tree without parsing the entire file? I'm making an xml parser to parse xml reports from different tools, and each tool generates different reports with different tags. 
+
+ For example: 
+
+ Arachni generates an xml report with &lt;arachni_report&gt;&lt;/arachni_report&gt; as tree root tag. 
+
+ nmap generates an xml report with &lt;nmaprun&gt;&lt;/nmaprun&gt; as tree root tag. 
+
+ I'm trying not to parse the entire file unless it's a valid report from any of the tools I want. 
+
+ First thing I thought to use was ElementTree, parse the entire xml file (supposing it contains valid xml), and then check based on the tree root if the report belongs to Arachni or nmap. 
+
+ I'm currently using cElementTree, and as far as I know getroot() is not an option here, but my goal is to make this parser to operate with recognized files only, without parsing unnecessary files. 
+
+ By the way, I'm Still learning about xml parsing, thanks in advance. 
+ Answers (Total-6): #0 "simple string methods" are the root [pun intended] of all evil -- see examples below. 
+
+ Update 2 Code and output now show that proposed regexes also don't work very well. 
+
+ Use ElementTree. The function that you are looking for is iterparse . Enable "start" events. Bale out on the first iteration. 
+
+ Code: 
+
+ # coding: ascii
+import xml.etree.cElementTree as et
+# import xml.etree.ElementTree as et
+# import lxml.etree as et
+from cStringIO import StringIO
+import re
+
+xml_text_1 = """\
+&lt;?xml version="1.0" ?&gt; 
+&lt;!-- this is a comment --&gt; 
+&lt;root
+&gt;&lt;foo&gt;bar&lt;/foo&gt;&lt;/root
+&gt;
+"""
+
+xml_text_2 = """\
+&lt;?xml version="1.0" ?&gt; 
+&lt;!-- this is a comment --&gt; 
+&lt;root
+&gt;&lt;foo&gt;bar&lt;/foo&gt;&lt;/root
+&gt;
+&lt;!--
+That's all, folks! 
+--&gt;
+"""
+
+xml_text_3 = '''&lt;?xml version="1.0" ?&gt;
+&lt;!-- &lt;mole1&gt; --&gt;
+&lt;root&gt;&lt;foo /&gt;&lt;/root&gt;
+&lt;!-- &lt;/mole2&gt; --&gt;'''
+
+xml_text_4 = '''&lt;?xml version="1.0" ?&gt;&lt;!-- &lt;mole1&gt; --&gt;&lt;root&gt;&lt;foo /&gt;&lt;/root&gt;&lt;!-- &lt;/mole2&gt; --&gt;'''
+
+for xml_text in (xml_text_1, xml_text_2, xml_text_3, xml_text_4):
+ print
+ chrstr = xml_text.strip()
+ x = max(chrstr.rfind('\r'),chrstr.rfind('\n'))
+ lastline = chrstr[x:]
+ print "*** eyquem 1:", repr(lastline.strip())
+
+ chrstr = xml_text.strip()
+ x = max(chrstr.rfind('\r'),chrstr.rfind('\n'))
+ lastline = chrstr[x+1:]
+ if lastline[0:5]=='&lt;!-- ':
+  chrstr = xml_text[0:x].rstrip()
+  x = max(chrstr.rfind('\r'),chrstr.rfind('\n'))
+  print "*** eyquem 2:", repr(chrstr[x+1:])
+ else:
+  print "*** eyquem 2:", repr(lastline)
+
+ m = None
+ for m in re.finditer('^&lt;/[^&gt;]+&gt;', xml_text, re.MULTILINE):
+  pass
+ if m: print "*** eyquem 3:", repr(m.group())
+ else: print "*** eyquem 3:", "FAIL"
+
+ m = None
+ for m in re.finditer('&lt;/[^&gt;]+&gt;', xml_text):
+  pass
+ if m: print "*** eyquem 4:", repr(m.group())
+ else: print "*** eyquem 4:", "FAIL"
+
+ m = re.search('^&lt;(?![?!])[^&gt;]+&gt;', xml_text, re.MULTILINE)
+ if m: print "*** eyquem 5:", repr(m.group())
+ else: print "*** eyquem 5:", "FAIL"
+
+ m = re.search('&lt;(?![?!])[^&gt;]+&gt;', xml_text)
+ if m: print "*** eyquem 6:", repr(m.group())
+ else: print "*** eyquem 6:", "FAIL"
+
+ filelike_obj = StringIO(xml_text)
+ tree = et.parse(filelike_obj)
+ print "*** parse:", tree.getroot().tag
+
+ filelike_obj = StringIO(xml_text)
+ for event, elem in et.iterparse(filelike_obj, ('start', 'end')):
+  print "*** iterparse:", elem.tag
+  break
+ 
+
+ Above ElementTree-related code works with Python 2.5 to 2.7. Will work with Python 2.2 to 2.4; you just need to get ElementTree and cElementTree from effbot.org and do some conditional importing. Should work with any lxml version. 
+
+ Output: 
+
+ *** eyquem 1: '&gt;'
+*** eyquem 2: '&gt;'
+*** eyquem 3: FAIL
+*** eyquem 4: '&lt;/root\n&gt;'
+*** eyquem 5: '&lt;root\n&gt;'
+*** eyquem 6: '&lt;root\n&gt;'
+*** parse: root
+*** iterparse: root
+
+*** eyquem 1: '--&gt;'
+*** eyquem 2: '--&gt;'
+*** eyquem 3: FAIL
+*** eyquem 4: '&lt;/root\n&gt;'
+*** eyquem 5: '&lt;root\n&gt;'
+*** eyquem 6: '&lt;root\n&gt;'
+*** parse: root
+*** iterparse: root
+
+*** eyquem 1: '&lt;!-- &lt;/mole2&gt; --&gt;'
+*** eyquem 2: '&lt;root&gt;&lt;foo /&gt;&lt;/root&gt;'
+*** eyquem 3: FAIL
+*** eyquem 4: '&lt;/mole2&gt;'
+*** eyquem 5: '&lt;root&gt;'
+*** eyquem 6: '&lt;mole1&gt;'
+*** parse: root
+*** iterparse: root
+
+*** eyquem 1: '&gt;'
+*** eyquem 2: '&lt;?xml version="1.0" ?&gt;&lt;!-- &lt;mole1&gt; --&gt;&lt;root&gt;&lt;foo /&gt;&lt;/root&gt;&lt;!-- &lt;/mole2&gt; --&gt;'
+*** eyquem 3: FAIL
+*** eyquem 4: '&lt;/mole2&gt;'
+*** eyquem 5: FAIL
+*** eyquem 6: '&lt;mole1&gt;'
+*** parse: root
+*** iterparse: root
+ 
+
+ Update 1 The above was demonstration code. Below is more like implementation code... just add exception handling. Tested with Python 2.7 and 2.2. 
+
+ try:
+ import xml.etree.cElementTree as ET
+except ImportError:
+ import cElementTree as ET
+
+def get_root_tag_from_xml_file(xml_file_path):
+ result = f = None
+ try:
+  f = open(xml_file_path, 'rb')
+  for event, elem in ET.iterparse(f, ('start', )):
+   result = elem.tag
+   break
+ finally:
+  if f: f.close()
+ return result
+
+if __name__ == "__main__":
+ import sys, glob
+ for pattern in sys.argv[1:]:
+  for filename in glob.glob(pattern):
+   print filename, get_root_tag_from_xml_file(filename)
+ 
+ #1 Does this seem interesting to a connoisseur of XML ? : 
+
+ ch = """\
+&lt;?xml version="1.0" encoding="ISO-8859-1" ?&gt; 
+&lt;!-- Edited by XMLSpy® --&gt; 
+&lt;CATALOG&gt;
+ &lt;CD&gt;
+ &lt;TITLE&gt;Empire Burlesque&lt;/TITLE&gt; 
+ &lt;ARTIST&gt;Bob Dylan&lt;/ARTIST&gt; 
+ &lt;COUNTRY&gt;USA&lt;/COUNTRY&gt; 
+ &lt;COMPANY&gt;Columbia&lt;/COMPANY&gt; 
+ &lt;PRICE&gt;10.90&lt;/PRICE&gt; 
+ &lt;YEAR&gt;1985&lt;/YEAR&gt; 
+ &lt;/CD&gt;
+ &lt;CD&gt;
+ &lt;TITLE&gt;Hide your heart&lt;/TITLE&gt; 
+ &lt;ARTIST&gt;Bonnie Tyler&lt;/ARTIST&gt; 
+ &lt;COUNTRY&gt;UK&lt;/COUNTRY&gt; 
+ &lt;COMPANY&gt;CBS Records&lt;/COMPANY&gt; 
+ &lt;PRICE&gt;9.90&lt;/PRICE&gt; 
+ &lt;YEAR&gt;1988&lt;/YEAR&gt; 
+ &lt;/CD&gt;
+&lt;/CATALOG&gt;
+&lt;!-- This is the end of arachni report --&gt; 
+
+"""
+
+chrstr = ch.strip()
+x = max(chrstr.rfind('\r'),chrstr.rfind('\n'))
+lastline = chrstr[x+1:]
+if lastline[0:5]=='&lt;!-- ':
+ chrstr = ch[0:x].rstrip()
+ x = max(chrstr.rfind('\r'),chrstr.rfind('\n'))
+ print chrstr[x+1:]
+else:
+ print lastline
+ 
+
+ result, still 
+
+ &lt;/CATALOG&gt;
+ 
+
+ If necessary, one could add a verification that the start-tag of tree root is also around the beginning in the file 
+
+ . 
+
+ If the file is big, to speed up the treatment, we can move the pointeur of the file near the file's end (say 200 or 600 characters ante the end) to read and search in only a string of 200 or 600 characters long (the end-tag of the tree root of an XL doesn't have a greater length, does it ?) 
+
+ from os.path import getsize
+
+with open('I:\\uuu.txt') as f:
+
+ L = getsize('I:\\uuu.txt')
+ print 'L==',L
+
+ f.seek( -min(600,L) , 2)
+ ch = f.read()
+ if '\r' not in ch and '\n' not in ch:
+  f.seek(0,0)
+  ch = f.read()  
+
+ chrstr = ch.strip()
+ x = max(chrstr.rfind('\r'),chrstr.rfind('\n'))
+ lastline = chrstr[x+1:]
+ if lastline[0:5]=='&lt;!-- ':
+  chrstr = ch[0:x].rstrip()
+  x = max(chrstr.rfind('\r'),chrstr.rfind('\n'))
+  print chrstr[x+1:]
+ else:
+  print lastline
+ 
+ #2 My understanding of your problem is this: You want to examine a file to determine if it is one of your recognized formats, and only parse it as XML if you know that it is one of the recognized formats. @eyquem is right: you should use simple string methods. 
+
+ The simplest thing to do is to read some small amount from the beginning of the file, and see if it has a root element you recognize: 
+
+ f = open(the_file)
+head = f.read(200)
+f.close()
+if "&lt;arachni_report" in head:
+ #.. re-open and parse as arachni ..
+elif "&lt;nmaprun" in head:
+ #.. re-open and parse as nmaprun ..
+ 
+
+ This method has the advantage that only a small amount of the file is read before determining whether it's an interesting file or not. 
+ #3 Final edit: 
+Thanks to John Machin I'll be using this following code (this is a draft) based on his answer (which is the one I selected as correct). 
+
+ I'd also like to thank eyquem for his responses and his persistence on defending his codes, I really learned a lot :) 
+
+ #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+from cStringIO import StringIO
+
+try:
+ import xml.etree.cElementTree as ET
+except ImportError:
+ import xml.etree.ElementTree as ET
+
+class reportRecognizer(object):
+
+ def __init__(self, xml_report_path):
+  self.report_type = ""
+
+  root_tag = self.get_root_tag_from_xml_file(xml_report_path)
+
+  if root_tag:
+   self.report_type = self.rType(root_tag)
+
+
+ def get_root_tag_from_xml_file(self, xml_file_path):
+  result = f = None
+  try:
+   f = open(xml_file_path, 'rb')
+   for event, elem in ET.iterparse(f, ('start', )):
+    result = elem.tag
+    break
+  except IOError, err:
+   print "Error while opening file.\n%s. %s" % (err, filepath)
+  finally:
+   if f: f.close()
+  return result
+
+ def rType(self, tag):
+  if "arachni_report" == tag:
+   return "Arachni XML Report"
+  elif "nmaprun" == tag:
+   return "Nmap XML Report"
+  else:
+   return "Unrecognized XML file, sorry."
+
+report = reportRecognizer('report.xml')
+print report.report_type
+ 
+ #4 Are you serious, John Machin , when you show that my code wouldn't work correctly ? 
+
+ Since I don't know well the XML format, I went there: 
+
+ W3C's XML validator 
+
+ Conclusion is that your text samples are not well-formed. Hence : 
+
+ 
+ « The definition of an XML document
+ excludes texts which contain
+ violations of well-formedness rules;
+ they are simply not XML . » 
+ 
+ http://en.wikipedia.org/wiki/XML 
+
+ The real evil is here.
+ 
+ 
+
+ Did you mean that I was supposed to have written a code able to detect tree root's tag in non-XML files ? I didn't know I had this over-requirement to fulfill. 
+
+ . 
+
+ Here's a code that frightens a little less than the one using only string methods. I didn't give it before because I would have received notifications that "..whisp...you MUST not employ regexes to analyse an XML text... whisp whisp" 
+
+ import re
+from os.path import getsize
+
+with open('I:\\uuu.txt') as f:
+
+ L = getsize('I:\\uuu.txt')
+ print 'L==',L
+
+ f.seek( -min(600,L) , 2)
+ for mat in re.finditer('^&lt;/[^&gt;]+&gt;',f.read(),re.MULTILINE):
+  pass
+ print mat.group()
+ 
+
+ It coud be done the same in the more noisy beginning of the XML. 
+
+ In fact, I prefer the solution given by John Machin, with the iterparse() function of ElementTree , and that's it ! 
+
+ . 
+
+ EDIT 
+
+ After all, I wonder why this wouldn't be enough.... 
+
+ import re
+
+with open('I:\\uuu.txt') as f:
+ print re.search('^&lt;(?![?!])[^&gt;]+&gt;',f.read(),re.MULTILINE).group()
+ 
+ #5 Here is what you were looking for, John Machin: the sequel of our serial . I verified that this time my brain was in its correct place, and I continued to think about the problem. 
+
+ So you have extended the demonstration code.
+Now, with your several exemplifying texts, it is clear for me that the string methods are far to be sufficient, and I UNDERSTAND why. I am very interested to know the underneath of processes and to understand the concrete reasons of affirmations. 
+
+ Then I studied more than I ever did the specifications of XML and performed tests with the W3c 's validator to increase my understanding of details of the structure of a XML text. It's a rather severe occupation but interesting though. I saw that the format of an XML is a mix of very strict rules and of debonair liberties. 
+
+ From the tricks you used in your exemples to tear my codes into pieces, I conclude that XML format doesn't require the text to be divided into lines. In fact, as the W3c 's validator showed me, characters \n , \r and \t can be at many positions in a XML text, provided that they don't break a rule of structure. 
+
+ For exemple they are authorized without any restriction between tags: as a consequence, an element may occupy several lines. Also, even tags can be splitted into several lines, or among several tabulations \t , provided that they occur after the name of one tag. There is nor requirement for the lines of a XML text to be indented as I always saw them: I understand now it's only a personal convenience choosen for ease of reading and logical comprehension. 
+
+ Well, you know all that better than me, John Machin. Thanks to you, I am now alerted to the complexity of XML format and I better understand the reasons that make parsing unrealistic by other means than specialized parsers. I incidentally wonder if common coders are aware of this awkardness of XML format: the possibility of \n characters present here and there in an XML text. 
+
+ . 
+
+ Anyway, as I have been in this conceptual boiling pot for a while now, I continued to search for a solution for your whac_moles, John Machin, as an instructive play. 
+
+ String methods being out of the game, I polished my regex. 
+
+ I know, I know: you'll say me that analyzing an XML text can't be done even with a regex. Now that I know better why, I agree. But I don't pretend to parse an XML text: my regex won't extract any part of an XML tree, it will search only a little chunk of text. For the problem asked by OP, I consider the use of regex as non heretical. 
+
+ . 
+
+ From the beginning, I think that searching the end-tag of the root is more easy and natural, because an end-tag hasn't attributes and there is less "noise" around it than the start-tag of the root. 
+
+ So my solution is now: 
+
+ 
+ ~~ open the XML file 
+ 
+ ~~ move the file's pointer to the position -200 from the end 
+ 
+ ~~ read the 200 last characters of the file 
+ 
+ ~~ here, two strategies: 
+ 
+ 
+ either remove only the comments and then searching the tag with a regex taking the characters \n, \r, \t in account 
+ or remove the comments and all the characters \n, \r, \t before searching
+ the tag with a simpler regex 
+ 
+ 
+
+ The bigger the file is, the speeder is this algorithm compared to the use of parse or iterparse. I wrote and examined all the results of the following codes. The first strategy is the faster one. 
+
+ # coding: ascii
+import xml.etree.cElementTree as et
+# import xml.etree.ElementTree as et
+# import lxml.etree as et
+from cStringIO import StringIO
+import re,urllib
+
+xml5 = """\
+&lt;?xml version="1.0" ?&gt; 
+&lt;!-- this is a comment --&gt; 
+&lt;root\t
+\r\t\r \r
+&gt;&lt;foo
+
+&gt;bar&lt;/foo\t \r&gt;&lt;/root
+&gt;
+"""
+
+xml6 = """\
+&lt;?xml version="1.0" ?&gt; 
+&lt;!-- this is a comment --&gt; 
+&lt;root
+&gt;&lt;foo
+&gt;bar&lt;/foo\n\t \t&gt;&lt;/root \t
+\r&gt;
+&lt;!-- \r \t
+That's all, folks!
+
+\t--&gt;
+"""
+
+xml7 = '''&lt;?xml version="1.0" ?&gt;
+&lt;!-- &lt;mole1&gt; --&gt; 
+&lt;root&gt;&lt;foo
+
+\t\t\r\r\t/&gt;&lt;/root \t
+&gt; 
+&lt;!-- &lt;/mole2&gt;\t \r
+ \r--&gt;
+&lt;!----&gt;
+'''
+
+xml8 = '''&lt;?xml version="1.0" ?&gt;&lt;!-- \r&lt;mole1&gt; --&gt;&lt;root&gt; \t\t&lt;foo \t\r\r/&gt;&lt;/root&gt;\t&lt;!-- &lt;/mole2&gt; --&gt;'''
+
+
+sock = urllib.urlopen('http://www.cafeconleche.org/books/bible/examples/18/18-4.xsl')
+xml9 = sock.read()
+sock.close()
+
+
+def rp(x):
+ return '\\r' if x.group()=='\r' else '\\t'
+
+for xml_text in (xml5, xml6, xml7, xml8, xml9):
+
+ print '\\n\n'.join(re.sub('\r|\t',rp,xml_text).split('\n'))
+ print '-----------------------------'
+
+ xml_text_noc = re.sub('&lt;!--.*?--&gt;|[\n\r\t]','', xml_text,flags=re.DOTALL)
+ RE11 = '(?&lt;=&lt;/)[^ &gt;]+(?= *&gt;)(?!.*&lt;/[^&gt;]+&gt;)' # with assertions # ^
+ m = re.search(RE11, xml_text_noc,re.DOTALL)
+ print "*** eyquem 11: " + repr(m.group() if m else "FAIL")
+
+ xml_text_noc = re.sub('&lt;!--.*?--&gt;|[\n\r\t]','', xml_text,flags=re.DOTALL)
+ RE12 = '&lt;/([^ &gt;]+) *&gt;(?!.*&lt;/[^&gt;]+&gt;)' # with group(1) # ^
+ m = re.search(RE12, xml_text_noc,re.DOTALL)
+ print "*** eyquem 12: " + repr(m.group(1) if m else "FAIL")
+
+ xml_text_noc = re.sub('&lt;!--.*?--&gt;|[\n\r\t]','', xml_text,flags=re.DOTALL)
+ RE13 = '&lt;/[^ &gt;]+ *&gt;(?!.*&lt;/[^&gt;]+&gt;)' # without group(1) # ^
+ m = re.search(RE13, xml_text_noc,re.DOTALL)
+ print "*** eyquem 13: " + repr(m.group()[2:-1].rstrip() if m else "FAIL")
+
+
+
+ xml_text_noc = re.sub('&lt;!--.*?--&gt;','', xml_text,flags=re.DOTALL)
+ RE14 = '(?&lt;=&lt;/)[^ \n\r\t&gt;]+(?=[ \n\r\t]*&gt;)(?!.*&lt;/[^&gt;]+&gt;)' # with assertions # ^
+ m = re.search(RE14, xml_text_noc,re.DOTALL)
+ print "*** eyquem 14: " + repr(m.group() if m else "FAIL")
+
+ xml_text_noc = re.sub('&lt;!--.*?--&gt;','', xml_text,flags=re.DOTALL)
+ RE15 = '&lt;/([^ \n\r\t&gt;]+)[ \n\r\t]*&gt;(?!.*&lt;/[^&gt;]+&gt;)' # with group(1) # &lt;
+ m = re.search(RE15, xml_text_noc,re.DOTALL)
+ print "*** eyquem 15: " + repr(m.group(1).rstrip() if m else "FAIL")
+
+ xml_text_noc = re.sub('&lt;!--.*?--&gt;','', xml_text,flags=re.DOTALL)
+ RE16 = '&lt;/[^ \n\r\t&gt;]+[ \n\r\t]*&gt;(?!.*&lt;/[^&gt;]+&gt;)' # without group(1) # &lt;
+ m = re.search(RE16, xml_text_noc,re.DOTALL)
+ print "*** eyquem 16: " + repr(m.group()[2:-1].rstrip() if m else "FAIL")
+
+
+
+ print
+ filelike_obj = StringIO(xml_text)
+ tree = et.parse(filelike_obj)
+ print "***  parse: " + tree.getroot().tag
+
+ filelike_obj = StringIO(xml_text)
+ for event, elem in et.iterparse(filelike_obj, ('start', 'end')):
+  print "*** iterparse: " + elem.tag
+  break
+
+
+ print '\n=============================================' 
+ 
+
+ Result 
+
+ &lt;?xml version="1.0" ?&gt; \n
+&lt;!-- this is a comment --&gt; \n
+&lt;root\t\n
+\r\t\r \r\n
+&gt;&lt;foo\n
+\n
+&gt;bar&lt;/foo\t \r&gt;&lt;/root\n
+&gt;\n
+
+-----------------------------
+*** eyquem 11: 'root'
+*** eyquem 12: 'root'
+*** eyquem 13: 'root'
+*** eyquem 14: 'root'
+*** eyquem 15: 'root'
+*** eyquem 16: 'root'
+
+***  parse: root
+*** iterparse: root
+
+=============================================
+&lt;?xml version="1.0" ?&gt; \n
+&lt;!-- this is a comment --&gt; \n
+&lt;root\n
+&gt;&lt;foo\n
+&gt;bar&lt;/foo\n
+\t \t&gt;&lt;/root \t\n
+\r&gt;\n
+&lt;!-- \r \t\n
+That's all, folks!\n
+\n
+\t--&gt;\n
+
+-----------------------------
+*** eyquem 11: 'root'
+*** eyquem 12: 'root'
+*** eyquem 13: 'root'
+*** eyquem 14: 'root'
+*** eyquem 15: 'root'
+*** eyquem 16: 'root'
+
+***  parse: root
+*** iterparse: root
+
+=============================================
+&lt;?xml version="1.0" ?&gt;\n
+&lt;!-- &lt;mole1&gt; --&gt; \n
+&lt;root&gt;&lt;foo\n
+\n
+\t\t\r\r\t/&gt;&lt;/root \t\n
+&gt; \n
+&lt;!-- &lt;/mole2&gt;\t\n
+--&gt;\n
+&lt;!----&gt;\n
+
+-----------------------------
+*** eyquem 11: 'root'
+*** eyquem 12: 'root'
+*** eyquem 13: 'root'
+*** eyquem 14: 'root'
+*** eyquem 15: 'root'
+*** eyquem 16: 'root'
+
+***  parse: root
+*** iterparse: root
+
+=============================================
+&lt;?xml version="1.0" ?&gt;&lt;!-- \r&lt;mole1&gt; --&gt;&lt;root&gt; \t\t&lt;foo \t\r\r/&gt;&lt;/root&gt;\t&lt;!-- &lt;/mole2&gt; --&gt;
+-----------------------------
+*** eyquem 11: 'root'
+*** eyquem 12: 'root'
+*** eyquem 13: 'root'
+*** eyquem 14: 'root'
+*** eyquem 15: 'root'
+*** eyquem 16: 'root'
+
+***  parse: root
+*** iterparse: root
+
+=============================================
+&lt;?xml version="1.0"?&gt;\r\n
+&lt;stylesheet\r\n
+ xmlns="http://www.w3.org/XSL/Transform/1.0"\r\n
+ xmlns:fo="http://www.w3.org/XSL/Format/1.0"\r\n
+ result-ns="fo"&gt;\r\n
+\r\n
+ &lt;template match="/"&gt;\r\n
+ &lt;fo:root xmlns:fo="http://www.w3.org/XSL/Format/1.0"&gt;\r\n
+\r\n
+  &lt;fo:layout-master-set&gt;\r\n
+  &lt;fo:simple-page-master page-master-name="only"&gt;\r\n
+   &lt;fo:region-body/&gt;\r\n
+  &lt;/fo:simple-page-master&gt;\r\n
+  &lt;/fo:layout-master-set&gt;\r\n
+\r\n
+  &lt;fo:page-sequence&gt;\r\n
+\r\n
+  &lt;fo:sequence-specification&gt;\r\n
+  &lt;fo:sequence-specifier-single page-master-name="only"/&gt;\r\n
+  &lt;/fo:sequence-specification&gt;\r\n
+  \r\n
+  &lt;fo:flow&gt;\r\n
+   &lt;apply-templates select="//ATOM"/&gt;\r\n
+  &lt;/fo:flow&gt;\r\n
+  \r\n
+  &lt;/fo:page-sequence&gt;\r\n
+\r\n
+ &lt;/fo:root&gt;\r\n
+ &lt;/template&gt;\r\n
+\r\n
+ &lt;template match="ATOM"&gt;\r\n
+ &lt;fo:block font-size="20pt" font-family="serif"&gt;\r\n
+  &lt;value-of select="NAME"/&gt;\r\n
+ &lt;/fo:block&gt;\r\n
+ &lt;/template&gt;\r\n
+\r\n
+&lt;/stylesheet&gt;\r\n
+
+-----------------------------
+*** eyquem 11: 'stylesheet'
+*** eyquem 12: 'stylesheet'
+*** eyquem 13: 'stylesheet'
+*** eyquem 14: 'stylesheet'
+*** eyquem 15: 'stylesheet'
+*** eyquem 16: 'stylesheet'
+
+***  parse: {http://www.w3.org/XSL/Transform/1.0}stylesheet
+*** iterparse: {http://www.w3.org/XSL/Transform/1.0}stylesheet
+
+=============================================
+ 
+
+ This code now measures the execution's times: 
+
+ # coding: ascii
+import xml.etree.cElementTree as et
+# import xml.etree.ElementTree as et
+# import lxml.etree as et
+from cStringIO import StringIO
+import re
+import urllib
+from time import clock
+
+sock = urllib.urlopen('http://www.cafeconleche.org/books/bible/examples/18/18-4.xsl')
+ch = sock.read()
+sock.close()
+
+# the following lines are intended to insert additional lines
+# into the XML text before its recording in a file, in order to
+# obtain a real file to use, containing an XML text 
+# long enough to observe easily the timing's differences
+
+li = ch.splitlines(True)[0:6] + 30*ch.splitlines(True)[6:-2] + ch.splitlines(True)[-2:]
+
+with open('xml_example.xml','w') as f:
+ f.write(''.join(li))
+
+print 'length of XML text in a file : ',len(''.join(li)),'\n'
+
+
+
+# timings
+
+P,I,A,B,C,D,E,F = [],[],[],[],[],[],[],[],
+
+
+n = 50
+
+for cnt in xrange(50):
+
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as filelike_obj:
+   tree = et.parse(filelike_obj)
+   res_parse = tree.getroot().tag
+ P.append( clock()-te)
+
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as filelike_obj:
+   for event, elem in et.iterparse(filelike_obj, ('start', 'end')):
+    res_iterparse = elem.tag
+    break
+ I.append( clock()-te)
+
+
+ RE11 = '(?&lt;=&lt;/)[^ &gt;]+(?= *&gt;)(?!.*&lt;/[^&gt;]+&gt;)' # with assertions # ^
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as f:
+   f.seek(-200,2)
+   xml_text = f.read()
+   xml_text_noc = re.sub('(&lt;!--.*?--&gt;|[\n\r\t])','', xml_text,flags=re.DOTALL)
+   m = re.search(RE11, xml_text_noc,re.DOTALL)
+   res_eyq11 = m.group() if m else "FAIL"
+ A.append( clock()-te)
+
+
+ RE12 = '&lt;/([^ &gt;]+) *&gt;(?!.*&lt;/[^&gt;]+&gt;)' # with group(1) # ^
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as f:
+   f.seek(-200,2)
+   xml_text = f.read()
+   xml_text_noc = re.sub('(&lt;!--.*?--&gt;|[\n\r\t])','', xml_text,flags=re.DOTALL)
+   m = re.search(RE12, xml_text_noc,re.DOTALL)
+   res_eyq12 = m.group(1) if m else "FAIL"
+ B.append( clock()-te)
+
+
+ RE13 = '&lt;/[^ &gt;]+ *&gt;(?!.*&lt;/[^&gt;]+&gt;)' # without group(1) # ^
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as f:
+   f.seek(-200,2)
+   xml_text = f.read()
+   xml_text_noc = re.sub('(&lt;!--.*?--&gt;|[\n\r\t])','', xml_text,flags=re.DOTALL)
+   m = re.search(RE13, xml_text_noc,re.DOTALL)
+   res_eyq13 = m.group()[2:-1] if m else "FAIL"
+ C.append( clock()-te)
+
+
+
+ RE14 = '(?&lt;=&lt;/)[^ \n\r\t&gt;]+(?=[ \n\r\t]*&gt;)(?!.*&lt;/[^&gt;]+&gt;)' # with assertions # ^
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as f:
+   f.seek(-200,2)
+   xml_text = f.read()
+   xml_text_noc = re.sub('&lt;!--.*?--&gt;','', xml_text,flags=re.DOTALL)
+   m = re.search(RE14, xml_text_noc,re.DOTALL)
+   res_eyq14 = m.group() if m else "FAIL"
+ D.append( clock()-te)
+
+
+ RE15 = '&lt;/([^ \n\r\t&gt;]+)[ \n\r\t]*&gt;(?!.*&lt;/[^&gt;]+&gt;)' # with group(1) # &lt;
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as f:
+   f.seek(-200,2)
+   xml_text = f.read()
+   xml_text_noc = re.sub('&lt;!--.*?--&gt;','', xml_text,flags=re.DOTALL)
+   m = re.search(RE15, xml_text_noc,re.DOTALL)
+   res_eyq15 = m.group(1) if m else "FAIL"
+ E.append( clock()-te)
+
+
+ RE16 = '&lt;/[^ \n\r\t&gt;]+[ \n\r\t]*&gt;(?!.*&lt;/[^&gt;]+&gt;)' # without group(1) # &lt;
+ te = clock()
+ for i in xrange (n):
+  with open('xml_example.xml') as f:
+   f.seek(-200,2)
+   xml_text = f.read()
+   xml_text_noc = re.sub('&lt;!--.*?--&gt;','', xml_text,flags=re.DOTALL)
+   m = re.search(RE16, xml_text_noc,re.DOTALL)
+   res_eyq16 = m.group()[2:-1].rstrip() if m else "FAIL"
+ F.append( clock()-te)
+
+
+print "***  parse: " + res_parse, ' parse'
+print "*** iterparse: " + res_iterparse, ' iterparse'
+print
+print "*** eyquem 11: " + repr(res_eyq11)
+print "*** eyquem 12: " + repr(res_eyq12)
+print "*** eyquem 13: " + repr(res_eyq13)
+print "*** eyquem 14: " + repr(res_eyq14)
+print "*** eyquem 15: " + repr(res_eyq15)
+print "*** eyquem 16: " + repr(res_eyq16)
+
+print
+print str(min(P))
+print str(min(I))
+print
+print '\n'.join(str(u) for u in map(min,(A,B,C)))
+print
+print '\n'.join(str(u) for u in map(min,(D,E,F)))
+ 
+
+ Result: 
+
+ length of XML text in a file : 22548 
+
+***  parse: {http://www.w3.org/XSL/Transform/1.0}stylesheet parse
+*** iterparse: {http://www.w3.org/XSL/Transform/1.0}stylesheet iterparse
+
+*** eyquem 11: 'stylesheet'
+*** eyquem 12: 'stylesheet'
+*** eyquem 13: 'stylesheet'
+*** eyquem 14: 'stylesheet'
+*** eyquem 15: 'stylesheet'
+*** eyquem 16: 'stylesheet'
+
+0.220554691169
+0.172240771802
+
+0.0273236743636
+0.0266525536625
+0.0265308269626
+
+0.0246300539733
+0.0241203758299
+0.0238024015203
+ 
+
+ . 
+
+ . 
+
+ Considering your unsophisticated need, Aereal, I think that you don't care to have an end-tag of the root with possible characters \r \n \t in it, instead of its name alone; So the best solution for you is, in my opinion: 
+
+ def get_root_tag_from_xml_file(xml_file_path):
+ with open(xml_file_path) as f:
+  try:  f.seek(-200,2)
+  except: f.seek(0,0)
+  finally: xml_text_noc = re.sub('&lt;!--.*?--&gt;','', f.read(), flags= re.DOTALL)
+  try:
+   return re.search('&lt;/[^&gt;]+&gt;(?!.*&lt;/[^&gt;]+&gt;)' , xml_text_noc, re.DOTALL).group()
+  except :
+   return 'FAIL'
+ 
+
+ Thanks to the expertise of John Machin, this solution do a more reliable job than my previous one; and in addition it answers exactly to the demand, as it was expressed: no parsing, hence a faster method, as it was implicitly aimed at. 
+
+ . 
+
+ John Machin, will you find a new tricky feature of XML format that will invalidate this solution ?

@@ -1,0 +1,57 @@
+Question (ID-1594604): How should I optimize this filesystem I/O bound program? I have a python program that does something like this: 
+
+ 
+ Read a row from a csv file. 
+ Do some transformations on it. 
+ Break it up into the actual rows as they would be written to the database. 
+ Write those rows to individual csv files. 
+ Go back to step 1 unless the file has been totally read. 
+ Run SQL*Loader and load those files into the database. 
+ 
+
+ Step 6 isn't really taking much time at all. It seems to be step 4 that's taking up most of the time. For the most part, I'd like to optimize this for handling a set of records in the low millions running on a quad-core server with a RAID setup of some kind. 
+
+ There are a few ideas that I have to solve this: 
+
+ 
+ Read the entire file from step one (or at least read it in very large chunks) and write the file to disk as a whole or in very large chunks. The idea being that the hard disk would spend less time going back and forth between files. Would this do anything that buffering wouldn't? 
+ Parallelize steps 1, 2&amp;3, and 4 into separate processes. This would make steps 1, 2, and 3 not have to wait on 4 to complete. 
+ Break the load file up into separate chunks and process them in parallel. The rows don't need to be handled in any sequential order. This would likely need to be combined with step 2 somehow. 
+ 
+
+ Of course, the correct answer to this question is "do what you find to be the fastest by testing." However, I'm mainly trying to get an idea of where I should spend my time first. Does anyone with more experience in these matters have any advice? 
+ Answers (Total-7): #0 Poor man's map-reduce: 
+
+ Use split to break the file up into as many pieces as you have CPUs. 
+
+ Use batch to run your muncher in parallel. 
+
+ Use cat to concatenate the results. 
+ #1 If you are I/O bound, the best way I have found to optimize is to read or write the entire file into/out of memory at once, then operate out of RAM from there on. 
+
+ With extensive testing I found that my runtime eded up bound not by the amount of data I read from/wrote to disk, but by the number of I/O operations I used to do it. That is what you need to optimize. 
+
+ I don't know Python, but if there is a way to tell it to write the whole file out of RAM in one go, rather than issuing a separate I/O for each byte, that's what you need to do. 
+
+ Of course the drawback to this is that files can be considerably larger than available RAM. There are lots of ways to deal with that, but that is another question for another time. 
+ #2 Python already does IO buffering and the OS should handle both prefetching the input file and delaying writes until it needs the RAM for something else or just gets uneasy about having dirty data in RAM for too long. Unless you force the OS to write them immediately, like closing the file after each write or opening the file in O_SYNC mode. 
+
+ If the OS isn't doing the right thing, you can try raising the buffer size (third parameter to open() ). For some guidance on appropriate values given a 100MB/s 10ms latency IO system a 1MB IO size will result in approximately 50% latency overhead, while a 10MB IO size will result in 9% overhead. If its still IO bound, you probably just need more bandwidth. Use your OS specific tools to check what kind of bandwidth you are getting to/from the disks. 
+
+ Also useful is to check if step 4 is taking a lot of time executing or waiting on IO. If it's executing you'll need to spend more time checking which part is the culprit and optimize that, or split out the work to different processes. 
+ #3 Can you use a ramdisk for step 4? Low millions sounds doable if the rows are less than a couple of kB or so. 
+ #4 Use buffered writes for step 4. 
+
+ Write a simple function that simply appends the output onto a string, checks the string length, and only writes when you have enough which should be some multiple of 4k bytes. I would say start with 32k buffers and time it. 
+
+ You would have one buffer per file, so that most "writes" won't actually hit the disk. 
+ #5 Isn't it possible to collect a few thousand rows in ram, then go directly to the database server and execute them? 
+
+ This would remove the save to and load from the disk that step 4 entails. 
+
+ If the database server is transactional, this is also a safe way to do it - just have the database begin before your first row and commit after the last. 
+ #6 The first thing is to be certain of what you should optimize. You seem to not know precisely where your time is going. Before spending more time wondering, use a performance profiler to see exactly where the time is going. 
+
+ http://docs.python.org/library/profile.html 
+
+ When you know exactly where the time is going, you'll be in a better position to know where to spend your time optimizing.

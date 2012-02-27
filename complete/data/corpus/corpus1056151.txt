@@ -1,0 +1,247 @@
+Question (ID-1056151): Random Python dictionary key, weighted by values I have a dictionary where each key has a list of variable length, eg: 
+
+ d = {
+ 'a': [1, 3, 2],
+ 'b': [6],
+ 'c': [0, 0]
+}
+ 
+
+ Is there a clean way to get a random dictionary key, weighted by the length of its value?
+ random.choice(d.keys()) will weight the keys equally, but in the case above I want 'a' to be returned roughly half the time. 
+ Answers (Total-8): #0 This would work: 
+
+ random.choice([k for k in d for x in d[k]])
+ 
+ #1 Do you always know the total number of values in the dictionary? If so, this might be easy to do with the following algorithm, which can be used whenever you want to make a probabilistic selection of some items from an ordered list: 
+
+ 
+ Iterate over your list of keys. 
+ Generate a uniformly distributed random value between 0 and 1 (aka "roll the dice"). 
+ Assuming that this key has N_VALS values associated with it and there are TOTAL_VALS total values in the entire dictionary, accept this key with a probability N_VALS / N_REMAINING, where N_REMAINING is the number of items left in the list. 
+ 
+
+ This algorithm has the advantage of not having to generate any new lists, which is important if your dictionary is large. Your program is only paying for the loop over K keys to calculate the total, a another loop over the keys which will on average end halfway through, and whatever it costs to generate a random number between 0 and 1. Generating such a random number is a very common application in programming, so most languages have a fast implementation of such a function. In Python the random number generator a C implementation of the Mersenne Twister algorithm , which should be very fast. Additionally, the documentation claims that this implementation is thread-safe. 
+
+ Here's the code. I'm sure that you can clean it up if you'd like to use more Pythonic features: 
+
+ #!/usr/bin/python
+
+import random
+
+def select_weighted( d ):
+ # calculate total
+ total = 0
+ for key in d:
+  total = total + len(d[key])
+ accept_prob = float( 1.0 / total )
+
+ # pick a weighted value from d
+ n_seen = 0
+ for key in d:
+  current_key = key
+  for val in d[key]:
+   dice_roll = random.random()
+   accept_prob = float( 1.0 / ( total - n_seen ) )
+   n_seen = n_seen + 1
+   if dice_roll &lt;= accept_prob:
+   return current_key
+
+dict = {
+ 'a': [1, 3, 2],
+ 'b': [6],
+ 'c': [0, 0]
+}
+
+counts = {}
+for key in dict:
+ counts[key] = 0
+
+for s in range(1,100000):
+ k = select_weighted(dict)
+ counts[k] = counts[k] + 1
+
+print counts
+ 
+
+ After running this 100 times, I get select keys this number of times: 
+
+ {'a': 49801, 'c': 33548, 'b': 16650}
+ 
+
+ Those are fairly close to your expected values of: 
+
+ {'a': 0.5, 'c': 0.33333333333333331, 'b': 0.16666666666666666}
+ 
+
+ Edit: Miles pointed out a serious error in my original implementation, which has since been corrected. Sorry about that! 
+ #2 Given that your dict fits in memory, the random.choice method should be reasonable. But assuming otherwise, the next technique is to use a list of increasing weights, and use bisect to find a randomly chosen weight. 
+
+ &gt;&gt;&gt; import random, bisect
+&gt;&gt;&gt; items, total = [], 0
+&gt;&gt;&gt; for key, value in d.items():
+  total += len(value)
+  items.append((total, key))
+
+
+&gt;&gt;&gt; items[bisect.bisect_left(items, (random.randint(1, total),))][1]
+'a'
+&gt;&gt;&gt; items[bisect.bisect_left(items, (random.randint(1, total),))][1]
+'c'
+ 
+ #3 Without constructing a new, possibly big list with repeated values: 
+
+ def select_weighted(d):
+ offset = random.randint(0, sum(d.itervalues())-1)
+ for k, v in d.iteritems():
+  if offset &lt; v:
+   return k
+  offset -= v
+ 
+ #4 Make a list in which each key is repeated a number of times equal to the length of its value. In your example: ['a', 'a', 'a', 'b', 'c', 'c'] . Then use random.choice() . 
+
+ Edit: or, less elegantly but more efficiently, try this: take the sum of the lengths of all values in the dictionary, S (you can cache and invalidate this value, or keep it up to date as you edit the dictionary, depending on the exact usage pattern you anticipate). Generate a random number from 0 to S, and do a linear search through the dictionary keys to find the range into which your random number falls. 
+
+ I think that's the best you can do without changing or adding to your data representation. 
+ #5 Here is some code that is based on a previous answer I gave for probability distribution in python but is using the length to set the weight. It uses an iterative markov chain so that it does not need to know what the total of all of the weights are. Currently it calculates the max length but if that is too slow just change 
+
+ self._maxw = 1
+ 
+
+ to 
+
+ self._maxw = max lenght
+ 
+
+ and remove 
+
+ for k in self._odata:
+  if len(self._odata[k])&gt; self._maxw:
+   self._maxw=len(self._odata[k])
+ 
+
+ Here is the code. 
+
+ import random
+
+
+class RandomDict:
+ """
+ The weight is the length of each object in the dict.
+ """
+
+ def __init__(self,odict,n=0):
+  self._odata = odict
+  self._keys = list(odict.keys())
+  self._maxw = 1 # to increase speed set me to max length
+  self._len=len(odict)
+  if n==0:
+   self._n=self._len
+  else:
+   self._n=n
+  # to increase speed set above max value and comment out next 3 lines
+  for k in self._odata:
+   if len(self._odata[k])&gt; self._maxw:
+    self._maxw=len(self._odata[k])
+
+
+ def __iter__(self):
+  return self.next()
+
+ def next(self):
+  while (self._len &gt; 0) and (self._n&gt;0):
+   self._n -= 1
+   for i in range(100):
+    k=random.choice(self._keys)
+    rx=random.uniform(0,self._maxw)
+    if rx &lt;= len(self._odata[k]): # test to see if that is the value we want
+     break
+   # if you do not find one after 100 tries then just get a random one
+   yield k
+
+ def GetRdnKey(self):
+  for i in range(100):
+   k=random.choice(self._keys)
+   rx=random.uniform(0,self._maxw)
+
+   if rx &lt;= len(self._odata[k]): # test to see if that is the value we want
+    break
+  # if you do not find one after 100 tries then just get a random one
+  return k
+
+
+
+#test code
+
+d = {
+ 'a': [1, 3, 2],
+ 'b': [6],
+ 'c': [0, 0]
+}
+
+
+rd=RandomDict(d)
+
+dc = {
+ 'a': 0,
+ 'b': 0,
+ 'c': 0
+}
+for i in range(100000):
+ k=rd.GetRdnKey()
+ dc[k]+=1
+
+print("Key count=",dc)
+
+
+
+#iterate over the objects
+
+dc = {
+ 'a': 0,
+ 'b': 0,
+ 'c': 0
+}
+
+for k in RandomDict(d,100000):
+ dc[k]+=1
+
+print("Key count=",dc)
+ 
+
+ Test results 
+
+ Key count= {'a': 50181, 'c': 33363, 'b': 16456}
+Key count= {'a': 50080, 'c': 33411, 'b': 16509}
+ 
+ #6 I'd say this: 
+
+ random.choice("".join([k * len(d[k]) for k in d]))
+ 
+
+ This makes it clear that each k in d gets as many chances as the length of its value. Of course, it is relying on dictionary keys of length 1 that are characters.... 
+
+ 
+
+ Much later: 
+
+ table = "".join([key * len(value) for key, value in d.iteritems()])
+random.choice(table)
+ 
+ #7 I modified some of the other answers to come up with this. It's a bit more configurable. It takes 2 arguments, a list and a lambda function to tell it how to generate a key. 
+
+ def select_weighted(lst, weight):
+ """ Usage: select_weighted([0,1,10], weight=lambda x: x) """
+ thesum = sum([weight(x) for x in lst])
+ if thesum == 0:
+  return random.choice(lst)
+ offset = random.randint(0, thesum - 1)
+
+ for k in lst:
+  v = weight(k)
+  if offset &lt; v:
+   return k
+  offset -= v
+ 
+
+ Thanks to sth for the base code for this.

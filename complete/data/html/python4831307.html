@@ -1,0 +1,109 @@
+<h3>Question (ID-4831307):</h3><h2>Is it bad to store all instances of a class in a class field?</h2><p>I was wondering if there is anything wrong (from a OOP point of view) in doing something like this:</p>
+
+<pre><code>class Foobar:
+    foobars = {}
+    def __init__(self, name, something):
+        self.name = name
+        self.something = something
+
+        Foobar.foobars[name] = self
+
+Foobar('first', 42)
+Foobar('second', 77)
+
+for name in Foobar.foobars:
+    print name, Foobar.foobars[name]
+</code></pre>
+
+<p><strong>EDIT</strong>: this is the actual piece of code I'm using right now</p>
+
+<pre><code>from threading import Event
+class Task:
+    ADDED, WAITING_FOR_DEPS, READY, IN_EXECUTION, DONE = range(5)
+    tasks = {}
+    def __init__(self, name, dep_names, job, ins, outs, uptodate, where):
+        self.name = name
+        self.dep_names = [dep_names] if isinstance(dep_names, str) else dep_names
+        self.job = job
+        self.where = where
+        self.done = Event()
+        self.status = Task.ADDED
+        self.jobs = []
+        # other stuff...
+        Task.tasks[name] = self
+    def set_done(self):
+        self.done.set()
+        self.status = Task.DONE
+    def wait_for_deps(self):
+        self.status = Task.WAITING_FOR_DEPS
+        for dep_name in self.dep_names:
+            Task.tasks[dep_name].done.wait()
+        self.status = Task.READY
+    def add_jobs_to_queues(self):
+        jobs = self.jobs
+        # a lot of stuff I trimmed here
+        for w in self.where: Queue.queues[w].put(jobs)
+        self.status = Task.IN_EXECUTION
+    def wait_for_jobs(self):
+        for j in self.jobs: j.wait()
+    #[...]
+</code></pre>
+
+<p>As you can see I need to access the dictionary with all the instances in
+the wait_for_deps method. Would it make more sense to have a global variable
+instead of a class field? I could be using a wrong approach here, maybe that
+stuff shouldn't even be in a method, but it made sense to me (I'm new to OOP)</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Yes.  It's bad.  It conflates the instance with the collection of instances.</p>
+
+<p>Collections are one thing.</p>
+
+<p>The instances which are collected are unrelated.</p>
+
+<p>Also, class-level variables which get updated confuse some of us.  Yes, we can eventually reason on what's going on, but the Standard Expectation™ is that state change applies to objects, not classes.</p>
+
+<hr>
+
+<pre><code> class Foobar_Collection( dict ):
+     def __init__( self, *arg, **kw ):
+         super( Foobar_Collection, self ).__init__( *arg, **kw ):
+     def foobar( self, *arg, **kw ):
+         fb= Foobar( *arg, **kw )
+         self[fb.name]= fb
+         return fb
+
+ class Foobar( object ):
+     def __init__( self, name, something )
+         self.name= name
+         self.something= something
+
+fc= Foobar_Collection()
+fc.foobar( 'first', 42 )
+fc.foobar( 'second', 77 ) 
+
+for name in fc:
+    print name, fc[name]
+</code></pre>
+
+<p>That's more typical.</p>
+
+<hr>
+
+<p>In your example, the <code>wait_for_deps</code> is simply a method of the task collection, not the individual task.  You don't need globals.</p>
+
+<p>You need to refactor.</p>
+<br /><b>#1</b><br /><p>I don't suppose that there's anything <em>wrong</em> with this, but I don't really see how this would be sensible. Why would you need to keep a global variable (in the class, of all places) that holds references to all the instances? The client could just as easily implement this himself if he just kept a list of his instances. All in all, it seems a little hackish and unnecessary, so I'd recommend that you don't do it.</p>
+
+<p>If you're more specific about what you're trying to do, perhaps we can find a better solution.</p>
+<br /><b>#2</b><br /><p>This is NOT cohesive, as well as not very functional, you want to strive to get your objects as far from the 'data-bucket' mindset as possible. The static object collection is not going to really gain you anything, you need to think WHY do you need all the objects in the collection and think about creating a second class whose responsibility is to manage and be queried for all the Foobars in the system.</p>
+<br /><b>#3</b><br /><p>Why would you want to do this?</p>
+
+<p>There are several problems with this code.  The first is that you have to take care of deleting instances -- there will always be a reference to each <code>Foobar</code> instance left in <code>Foobar.foobars</code>, so the garbage collector will never garbage collect them.  The second problem is that it won't work with <code>copy</code> and <code>pickle</code>.</p>
+
+<p>But apart from the technical problems, it feels like a wrong design.  The purpose of object instances is hiding state, and you make them see each other.</p>
+<br /><b>#4</b><br /><p>From a OOP point of view there's nothing wrong with it. A class is an instance of a metaclass, and any instance can hold any kind of data in it.</p>
+
+<p>However, from an efficiency point of view, if you don't eventualy clean up the <code>foobars</code> dict on a long running Python program, you are having potential memory leak.</p>
+<br /><b>#5</b><br /><p>No one has mentioned the potential problem this might have if you later derive a subclass from <code>Foobar</code> which could happen if the base class <code>__init__()</code> function is called from the derived class's <code>__init__()</code>. Specifically whether you want all the subclass instances to be sored in the same place as those of the base class -- which of course depend on why you're doing this.</p>
+
+<p>It's a solvable problem but something to consider, and perhaps to code for, up front in the base class.</p>
+<br />

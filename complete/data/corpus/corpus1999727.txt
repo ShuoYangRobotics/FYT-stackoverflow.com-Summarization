@@ -1,0 +1,204 @@
+Question (ID-1999727): Find the type of an attribute in a class I want determine the type of an attribute in a class. I am using setattr to set the value, and I would like to check the type that is expected, so that I can properly convert a string value before calling setattr . 
+
+ How do you do this in python? 
+
+ EDIT 1-
+Some additional information based on the answers so far: 
+
+ I only know the name of the property that I want the type for, here is some code: 
+
+ def populate_object_properties(values_as_strings, 
+        object_to_populate, 
+        properties_to_populate):
+ for k in properties_to_populate:  
+  value = values_as_strings.get(k)
+  if value:
+   setattr(object_to_populate, k, value)
+  else:
+   setattr(object_to_populate, k, None)
+ 
+
+ I want to be able test that value is the right type before I call setattr . 
+
+ Edit 2- The reason why I need to validate the type, is that I'm using Google AppEngine's db.Model as the base type for the object_to_populate , and it doesn't like when a put a string into an int type. I was trying to keep the question as simple as possible, but maybe that piece of information makes a difference in how someone would answer.(?) 
+ Answers (Total-7): #0 You seem to misunderstand how Python (the language) is designed. Attributes have no a-priori type (the language is dynamically typed), and therefore it makes, most of the time, little sense to try to coerce attributes explicitly when setting them. 
+ #1 In AppEngine, each model has a properties() class method, which returns the dict of properties you declared in your model. You can use it to check the types your model expects for each attribute: 
+
+ def populate_object_properties(values_as_strings, 
+        object_to_populate, 
+        properties_to_populate):
+ model_properties = object_to_populate.properties()
+ for k in properties_to_populate:  
+  value = values_as_strings.get(k)
+  model_property = model_properties.get(k)
+  if value:
+   if isinstance(model_property, StringProperty):
+    setattr(object_to_populate, k, str(value))
+   elif isinstance(model_property, IntegerProperty):
+    setattr(object_to_populate, k, int(value))
+  else:
+   setattr(object_to_populate, k, None)
+ 
+ #2 Check a. __class__ , or maybe isinstance(obj, class) if you want to check if the type is as expected. 
+
+ &gt;&gt;&gt; a = 1
+&gt;&gt;&gt; a.__class__
+&lt;type 'int'&gt;
+&gt;&gt;&gt; isinstance(a, int)
+True
+ 
+
+ more to the point for you is probably: 
+
+ &gt;&gt;&gt; b = "10"
+&gt;&gt;&gt; isinstance(b, str)
+True
+&gt;&gt;&gt; isinstance(b, int)
+False
+&gt;&gt;&gt; int(b)
+10
+ 
+
+ If your only goal is to set an attribute if the given argument can be expressed as an integer you could also use something like: 
+
+ def convert(x):
+ try:
+  return int(x) # Or do something else with it
+ except ValueError, e: 
+  print "The value", x, "is not an integer"
+  raise
+
+convert(123) # =&gt; 123 
+convert("123") # =&gt; 123
+convert("abc") # =&gt; ValueError
+ 
+
+ Some extra text in the question makes me think of changing: 
+
+ value = values_as_strings.get(k)
+ 
+
+ to 
+
+ try:
+ value = int( values_as_strings.get(k) )
+except ValueError, e:
+ # It's not an int or string with int contents, what to do?
+ raise
+ 
+
+ resulting in: 
+
+ try:
+ setattr(object_to_populate, k, int( values_as_strings.get(k) ))
+except:
+ setattr(object_to_populate, k, None)
+ 
+ #3 you can use type(a.v) to check it, but if it doesn't have a default value, it could as well be None or undefined. 
+
+ &gt;&gt; class A:
+&gt;&gt; v=10
+&gt;&gt; u=None
+&gt;&gt; a=A()
+&gt;&gt; print type(a.v)
+&lt;type 'int'&gt;
+&gt;&gt; print type(a.u)
+&lt;type 'NoneType'&gt;
+&gt;&gt; print type(a.w)
+AttributeError
+&gt;&gt; a.w=20
+&gt;&gt; print type(a.w)
+&lt;type 'int'&gt;
+ 
+
+ Python builtin tools for introspecion are not utterly useful here. I wouldn't rely on them in this case. For example xmlrpc libs provide more helpful ways for doing that. 
+
+ If you only know the name use a.getattr('v') instead of a.v in the code above. 
+
+ if type(getattr(object_to_populate, k))==type('a'):
+ setattr(object_to_populate, k, value)
+ 
+
+ or use isinstance as suggested by extraneon, it's just the same. 
+ #4 Since python does not do type checking in this case you have to implement this feature by hand (or use existing libraries; see Alex Martellis answer). 
+
+ One approach: Check if the value is an instance of the desired type, via isinstance . 
+
+ Here is a modified version of your code, I'd start with ... 
+
+ # 'pdict' is a dictionary of property-value pairs { 'property' : 'value', ... }
+def populate_object_properties(object_to_populate, pdict):
+ for p, v in pdict.items():
+  setattr(object_to_populate, p, v)
+ 
+
+ Then we add the typecheck, for this example, we just want to populate the attributes of the object with objects of the same type as the currently used values .... 
+
+ def populate_object_properties(object_to_populate, pdict):
+ for p, v in pdict.items():
+
+  current_value = getattr(p, v, None)
+  klass = type(current_value)
+
+  # allow setting the attribute, when 
+  # 
+  # - the attribute did not exist before,
+  # - the attribute value was 'None',
+  # - the value to be inserted is of the same type as the current value
+
+  if not current_value or isinstance(v, klass): 
+   setattr(object_to_populate, p, v)
+ 
+
+ 
+
+ A couple of sidenotes: 
+
+ # why don't you just take two parameters? 1) the object, 2) a dict with 
+# property-value pairs?
+
+def populate_object_properties(values_as_strings, 
+        object_to_populate, 
+        properties_to_populate):
+
+ for k in properties_to_populate:  
+  value = values_as_strings.get(k)
+
+  # here you are branching on 'value', just to populate 
+  # property 'k' with whah might have been 'value' before ..
+  # it's nothing serious, though, just a bit too much to read
+
+  if value:
+   setattr(object_to_populate, k, value)
+  else:
+   setattr(object_to_populate, k, None)
+
+  # you could simply write:
+  # setattr(object_to_populate, k, value)
+ 
+
+ 
+
+ Further reading: 
+
+ 
+ isinstance() considered harmful 
+ 
+ #5 Normally, a Python class (or instance thereof) carries no information regarding what types it "expects" any given attribute to have, because it has no such "expectation". 
+
+ When you need to encode such metadata, rather than "rolling your own", you can use existing third party extensions like Enthought's Traits -- in Traits, among other features, you get: 
+
+ 
+ Validation : A trait attribute's type
+ is explicitly declared . The type is
+ evident in the code, and only values
+ that meet a programmer-specified set
+ of criteria (i.e., the trait
+ definition) can be assigned to that
+ attribute. Note that the default value
+ need not meet the criteria defined for
+ assignment of values. 
+ 
+ #6 Since explicit type-checking is so un-pythonic, consider just wrapping the value in int() . Then, if the value (whatever it is) can be coerced into an int , it will be. If it cannot be coerced into an int , then you need to throw an error anyway (which it will do automatically). 
+
+ This is an example of the fundamental difference between "look before you leap" and "it's easier to ask forgiveness than to ask permission". Python isn't a "look before you leap" language, it's an "it's easier to ask forgiveness than ask permission" language. :)

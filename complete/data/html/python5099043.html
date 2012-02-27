@@ -1,0 +1,232 @@
+<h3>Question (ID-5099043):</h3><h2>Embedding a Low Performance Scripting Language in Python</h2><p>I have a web-application. As part of this, I need users of the app to be able to write (or copy and paste) very simple scripts to run against their data.</p>
+
+<p>The scripts really can be very simple, and performance is only the most minor issue. And example of the sophistication of script I mean are something like:</p>
+
+<pre><code>ratio = 1.2345678
+minimum = 10
+
+def convert(money)
+    return money * ratio
+end
+
+if price &lt; minimum
+    cost = convert(minimum)
+else
+    cost = convert(price)
+end
+</code></pre>
+
+<p>where price and cost are a global variables (something I can feed into the environment and access after the computation). </p>
+
+<p>I do, however, need to guarantee some stuff.</p>
+
+<ol>
+<li><p>Any scripts run cannot get access to the environment of Python. They cannot import stuff, call methods I don't explicitly expose for them, read or write files, spawn threads, etc. I need total lockdown.</p></li>
+<li><p>I need to be able to put a hard-limit on the number of 'cycles' that a script runs for. Cycles is a general term here. could be VM instructions if the language byte-compiled. Apply-calls for an Eval/Apply loop. Or just iterations through some central processing loop that runs the script. The details aren't as important as my ability to stop something running after a short time and send an email to the owner and say "your scripts seems to be doing more than adding a few numbers together - sort them out."</p></li>
+<li><p>It must run on Vanilla unpatched CPython.</p></li>
+</ol>
+
+<p>So far I've been writing my own DSL for this task. I can do that. But I wondered if I could build on the shoulders of giants. Is there a mini-language available for Python that would do this?</p>
+
+<p>There are plenty of hacky Lisp-variants (Even one I wrote on Github), but I'd prefer something with more non-specialist syntax (more C or Pascal, say), and as I'm considering this as an alternative to coding one myself I'd like something a bit more mature.</p>
+
+<p>Any ideas?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Here is my take on this problem.  Requiring that the user scripts run inside vanilla CPython means you either need to write an interpreter for your mini language, or compile it to Python bytecode (or use Python as your source language) and then "sanitize" the bytecode before executing it.</p>
+
+<p>I've gone for a quick example based on the assumption that users can write 
+their scripts in Python, and that the source and bytecode can be sufficiently
+sanitized through some combination of filtering unsafe syntax from the parse
+tree and/or removing unsafe opcodes from the bytecode.</p>
+
+<p>The second part of the solution requires that the user script bytecode be 
+periodically interrupted by a watchdog task which will ensure that the user
+script does not exceed some opcode limit, and for all of this to run on vanilla CPython.</p>
+
+<p>Summary of my attempt, which mostly focuses on the 2nd part of the problem.</p>
+
+<ul>
+<li>User scripts are written in Python.</li>
+<li>Use <strong>byteplay</strong> to filter and modify the bytecode.</li>
+<li>Instrument the user's bytecode to insert an opcode counter and calls to a function which context switches to the watchdog task.</li>
+<li>Use <strong>greenlet</strong> to execute the user's bytecode, with yields switching
+between the user's script and the watchdog coroutine.</li>
+<li>The watchdog enforces a preset limit on the number of opcodes which can be
+executed before raising an error.</li>
+</ul>
+
+<p>Hopefully this at least goes in the right direction. I'm interested to hear
+more about your solution when you arrive at it.</p>
+
+<p>Source code for <code>lowperf.py</code>:</p>
+
+<pre><code># std
+import ast
+import dis
+import sys
+from pprint import pprint
+
+# vendor
+import byteplay
+import greenlet
+
+# bytecode snippet to increment our global opcode counter
+INCREMENT = [
+    (byteplay.LOAD_GLOBAL, '__op_counter'),
+    (byteplay.LOAD_CONST, 1),
+    (byteplay.INPLACE_ADD, None),
+    (byteplay.STORE_GLOBAL, '__op_counter')
+    ]
+
+# bytecode snippet to perform a yield to our watchdog tasklet.
+YIELD = [
+    (byteplay.LOAD_GLOBAL, '__yield'),
+    (byteplay.LOAD_GLOBAL, '__op_counter'),
+    (byteplay.CALL_FUNCTION, 1),
+    (byteplay.POP_TOP, None)
+    ]
+
+def instrument(orig):
+    """
+    Instrument bytecode.  We place a call to our yield function before
+    jumps and returns.  You could choose alternate places depending on 
+    your use case.
+    """
+    line_count = 0
+    res = []
+    for op, arg in orig.code:
+        line_count += 1
+
+        # NOTE: you could put an advanced bytecode filter here.
+
+        # whenever a code block is loaded we must instrument it
+        if op == byteplay.LOAD_CONST and isinstance(arg, byteplay.Code):
+            code = instrument(arg)
+            res.append((op, code))
+            continue
+
+        # 'setlineno' opcode is a safe place to increment our global 
+        # opcode counter.
+        if op == byteplay.SetLineno:
+            res += INCREMENT
+            line_count += 1
+
+        # append the opcode and its argument
+        res.append((op, arg))
+
+        # if we're at a jump or return, or we've processed 10 lines of
+        # source code, insert a call to our yield function.  you could 
+        # choose other places to yield more appropriate for your app.
+        if op in (byteplay.JUMP_ABSOLUTE, byteplay.RETURN_VALUE) \
+                or line_count &gt; 10:
+            res += YIELD
+            line_count = 0
+
+    # finally, build and return new code object
+    return byteplay.Code(res, orig.freevars, orig.args, orig.varargs,
+        orig.varkwargs, orig.newlocals, orig.name, orig.filename,
+        orig.firstlineno, orig.docstring)
+
+def transform(path):
+    """
+    Transform the Python source into a form safe to execute and return
+    the bytecode.
+    """
+    # NOTE: you could call ast.parse(data, path) here to get an
+    # abstract syntax tree, then filter that tree down before compiling
+    # it into bytecode.  i've skipped that step as it is pretty verbose.
+    data = open(path, 'rb').read()
+    suite = compile(data, path, 'exec')
+    orig = byteplay.Code.from_code(suite)
+    return instrument(orig)
+
+def execute(path, limit = 40):
+    """
+    This transforms the user's source code into bytecode, instrumenting
+    it, then kicks off the watchdog and user script tasklets.
+    """
+    code = transform(path)
+    target = greenlet.greenlet(run_task)
+
+    def watcher_task(op_count):
+        """
+        Task which is yielded to by the user script, making sure it doesn't
+        use too many resources.
+        """
+        while 1:
+            if op_count &gt; limit:
+                raise RuntimeError("script used too many resources")
+            op_count = target.switch()
+
+    watcher = greenlet.greenlet(watcher_task)
+    target.switch(code, watcher.switch)
+
+def run_task(code, yield_func):
+    "This is the greenlet task which runs our user's script."
+    globals_ = {'__yield': yield_func, '__op_counter': 0}
+    eval(code.to_code(), globals_, globals_)
+
+execute(sys.argv[1])
+</code></pre>
+
+<p>Here is a sample user script <code>user.py</code>:</p>
+
+<pre><code>def otherfunc(b):
+    return b * 7
+
+def myfunc(a):
+    for i in range(0, 20):
+        print i, otherfunc(i + a + 3)
+
+myfunc(2)
+</code></pre>
+
+<p>Here is a sample run:</p>
+
+<pre><code>% python lowperf.py user.py
+
+0 35
+1 42
+2 49
+3 56
+4 63
+5 70
+6 77
+7 84
+8 91
+9 98
+10 105
+11 112
+Traceback (most recent call last):
+  File "lowperf.py", line 114, in &lt;module&gt;
+    execute(sys.argv[1])
+  File "lowperf.py", line 105, in execute
+    target.switch(code, watcher.switch)
+  File "lowperf.py", line 101, in watcher_task
+    raise RuntimeError("script used too many resources")
+RuntimeError: script used too many resources
+</code></pre>
+<br /><b>#1</b><br /><p>Try Lua. The syntax you mentioned is almost identical to Lua's. See <a href="http://stackoverflow.com/questions/4527261/how-could-i-embed-lua-into-python-3-x">How could I embed Lua into Python 3.x?</a></p>
+<br /><b>#2</b><br /><p>I don't know of anything that really solves this problem yet.</p>
+
+<p>I think the absolute simplest thing you could do would be to write your own version of the python virtual machine in python. </p>
+
+<p>I've often thought of doing that in something like Cython so you could just import it as a module, and you could lean on the existing runtime for most of the hard bits.</p>
+
+<p>You may already be able to generate a python-in-python interpreter with PyPy, but PyPy's output is a runtime that does EVERYTHING, including implementing the equivalent of the underlying PyObjects for built-in types and all that, and I think that's overkill for this kind of thing.</p>
+
+<p>All you really need is something that works like a Frame in the execution stack, and then a method for each opcode. I don't think you even have to implement it yourself. You could just write a module that exposed the existing frame objects to the runtime.</p>
+
+<p>Anyway, then you just maintain your own stack of frame objects and handle the bytecodes, and you can throttle it with bytecodes per second or whatever.</p>
+<br /><b>#3</b><br /><p>Why not python code in pysandbox <a href="http://pypi.python.org/pypi/pysandbox/1.0.3" rel="nofollow">http://pypi.python.org/pypi/pysandbox/1.0.3</a> ?</p>
+<br /><b>#4</b><br /><p>Take a look at <a href="https://bitbucket.org/yougov/limpy/src" rel="nofollow">LimPy</a>. It stands for Limited Python and was built for exactly this purpose.</p>
+
+<p>There was an environment where users needed to write basic logic to control a user experience. I don't know how it'll interact with runtime limits, but I imagine you can do it if you're willing to write a little code.</p>
+<br /><b>#5</b><br /><p>I've used Python as a "mini config language" for an earlier project. My approach was to take the code, parse it using the <code>parser</code> module and then to walk the AST of the generated code and to kick out "unallowed" operations (e.g. defining classes, called <code>__</code> methods etc.). </p>
+
+<p>After I do this, a created a synthetic environment with only the modules and variables that were "allowed" and evaluated the code within that to get something I could run. </p>
+
+<p>It worked nicely for me. I don't know if it's bullet proof especially if you want to give your users more power than I did for a config language. </p>
+
+<p>As for the time limit, you could run your program in a separate thread or process and terminate it after a fixed amount of time.</p>
+<br /><b>#6</b><br /><p>The simplest way to make a real DSL is ANTLR, it has syntax templates for some popular languages.</p>
+<br />

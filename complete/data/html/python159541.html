@@ -1,0 +1,133 @@
+<h3>Question (ID-159541):</h3><h2>Nginx + fastcgi truncation problem</h2><p>I'm running a Django site using the fastcgi interface to nginx. However, some pages are being served truncated (i.e. the page source just stops, sometimes in the middle of a tag). How do I fix this (let me know what extra information is needed, and I'll post it)</p>
+
+<p>Details:</p>
+
+<p>I'm using flup, and spawning the fastcgi server with the following command:</p>
+
+<pre><code>python ./manage.py runfcgi umask=000 maxchildren=5 maxspare=1 minspare=0 method=prefork socket=/path/to/runfiles/django.sock pidfile=/path/to/runfiles/django.pid
+</code></pre>
+
+<p>The nginx config is as follows:</p>
+
+<pre><code># search and replace this: {project_location}
+pid /path/to/runfiles/nginx.pid;
+worker_processes  2;
+error_log /path/to/runfiles/error_log;
+events {
+    worker_connections  1024;
+    use epoll;
+}
+http {
+    # default nginx location
+    include        /etc/nginx/mime.types;
+    default_type    application/octet-stream;
+    log_format main
+        '$remote_addr - $remote_user [$time_local] '
+            '"$request" $status $bytes_sent '
+        '"$http_referer" "$http_user_agent" '
+        '"$gzip_ratio"';
+    client_header_timeout  3m;
+    client_body_timeout    3m;
+    send_timeout           3m;
+    connection_pool_size        256;
+    client_header_buffer_size    1k;
+    large_client_header_buffers    4 2k;
+    request_pool_size        4k;
+    output_buffers   4 32k;
+    postpone_output  1460;
+    sendfile        on;
+    tcp_nopush             on;
+    keepalive_timeout      75 20;
+    tcp_nodelay            on;
+    client_max_body_size       10m;
+    client_body_buffer_size    256k;
+    proxy_connect_timeout      90;
+    proxy_send_timeout         90;
+    proxy_read_timeout         90;
+    client_body_temp_path      /path/to/runfiles/client_body_temp;
+    proxy_temp_path            /path/to/runfiles/proxy_temp;
+    fastcgi_temp_path            /path/to/runfiles/fastcgi_temp;
+    gzip on;
+    gzip_min_length  1100;
+    gzip_buffers     4 32k;
+    gzip_types       text/plain text/html application/x-javascript text/xml text/css;
+    ignore_invalid_headers    on;
+    server {
+        listen 80;
+        server_name alpha2.sonyalabs.com;
+        index index.html;
+        root   /path/to/django-root/static;
+        # static resources
+        location ~* ^/static/.*$
+        {
+    	root   /path/to/django-root;
+                expires 30d;
+                break;
+        }
+        location / {
+            # host and port to fastcgi server
+            fastcgi_pass unix:/path/to/runfiles/django.sock;
+            fastcgi_param PATH_INFO $fastcgi_script_name;
+            fastcgi_param REQUEST_METHOD $request_method;
+            fastcgi_param QUERY_STRING $query_string;
+            fastcgi_param CONTENT_TYPE $content_type;
+            fastcgi_param CONTENT_LENGTH $content_length;
+            fastcgi_pass_header Authorization;
+            fastcgi_intercept_errors off;
+        }
+        location /403.html {
+                root   /usr/local/nginx;
+                access_log   off;
+        }
+        location /401.html {
+                root   /usr/local/nginx;
+                access_log   off;
+        }
+        location /404.html {
+                root   /usr/local/nginx;
+                access_log   off;
+        }
+        location = /_.gif {
+                    empty_gif;
+                access_log   off;
+        }
+            access_log    /path/to/runfiles/localhost.access_log main;
+            error_log    /path/to/runfiles/localhost.error_log;
+        }
+}
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>What fastcgi interface are you using and how.  Is it flup?  If yes, paste the way you spawn the server and how it's hooked into nginx.  Without that information it's just guessing what could go wrong.</p>
+
+<p>Possible problems:</p>
+
+<ul>
+<li>nginx is buggy.  At least lighttpd has horrible fastcgi bugs, I wouldn't wonder if nginx has some too :)</li>
+<li>Django is dying with a traceback in an internal system that is not properly catched and closes the fastcgi server which you can't see from the client.  In that situation wrap the fastcgi server application call and try/except it to print the exception.</li>
+</ul>
+
+<p>But server log and config would be great.</p>
+<br /><b>#1</b><br /><p>try to raise  "gzip_buffers" may help.</p>
+
+<p>see here:
+<a href="http://blog.leetsoft.com/2007/7/25/nginx-gzip-ssl" rel="nofollow">http://blog.leetsoft.com/2007/7/25/nginx-gzip-ssl</a></p>
+<br /><b>#2</b><br /><p>Check your error logs for "Permission denied" errors writing to <code>.../nginx/tmp/...</code> files. Nginx will work fine unless it needs temporary space, and that typically happens at 32K boundaries. If you find these errors, make sure the tmp directory is writable by the user nginx runs as.</p>
+<br /><b>#3</b><br /><p>FastCGI is not to blame for this. </p>
+
+<p>I ran into exactly the same issue using nginx/gunicorn. Reducing the response size to less than 32k (in the specific case using the <code>spaceless</code> tag in the template) solved it.</p>
+
+<p>As dwc says, it's probably a hard limit due to the way nginx uses address space.</p>
+<br /><b>#4</b><br /><p>I'm running very similar configurations to this both on my webhost (Webfaction) and on a local Ubuntu dev server and I don't see any problems. I'm guessing it's a time-out or full buffer that's causing this.</p>
+
+<p>Can you post the output of the nginx error log? Also what version of nginx are you using?</p>
+
+<p>As a side note it may be worth looking at <a href="http://code.google.com/p/django-logging/wiki/Overview" rel="nofollow">django-logging</a> to find out what your fastcgi process is doing.</p>
+<br /><b>#5</b><br /><p>I had the same exact problem running Nagios on nginx. I stumbled upon your question while googling for an answer, and reading "permission denied" related answers it struck me (and perhaps it will help you) : </p>
+
+<ul>
+<li><p>Nginx error.log was reporting :</p>
+
+<p>2011/03/07 11:36:02 [crit] 30977#0: *225952 open() "/var/lib/nginx/fastcgi/2/65/0000002652" failed (13: Permission denied)</p></li>
+<li><p>so I just ran # chown -R www-data:www-data /var/lib/nginx/fastcgi</p></li>
+<li><p>Fixed ! (and thank you for your indirect help)</p></li>
+</ul>
+<br />

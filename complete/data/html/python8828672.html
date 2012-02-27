@@ -1,0 +1,323 @@
+<h3>Question (ID-8828672):</h3><h2>How can I do this without using eval() /exec() in Python</h2><p>I have a simple rules/conditions table in my database which is used to generate alerts for one of our systems. A simple rule stored in this table would be..(omitting the relationships here)</p>
+
+<pre><code>if temp &gt; 40 send email
+</code></pre>
+
+<p>Please note there would be many more such rules. A script runs once daily to evaluate these rules and perform the necessary actions. At the beginning, there was only one rule, so we had the script in place to only support that rule. However we now need to make it more scalable to support different conditions/rules. I have looked into rules engines , but I hope to achieve this in some simple pythonic way. At the moment, I have only come up with eval/exec and I know that is not the most recommended approach. So, what would be the best way to accomplish this??</p>
+
+<p>( The rules are stored as data in database so each object like "temperature", condition like ">/=..etc" , value like "40,50..etc" and action like "email, sms, etc.." are stored in the database, i retrieve this to form the condition...if temp > 50 send email, that was my idea to then use exec or eval on them to make it live code..but not sure if this is the right approach )</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Well, if what you want to do is send emails then use the <a href="http://docs.python.org/library/email-examples.html" rel="nofollow"><code>email</code> module</a>. </p>
+
+<p>If I were you, I would write a simple Python script which processes a bunch of rules, probably just written as simple Python statements in a separate file, then send the emails / sms / ... for those rules that require an action to be performed. </p>
+
+<p>You can make that run once a day (or whatever) using a service such as <a href="http://en.wikipedia.org/wiki/Cron" rel="nofollow">cron</a></p>
+
+<p>For example, if your rules look like this:</p>
+
+<pre><code># Rule file: rules.py
+
+def rule1():
+    if db.getAllUsers().contains("admin"): 
+        return ('email', 'no admin user in db')
+    else:
+        return None, None
+
+def rule2():
+    if temp &gt; 100.0: 
+        return ('sms', 'too hot in greenhouse')
+    else:
+        return (None, None)
+
+...
+
+rules = [rule1, rule2, ....]
+</code></pre>
+
+<p>then your processing script might look like this:</p>
+
+<pre><code># Script file: engine.py
+
+import rules
+import email
+...
+
+def send_email(message, receiver):
+    # function that sends an email...
+
+def send_sms(message, receiver):
+    # function that sends an sms...
+
+actions = {'email':send_email, 'sms':send_sms, ...}    
+
+if __name__ == '__main__':
+
+    # Declare receiver here...
+
+    for rule in rules.rules:
+        # Does the rule return a do-able action?
+        # To be really paranoid we might wrap this in a try/finally
+        # in case the rules themselves have any side effects,
+        # or they don't all return 2-tuples.
+        act, message = rule()
+        if act in actions:
+            # perform the action
+            actions[rule()](message, receiver) 
+</code></pre>
+
+<p>Undoubtedly there are other ways to do this, such as creating a <a href="http://www.ibm.com/developerworks/library/l-cpdec/index.html" rel="nofollow">Pythonic DSL</a> with which to write the rules.</p>
+<br /><b>#1</b><br /><p>There are several ways to achieve this. The other answers are valuable, and I'd like to add two techniques.</p>
+
+<ul>
+<li>Provided you can rewrite the table juste create each rules as a pickled function that you can deserialize when needed</li>
+<li>Write a big dictionary with rules as a key, and a function a a value. If you got 100 max rules, this is manageable. Just make sure you make very flexible functions using *args and **kwargs.</li>
+</ul>
+
+<p><strong>Example with pickle:</strong></p>
+
+<p>First, make a function that is flexible with its input.</p>
+
+<pre><code>def greater_than(value, *args, **kwargs):
+    return all(value &gt; i for i in args)
+</code></pre>
+
+<p>Then <a href="http://docs.python.org/library/pickle.html" rel="nofollow">pickle</a> it:</p>
+
+<pre><code>&gt;&gt;&gt; import pickle
+&gt;&gt;&gt; rule = pickle.dumps(greater_than)
+&gt;&gt;&gt; rule # store this in DB
+'ctest\ngreater_than\np0\n.'
+</code></pre>
+
+<p>Then when you need to get you business rule back:</p>
+
+<pre><code>&gt;&gt;&gt; func = pickle.loads(rule) # rule is the sring from DB
+&gt;&gt;&gt; func(5, 4, 3, 1)
+True
+&gt;&gt;&gt; func(5, 6) 
+False
+</code></pre>
+
+<p>The purpose of having flexible input is that you can get an arbitrary number of parameters :</p>
+
+<pre><code>&gt;&gt;&gt; args = [1, 2, 3]
+&gt;&gt;&gt; func(5, *args)
+True 
+</code></pre>
+
+<p><strong>Example with a dictionary</strong></p>
+
+<p>Store all functions in one big mapping:</p>
+
+<pre><code>def greater_than(value, *args, **kwargs):
+    return all(value &gt; i for i in args)
+
+RULES = {
+    'if x &gt; y': greater_than
+    'other rule': other_func,
+    etc
+}
+</code></pre>
+
+<p>Then when you need it:</p>
+
+<pre><code>   &gt;&gt;&gt; func = RULES['if x &gt; y']
+   &gt;&gt;&gt; func(5, 1)
+   True
+</code></pre>
+<br /><b>#2</b><br /><p>Since the "variable", "value" and comparison operator for eahc rule are on the database, you could write a Rule class that will take the apropriate parameters (operator, action, value, etc...), and yield a callable object that will receive all the relevant variables in the form of a dictionary, and take the proper registered action.</p>
+
+<p>It would look like this, though you have to adapt it to proper get the parameters for your actions:</p>
+
+<pre><code>import operator
+
+class Rule(object):
+    def __init__(self, variable_name, op, value, action):
+        op_dict = {"=": operator.eq,
+                   "&gt;": operator.gt,
+                   "&lt;": operator.lt,
+                   #(...)
+                  }
+        action_dict = {"email": email_function,
+                       "log": log_function,
+                       # ...
+                      }
+        self.variable = variable_name
+        self.op = op_dict[op]
+        self.value = value
+        self.action = action_dict[action]
+    def __call__(self, value_dict, action_parameters, k_action_parameters):
+        if self.op(value_dict[self.variable], self.value):
+            return self.action(*action_parameters, **k_action_parameters)
+        return False
+
+rule = Rule("temp", "&gt;", "email")
+for result in query():
+     rule(result, ())
+</code></pre>
+<br /><b>#3</b><br /><p>Write a parser. See pyparsing.</p>
+
+<p>Alternatively, make a table driven approach. </p>
+<br /><b>#4</b><br /><p>Why do you need to store rules into a database?<br>
+Can't you just store the data in the database and put the rules into a python module?</p>
+
+<p>For example in a file <code>rules.py</code> you could:</p>
+
+<ul>
+<li>Write a set of rules</li>
+<li>Write a parser for your data that will apply the right rule for each paramenter</li>
+</ul>
+
+<p>Then in your main you just have to pass the data to your <code>rules.parser()</code> and everything will be taken care of.</p>
+
+<p><strong>Edit:</strong> Seen your comment I've made a <a href="http://stackoverflow.com/a/8871883/1132524">new answer</a>.</p>
+<br /><b>#5</b><br /><p>I think you mainly need two things:</p>
+
+<ul>
+<li>a <code>Rule</code> class to interface your front-end template</li>
+<li><a href="http://docs.python.org/library/pickle.html" rel="nofollow"><code>pickle</code></a> to store your rules in the db.</li>
+</ul>
+
+<p>This is how your main could look like:</p>
+
+<pre><code>import pickle
+
+# some data loaded from your DB
+data = {'temp': 60, 'wind': 150}
+
+# entry should be provided by your front-end template
+entry = {'param_name': 'temp', 'test': Test(gt, 50), 'action': send_email}
+
+rule = Rule(**entry)
+to_store = pickle.dumps(rule)
+# store 'to_store' into your DB
+
+# Let's pretend to load the previously stored rule
+stored = to_store
+rule = pickle.loads(stored)
+rule(data)
+</code></pre>
+
+<p>The idea is to get every information that you need to build a Rule from your template and then you just store that rule with pickle.</p>
+
+<p>This may be a <code>Rule</code> implementation:</p>
+
+<pre><code># =======
+# Actions
+# =======
+#
+# Any callable with no arguments is an Action
+# (you may need to implement this)
+#
+
+def send_email():
+    print('email sent')
+
+# ==========
+# Test class
+# ==========
+#
+# Test class is a way to call your test function.
+# The real test is in self.function
+#
+
+class Test:
+
+    def __init__(self, function, *args):
+        self.function = function
+        self.args = args
+
+    def __call__(self, parameter):
+        return self.function(parameter, *self.args)
+
+# ==============
+# Test functions
+# ==============
+#
+# These are the functions that are going to be executed
+#
+
+import operator
+
+gt = operator.gt
+
+def more_complex_test(*args):
+    pass
+
+# ==========
+# Rule class
+# ==========
+#
+# A Rule needs to know:
+#  - the parameter to test
+#  - the test to perform
+#      - the action to execute
+#
+
+class Rule:
+
+    def __init__(self, param_name, test, action):
+        self.param_name = param_name
+        self.test = test
+        self.action = action
+
+    def __call__(self, data):   # data is a dictionary {'temp': 60, ...}
+        param_value = data[self.param_name]
+        if self.test(param_value):
+            return self.action()
+        return False
+</code></pre>
+
+<p><strong>Note:</strong> The two pieces of code above (if put togheter) can be executed. Give it a try!</p>
+<br /><b>#6</b><br /><p>I have used @jsbuenos code snippet and done a few changes to form this. Basicaly, I also need support to check the "unit of measure" for a rule to evaluate the condition. So to support diff. rules like if time > 24 hrs send email OR if temp > 40 celsius send email etc.(I would probably have other units later on as well..) I have included a new dict to map the unit of measure to a calculate function and accordingly changed the callable function for the class. Would this be the right approach to do it?</p>
+
+<pre><code>import operator
+
+class Rule(object):
+    def __init__(self, variable_name, op, value, action):
+      op_dict = {"=": operator.eq,
+               "&gt;": operator.gt,
+               "&lt;": operator.lt,
+               #(...)
+              }
+      action_dict = {"email": email_function,
+                   "log": log_function,
+                   # ...
+                  }
+
+      eval_condition = {"hrs" :  self.raise_timeexceeded_alert,
+                    "celsius" : self.raise_tempexceeded_alert,
+                    #}  
+
+      self.variable = variable_name
+      self.op = op_dict[op]
+      self.value = value
+      self.action = action_dict[action]
+      self.uom = measure      
+      self.raise_alert = eval_condition[measure]
+
+   def __call__(self, actual_value, *action_parameters):
+     if self.raise_alert(actual_value,self.op,self.uom,self.threshold):
+        return self.action(*action_parameters)
+    return False
+
+   def raise_timeexceeded_alert(self,timevalue, op, uom, threshold):
+    #calculate time difference with respect to local timezone and return true
+    # if diff is 'operator' threshold
+    localtime=pytz.timezone(TIMEZONE)
+    ....
+    ...
+    return False
+
+
+   def raise_tempexceeded_alert(self,timevalue, op, uom, threshold):
+     #return True if temp. is 'operator' threshold
+     ....
+     .....
+     return False
+
+
+rule = Rule("time", "&gt;=", "24" , "hrs", "email")
+args = [contact_email,message]
+rule("2011-12-11 12:06:03",*args)
+</code></pre>
+<br />

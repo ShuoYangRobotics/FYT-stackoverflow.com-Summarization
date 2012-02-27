@@ -1,0 +1,152 @@
+<h3>Question (ID-7460836):</h3><h2>How to len(generator())</h2><p><a href="http://docs.python.org/tutorial/classes.html#generators" rel="nofollow">Python generators</a> are very useful. They have advantages over functions that return lists. However, you could <code>len(list_returning_function())</code>. Is there a way to <code>len(generator_function())</code>?</p>
+
+<p><strong>UPDATE:</strong><br>
+Of course <code>len(list(generator_function()))</code> would work.....<br>
+I'm trying to use a generator I've created inside a new generator I'm creating. As part of the calculation in the new generator it needs to know the length of the old one. However I would like to keep both of them together with the same properties as a generator, specifically - not maintain the entire list in memory as it may be <strong>very</strong> long.</p>
+
+<p><strong>UPDATE 2:</strong><br>
+Assume the generotr <em>knows</em> it's target length even from the first step. Also, there's no reason to maintain the <code>len()</code> syntax. Example - if functions in Python are objects, couldn't I assign the length to a variable of this object that would be accessible to the new generator?</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Generators have no length, they aren't collections after all.</p>
+
+<p>Generators are <em>functions with a internal state</em> (and fancy syntax). You can repeatedly call them to get a sequence of values, so you can use them in loop. But they don't contain any elements, so asking for the length of a generator is like asking for the length of a function. </p>
+
+<blockquote>
+  <p>if functions in Python are objects, couldn't I assign the length to a
+  variable of this object that would be accessible to the new generator?</p>
+</blockquote>
+
+<p>Functions are objects, but you cannot assign new attributes to them. The reason is probably to keep such a basic object as efficient as possible.</p>
+
+<p>You can however simply return <code>(generator, lenght)</code> pairs from your functions or wrap the generator in a simple object like this:</p>
+
+<pre><code>class GeneratorLen(object):
+    def __init__(self, gen, length):
+        self.gen = gen
+        self.length = length
+
+    def __len__(self): 
+        return self.length
+
+    def __iter__(self):
+        return self.gen
+
+g = some_generator()
+h = GeneratorLen(g, 1)
+print len(h), list(h)
+</code></pre>
+<br /><b>#1</b><br /><p>Suppose we have a generator:</p>
+
+<pre><code>def gen():
+    for i in range(10):
+        yield i
+</code></pre>
+
+<p>We can wrap the generator, along with the known length, in an object:</p>
+
+<pre><code>import itertools
+class LenGen(object):
+    def __init__(self,gen,length):
+        self.gen=gen
+        self.length=length
+    def __call__(self):
+        return itertools.islice(self.gen(),self.length)
+    def __len__(self):
+        return self.length
+
+lgen=LenGen(gen,10)
+</code></pre>
+
+<p>Instances of <code>LenGen</code> are generators themselves, since calling them returns an iterator.</p>
+
+<p>Now we can use the <code>lgen</code> generator in place of <code>gen</code>, and access <code>len(lgen)</code> as well:</p>
+
+<pre><code>def new_gen():
+    for i in lgen():
+        yield float(i)/len(lgen)
+
+for i in new_gen():
+    print(i)
+</code></pre>
+<br /><b>#2</b><br /><p>You can combine the benefits of generators with the certainty of <code>len()</code>, by creating your own iterable object:</p>
+
+<pre><code>class MyIterable(object):
+    def __init__(self, n):
+        self.n = n
+
+    def __len__(self):
+        return self.n
+
+    def __iter__(self):
+        self._gen = self._generator()
+        return self
+
+    def _generator(self):
+        # Put your generator code here
+        i = 0
+        while i &lt; self.n:
+            yield i
+            i += 1
+
+    def next(self):
+        return next(self._gen)
+
+mi = MyIterable(100)
+print len(mi)
+for i in mi:
+    print i,
+</code></pre>
+
+<p>This is basically a simple implementation of <code>xrange</code>, which returns an object you can take the len of, but doesn't create an explicit list.</p>
+<br /><b>#3</b><br /><p>You can use <code>len(list(generator_function())</code>. However, this consumes the generator, but that's the only way you can find out how many elements are generated. So you may want to save the list somewhere if you also want to use the items.</p>
+
+<pre><code>a = list(generator_function())
+print(len(a))
+print(a[0])
+</code></pre>
+<br /><b>#4</b><br /><p>The conversion to <code>list</code> that's been suggested in the other answers is the best way if you want to still want to process the generator elements afterwards, but has one flaw: It uses O(n) memory. You can count the elements in a  generator without using that much memory with:</p>
+
+<pre><code>sum(1 for x in generator)
+</code></pre>
+
+<p>Of course, be aware that this might be slower than <code>len(list(generator))</code> in common Python implementations, and if the generators are long enough for the memory complexity to matter, the operation would take quite some time. Still, I personally prefer this solution as it describes what I want to get, and it doesn't give me anything extra that's not required (such as a list of all the elements).</p>
+
+<p>Also listen to delnan's advice: If you're discarding the output of the generator it is very likely that there is a way to calculate the number of elements without running it, or by counting them in another manner.</p>
+<br /><b>#5</b><br /><p>You can <code>len(list(generator))</code> but you could probably make something more efficient if you really intend to discard the results.</p>
+<br /><b>#6</b><br /><p>You can use <code>reduce</code>.</p>
+
+<p>For Python 3:</p>
+
+<pre><code>&gt;&gt;&gt; import functools
+&gt;&gt;&gt; def gen():
+...     yield 1
+...     yield 2
+...     yield 3
+...
+&gt;&gt;&gt; functools.reduce(lambda x,y: x + 1, gen(), 0)
+</code></pre>
+
+<p>In Python 2, <code>reduce</code> is in the global namespace so the import is unnecessary.</p>
+<br /><b>#7</b><br /><p>You can use <code>send</code> as a hack:</p>
+
+<pre><code>def counter():
+    length = 10
+    i = 0
+    while i &lt; length:
+        val = (yield i)
+        if val == 'length':
+            yield length
+        i += 1
+
+it = counter()
+print(it.next())
+#0
+print(it.next())
+#1
+print(it.send('length'))
+#10
+print(it.next())
+#2
+print(it.next())
+#3
+</code></pre>
+<br />

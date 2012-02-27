@@ -1,0 +1,73 @@
+Question (ID-1477569): Python: time a method call and stop it if time is exceeded I need to dynamically load code (comes as source), run it and get the results. The code that I load always includes a run method, which returns the needed results. Everything looks ridiculously easy, as usual in Python, since I can do 
+
+ exec(source) #source includes run() definition
+result = run(params)
+#do stuff with result
+ 
+
+ The only problem is, the run() method in the dynamically generated code can potentially not terminate, so I need to only run it for up to x seconds. I could spawn a new thread for this, and specify a time for .join() method, but then I cannot easily get the result out of it (or can I). Performance is also an issue to consider, since all of this is happening in a long while loop 
+
+ Any suggestions on how to proceed? 
+
+ Edit: to clear things up per dcrosta's request: the loaded code is not untrusted, but generated automatically on the machine. The purpose for this is genetic programming. 
+ Answers (Total-6): #0 You could also use Stackless Python, as it allows for cooperative scheduling of microthreads. Here you can specify a maximum number of instructions to execute before returning. Setting up the routines and getting the return value out is a little more tricky though. 
+ #1 The only "really good" solutions -- imposing essentially no overhead -- are going to be based on SIGALRM, either directly or through a nice abstraction layer; but as already remarked Windows does not support this. Threads are no use, not because it's hard to get results out (that would be trivial, with a Queue!), but because forcibly terminating a runaway thread in a nice cross-platform way is unfeasible. 
+
+ This leaves high-overhead multiprocessing as the only viable cross-platform solution. You'll want a process pool to reduce process-spawning overhead (since presumably the need to kill a runaway function is only occasional, most of the time you'll be able to reuse an existing process by sending it new functions to execute). Again, Queue (the multiprocessing kind) makes getting results back easy (albeit with a modicum more caution than for the threading case, since in the multiprocessing case deadlocks are possible). 
+
+ If you don't need to strictly serialize the executions of your functions, but rather can arrange your architecture to try two or more of them in parallel, AND are running on a multi-core machine (or multiple machines on a fast LAN), then suddenly multiprocessing becomes a high-performance solution, easily paying back for the spawning and IPC overhead and more, exactly because you can exploit as many processors (or nodes in a cluster) as you can use. 
+ #2 You could use the multiprocessing library to run the code in a separate process, and call .join() on the process to wait for it to finish, with the timeout parameter set to whatever you want. The library provides several ways of getting data back from another process - using a Value object (seen in the Shared Memory example on that page) is probably sufficient. You can use the terminate() call on the process if you really need to, though it's not recommended. 
+ #3 Executing untrusted code is dangerous, and should usually be avoided unless it's impossible to do so. I think you're right to be worried about the time of the run() method, but the run() method could do other things as well: delete all your files, open sockets and make network connections, begin cracking your password and email the result back to an attacker, etc. 
+
+ Perhaps if you can give some more detail on what the dynamically loaded code does, the SO community can help suggest alternatives. 
+ #4 a quick google for "python timeout" reveals a TimeoutFunction class 
+ #5 
+ I could spawn a new thread for this, and specify a time for .join() method, but then I cannot easily get the result out of it 
+ 
+
+ If the timeout expires, that means the method didn't finish, so there's no result to get. If you have incremental results, you can store them somewhere and read them out however you like (keeping threadsafety in mind). 
+
+ Using SIGALRM-based systems is dicey, because it can deliver async signals at any time, even during an except or finally handler where you're not expecting one. (Other languages deal with this better, unfortunately.) For example: 
+
+ try:
+ # code
+finally:
+ cleanup1()
+ cleanup2()
+ cleanup3()
+ 
+
+ A signal passed up via SIGALRM might happen during cleanup2(), which would cause cleanup3() to never be executed. Python simply does not have a way to terminate a running thread in a way that's both uncooperative and safe. 
+
+ You should just have the code check the timeout on its own. 
+
+ import threading
+from datetime import datetime, timedelta
+
+local = threading.local()
+class ExecutionTimeout(Exception): pass
+
+def start(max_duration = timedelta(seconds=1)):
+ local.start_time = datetime.now()
+ local.max_duration = max_duration
+
+def check():
+ if datetime.now() - local.start_time &gt; local.max_duration:
+  raise ExecutionTimeout()
+
+def do_work():
+ start()
+ while True:
+  check()
+  # do stuff here
+ return 10
+
+try:
+ print do_work()
+except ExecutionTimeout:
+ print "Timed out"
+ 
+
+ (Of course, this belongs in a module, so the code would actually look like "timeout.start()"; "timeout.check()".) 
+
+ If you're generating code dynamically, then generate a timeout.check() call at the start of each loop.

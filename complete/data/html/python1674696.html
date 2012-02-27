@@ -1,0 +1,45 @@
+<h3>Question (ID-1674696):</h3><h2>how to process long-running requests in python workers?</h2><p>I have a python (well, it's php now but we're rewriting) function that takes some parameters (A and B) and compute some results (finds best path from A to B in a graph, graph is read-only), in typical scenario one call takes 0.1s to 0.9s to complete. This function is accessed by users as a simple REST web-service (GET bestpath.php?from=A&amp;to=B). Current implementation is quite stupid - it's a simple php script+apache+mod_php+APC, every requests needs to load all the data (over 12MB in php arrays), create all structures, compute a path and exit. I want to change it. </p>
+
+<p>I want a setup with N independent workers (X per server with Y servers), each worker is a python app running in a loop (getting request -> processing -> sending reply -> getting req...), each worker can process one request at a time. I need something that will act as a frontend: get requests from users, manage queue of requests (with configurable timeout) and feed my workers with one request at a time. </p>
+
+<p>how to approach this? can you propose some setup? nginx + fcgi or wsgi or something else? haproxy? as you can see i'am a newbie in python, reverse-proxy, etc. i just need a starting point about architecture (and data flow)</p>
+
+<p>btw. workers are using read-only data so there is no need to maintain locking and communication between them</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Looks like you need the "workers" to be separate processes (at least some of them, and therefore might as well make them all separate processes rather than bunches of threads divided into several processes).  The <a href="http://docs.python.org/library/multiprocessing.html?highlight=multiprocessing#module-multiprocessing" rel="nofollow">multiprocessing</a> module in Python 2.6 and later's standard library offers good facilities to spawn a pool of processes and communicate with them via FIFO "queues"; if for some reason you're stuck with Python 2.5 or even earlier there are versions of multiprocessing on the PyPi repository that you can download and use with those older versions of Python.</p>
+
+<p>The "frontend" can and should be pretty easily made to run with WSGI (with either Apache or Nginx), and it can deal with all communications to/from worker processes via <code>multiprocessing</code>, without the need to use HTTP, proxying, etc, for that part of the system; only the frontend would be a web app per se, the workers just receive, process and respond to units of work as requested by the frontend. This seems the soundest, simplest architecture to me.</p>
+
+<p>There are other distributed processing approaches available in third party packages for Python, but multiprocessing is quite decent and has the advantage of being part of the standard library, so, absent other peculiar restrictions or constraints, multiprocessing is what I'd suggest you go for.</p>
+<br /><b>#1</b><br /><p>The typical way to handle this sort of arrangement using threads in Python is to use the standard library module <a href="http://docs.python.org/library/queue.html" rel="nofollow">Queue</a>. An example of using the Queue module for managing workers can be found here: <a href="http://effbot.org/librarybook/queue.htm" rel="nofollow">Queue Example</a></p>
+<br /><b>#2</b><br /><p>There are many FastCGI modules with preforked mode and WSGI interface for python around, the most known is <a href="http://trac.saddi.com/flup" rel="nofollow"><code>flup</code></a>. My personal preference for such task is <a href="http://bitbucket.org/barbuza/superfcgi/" rel="nofollow"><code>superfcgi</code></a> with nginx. Both will launch several processes and will dispatch requests to them. 12Mb is not as much to load them separately in each process, but if you'd like to share data among workers you need threads, not processes. Note, that heavy math in python with single process and many threads won't use several CPU/cores efficiently due to GIL. Probably the best approach is to use several processes (as much as cores you have) each running several threads (default mode in <code>superfcgi</code>).</p>
+<br /><b>#3</b><br /><p>I think you can configure modwsgi/Apache so it will have several "hot" Python interpreters
+in separate processes ready to go at all times and also reuse them for new accesses
+(and spawn a new one if they are all busy).
+In this case you could load all the preprocessed data as module globals and they would
+only get loaded once per process and get reused for each new access.  In fact I'm not sure this isn't the default configuration
+for modwsgi/Apache.</p>
+
+<p>The main problem here is that you might end up consuming
+a lot of "core" memory (but that may not be a problem either).
+I think you can also configure modwsgi for single process/multiple
+thread -- but in that case you may only be using one CPU because
+of the Python Global Interpreter Lock (the infamous GIL), I think.</p>
+
+<p>Don't be afraid to ask at the modwsgi mailing list -- they are very
+responsive and friendly.</p>
+<br /><b>#4</b><br /><p>You could use nginx load balancer to proxy to PythonPaste paster (which serves WSGI, for example Pylons), that launches each request as separate thread anyway.</p>
+<br /><b>#5</b><br /><p>The most simple solution in this case is to use the webserver to do all the heavy lifting. Why should you handle threads and/or processes when the webserver will do all that for you?</p>
+
+<p>The standard arrangement in deployments of Python is:</p>
+
+<ol>
+<li>The webserver start a number of processes each running a complete python interpreter and loading all your data into memory.</li>
+<li>HTTP request comes in and gets dispatched off to some process</li>
+<li>Process does your calculation and returns the result directly to the webserver and user</li>
+<li>When you need to change your code or the graph data, you restart the webserver and go back to step 1.</li>
+</ol>
+
+<p>This is the architecture used Django and other popular web frameworks.</p>
+<br /><b>#6</b><br /><p>Another option is a queue table in the database.<br>
+The worker processes run in a loop or off cron and poll the queue table for new jobs.</p>
+<br />

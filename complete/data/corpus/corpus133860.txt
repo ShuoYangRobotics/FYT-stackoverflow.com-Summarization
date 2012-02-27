@@ -1,0 +1,70 @@
+Question (ID-133860): Running subversion under apache and mod_python My Apache server runs on some non-default (not-root) account. When it tries to run a python script which in turn executes a subversion check-out command, 'svn checkout' fails with the following error message: 
+
+ svn: Can't open file '/root/.subversion/servers': Permission denied
+ 
+
+ At the same time running that python script with subversion checkout command inside from command line under the same user account goes on perfectly well. 
+
+ Apache server 2.2.6 with mod_python 3.2.8 runs on Fedora Core 6 machine. 
+
+ Can anybody help me out? Thanks a lot. 
+ Answers (Total-6): #0 It sounds like the environment you apache process is running under is a little unusual. For whatever reason, svn seems to think the user configuration files it needs are in /root. You can avoid having svn use the root versions of the files by specifying on the command line which config directory to use, like so: 
+
+ svn --config-dir /home/myuser/.subversion checkout http://example.com/path
+ 
+
+ While not fixing your enviornment, it will at least allow you to have your script run properly... 
+ #1 Try granting the Apache user (the user that the apache service is running under) r+w permissions on that file. 
+ #2 Doesn't Apache's error log give you a clue? 
+
+ Maybe it has to do with SELinux. Check /var/log/audit/audit.log and adjust your SELinux configuration accordingly, if the audit.log file indicates that it's SELinux which denies Apache access. 
+ #3 The Permission Denied error is showing that the script is running with root credentials, because it's looking in root's home dir for files. 
+
+ I suggest you change the hook script to something that does: 
+
+ id &gt; /tmp/id
+ 
+
+ so that you can check the results of that to make sure what the uid/gid and euid/egid are. You will probably find it's not actually running as the user you think it is. 
+
+ My first guess, like Troels, was also SELinux, but that would only be my guess if you are absolutely sure the script through Apache is running with exactly the same user/group as your manual test. 
+ #4 Well, thanks to all who answered the question. Anyway, I think I solved the mistery. 
+
+ SELinux is completely disabled on the machine, so the problem is definitely in 'svn co' not being able to found config_dir for the user account it runs under. 
+
+ Apache / mod_python doesn't read in shell environment of the user account which apache is running on. Thus for examle no $HOME is seen by mod_python when apache 
+is running under some real user ( not nobody ) 
+
+ Now 'svn co' has a flag --config-dir which points to configuration directory to read params from. By default it is $HOME/.subversion, i.e. it corresponds to the user account home directory. Apparently when no $HOME exists mod_python goes to root home dir ( /root) and tries to fiddle with .subversion content over there - which is obviously
+fails miserably. 
+
+ putting 
+
+ SetEnv HOME /home/qa 
+
+ into the /etc/httpd/conf/httpd.conf doesn't solve the problem because of SetEnv having nothing to do with shell environment - it only sets apache related environment 
+
+ Likewise PythonOption - sets only mod_python related variables which can be read with req.get_options() after that 
+
+ Running 'svn co --config-dir /home/ ...' definitely gives a workaround for running from within mod_python, but gets in the way of those who will try to run the script from command line. 
+
+ So the proposed ( and working) solution is to set HOME environment variable prior to starting appache. 
+
+ For example in /etc/init.d/httpd script 
+
+  QAHOME=/home/qa
+ ...
+ HOME=$QAHOME LANG=$HTTPD_LANG daemon $httpd $OPTIONS
+ 
+ #5 What is happening is apache is being started with the environment variables of root, so it thinks that it should find its config files in /root/. This is NOT the case.
+what happens is if you do sudo apache2ctl start, it pulls your $HOME variable from the sudo $HOME=/root/ 
+
+ I have just found a solution to this problem myself (although with mod_perl, but same thing) 
+
+ run this command (if its apache 1, remove the 2): 
+
+ sudo /etc/init.d/apache2 stop
+sudo /etc/init.d/apache2 start
+ 
+
+ When /etc/init.d/apache2 starts apache, it sets all the proper environment variables that apache should be running under.

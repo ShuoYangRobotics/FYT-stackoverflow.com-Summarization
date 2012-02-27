@@ -1,0 +1,355 @@
+Question (ID-6462272): Subtract Overlaps Between Two Ranges Without Sets NO SETS! 
+
+ I can't use Sets because the ranges will be too long. They will take up too much memory and the creation of the sets themselves will take too long. 
+
+ Using only the endpoints of the of the ranges, is there an optimal way to subtract two lists of ranges? 
+
+ For e.g., 
+
+ r1 = (1, 1000), (1100, 1200) 
+r2 = (30, 50), (60, 200), (1150, 1300) 
+
+ r1 - r2 = (1, 29), (51, 59), (201, 1000), (1100, 1149) 
+
+ other info: 
+ -r2 does not have to overlap r1 
+ -r1 and r2 will not have pairs that overlap other pairs. For instance, r1 will not have both (0,30) and (10, 25) 
+
+ Thanks. 
+ Answers (Total-7): #0 The interval package may provide all that you need. 
+
+ from interval import Interval, IntervalSet
+r1 = IntervalSet([Interval(1, 1000), Interval(1100, 1200)])
+r2 = IntervalSet([Interval(30, 50), Interval(60, 200), Interval(1150, 1300)])
+print(r1 - r2)
+
+&gt;&gt;&gt; [1..30),(50..60),(200..1000],[1100..1150)
+ 
+ #1 One solution (in addition to all the other different solutions that have been presented here) is to use an interval/segment tree (they are really the same thing): 
+
+ http://en.wikipedia.org/wiki/Segment_tree 
+
+ http://en.wikipedia.org/wiki/Interval_tree 
+
+ One big advantage to doing it this way is that it is trivial to do arbitrary boolean operations (not just subtraction) using the same piece of code. There is a standard treatment of this data structure in de Berg. To perform any boolean operation on a pair of interval trees, (including subtraction) you just merge them together. Here is some (admittedly naive) Python code for doing this with unbalanced range trees. The fact that they are unbalanced has no effect on the time taken to merge the trees, however the tree construction here is the really dumb part which ends up being quadratic (unless the reduce is executed by partitioning, which I somehow doubt). Anyway here you go: 
+
+ class IntervalTree:
+ def __init__(self, h, left, right):
+  self.h = h
+  self.left = left
+  self.right = right
+
+def merge(A, B, op, l=-float("inf"), u=float("inf")):
+ if l &gt; u:
+  return None
+ if not isinstance(A, IntervalTree):
+  if isinstance(B, IntervalTree):
+   opT = op
+   A, B, op = B, A, (lambda x, y : opT(y,x))
+  else:
+   return op(A, B)
+ left = merge(A.left, B, op, l, min(A.h, u))
+ right = merge(A.right, B, op, max(A.h, l), u)
+ if left is None:
+  return right
+ elif right is None or left == right:
+  return left
+ return IntervalTree(A.h, left, right)
+
+def to_range_list(T, l=-float("inf"), u=float("inf")):
+ if isinstance(T, IntervalTree):
+  return to_range_list(T.left, l, T.h) + to_range_list(T.right, T.h, u)
+ return [(l, u-1)] if T else []
+
+def range_list_to_tree(L):
+ return reduce(lambda x, y : merge(x, y, lambda a, b: a or b), 
+  [ IntervalTree(R[0], False, IntervalTree(R[1]+1, True, False)) for R in L ])  
+ 
+
+ I wrote this kind of quickly and didn't test it that much, so there could be bugs. Also note that this code will work with arbitrary boolean operations, not just differences (you simply pass them as the argument to op in merge). The time complexity of evaluating any of these is linear on the size of the output tree (which is also the same as the number of intervals in the result). As an example, I ran it on the case you provided: 
+
+ #Example:
+r1 = range_list_to_tree([ (1, 1000), (1100, 1200) ])
+r2 = range_list_to_tree([ (30, 50), (60, 200), (1150, 1300) ])
+diff = merge(r1, r2, lambda a, b : a and not b)
+print to_range_list(diff)
+ 
+
+ And I got the following output: 
+
+ 
+ [(1, 29), (51, 59), (201, 1000), (1100, 1149)] 
+ 
+
+ Which seems to be in agreement with what you would expect. Now if you want to do some other boolean operations here is how it would work using the same function: 
+
+ #Intersection
+merge(r1, r2, lambda a, b : a and b)
+
+#Union
+merge(r1, r2, lambda a, b : a or b)
+
+#Xor
+merge(r1, r2, lambda a, b : a != b)
+ 
+ #2 I think I misunderstood the question, but this code works if r2 is a subset of r1 
+
+ class RangeSet:
+ def __init__(self, elements):
+  self.ranges = list(elements)
+
+ def __iter__(self):
+  return iter(self.ranges)
+
+ def __repr__(self):
+  return 'RangeSet: %r' % self.ranges
+
+ def has(self, tup):
+  for pos, i in enumerate(self.ranges):
+   if i[0] &lt;= tup[0] and i[1] &gt;= tup[1]:
+    return pos, i
+  raise ValueError('Invalid range or overlapping range')
+
+ def minus(self, tup):
+  pos, (x,y) = self.has(tup)
+  out = []
+  if x &lt; tup[0]:
+   out.append((x, tup[0]-1))
+  if y &gt; tup[1]:
+   out.append((tup[1]+1, y))
+  self.ranges[pos:pos+1] = out
+
+ def __sub__(self, r):
+  r1 = RangeSet(self)
+  for i in r: r1.minus(i)
+  return r1
+
+ def sub(self, r): #inplace subtraction
+  for i in r:
+   self.minus(i)
+ 
+
+ then, you do: 
+
+ Update : Note the last interval of r2 is different to work the way I meant. 
+
+ &gt;&gt;&gt; r1 = RangeSet(((1, 1000), (1100, 1200)))
+&gt;&gt;&gt; r2 = RangeSet([(30, 50), (60, 200), (1150, 1200)])
+&gt;&gt;&gt; r1 - r2
+RangeSet: [(1, 29), (51, 59), (201, 1000), (1100, 1149)]
+&gt;&gt;&gt; r1.sub(r2)
+&gt;&gt;&gt; r1
+RangeSet: [(1, 29), (51, 59), (201, 1000), (1100, 1149)]
+ 
+ #3 Here's a quick python function that does the subtraction, regardless of whether the initial lists are well-formed (i.e. turns the lists into the smallest list of equivalent ranges, sorted, before doing the subtraction): 
+
+ def condense(l):
+ l = sorted(l)
+ temp = [l.pop(0)]
+ for t in l:
+  if t[0] &lt;= temp[-1][1]:
+   t2 = temp.pop()
+   temp.append((t2[0], max(t[1], t2[1])))
+  else:
+   temp.append(t)
+ return temp
+
+def setSubtract(l1, l2):
+ l1 = condense(l1)
+ l2 = condense(l2)
+ i = 0
+ for t in l2:
+  while t[0] &gt; l1[i][1]:
+   i += 1
+   if i &gt;= len(l1):
+    break
+  if t[1] &lt; l1[i][1] and t[0] &gt; l1[i][0]:
+   #t cuts l1[i] in 2 pieces
+   l1 = l1[:i] + [(l1[i][0], t[0] - 1), (t[1] + 1, l1[i][1])] + l1[i + 1:]
+  elif t[1] &gt;= l1[i][1] and t[0] &lt;= l1[i][0]:
+   #t eliminates l1[i]
+   l1.pop(i)
+  elif t[1] &gt;= l1[i][1]:
+   #t cuts off the top end of l1[i]
+   l1[i] = (l1[i][0], t[0] - 1)
+  elif t[0] &lt;= l1[i][0]:
+   #t cuts off the bottom end of l1[i]
+   l1[i] = (t[1] + 1, l1[i][1])
+  else:
+   print "This shouldn't happen..."
+   exit()
+ return l1
+
+r1 = (1, 1000), (1100, 1200)
+r2 = (30, 50), (60, 200), (1150, 1300)
+setSubtract(r1, r2) #yields [(1, 29), (51, 59), (201, 1000), (1100, 1149)]
+ 
+ #4 This was an interesting problem! 
+
+ I think this is right, and it's fairly compact. It should work with overlapping ranges of all kinds, but it assumes well-formed ranges (i.e. [x, y) where x &lt; y ). It uses [x, y) style ranges for simplicity. It's based on the observation that there are really only six possible arrangements (with results in ()): 
+
+ Edit : I found a more compact representation: 
+
+ (s1 e1) s2 e2
+(s1 s2) e1 e2
+(s1 s2) (e2 e1)
+
+ s2 e2 (s1 e1)
+ s2 s1 (e2 e1)
+ s2 s1 e1 e2 ()
+ 
+
+ Given a sorted list of endpoints, if endpoints[0] == s1 then the first two endpoints should be in the result. If endpoints[3] == e1 then the last two endpoints should be in the result. If neither, then there should be no result. 
+
+ I haven't tested it a great deal, so it's entirely possible that something is wrong. Please let me know if you find a mistake! 
+
+ import itertools
+
+def range_diff(r1, r2):
+ s1, e1 = r1
+ s2, e2 = r2
+ endpoints = sorted((s1, s2, e1, e2))
+ result = []
+ if endpoints[0] == s1:
+  result.append((endpoints[0], endpoints[1]))
+ if endpoints[3] == e1:
+  result.append((endpoints[2], endpoints[3]))
+ return result
+
+def multirange_diff(r1_list, r2_list):
+ for r2 in r2_list:
+  r1_list = list(itertools.chain(*[range_diff(r1, r2) for r1 in r1_list]))
+ return r1_list
+ 
+
+ Tested: 
+
+ &gt;&gt;&gt; r1_list = [(1, 1001), (1100, 1201)]
+&gt;&gt;&gt; r2_list = [(30, 51), (60, 201), (1150, 1301)]
+&gt;&gt;&gt; print multirange_diff(r1_list, r2_list)
+[(1, 30), (51, 60), (201, 1001), (1100, 1150)]
+ 
+ #5 Fun question! Another implementation, though you already have plenty. It was interesting to do!
+Involves some extra 'decoration' to make what I'm doing more explicit. 
+
+ import itertools
+
+def flatten_range_to_labeled_points(input_range,label):
+ range_with_labels = [((start,'start_%s'%label),(end,'end_%s'%label)) for (start,end) in input_range]
+ flattened_range = list(reduce(itertools.chain,range_with_labels))
+ return flattened_range 
+
+def unflatten_range_remove_labels(input_range):
+ without_labels = [x for (x,y) in input_range]
+ grouped_into_pairs = itertools.izip(without_labels[::2], without_labels[1::2])
+ return grouped_into_pairs
+
+def subtract_ranges(range1, range2):
+ range1_labeled = flatten_range_to_labeled_points(range1,1)
+ range2_labeled = flatten_range_to_labeled_points(range2,2)
+ all_starts_ends_together = sorted(range1_labeled + range2_labeled)
+ in_range1, in_range2 = False, False
+ new_starts_ends = []
+ for (position,label) in all_starts_ends_together:
+  if label=='start_1':
+   in_range1 = True
+   if not in_range2:
+    new_starts_ends.append((position,'start'))
+  elif label=='end_1':
+   in_range1 = False
+   if not in_range2:
+    new_starts_ends.append((position,'end'))
+  elif label=='start_2':
+   in_range2 = True
+   if in_range1:
+    new_starts_ends.append((position-1,'end'))
+  elif label=='end_2':
+   in_range2 = False
+   if in_range1:
+    new_starts_ends.append((position+1,'start'))
+ # strip the start/end labels, they're not used, I just appended them for clarity
+ return unflatten_range_remove_labels(new_starts_ends)
+ 
+
+ I get the right output: 
+
+ r1 = (1, 1000), (1100, 1200)
+r2 = (30, 50), (60, 200), (1150, 1300)
+&gt;&gt;&gt; subtract_ranges(r1,r2)
+[(1, 29), (51, 59), (201, 1000), (1100, 1149)]
+ 
+ #6 this is rather ugly but it does work for the given example 
+
+ def minus1(a,b):
+ if (b[0] &lt; a[0] and b[1] &lt; a[0]) or (a[1] &lt; b[0] and a[1] &lt; b[1]):
+  return [a] # doesn't overlap
+ if a[0]==b[0] and a[1]==b[1]:
+  return [] # overlaps exactly
+ if b[0] &lt; a[0] and a[1] &lt; b[1]:
+  return [] # overlaps completely
+ if a[0]==b[0]:
+  return [(b[1]+1,a[1])] # overlaps exactly on the left
+ if a[1]==b[1]:
+  return [(a[0],b[0]-1)] # overlaps exactly on the right 
+ if a[0] &lt; b[0] and b[0] &lt; a[1] and a[1] &lt; b[1]:
+  return [(a[0],b[0]-1)] # overlaps the end
+ if a[0] &lt; b[1] and b[1] &lt; a[1] and b[0] &lt; a[0]:
+  return [(b[1]+1,a[1])] # overlaps the start
+ else:
+  return [(a[0],b[0]-1),(b[1]+1,a[1])] # somewhere in the middle
+
+def minus(r1, r2):
+ # assume r1 and r2 are already sorted
+ r1 = r1[:]
+ r2 = r2[:]
+ l = []
+ v = r1.pop(0)
+ b = r2.pop(0)
+ while True:
+  r = minus1(v,b)
+  if r:
+   if len(r)==1:
+    if r[0] == v:
+     if v[1] &lt; b[0] and v[1] &lt; b[1]:
+      l.append(r[0])
+      if r1:
+       v = r1.pop(0)
+      else:
+       break
+     else:
+      if r2:
+       b = r2.pop(0)
+      else:
+       break
+    else:
+     v = r[0]
+   else:
+    l.append(r[0])
+    v = r[1]
+    if r2:
+     b = r2.pop(0)
+    else:
+     l.append(v)
+     break
+  else:
+   if r1:
+    v = r1.pop(0)
+   else:
+    break
+   if r2:
+    b = r2.pop(0)
+   else:
+    l.append(v)
+    l.extend(r1)
+    break
+ return l
+
+r1 = [(1, 1000), (1100, 1200)]
+r2 = [(30, 50), (60, 200), (1150, 1300)]
+
+print minus(r1,r2)
+ 
+
+ prints: 
+
+ [(1, 29), (51, 59), (201, 1000), (1100, 1149)]

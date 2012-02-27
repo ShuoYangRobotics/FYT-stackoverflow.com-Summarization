@@ -1,0 +1,110 @@
+Question (ID-11060): How should I unit test a code-generator? This is a difficult and open-ended question I know, but I thought I'd throw it to the floor and see if anyone had any interesting suggestions. 
+
+ I have developed a code-generator that takes our python interface to our C++ code (generated via SWIG) and generates code needed to expose this as WebServices. When I developed this code I did it using TDD, but I've found my tests to be brittle as hell. Because each test essentially wanted to verify that for a given bit of input code (which happens to be a C++ header) I'd get a given bit of outputted code I wrote a small engine that reads test definitions from XML input files and generates test cases from these expectations. 
+
+ The problem is I dread going in to modify the code at all. That and the fact that the unit tests themselves are a: complex, and b: brittle. 
+
+ So I'm trying to think of alternative approaches to this problem, and it strikes me I'm perhaps tackling it the wrong way. Maybe I need to focus more on the outcome, IE: does the code I generate actually run and do what I want it to, rather than, does the code look the way I want it to. 
+
+ Has anyone got any experiences of something similar to this they would care to share? 
+ Answers (Total-8): #0 I started writing up a summary of my experience with my own code generator, then went back and re-read your question and found you had already touched upon the same issues yourself, focus on the execution results instead of the code layout/look. 
+
+ Problem is, this is hard to test, the generated code might not be suited to actually run in the environment of the unit test system, and how do you encode the expected results? 
+
+ I've found that you need to break down the code generator into smaller pieces and unit test those. Unit testing a full code generator is more like integration testing than unit testing if you ask me. 
+ #1 Recall that "unit testing" is only one kind of testing. You should be able to unit test the internal pieces of your code generator. What you're really looking at here is system level testing (a.k.a. regression testing). It's not just semantics... there are different mindsets, approaches, expectations, etc. It's certainly more work, but you probably need to bite the bullet and set up an end-to-end regression test suite: fixed C++ files -> SWIG interfaces -> python modules -> known output. You really want to check the known input (fixed C++ code) against expected output (what comes out of the final Python program). Checking the code generator results directly would be like diffing object files... 
+ #2 
+ Problem is, this is hard to test, the generated code might not be suited to actually run in the environment of the unit test system, and how do you encode the expected results? 
+ 
+
+ This is indeed a problem. And the code i'm generating is not suited very well to running in a test environment: it uses some complex Python tricks to register available SOAP methods etc and mocking or detecting this would lead to more obscure tests. 
+
+ In terms of encoding expectations, in this case I was going to have it generate code to access custom test specific code which I'd compile and link in, then I would make calls via my generated interface, and ask the underlying classes if the right thing had happened. 
+
+ This again, would lead to obscure tests, since the test logic would be split accross several places. I think unit tests should not be factored in this manner if possible. 
+
+ Can you give an example of how you split your generator up? What were the components, and can this be generalised for other cases? 
+ #3 Yes, results are the ONLY thing that matters. The real chore is writing a framework that allows your generated code to run independently... spend your time there. 
+ #4 If you are running on *nux you might consider dumping the unittest framework in favor of a bash script or makefile. on windows you might consider building a shell app/function that runs the generator and then uses the code (as another process) and unittest that. 
+
+ A third option would be to generate the code and then build an app from it that includes nothing but a unittest. Again you would need a shell script or whatnot to run this for each input. As to how to encode the expected behavior, it occurs to me that it could be done in much the same way as you would for the C++ code just using the generated interface rather than the C++ one. 
+ #5 Just wanted to point out that you can still achieve fine-grained testing while verifying the results: you can test individual chunks of code by nesting them inside some setup and verification code: 
+
+ int x = 0;
+GENERATED_CODE
+assert(x == 100);
+ 
+
+ Provided you have your generated code assembled from smaller chunks, and the chunks do not change frequently, you can exercise more conditions and test a little better, and hopefully avoid having all your tests break when you change specifics of one chunk. 
+ #6 Unit testing is just that testing a specific unit. So if you are writing a specification for class A, it is ideal if class A does not have the real concrete versions of class B and C. 
+
+ Ok I noticed afterwards the tag for this question includes C++ / Python, but the principles are the same: 
+
+  public class A : InterfaceA 
+ { 
+  InterfaceB b;
+
+  InterfaceC c;
+
+  public A(InterfaceB b, InterfaceC c) {
+   this._b = b;
+   this._c = c; }
+
+  public string SomeOperation(string input) 
+  {
+   return this._b.SomeOtherOperation(input) 
+    + this._c.EvenAnotherOperation(input); 
+  } 
+ }
+ 
+
+ Because the above System A injects interfaces to systems B and C, you can unit test just system A, without having real functionality being executed by any other system. This is unit testing. 
+
+ Here is a clever manner for approaching a System from creation to completion, with a different When specification for each piece of behaviour: 
+
+ public class When_system_A_has_some_operation_called_with_valid_input : SystemASpecification
+{
+ private string _actualString;
+
+ private string _expectedString;
+
+ private string _input;
+
+ private string _returnB;
+
+ private string _returnC;
+
+ [It]
+ public void Should_return_the_expected_string()
+ {
+  _actualString.Should().Be.EqualTo(this._expectedString);
+ }
+
+ public override void GivenThat()
+ {
+  var randomGenerator = new RandomGenerator();
+  this._input = randomGenerator.Generate&lt;string&gt;();
+  this._returnB = randomGenerator.Generate&lt;string&gt;();
+  this._returnC = randomGenerator.Generate&lt;string&gt;();
+
+  Dep&lt;InterfaceB&gt;().Stub(b =&gt; b.SomeOtherOperation(_input))
+       .Return(this._returnB);
+  Dep&lt;InterfaceC&gt;().Stub(c =&gt; c.EvenAnotherOperation(_input))
+       .Return(this._returnC);
+
+  this._expectedString = this._returnB + this._returnC;
+ }
+
+ public override void WhenIRun()
+ {
+  this._actualString = Sut.SomeOperation(this._input);
+ }
+}
+ 
+
+ So in conclusion, a single unit / specification can have multiple behaviours, and the specification grows as you develop the unit / system; and if your system under test depends on other concrete systems within it, watch out. 
+ #7 My recommendation would be to figure out a set of known input-output results, such as some simpler cases that you already have in place, and unit test the code that is produced . It's entirely possible that as you change the generator that the exact string that is produced may be slightly different... but what you really care is whether it is interpreted in the same way. Thus, if you test the results as you would test that code if it were your feature, you will find out if it succeeds in the ways you want. 
+
+ Basically, what you really want to know is whether your generator will produce what you expect without physically testing every possible combination (also: impossible). By ensuring that your generator is consistent in the ways you expect, you can feel better that the generator will succeed in ever-more-complex situations. 
+
+ In this way, you can also build up a suite of regression tests (unit tests that need to keep working correctly). This will help you make sure that changes to your generator aren't breaking other forms of code. When you encounter a bug that your unit tests didn't catch, you may want to include it to prevent similar breakage.

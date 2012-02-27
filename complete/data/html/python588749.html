@@ -1,0 +1,178 @@
+<h3>Question (ID-588749):</h3><h2>Python Daemon Packaging Best Practices</h2><p>I have a tool which I have written in python and generally should be run as a daemon.  What are the best practices for packaging this tool for distribution, particularly how should settings files and the daemon executable/script be handled?</p>
+
+<p>Relatedly are there any common tools for setting up the daemon for running on boot as appropriate for the given platform (i.e. init scripts on linux, services on windows, launchd on os x)?</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>The best tool I found for helping with init.d scripts is "start-stop-daemon". It will run any application, monitor run/pid files, create them when necessary, provide ways to stop the daemon, set process user/group ids, and can even background your process.</p>
+
+<p>For example, this is a script which can start/stop a wsgi server:</p>
+
+<pre><code>#! /bin/bash
+
+case "$1" in
+  start)
+    echo "Starting server"
+
+    # Activate the virtual environment
+    . /home/ali/wer-gcms/g-env/bin/activate
+
+    # Run start-stop-daemon, the $DAEMON variable contains the path to the
+    # application to run
+    start-stop-daemon --start --pidfile $WSGI_PIDFILE \
+        --user www-data --group www-data \
+        --chuid www-data \
+        --exec "$DAEMON"
+    ;;
+  stop)
+    echo "Stopping WSGI Application"
+
+    # Start-stop daemon can also stop the application by sending sig 15
+    # (configurable) to the process id contained in the run/pid file
+    start-stop-daemon --stop --pidfile $WSGI_PIDFILE --verbose
+    ;;
+  *)
+    # Refuse to do other stuff
+    echo "Usage: /etc/init.d/wsgi-application.sh {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0
+</code></pre>
+
+<p>You can also see there an example of how to use it with a virtualenv, which I would always recommend.</p>
+<br /><b>#1</b><br /><p>To answer one part of your question, there are no tools I know of that will do daemon setup portably even across Linux systems let alone Windows or Mac OS X.</p>
+
+<p>Most Linux distributions seem to be using <code>start-stop-daemon</code> within init scripts now, but you're still going to have minor difference in filesystem layout and big differences in packaging.  Using autotools/configure, or distutils/easy_install if your project is all Python, will go a long way to making it easier to build packages for different Linux/BSD distributions.</p>
+
+<p>Windows is a whole different game and will require <a href="http://starship.python.net/crew/mhammond/" rel="nofollow">Mark Hammond's win32</a> extensions and maybe <a href="http://timgolden.me.uk/python/wmi.html" rel="nofollow">Tim Golden's WMI</a> extensions.</p>
+
+<p>I don't know Launchd except that "none of the above" are relevant.</p>
+
+<p>For tips on daemonizing Python scripts, I would look to Python apps that are actually doing it in the real world, for example inside Twisted.</p>
+<br /><b>#2</b><br /><p>There are many snippets on the internet offering to write a daemon in pure python (no bash scripts)</p>
+
+<p><a href="http://www.jejik.com/articles/2007/02/a_simple_unix_linux_daemon_in_python/" rel="nofollow">http://www.jejik.com/articles/2007/02/a_simple_unix_linux_daemon_in_python/</a>
+looks clean...</p>
+
+<p>If you want to write your own,<br />
+the principle is the same as with the bash daemon function.</p>
+
+<p>Basically:</p>
+
+<p><strong>On start:</strong></p>
+
+<ul>
+<li>you fork to another process</li>
+<li>open a logfile to redirect your
+stdout and stderr </li>
+<li>Save the pid somewhere.</li>
+</ul>
+
+<p><strong>On stop:</strong></p>
+
+<ul>
+<li>You send SIGTERM to the process with pid stored in your pidfile.</li>
+<li>With signal.signal(signal.SIGTERM, sigtermhandler) you can bind a stopping
+procedure to the SIGTERM signal.</li>
+</ul>
+
+<p>I don't know any widely used package doing this though.</p>
+<br /><b>#3</b><br /><p>I can't remember where I downloaded it... but this is the best daemonizing script that I've found.  It works beautifully (on Mac and Linux.)  (save it as daemonize.py)</p>
+
+<pre><code>import sys, os
+def daemonize (stdin='/dev/null', stdout='/dev/null', stderr='/dev/null'):
+    # Perform first fork.
+    try:
+        pid = os.fork( )
+        if pid &gt; 0:
+            sys.exit(0) # Exit first parent.
+    except OSError, e:
+        sys.stderr.write("fork #1 failed: (%d) %sn" % (e.errno, e.strerror))
+        sys.exit(1)
+    # Decouple from parent environment.
+    os.chdir("/")
+    os.umask(0)
+    os.setsid( )
+    # Perform second fork.
+    try:
+        pid = os.fork( )
+        if pid &gt; 0:
+            sys.exit(0) # Exit second parent.
+    except OSError, e:
+        sys.stderr.write("fork #2 failed: (%d) %sn" % (e.errno, e.strerror))
+        sys.exit(1)
+    # The process is now daemonized, redirect standard file descriptors.
+    for f in sys.stdout, sys.stderr: f.flush( )
+    si = file(stdin, 'r')
+    so = file(stdout, 'a+')
+    se = file(stderr, 'a+', 0)
+    os.dup2(si.fileno( ), sys.stdin.fileno( ))
+    os.dup2(so.fileno( ), sys.stdout.fileno( ))
+    os.dup2(se.fileno( ), sys.stderr.fileno( ))
+</code></pre>
+
+<p>In your script, you would simply:</p>
+
+<pre><code>from daemonize import daemonize
+daemonize()
+</code></pre>
+
+<p>And you can also specify places to redirect the stdio, err, etc...</p>
+<br /><b>#4</b><br /><p>Check the Ben Finney's daemon module. He has started to write a PEP targeting python 3.X:</p>
+
+<p><a href="http://www.python.org/dev/peps/pep-3143/" rel="nofollow">http://www.python.org/dev/peps/pep-3143/</a></p>
+
+<p>But an implementation is already available here :</p>
+
+<p><a href="http://pypi.python.org/pypi/python-daemon/" rel="nofollow">http://pypi.python.org/pypi/python-daemon/</a></p>
+<br /><b>#5</b><br /><p>Not a silver bullet for what you're asking, but check out <a href="http://supervisord.org/" rel="nofollow" title="supervisord">supervisord</a>.  It handles all the fun bits of managing processes.  I use it heavily in a large production environment.  Also, it's written in Python!</p>
+<br /><b>#6</b><br /><p>On Linux systems, the system's package manager (Portage for Gentoo, Aptitude for Ubuntu/Debian, yum for Fedora, etc.) usually takes care of installing the program including placing init scripts in the right places. If you want to distribute your program for Linux, you might want to look into bundling it up into the proper format for various distributions' package managers.</p>
+
+<p>This advice is obviously irrelevant on systems which don't have package managers (Windows, and Mac I think).</p>
+<br /><b>#7</b><br /><p>This <a href="http://jimmyg.org/blog/2010/python-daemon-init-script.html" rel="nofollow">blog entry</a> made it clear for me  that there are actually two common ways to have your Python program run as a deamon (I hadn't figured that out so clearly from the existing answers):</p>
+
+<blockquote>
+  <p>There are two approaches to writing daemon applications like servers
+  in Python. </p>
+  
+  <ul>
+  <li>The first is to <strong>handle all the tasks of sarting and
+  stopping daemons in Python code itself</strong>. The easiest way to do this is
+  with the <code>python-daemon</code> package which might eventually make its way
+  into the Python distribution. </li>
+  </ul>
+</blockquote>
+
+<p><a href="http://stackoverflow.com/a/588891/50899">Poeljapon's answer</a> is an example of this 1st  approach, although it doesn't use the <code>python-daemon</code> package, but links to a custom but very clean python script.</p>
+
+<blockquote>
+  <ul>
+  <li>The other approach is to <strong>use the tools
+  supplied by the operating system</strong>. In the case of Debain, this means
+  writing an init script which makes use of the <code>start-stop-daemon</code>
+  program.</li>
+  </ul>
+</blockquote>
+
+<p><a href="http://stackoverflow.com/a/588780/50899">Ali Afshar's  answer</a> is a shell script example of the 2nd approach, using the <code>start-stop-daemon</code>.</p>
+
+<p>The blog entry I quoted has a shell script example, and some additional details on things such as starting your daemon at system startup and restarting your daemon automatically when it stopped for any reason.</p>
+<br /><b>#8</b><br /><p>"generally should be run as a daemon?"</p>
+
+<p>Doesn't -- on surface -- make a lot of sense.  "Generally" isn't sensible.  It's either a a daemon or not.  You might want to update your question.</p>
+
+<p>For examples of daemons, read up on daemons like Apache's httpd or any database server (they're daemons) or the SMTPD mail daemon.</p>
+
+<p>Or, perhaps, read up on something simpler, like the FTP daemon, SSH daemon, Telnet daemon.</p>
+
+<p>In Linux world, you'll have your application installation directory, some working directory, plus the configuration file directories.</p>
+
+<p>We use <code>/opt/ourapp</code> for the application (it's Python, but we don't install in Python's <code>lib/site-packages</code>)</p>
+
+<p>We use <code>/var/ourapp</code> for working files and our configuration files.  </p>
+
+<p>We could use <code>/etc/ourapp</code> for configuration files -- it would be consistent -- but we don't.</p>
+
+<p>We don't -- yet -- use the <code>init.d</code> scripts for startup.  But that's the final piece, automated startup.  For now, we have sys admins start the daemons.</p>
+
+<p>This is based, partly, on <a href="http://www.pathname.com/fhs/" rel="nofollow">http://www.pathname.com/fhs/</a> and <a href="http://tldp.org/LDP/Linux-Filesystem-Hierarchy/html/Linux-Filesystem-Hierarchy.html" rel="nofollow">http://tldp.org/LDP/Linux-Filesystem-Hierarchy/html/Linux-Filesystem-Hierarchy.html</a>.</p>
+<br />

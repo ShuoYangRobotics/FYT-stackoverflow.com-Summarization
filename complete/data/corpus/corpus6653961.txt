@@ -1,0 +1,146 @@
+Question (ID-6653961): Is string interning really useful? I was having a conversation about strings and various languages a while back, and the topic of string interning came up. Apparently Java and the .NET framework do this automatically with all strings, as well as several scripting languages. Theoretically, it saves memory because you don't end up with multiple copies of the same string, and it saves time because string equality comparisons are a simple pointer comparison instead of an O(N) run through each character of the string. 
+
+ But the more I think about it, the more skeptical I grow of the concept's benefits. It seems to me that the advantages are mostly theoretical: 
+
+ 
+ First off, to use automatic string interning, all strings must be immutable, which makes a lot of string processing tasks harder than they need to be. (And yes, I've heard all the arguments for immutability in general. That's not the point.) 
+ Every time a new string is created, it has to be checked against the string interning table, which is at least a O(N) operation. ( EDIT: Where N is the size of the string, not the size of the table, since this was confusing people.) So unless the ratio of string equality comparisons to new string creation is pretty high, it's unlikely that the net time saved is a positive value. 
+ If the string equality table uses strong references, the strings will never get garbage collected when they're no longer needed, thus wasting memory. On the other hand, if the table uses weak references, then the string class requires some sort of finalizer to remove the string from the table, thus slowing down the GC process. (Which could be pretty significant, depending on how the string intern table is implemented. Worst case, deleting an item from a hash table can require an O(N) rebuild of the entire table under certain circumstances.) 
+ 
+
+ This is just the result of me thinking about implementation details. Is there something I've missed? Does string interning actually provide any significant benefits in the general case? 
+
+ EDIT 2: All right, apparently I was operating from a mistaken premise. The person I was talking to never pointed out that string interning was optional for newly-created strings, and in fact gave the strong impression that the opposite was true. Thanks to Jon for setting the matter straight. Another accepted answer for him. 
+ Answers (Total-6): #0 No, Java and .NET don't do it "automatically with all strings". They (well, Java and C#) do it with constant string expressions expressed in bytecode/IL, and on demand via the String.intern and String.Intern (.NET) methods. The exact situation in .NET is interesting, but basically the C# compiler will guarantee that every reference to an equal string constant within an assembly ends up referring to the same string object. That can be done efficiently at type initialization time, and can save a bunch of memory. 
+
+ It doesn't happen every time a new string is created. 
+
+ (On the string immutability front, I for one am extremely glad that strings are immutable. I don't want to have to take a copy every time I receive a parameter etc, thank you very much. I haven't seen it make string processing tasks harder, either...) 
+
+ And as others have pointed out, looking up a string in a hash table isn't generally an O(n) operation, unless you're incredibly unlucky with hash collisions... 
+
+ Personally I don't use string interning in user-land code; if I want some sort of cache of strings I'll create a HashSet&lt;string&gt; or something similar. That can be useful in various situations where you expect to come across the same strings several times (e.g. XML element names) but with a simple collection you don't pollute a system-wide cache. 
+ #1 
+ First off, to use automatic string interning, all strings must be
+ immutable, which makes a lot of string processing tasks harder than
+ they need to be. (And yes, I've heard all the arguments for
+ immutability in general. That's not the point.) 
+ 
+
+ This is true and string are immutable in Java. I am not sure if this a bad thing. Without going in to immutable vs mutable, I like to think this is a great design because of caching and so much more simplicity that I won't get in to. 
+
+ 
+ Every time a new string is created, it has to be checked against the
+ string interning table, which is at least a O(N) operation. So unless
+ the ratio of string equality comparisons to new string creation is
+ pretty high, it's unlikely that the net time saved is a positive
+ value. 
+ 
+
+ Not exactly O(n). You can do hashmaps and/or other data structures that will bring this to near constant look up. 
+
+ 
+ If the string equality table uses strong references, the strings will
+ never get garbage collected when they're no longer needed, thus
+ wasting memory. On the other hand, if the table uses weak references,
+ then the string class requires some sort of finalizer to remove the
+ string from the table, thus slowing down the GC process. (Which could
+ be pretty significant, depending on how the string intern table is
+ implemented. Worst case, deleting an item from a hash table can
+ require an O(N) rebuild of the entire table under certain
+ circumstances.) 
+ 
+
+ You are right about this and I would agree with you. Except I feel that the GC processing and negligible. The benefits in the long run are much more useful than having a garbage collector doing an extra check. I am not sure what you mean about O(n) for deleting from hashtable. Most operations on hashtables are O(1) 
+
+ So in summary, I think your assumption that most operation are linear. But looking up strings is closer to a constant time. Therefore, this approach will have negligible performance loss but a huge memory gain. Which I'd argue is worth it. 
+
+ Here is a nice quote on what is actually happening and how it saves memory. 
+
+ 
+ To save memory (and speed up testing for equality), Java supports
+ “interning” of Strings. When the intern() method is invoked on a
+ String, a lookup is performed on a table of interned Strings. If a
+ String object with the same content is already in the table, a
+ reference to the String in the table is returned. Otherwise, the
+ String is added to the table and a reference to it is returned. 
+ 
+ #2 Here's the python documentation's take on it: 
+
+ 
+ sys.intern(string) 
+ 
+ Enter string in the table of “interned” strings and return the interned string – which is string itself or a copy. Interning strings
+ is useful to gain a little performance on dictionary lookup – if the
+ keys in a dictionary are interned, and the lookup key is interned, the
+ key comparisons (after hashing) can be done by a pointer compare
+ instead of a string compare. Normally, the names used in Python
+ programs are automatically interned, and the dictionaries used to hold
+ module, class or instance attributes have interned keys. 
+ 
+ Interned strings are not immortal; you must keep a reference to the return value of intern() around to benefit from it. 
+ 
+ #3 The a.equals(b) is very fast for random strings. Its is only slow for Strings which are long and the same (or almost the same) 
+
+ Random rand = new Random(1);
+String[] list = new String[2000];
+for(int i=0;i&lt;list.length;i++)
+ list[i] = "1234567"+Long.toString(rand.nextInt(36*37), 36); // semi random
+int count = 0;
+long start = System.nanoTime();
+for(int i=0;i&lt;list.length;i++)
+ for(int j=0;j&lt;list.length;j++)
+  if (list[i].equals(list[j]))
+   count++;
+long time = System.nanoTime() - start;
+System.out.printf("The average time for equals() was %,d ns.%n", time/list.length/list.length);
+ 
+
+ on a 2.3 GHz laptop prints 
+
+ The average time for equals() was 19 ns.
+ 
+
+ If you intern() the first value and have to intern() one value to do the comparison 
+
+   if (list[i] == list[j].intern())
+ 
+
+ prints 
+
+ The average time for equals() was 258 ns.
+ 
+
+ This is a common case as you often have one value you know is interned and a second which is input and is not intern'ed. 
+
+ if you only use intern'ed Strings and == it, and don't count the cost, prints 
+
+ The average time for equals() was 4 ns.
+ 
+
+ Which is many times faster if you are doing millions of comparison. However for a small number of comparisons, you are saving 8 ns but could be costing 250 ns more. 
+
+ It may just be simpler to avoid intern() and use equals(). 
+ #4 The points you listed are all valid to a certain extent. But there are important counter-arguments. 
+
+ 
+ Immutability is very important, especially if you're using hash maps, and they are used a lot. 
+ String composition operations are very slow anyway, because you have to constantly reallocate the array containing the characters. 
+ On the other hand, subString() operations are very fast. 
+ String equality is indeed used a lot, and you're not losing anything there. The reason being that strings aren't interned automatically. In fact in Java if the references are different, equals() falls back to a character by character comparison. 
+ Clearly, using strong references for the intern table isn't a good idea. You have to live with the GC overhead. 
+ Java string handling was designed to be space-efficient, especially on constant strings and substring operations. 
+ 
+
+ On balance I'd say it is worth it in most cases and fits well with the VM-managed heap concept. I could imagine some special scenarios where it could be a real pain though. 
+ #5 
+ Does string interning actually provide any significant benefits in the general case? 
+ 
+
+ Yes. It's huge. Try it in java. 
+
+ Write simple tests that compare 1,000's of semi-random strings for equality with and without interning. 
+
+ a.equals( b ) is slow
+
+a == b is fast.

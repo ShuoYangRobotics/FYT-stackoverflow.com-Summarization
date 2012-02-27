@@ -1,0 +1,218 @@
+Question (ID-842696): how to use list of python objects whose representation is unicode I have a object which contains unicode data and I want to use that in its representaion
+e.g. 
+
+ # -*- coding: utf-8 -*-
+
+class A(object):
+
+ def __unicode__(self):
+  return u"©au"
+
+ def __repr__(self):
+  return unicode(self).encode("utf-8")
+
+ __str__ = __repr__ 
+
+a = A()
+
+
+s1 = u"%s"%a # works
+#s2 = u"%s"%[a] # gives unicode decode error
+#s3 = u"%s"%unicode([a]) # gives unicode decode error
+ 
+
+ Now even if I return unicode from repr it still gives error
+so question is how can I use a list of such objects and create another unicode string out of it? 
+
+ platform details: 
+
+ """
+Python 2.5.2 (r252:60911, Jul 31 2008, 17:28:52)
+[GCC 4.2.3 (Ubuntu 4.2.3-2ubuntu7)] on linux2
+'Linux-2.6.24-19-generic-i686-with-debian-lenny-sid'
+"""
+ 
+
+ also not sure why 
+
+ print a # works
+print unicode(a) # works
+print [a] # works
+print unicode([a]) # doesn't works
+ 
+
+ python group answers that
+ http://groups.google.com/group/comp.lang.python/browse_thread/thread/bd7ced9e4017d8de/2e0b07c761604137?lnk=gst&amp;q=unicode#2e0b07c761604137 
+ Answers (Total-7): #0 s1 = u"%s"%a # works 
+
+ This works, because when dealing with 'a' it is using its unicode representation (i.e. the unicode method), 
+
+ when however you wrap it in a list such as '[a]' ... when you try to put that list in the string, what is being called is the unicode([a]) (which is the same as repr in the case of list), the string representation of the list, which will use 'repr(a)' to represent your item in its output. This will cause a problem since you are passing a 'str' object (a string of bytes) that contain the utf-8 encoded version of 'a', and when the string format is trying to embed that in your unicode string, it will try to convert it back to a unicode object using hte default encoding, i.e. ASCII. since ascii doesn't have whatever character it's trying to conver, it fails 
+
+ what you want to do would have to be done this way: u"%s" % repr([a]).decode('utf-8') assuming all your elements encode to utf-8 (or ascii, which is a utf-8 subset from unicode point of view). 
+
+ for a better solution (if you still want keep the string looking like a list str) you would have to use what was suggested previously, and use join, in something like this: 
+
+ u '[%s]' % u','.join(unicode(x) for x in [a,a]) 
+
+ though this won't take care of list containing list of your A objects. 
+
+ My explanation sounds terribly unclear, but I hope you can make some sense out of it. 
+ #1 Try: 
+
+ s2 = u"%s"%[unicode(a)]
+ 
+
+ Your main problem is that you are doing more conversions than you expect. Lets consider the following: 
+
+ s2 = u"%s"%[a] # gives unicode decode error
+ 
+
+ From Python Documentation , 
+
+ 
+ 's'  String (converts any python object using str()).
+ If the object or format provided is a unicode string, 
+ the resulting string will also be unicode.
+ 
+
+ When the %s format string is being processed, str([a]) is applied. What you have at this point is a string object containg a sequence of unicode bytes. If you try and print this there is no problem, because the bytes pass straight through to your terminal and are rendered by the terminal. 
+
+ &gt;&gt;&gt; x = "%s" % [a]
+&gt;&gt;&gt; print x
+[©au]
+ 
+
+ The problem arises when you try to convert that back to unicode. Essentially, the function unicode is being called on the string which contains the sequence of unicode-encoded bytes, and that is what causes the ascii codec to fail. 
+
+ 
+ >>> u"%s" % x
+ Traceback (most recent call last):
+  File "", line 1, in 
+ UnicodeDecodeError: 'ascii' codec can't decode byte 0xc2 in position 1: ordinal not in range(128)
+ >>> unicode(x)
+ Traceback (most recent call last):
+  File "", line 1, in 
+ UnicodeDecodeError: 'ascii' codec can't decode byte 0xc2 in position 1: ordinal not in range(128)
+ 
+ #2 First of all, ask yourself what you're trying to achieve. If all you want is a round-trippable representation of the list, you should simply do the following: 
+
+ class A(object):
+ def __unicode__(self):
+  return u"©au"
+ def __repr__(self):
+  return repr(unicode(self))
+ __str__ = __repr__
+
+&gt;&gt;&gt; A()
+u'\xa9au'
+&gt;&gt;&gt; [A()]
+[u'\xa9au']
+&gt;&gt;&gt; u"%s" % [A()]
+u"[u'\\xa9au']"
+&gt;&gt;&gt; "%s" % [A()]
+"[u'\\xa9au']"
+&gt;&gt;&gt; print u"%s" % [A()]
+[u'\xa9au']
+ 
+
+ That's how it's supposed to work. String representation of python lists are not something a user should see, so it makes sense to have escaped characters in them. 
+ #3 If you want to use a list of unicode() able objects to create a unicode string, try something like: 
+
+ u''.join([unicode(v) for v in [a,a]])
+ 
+ #4 Since this question involves a lot of confusing unicode stuff, I thought I'd offer an analysis of what was going on here. 
+
+ It all comes down to the implementation of __unicode__ and __repr__ of the builtin list class. Basically, it is equivalent to: 
+
+ class list(object):
+ def __repr__(self):
+  return "[%s]" % ", ".join(repr(e) for e in self.elements)
+ def __str__(self):
+  return repr(self)
+ def __unicode__(self):
+  return str(self).decode()
+ 
+
+ Actually, list doesn't even define the __unicode__ and __str__ methods , which makes sense when you think about it. 
+
+ When you write: 
+
+ u"%s" % [a]       # it expands to
+u"%s" % unicode([a])     # which expands to
+u"%s" % repr([a]).decode()   # which expands to
+u"%s" % ("[%s]" % repr(a)).decode() # (simplified a little bit)
+u"%s" % ("[%s]" % unicode(a).encode('utf-8')).decode()
+ 
+
+ That last line is an expansion of repr(a), using the implementation of __repr__ in the question. 
+
+ So as you can see, the object is first encoded in utf-8, only to be decoded later with the system default encoding, which usually doesn't support all characters. 
+
+ As some of the other answers mentioned, you can write your own function, or even subclass list, like so: 
+
+ class mylist(list):
+ def __unicode__(self):
+  return u"[%s]" % u", ".join(map(unicode, self))
+ 
+
+ Note that this format is not round-trippable. It can even be misleading: 
+
+ &gt;&gt;&gt; unicode(mylist([]))
+u'[]'
+&gt;&gt;&gt; unicode(mylist(['']))
+u'[]'
+ 
+
+ Of cource, you can write a quote_unicode function to make it round-trippable, but this is the moment to ask youself what's the point . The unicode and str functions are meant to create a representation of an object that makes sense to a user. For programmers, there's the repr function. Raw lists are not something a user is ever supposed to see. That's why the list class does not implement the __unicode__ method. 
+
+ To get a somewhat better idea about what happens when, play with this little class: 
+
+ class B(object):
+ def __unicode__(self):
+  return u"unicode"
+ def __repr__(self):
+  return "repr"
+ def __str__(self):
+  return "str"
+
+
+&gt;&gt;&gt; b
+repr
+&gt;&gt;&gt; [b]
+[repr]
+&gt;&gt;&gt; unicode(b)
+u'unicode'
+&gt;&gt;&gt; unicode([b])
+u'[repr]'
+
+&gt;&gt;&gt; print b
+str
+&gt;&gt;&gt; print [b]
+[repr]
+&gt;&gt;&gt; print unicode(b)
+unicode
+&gt;&gt;&gt; print unicode([b])
+[repr]
+ 
+ #5 # -*- coding: utf-8 -*-
+
+class A(object):
+ def __unicode__(self):
+  return u"©au"
+
+ def __repr__(self):
+  return unicode(self).encode('ascii', 'replace')
+
+ __str__ = __repr__
+
+a = A()
+
+&gt;&gt;&gt; u"%s" % a
+u'\xa9au'
+&gt;&gt;&gt; u"%s" % [a]
+u'[?au]'
+ 
+ #6 repr and str are both supposed to return str objects, at least up to Python 2.6.x. You're getting the decode error because repr() is trying to convert your result into a str, and it's failing. 
+
+ I believe this has changed in Python 3.x.

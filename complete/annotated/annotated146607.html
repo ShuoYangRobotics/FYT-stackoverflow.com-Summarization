@@ -1,0 +1,89 @@
+<h3>Question ( ID-146607 ) : </h3><h2>I 'm using Python regexes in a criminally inefficient <span style="background-color:yellow;">manner</span> </h2><p>My goal here is to create a very simple template language. At the <span style="background-color:yellow;">moment</span> , I 'm working on replacing a variable with a value , like this : </p>
+<p>This input : </p>
+<blockquote>&lt ; % " TITLE " = " This Is A Test Variable " % &gt ; The Web &lt ; % " TITLE " % &gt ; </blockquote>
+<p>Should produce this output : </p>
+<blockquote>The Web This Is A Test Variable </blockquote>
+<p>I 've got it working. But looking at <span style="background-color:yellow;">my</span> code , I 'm running <span style="background-color:yellow;">multiple</span> identical regexes on the same strings -- that just offends <span style="background-color:yellow;">my</span> sense of efficiency. There 's got to be a better , <span style="background-color:yellow;">more</span> Pythonic way. ( It 's the two " while " loops that really offend. ) </p>
+<p>This does pass the unit tests , so if this is silly premature optimization , tell <span style="background-color:yellow;">me</span> -- I 'm willing to let this go. There <span style="background-color:yellow;">may</span> be dozens of these variable definitions and uses in a document , but not hundreds. But I suspect there 's obvious ( to other people ) ways of improving this , and I 'm curious what the StackOverflow crowd will come up with . </p>
+<pre><code>def stripMatchedQuotes(item):
+    MatchedSingleQuotes = re.compile(r"'(.*)'", re.LOCALE)
+    MatchedDoubleQuotes = re.compile(r'"(.*)"', re.LOCALE)
+    item = MatchedSingleQuotes.sub(r'\1', item, 1)
+    item = MatchedDoubleQuotes.sub(r'\1', item, 1)
+    return item
+
+
+
+
+def processVariables(item):
+    VariableDefinition = re.compile(r'<%(.*?)=(.*?)%>', re.LOCALE)
+    VariableUse = re.compile(r'<%(.*?)%>', re.LOCALE)
+    Variables={}
+
+    while VariableDefinition.search(item):
+        VarName, VarDef = VariableDefinition.search(item).groups()
+        VarName = stripMatchedQuotes(VarName).upper().strip()
+        VarDef = stripMatchedQuotes(VarDef.strip())
+        Variables[VarName] = VarDef
+        item = VariableDefinition.sub('', item, 1)
+
+    while VariableUse.search(item):
+        VarName = stripMatchedQuotes(VariableUse.search(item).group(1).upper()).strip()
+        item = VariableUse.sub(Variables[VarName], item, 1)
+
+    return item
+</code></pre>
+<br /><h3>Answers ( Total-10 ) : </h3><b># 0 </b><br /><p>The first thing that <span style="background-color:yellow;">may</span> improve things is to <span style="background-color:yellow;">move</span> the re.compile outside the function. The compilation is cached , but there is a speed hit in checking this to see if its compiled . </p>
+<p>Another possibility is to use a single regex as below : </p>
+<pre><code>MatchedQuotes = re.compile(r"(['\"])(.*)\1", re.LOCALE)
+item = MatchedQuotes.sub(r'\2', item, 1)
+</code></pre>
+<p>Finally , you can combine this into the regex in <span style="background-color:yellow;">processVariables.</span> Taking Torsten Marek 's suggestion to use a function for re.sub , this improves and simplifies things dramatically . </p>
+<pre><code>VariableDefinition = re.compile(r'<%(["\']?)(.*?)\1=(["\']?)(.*?)\3%>', re.LOCALE)
+VarRepl = re.compile(r'<%(["\']?)(.*?)\1%>', re.LOCALE)
+
+def processVariables(item):
+    vars = {}
+    def findVars(m):
+        vars[m.group(2).upper()] = m.group(4)
+        return ""
+
+    item = VariableDefinition.sub(findVars, item)
+    return VarRepl.sub(lambda m: vars[m.group(2).upper()], item)
+
+print processVariables('<%"TITLE"="This Is A Test Variable"%>The Web <%"TITLE"%>')
+</code></pre>
+<p>Here are <span style="background-color:yellow;">my</span> timings for 100000 runs : </p>
+<pre><code>Original       : 13.637
+Global regexes : 12.771
+Single regex   :  9.095
+Final version  :  1.846
+</code></pre>
+<p>[ Edit ] Add <span style="background-color:yellow;">missing</span> non-greedy specifier </p>
+<p>[ Edit2 ] Added .upper ( ) calls so case insensitive like original version </p>
+<br /><b># 1 </b><br /><p><span style="background-color:yellow;">sub</span> can take a callable as it 's argument rather than a simple string. Using that , you can replace all variables with one function call : </p>
+<pre><code>>>> import re
+>>> var_matcher = re.compile(r'<%(.*?)%>', re.LOCALE)
+>>> string = '<%"TITLE"%> <%"SHMITLE"%>'
+>>> values = {'"TITLE"': "I am a title.", '"SHMITLE"': "And I am a shmitle."}
+>>> var_matcher.sub(lambda m: vars[m.group(1)], string)
+'I am a title. And I am a shmitle.
+</code></pre>
+<p>Follow eduffy.myopenid.com 's advice and keep the compiled regexes around . </p>
+<p>The same recipe can be applied to the first loop , only there you need to store the value of the variable first , and always return " " as replacement . </p>
+<br /><b># <span style="background-color:yellow;">2</span> </b><br /><p>Never create your own programming language. Ever. ( I used to have an exception to this rule , but not any <span style="background-color:yellow;">more.</span> ) </p>
+<p>There is always an existing language you can use which suits your needs better. If you elaborated on your use-case , people <span style="background-color:yellow;">may</span> help you select a suitable language . </p>
+<br /><b># 3 </b><br /><p>Creating a templating language is all well and good , but should n't one of the goals of the templating language be easy readability and efficient parsing ? The example you gave seems to be neither . </p>
+<p>As Jamie Zawinsky famously said : </p>
+<blockquote>Some people , when confronted with a problem , think " I know , I 'll use regular expressions ! " Now they have two problems . </blockquote>
+<p>If regular expressions are a solution to a problem you have created , the best bet is not to write a better regular expression , but to redesign your approach to eliminate their use entirely. Regular expressions are complicated , expensive , hugely difficult to <span style="background-color:yellow;">maintain</span> , and ( ideally ) should only be used for working around a problem someone else created . </p>
+<br /><b># 4 </b><br /><p>You can <span style="background-color:yellow;">match</span> both kind of quotes in one go with r " ( \ " | ' ) ( . * ? ) \ 1 " - the \ 1 refers to the first group , so it will only <span style="background-color:yellow;">match</span> <span style="background-color:yellow;">matching</span> quotes . </p>
+<br /><b># 5 </b><br /><p>You 're calling re.compile quite a bit. A global variable for these would n't hurt here . </p>
+<br /><b># 6 </b><br /><p>If a regexp only contains one . * wildcard and literals , then you can use find and rfind to locate the opening and closing delimiters . </p>
+<p>If it contains only a series of . * ? wildcards , and literals , then you can just use a series of find 's to do the work . </p>
+<p>If the code is time-critical , this switch away from regexp 's altogether <span style="background-color:yellow;">might</span> give a little <span style="background-color:yellow;">more</span> speed . </p>
+<p>Also , it looks to <span style="background-color:yellow;">me</span> like this is an LL-parsable language . You could look for a library that can already parse such things for you. You could also use recursive calls to do a one-pass parse -- for example , you could implement your <span style="background-color:yellow;">processVariables</span> function to only consume up the first quote , and then call a quote-matching function to consume up to the next quote , etc . </p>
+<br /><b># 7 </b><br /><p>Why not use Mako ? Seriously. What feature do you require that Mako does n't have ? Perhaps you can adapt or extend something that already works . </p>
+<br /><b># 8 </b><br /><p>Do n't call search twice in a row ( in the loop conditional , and the first statement in the loop ) . Call ( and cache the result ) once before the loop , and then in the final statement of the loop . </p>
+<br /><b># 9 </b><br /><p>Why not use XML and XSLT instead of creating your own template language ? What you want to do is pretty easy in XSLT . </p>
+<br />

@@ -1,0 +1,198 @@
+<h3>Question (ID-7906187):</h3><h2>Enforcing method order in a python module</h2><p>What is the most pythonic way to deal with a module in which methods must be called in a certain order?  </p>
+
+<p>As an example, I have an XML configuration that must be read before doing anything else because the configuration affects behavior.  The <code>parse_config()</code> must be called first with the config file provided.  Calling other supporting methods like <code>query_data()</code> won't work until <code>parse_config()</code> has been called.  </p>
+
+<p>I first implemented this as a singleton to ensure that a filename for the config is passed at time of initialization, but noticing that modules are actually singletons, it's no longer a class, but just a regular module.  </p>
+
+<p>What's the best way to enforce the <code>parse_config</code> being called first in a module?</p>
+
+<p><strong>Edit:</strong> Worth noting is that the function is actually <code>parse_config(configfile)</code></p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>If the object isn't valid before it's called, then call that method in <code>__init__</code> (or use a factory function). You don't need any silly singletons, that's for sure.</p>
+<br /><b>#1</b><br /><p>The model I have been using is that subsequent functions are only available as methods on the return value of previous functions, like this:</p>
+
+<pre><code>class Second(object):
+   def two(self):
+     print "two"
+     return Third()
+
+class Third(object):
+   def three(self):
+     print "three"
+
+def one():
+   print "one"
+   return Second()
+
+one().two().three()
+</code></pre>
+
+<p>Properly designed, this style (which I admit is not terribly Pythonic, <em>yet</em>) makes for fluent libraries to handle complex pipeline operations where later steps in the library require both the results of early calculations and fresh input from the calling function.</p>
+
+<p>An interesting result is error handling.  What I've found is the best way of handling well-understood errors in pipeline steps is having a blank Error class that supposedly can handle every function in the pipeline (except initial one) but those functions (except possibly terminal ones) return only <code>self</code>:</p>
+
+<pre><code>class Error(object):
+   def two(self, *args):
+      print "two not done because of earlier errors"
+      return self
+   def three(self, *args):
+      print "three not done because of earlier errors"
+
+class Second(object):
+   def two(self, arg):
+     if arg == 2:
+       print "two"
+       return Third()
+     else:
+       print "two cannot be done"
+       return Error()
+
+class Third(object):
+   def three(self):
+     print "three"
+
+def one(arg):
+   if arg == 1:
+      print "one"
+      return Second()
+   else:
+      print "one cannot be done"
+      return Error()
+
+one(1).two(-1).three()
+</code></pre>
+
+<p>In your example, you'd have the Parser class, which would have almost nothing but a <code>configure</code> function that returned an instance of a ConfiguredParser class, which would do all the thing that only a properly configured parser could do.  This gives you access to such things as multiple configurations and handling failed attempts at configuration.</p>
+<br /><b>#2</b><br /><p>As Cat Plus Plus said in other words, wrap the behaviour/functions up in a class and put all the required setup in the <code>__init__</code> method.  You might complain that the functions don't seem like they naturally belong together in an object and, hence, this is bad OO design.  If that's the case, think of your class/object as a form of name-spacing.  It's much cleaner and more flexible than trying to enforce function calling order somehow or using singletons.</p>
+<br /><b>#3</b><br /><p>What it comes down to is how friendly do you want your error messages to be if a function is called before it is configured.  </p>
+
+<p>Least friendly is to do nothing extra, and let the functions fail noisily with <code>AttributeError</code>s, <code>IndexError</code>s, etc.</p>
+
+<p>Most friendly would be having stub functions that raise an informative exception, such as a custom <code>ConfigError:  configuration not initialized</code>.  When the <code>ConfigParser()</code> function is called it can then replace the stub functions with real functions.  Something like this:</p>
+
+<pre><code>config.py
+----------
+class ConfigError(Exception):
+    "configuration errors"
+
+def query_data():
+    raise ConfigError("parse_config() has not been called")
+
+def _query_data():
+    do_actual_work()
+
+def parse_config(config_file):
+    load_file(config_file)
+    if failure:
+        raise ConfigError("bad file")
+    all_objects = globals()
+    for name in ('query_data', ):
+        working_func = all_objects['_'+name]
+        all_objects[name] = working_func
+</code></pre>
+
+<p>If you have very many functions you can add decorators to keep track of the function names, but that's an answer for a different question.  ;)</p>
+
+<p>Okay,  I couldn't resist -- here is the decorator version, which makes my solution much easier to actually implement:</p>
+
+<pre><code>class ConfigError(Exception):
+    "various configuration errors"
+
+class NeedsConfig(object):
+    def __init__(self, module_namespace):
+        self._namespace = module_namespace
+        self._functions = dict()
+    def __call__(self, func):
+        self._functions[func.__name__] = func
+        return self._stub
+    @staticmethod
+    def _stub(*args, **kwargs):
+        raise ConfigError("parseconfig() needs to be called first")
+    def go_live(self):
+        for name, func in self._functions.items():
+            self._namespace[name] = func
+</code></pre>
+
+<p>And a sample run:</p>
+
+<pre><code>needs_parseconfig = NeedsConfig(globals())
+
+@needs_parseconfig
+def query_data():
+    print "got some data!"
+
+@needs_parseconfig
+def set_data():
+    print "set the data!"
+
+def okay():
+    print "Okay!"
+
+def parse_config(somefile):
+    needs_parseconfig.go_live()
+
+try:
+    query_data()
+except ConfigError, e:
+    print e
+
+try:
+    set_data()
+except ConfigError, e:
+    print e
+
+try:
+    okay()
+except:
+    print "this shouldn't happen!"
+    raise
+
+parse_config('config_file')
+query_data()
+set_data()
+okay()
+</code></pre>
+
+<p>and the results:</p>
+
+<pre><code>parseconfig() needs to be called first
+parseconfig() needs to be called first
+Okay!
+got some data!
+set the data!
+Okay!
+</code></pre>
+
+<p>As you can see, the decorator works by remembering the functions it decorates, and instead of returning a decorated function it returns a simple stub that raises a <code>ConfigError</code> if it is ever called.  When the <code>parse_config()</code> routine is called, it needs to call the <code>go_live()</code> method which will then replace all the error raising stubs with the actual remembered functions.</p>
+<br /><b>#4</b><br /><p>The simple requirement that a module needs to be "configured" before it is used is best handled by a class which does the "configuration" in the <code>__init__</code> method, as in the currently-accepted answer. Other module functions become methods of the class. <em>There is no benefit in trying to make a singleton ... the caller may well want to have two or more differently-configured gadgets operating simultaneously.</em></p>
+
+<p>Moving on from that to a more complicated requirement, such as a temporal ordering of the methods:</p>
+
+<p>This can be handled in a quite general fashion by maintaining state in attributes of the object, as is usually done in any OOPable language. Each method that has prerequisites must check that those prequisites are satisfied. </p>
+
+<p>Poking in replacement methods is an obfuscation on a par with the <a href="http://www.tonymarston.net/cobol/cobolstandards.html#alter" rel="nofollow">COBOL ALTER verb</a>, and made worse by using decorators -- it just wouldn't/shouldn't get past code review.</p>
+<br /><b>#5</b><br /><p>A module doesn't do anything it isn't told to do so put your function calls at the bottom of the module so that when you import it, things get ran in the order you specify:</p>
+
+<h2>test.py</h2>
+
+<pre><code>import testmod
+</code></pre>
+
+<h2>testmod.py</h2>
+
+<pre><code>def fun1():
+    print('fun1')
+
+def fun2():
+    print('fun2')
+
+fun1()
+fun2()
+</code></pre>
+
+<p>When you run test.py, you'll see fun1 is ran before fun2:</p>
+
+<pre><code>python test.py 
+fun1
+fun2
+</code></pre>
+<br />

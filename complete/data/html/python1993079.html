@@ -1,0 +1,71 @@
+<h3>Question (ID-1993079):</h3><h2>A programming strategy to bypass the os thread limit?</h2><p>The scenario: We have a python script that checks thousands of proxys simultaneously.
+The program uses threads, 1 per proxy, to speed the process. When it reaches the 1007 thread, the script crashes because of the thread limit.
+<br>My solution is: A global variable that gets incremented when a thread spawns and decrements when a thread finishes. The function which spawns the threads monitors the variable so that the limit is not reached.
+<br>What will your solution be, friends?</p>
+
+<p>Thanks for the answers.</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>You want to do non-blocking I/O with the <a href="http://docs.python.org/library/select.html" rel="nofollow">select module</a>.</p>
+
+<p>There are a couple of different specific techniques.  select.select should work for every major platform.  There are other variations that are more efficient (and could matter if you are checking tens of thousands of connections simultaneously) but you will then need to write the code for you specific platform.</p>
+<br /><b>#1</b><br /><p>I've run into this situation before.  Just make a pool of Tasks, and spawn a fixed number of threads that run an endless loop which grabs a Task from the pool, run it, and repeat.  Essentially you're implementing your own thread abstraction and using the OS threads to implement it.</p>
+
+<p>This does have drawbacks, the major one being that if your Tasks block for long periods of time they can prevent the execution of other Tasks.  But it does let you create an unbounded number of Tasks, limited only by memory.</p>
+<br /><b>#2</b><br /><p>Does Python have any sort of asynchronous IO functionality? That would be the preferred answer IMO - spawning an extra thread for each outbound connection isn't as neat as having a single thread which is effectively event-driven.</p>
+<br /><b>#3</b><br /><p>Using different processes, and pipes to transfer data. Using threads in python is pretty lame. From what I heard, they don't actually run in parallel, even if you have a multi-core processor... But maybe it was fixed in python3.</p>
+<br /><b>#4</b><br /><blockquote>
+  <p>My solution is: A global variable that gets incremented when a thread spawns and decrements when a thread finishes. The function which spawns the threads monitors the variable so that the limit is not reached. </p>
+</blockquote>
+
+<p>The standard way is to have each thread get next tasks in a loop instead of dying after processing just one. This way you don't have to keep track of the number of threads, since you just fire a fixed number of them. As a bonus, you save on thread creation/destruction.</p>
+<br /><b>#5</b><br /><p>Make sure your threads get destroyed properly after they've been used or use a threadpool, although per what I see they're not that effective in Python</p>
+
+<p>see here:</p>
+
+<p><a href="http://code.activestate.com/recipes/203871/" rel="nofollow">http://code.activestate.com/recipes/203871/</a></p>
+<br /><b>#6</b><br /><p>Using the <a href="http://docs.python.org/library/select.html" rel="nofollow"><code>select</code></a> module or a similar library would most probably be a more efficient solution, but that would require bigger architectural changes.</p>
+
+<p>If you just want to limit the number of threads, a global counter should be fine, as long as you access it in a thread safe way.</p>
+<br /><b>#7</b><br /><p>Be careful to minimize the default thread stack size. At least on Linux, the default limit puts severe restrictions on the number of created threads. Linux allocates a chunk of the process virtual address space to the stack (usually 10MB). 300 threads x 10MB stack allocation = 3GB of virtual address space dedicated to stack, and on a 32 bit system you have a 3GB limit. You can probably get away with much less.</p>
+<br /><b>#8</b><br /><p>A counting semaphore should do the trick.</p>
+
+<pre><code>from socket import *
+from threading import *
+
+maxthreads = 1000
+threads_sem = Semaphore(maxthreads)
+
+class MyThread(Thread):
+    def __init__(self, conn, addr):
+        Thread.__init__(self)
+        self.conn = conn
+        self.addr = addr
+    def run(self):
+        try:
+            read = conn.recv(4096)
+            if read == 'go away\n':
+                global running
+                running = False
+            conn.close()
+        finally:
+            threads_sem.release()
+
+sock = socket()
+sock.bind(('0.0.0.0', 2323))
+sock.listen(1)
+running = True
+while running:
+    conn, addr = sock.accept()
+    threads_sem.acquire()
+    MyThread(conn, addr).start()
+</code></pre>
+<br /><b>#9</b><br /><p><a href="http://twistedmatrix.com/trac/" rel="nofollow">Twisted</a> is a perfect fit for this problem. See <a href="http://twistedmatrix.com/documents/current/core/howto/clients.html" rel="nofollow">http://twistedmatrix.com/documents/current/core/howto/clients.html</a> for a tutorial on writing a client.</p>
+
+<p>If you don't mind using alternate Python implmentations, <a href="http://www.stackless.com/" rel="nofollow">Stackless</a> has light-weight (non-native) threads. The only company I know doing much with it though is CCP--they use it for tasklets in their game on both the client and server. You still need to do async I/O with Stackless because if a thread blocks, the process blocks.</p>
+<br /><b>#10</b><br /><p>As mentioned in another thread, why do you spawn off a new thread for each single operation? This is a classical producer - consumer problem, isn't it? Depending a bit on how you look at it, the proxy checkers might be comsumers or producers.</p>
+
+<p>Anyway, the solution is to make a "queue" of "tasks" to process, and make the threads in a loop check if there are any more tasks to perform in the queue, and if there isn't, wait a predefined interval, and check again.</p>
+
+<p>You should protect your queue with some locking mechanisms, i.e. semaphores, to prevent race conditions.</p>
+
+<p>It's really not that difficult. But it requires a bit of thinking getting it right. Good luck!</p>
+<br />

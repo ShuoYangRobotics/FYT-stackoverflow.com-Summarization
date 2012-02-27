@@ -1,0 +1,218 @@
+Question (ID-990758): Reclassing an instance in Python I have a class that is provided to me by an external library. I have created a subclass of this class. I also have an instance of the original class. 
+
+ I now want to turn this instance into an instance of my subclass without changing any properties that the instance already has (except for those that my subclass overrides anyway). 
+
+ The following solution seems to work. 
+
+ # This class comes from an external library. I don't (want) to control
+# it, and I want to be open to changes that get made to the class
+# by the library provider.
+class Programmer(object):
+ def __init__(self,name):
+  self._name = name
+
+ def greet(self):
+  print "Hi, my name is %s." % self._name
+
+ def hard_work(self):
+  print "The garbage collector will take care of everything."
+
+# This is my subclass.
+class C_Programmer(Programmer):
+ def __init__(self, *args, **kwargs):
+  super(C_Programmer,self).__init__(*args, **kwargs)
+  self.learn_C()
+
+ def learn_C(self):
+  self._knowledge = ["malloc","free","pointer arithmetic","curly braces"]
+
+ def hard_work(self):
+  print "I'll have to remember " + " and ".join(self._knowledge) + "."
+
+ # The questionable thing: Reclassing a programmer.
+ @classmethod
+ def teach_C(cls, programmer):
+  programmer.__class__ = cls # &lt;-- do I really want to do this?
+  programmer.learn_C()
+
+
+joel = C_Programmer("Joel")
+joel.greet()
+joel.hard_work()
+#&gt;Hi, my name is Joel.
+#&gt;I'll have to remember malloc and free and pointer arithmetic and curly braces.
+
+jeff = Programmer("Jeff")
+
+# We (or someone else) makes changes to the instance. The reclassing shouldn't
+# overwrite these.
+jeff._name = "Jeff A" 
+
+jeff.greet()
+jeff.hard_work()
+#&gt;Hi, my name is Jeff A.
+#&gt;The garbage collector will take care of everything.
+
+# Let magic happen.
+C_Programmer.teach_C(jeff)
+
+jeff.greet()
+jeff.hard_work()
+#&gt;Hi, my name is Jeff A.
+#&gt;I'll have to remember malloc and free and pointer arithmetic and curly braces.
+ 
+
+ However, I'm not convinced that this solution doesn't contain any caveats I haven't thought of (sorry for the triple negation), especially because reassigning the magical __class__ just doesn't feel right. Even if this works, I can't help the feeling there should be a more pythonic way of doing this. 
+
+ Is there? 
+
+ 
+
+ Edit: Thanks everyone for your answers. Here is what I get from them: 
+
+ 
+ Although the idea of reclassing an instance by assigning to __class__ is not a widely used idiom, most answers (4 out of 6 at the time of writing) consider it a valid approach. One anwswer (by ojrac) says that it's "pretty weird at first glance," with which I agree (it was the reason for asking the question). Only one answer (by Jason Baker; with two positive comments &amp; votes) actively discouraged me from doing this, however doing so based on the example use case moreso than on the technique in general. 
+ None of the answers, whether positive or not, finds an actual technical problem in this method. A small exception is jls who mentions to beware of old-style classes, which is likely true, and C extensions. I suppose that new-style-class-aware C extensions should be as fine with this method as Python itself (presuming the latter is true), although if you disagree, keep the answers coming. 
+ 
+
+ As to the question of how pythonic this is, there were a few positive answers, but no real reasons given. Looking at the Zen ( import this ), I guess the most important rule in this case is "Explicit is better than implicit." I'm not sure, though, whether that rule speaks for or against reclassing this way. 
+
+ 
+ Using {has,get,set}attr seems more explicit, as we are explicitly making our changes to the object instead of using magic. 
+ Using __class__ = newclass seems more explicit because we explicitly say "This is now an object of class 'newclass,' expect a different behaviour" instead of silently changing attributes but leaving users of the object believing they are dealing with a regular object of the old class. 
+ 
+
+ Summing up: From a technical standpoint, the method seems okay; the pythonicity question remains unanswered with a bias towards "yes." 
+
+ I have accepted Martin Geisler's answer, because the Mercurial plugin example is a quite strong one (and also because it answered a question I even hadn't asked myself yet). However, if there are any arguments on the pythonicity question, I'd still like to hear them. Thanks all so far. 
+
+ P.S. The actual use case is a UI data control object that needs to grow additional functionality at runtime . However, the question is meant to be very general. 
+ Answers (Total-7): #0 Reclassing instances like this is done in Mercurial (a distributed revision control system) when extensions (plugins) want to change the object that represent the local repository. The object is called repo and is initially a localrepo instance. It is passed to each extension in turn and, when needed, extensions will define a new class which is a subclass of repo.__class__ and change the class of repo to this new subclass! 
+
+ It looks like this in code: 
+
+ def reposetup(ui, repo):
+ # ...
+
+ class bookmark_repo(repo.__class__): 
+  def rollback(self):
+   if os.path.exists(self.join('undo.bookmarks')):
+    util.rename(self.join('undo.bookmarks'), self.join('bookmarks'))
+   return super(bookmark_repo, self).rollback() 
+
+  # ...
+
+ repo.__class__ = bookmark_repo
+ 
+
+ The extension (I took the code from the bookmarks extension) defines a module level function called reposetup . Mercurial will call this when initializing the extension and pass a ui (user interface) and repo (repository) argument. 
+
+ The function then defines a subclass of whatever class repo happens to be. It would not suffice to simply subclass localrepo since extensions need to be able to extend each other. So if the first extension changes repo.__class__ to foo_repo , the next extension should change repo.__class__ to a subclass of foo_repo and not just a subclass of localrepo . Finally the function changes the instanceø's class, just like you did in your code. 
+
+ I hope this code can show a legitimate use of this language feature. I think it's the only place where I've seen it used in the wild. 
+ #1 I'm not sure that the use of inheritance is best in this case (at least with regards to "reclassing"). It seems like you're on the right track, but it sounds like composition or aggregation would be best for this. Here's an example of what I'm thinking of (in untested, pseudo-esque code): 
+
+ from copy import copy
+
+# As long as none of these attributes are defined in the base class,
+# this should be safe
+class SkilledProgrammer(Programmer):
+ def __init__(self, *skillsets):
+  super(SkilledProgrammer, self).__init__()
+  self.skillsets = set(skillsets)
+
+def teach(programmer, other_programmer):
+ """If other_programmer has skillsets, append this programmer's
+  skillsets. Otherwise, create a new skillset that is a copy
+  of this programmer's"""
+ if hasattr(other_programmer, skillsets) and other_programmer.skillsets:
+  other_programmer.skillsets.union(programmer.skillsets)
+ else:
+  other_programmer.skillsets = copy(programmer.skillsets)
+def has_skill(programmer, skill):
+ for skillset in programmer.skillsets:
+  if skill in skillset.skills
+   return True
+ return False
+def has_skillset(programmer, skillset):
+ return skillset in programmer.skillsets
+
+
+class SkillSet(object):
+ def __init__(self, *skills):
+  self.skills = set(skills)
+
+C = SkillSet("malloc","free","pointer arithmetic","curly braces")
+SQL = SkillSet("SELECT", "INSERT", "DELETE", "UPDATE")
+
+Bob = SkilledProgrammer(C)
+Jill = Programmer()
+
+teach(Bob, Jill)   #teaches Jill C
+has_skill(Jill, "malloc") #should return True
+has_skillset(Jill, SQL) #should return False
+ 
+
+ You may have to read more about sets and arbitrary argument lists if you aren't familiar with them to get this example. 
+ #2 This is fine. I've used this idiom plenty of times. One thing to keep in mind though is that this idea doesn't play well with old-style classes and various C extensions. Normally this wouldn't be an issue, but since you are using an external library you'll just have to make sure you're not dealing with any old-style classes or C extensions. 
+ #3 "The State Pattern allows an object to alter its behavior when its internal state changes. The object will appear to change it's class." - Head First Design Pattern. Something very similar write Gamma et.al. in their Design Patterns book. (I have it at my other place, so no quote). I think that's the whole point of this design pattern. But if I can change the class of an object at runtime, most of the time i don't need the pattern (there are cases when State Pattern does more than simulate a class change). 
+
+ Also, changing class at runtime doesn't always work: 
+
+ class A(object):
+ def __init__(self, val):
+  self.val = val
+ def get_val(self):
+  return self.val
+
+class B(A):
+ def __init__(self, val1, val2):
+  A.__init__(self, val1)
+  self.val2 = val2
+ def get_val(self):
+  return self.val + self.val2
+
+
+a = A(3)
+b = B(4, 6)
+
+print a.get_val()
+print b.get_val()
+
+a.__class__ = B
+
+print a.get_val() # oops!
+ 
+
+ Apart from that, I consider changing class at runtime Pythonic and use it from time to time. 
+ #4 Heheh, fun example. 
+
+ "Reclassing" is pretty weird, at first glance. What about the 'copy constructor' approach? You can do this with the Reflection-like hasattr , getattr and setattr . This code will copy everything from one object to another, unless it already exists. If you don't want to copy methods, you can exclude them; see the commented if . 
+
+ class Foo(object):
+ def __init__(self):
+  self.cow = 2
+  self.moose = 6
+
+class Bar(object):
+ def __init__(self):
+  self.cat = 2
+  self.cow = 11
+
+ def from_foo(foo):
+  bar = Bar()
+  attributes = dir(foo)
+  for attr in attributes:
+   if (hasattr(bar, attr)):
+    break
+   value = getattr(foo, attr)
+   # if hasattr(value, '__call__'):
+   #  break # skip callables (i.e. functions)
+   setattr(bar, attr, value)
+
+  return bar
+ 
+
+ All this reflection isn't pretty, but sometimes you need an ugly reflection machine to make cool stuff happen. ;) 
+ #5 This technique seems reasonably Pythonic to me. Composition would also be a good choice, but assigning to __class__ is perfectly valid (see here for a recipe that uses it in a slightly different way). 
+ #6 I will say this is perfectly fine, if it works for you.

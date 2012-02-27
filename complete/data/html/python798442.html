@@ -1,0 +1,245 @@
+<h3>Question (ID-798442):</h3><h2>What is the correct (or best) way to subclass the Python set class, adding a new instance variable?</h2><p>I'm implementing an object that is almost identical to a set, but requires an extra instance variable, so I am subclassing the built-in set object. What is the best way to make sure that the value of this variable is copied when one of my objects is copied?</p>
+
+<p>Using the old sets module, the following code worked perfectly:</p>
+
+<pre><code>import sets
+class Fooset(sets.Set):
+	def __init__(self, s = []):
+		sets.Set.__init__(self, s)
+		if isinstance(s, Fooset):
+			self.foo = s.foo
+		else:
+			self.foo = 'default'
+f = Fooset([1,2,4])
+f.foo = 'bar'
+assert( (f | f).foo == 'bar')
+</code></pre>
+
+<p>but this does not work using the built-in set module.</p>
+
+<p>The only solution that I can see is to override every single method that returns a copied set object... in which case I might as well not bother subclassing the set object. Surely there is a standard way to do this?</p>
+
+<p>(To clarify, the following code does <em>not</em> work (the assertion fails):</p>
+
+<pre><code>class Fooset(set):
+	def __init__(self, s = []):
+		set.__init__(self, s)
+		if isinstance(s, Fooset):
+			self.foo = s.foo
+		else:
+			self.foo = 'default'
+
+f = Fooset([1,2,4])
+f.foo = 'bar'
+assert( (f | f).foo == 'bar')
+</code></pre>
+
+<p>)</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>My favorite way to wrap methods of a built-in collection:</p>
+
+<pre><code>class Fooset(set):
+    def __init__(self, s=(), foo=None):
+        super(Fooset,self).__init__(s)
+        if foo is None and hasattr(s, 'foo'):
+            foo = s.foo
+        self.foo = foo
+
+
+
+    @classmethod
+    def _wrap_methods(cls, names):
+        def wrap_method_closure(name):
+            def inner(self, *args):
+                result = getattr(super(cls, self), name)(*args)
+                if isinstance(result, set) and not hasattr(result, 'foo'):
+                    result = cls(result, foo=self.foo)
+                return result
+            inner.fn_name = name
+            setattr(cls, name, inner)
+        for name in names:
+            wrap_method_closure(name)
+
+Fooset._wrap_methods(['__ror__', 'difference_update', '__isub__', 
+    'symmetric_difference', '__rsub__', '__and__', '__rand__', 'intersection',
+    'difference', '__iand__', 'union', '__ixor__', 
+    'symmetric_difference_update', '__or__', 'copy', '__rxor__',
+    'intersection_update', '__xor__', '__ior__', '__sub__',
+])
+</code></pre>
+
+<p>Essentially the same thing you're doing in your own answer, but with fewer loc.  It's also easy to put in a metaclass if you want to do the same thing with lists and dicts as well.</p>
+<br /><b>#1</b><br /><p>It looks like set bypasses <code>__init__</code> in the <a href="http://svn.python.org/view/python/trunk/Objects/setobject.c?view=markup" rel="nofollow">c code</a>.  However you will end an instance of <code>Fooset</code>, it just won't have had a chance to copy the field.</p>
+
+<p>Apart from overriding the methods that return new sets I'm not sure you can do too much in this case.  Set is clearly built for a certain amount of speed, so does a lot of work in c.</p>
+<br /><b>#2</b><br /><p><code>set1 | set2</code> is an operation that won't modify either existing <code>set</code>, but return a new <code>set</code> instead. The new <code>set</code> is created and returned. There is no way to make it automatically copy arbritary attributes from one or both of the <code>set</code>s to the newly created <code>set</code>, without customizing the <code>|</code> operator yourself by <a href="http://docs.python.org/reference/datamodel.html#object.%5F%5For%5F%5F" rel="nofollow">defining the <code>__or__</code>  method</a>.</p>
+
+<pre><code>class MySet(set):
+    def __init__(self, *args, **kwds):
+        super(MySet, self).__init__(*args, **kwds)
+        self.foo = 'nothing'
+    def __or__(self, other):
+        result = super(MySet, self).__or__(other)
+        result.foo = self.foo + "|" + other.foo
+        return result
+
+r = MySet('abc')
+r.foo = 'bar'
+s = MySet('cde')
+s.foo = 'baz'
+
+t = r | s
+
+print r, s, t
+print r.foo, s.foo, t.foo
+</code></pre>
+
+<p>Prints:</p>
+
+<pre><code>MySet(['a', 'c', 'b']) MySet(['c', 'e', 'd']) MySet(['a', 'c', 'b', 'e', 'd'])
+bar baz bar|baz
+</code></pre>
+<br /><b>#3</b><br /><p>Assuming the other answers are correct, and overriding all the methods is the only way to do this, here's my attempt at a moderately elegant way of doing this. If more instance variables are added, only one piece of code needs to change. Unfortunately if a new binary operator is added to the set object, this code will break, but I don't think there's a way to avoid that. Comments welcome!</p>
+
+<pre><code>def foocopy(f):
+	def cf(self, new):
+		r = f(self, new)
+		r.foo = self.foo
+		return r
+	return cf
+
+class Fooset(set):
+	def __init__(self, s = []):
+		set.__init__(self, s)
+		if isinstance(s, Fooset):
+			self.foo = s.foo
+		else:
+			self.foo = 'default'
+
+	def copy(self):
+		x = set.copy(self)
+		x.foo = self.foo
+		return x
+
+	@foocopy
+	def __and__(self, x):
+		return set.__and__(self, x)
+
+	@foocopy
+	def __or__(self, x):
+		return set.__or__(self, x)
+
+	@foocopy
+	def __rand__(self, x):
+		return set.__rand__(self, x)
+
+	@foocopy
+	def __ror__(self, x):
+		return set.__ror__(self, x)
+
+	@foocopy
+	def __rsub__(self, x):
+		return set.__rsub__(self, x)
+
+	@foocopy
+	def __rxor__(self, x):
+		return set.__rxor__(self, x)
+
+	@foocopy
+	def __sub__(self, x):
+		return set.__sub__(self, x)
+
+	@foocopy
+	def __xor__(self, x):
+		return set.__xor__(self, x)
+
+	@foocopy
+	def difference(self, x):
+		return set.difference(self, x)
+
+	@foocopy
+	def intersection(self, x):
+		return set.intersection(self, x)
+
+	@foocopy
+	def symmetric_difference(self, x):
+		return set.symmetric_difference(self, x)
+
+	@foocopy
+	def union(self, x):
+		return set.union(self, x)
+
+
+f = Fooset([1,2,4])
+f.foo = 'bar'
+assert( (f | f).foo == 'bar')
+</code></pre>
+<br /><b>#4</b><br /><p>I think that the recommended way to do this is not to subclass directly from the built-in <code>set</code>, but rather to make use of the <a href="http://docs.python.org/library/collections.html#collections.Set" rel="nofollow">Abstract Base Class <code>Set</code></a> available in <a href="http://docs.python.org/library/collections.html#abcs-abstract-base-classes" rel="nofollow">collections</a>.</p>
+
+<p>Using the ABC Set gives you some methods for free as a mix-in so you can have a minimal Set class by defining only <code>__contains__()</code>, <code>__len__()</code> and <code>__iter__()</code>. If you want some of the nicer set methods like <code>intersection()</code> and <code>difference()</code>, you probably do have to wrap them.</p>
+
+<p>Here's my attempt (this one happens to be a frozenset-like, but you can inherit from <code>MutableSet</code> to get a mutable version):</p>
+
+<pre><code>from collections import Set, Hashable
+
+class CustomSet(Set, Hashable):
+    """An example of a custom frozenset-like object using
+    Abstract Base Classes.
+    """
+    ___hash__ = Set._hash
+
+    wrapped_methods = ('difference',
+                       'intersection',
+                       'symetric_difference',
+                       'union',
+                       'copy')
+
+    def __repr__(self):
+        return "CustomSet({0})".format(list(self._set))
+
+    def __new__(cls, iterable):
+        selfobj = super(CustomSet, cls).__new__(CustomSet)
+        selfobj._set = frozenset(iterable)
+        for method_name in cls.wrapped_methods:
+            setattr(selfobj, method_name, cls._wrap_method(method_name, selfobj))
+        return selfobj
+
+    @classmethod
+    def _wrap_method(cls, method_name, obj):
+        def method(*args, **kwargs):
+            result = getattr(obj._set, method_name)(*args, **kwargs)
+            return CustomSet(result)
+        return method
+
+    def __getattr__(self, attr):
+        """Make sure that we get things like issuperset() that aren't provided
+        by the mix-in, but don't need to return a new set."""
+        return getattr(self._set, attr)
+
+    def __contains__(self, item):
+        return item in self._set
+
+    def __len__(self):
+        return len(self._set)
+
+    def __iter__(self):
+        return iter(self._set)
+</code></pre>
+<br /><b>#5</b><br /><p>For me this works perfectly using Python 2.5.2 on Win32. Using you class definition and the following test:</p>
+
+<pre><code>f = Fooset([1,2,4])
+s = sets.Set((5,6,7))
+print f, f.foo
+f.foo = 'bar'
+print f, f.foo
+g = f | s
+print g, g.foo
+assert( (f | f).foo == 'bar')
+</code></pre>
+
+<p>I get this output, which is what I expect:</p>
+
+<pre><code>Fooset([1, 2, 4]) default
+Fooset([1, 2, 4]) bar
+Fooset([1, 2, 4, 5, 6, 7]) bar
+</code></pre>
+<br />

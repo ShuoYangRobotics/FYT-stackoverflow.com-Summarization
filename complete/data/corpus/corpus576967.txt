@@ -1,0 +1,139 @@
+Question (ID-576967): How can I change a huge file into csv in python I'm a beginner in python. I have a huge text file (hundreds of GB) and I want to convert the file into csv file. In my text file, I know the row delimiter is a string "&lt;>&lt;>&lt;>&lt;>&lt;>&lt;>&lt;>". If a line contains that string, I want to replace it with ". Is there a way to do it without having to read the old file and rewriting a new file. 
+
+ Normally I thought I need to do something like this: 
+
+ fin = open("input", "r")
+fout = open("outpout", "w")
+line = f.readline
+while line != "":
+ if line.contains("&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;"):
+  fout.writeline("\"")
+ else:
+  fout.writeline(line)
+ line = f.readline
+ 
+
+ but copying hundreds of GB is wasteful. Also I don't know if open will eat lots of memory (does it treat file handler as a stream?) 
+
+ Any help is greatly appreciated. 
+
+ Note: an example of the file would be 
+
+ file.txt
+&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;
+abcdefeghsduai 
+asdjliwa
+1231214 ""
+&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;
+ 
+
+ would be one row and one column in csv. 
+ Answers (Total-8): #0 @richard-levasseur 
+
+ I agree, sed seems like the right way to go. Here's a rough cut at what the OP describes: 
+
+ sed -i -e's/&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;/"/g' foo.txt
+ 
+
+ This will do the replacement in-place in the existing foo.txt . For that reason, I recommend having the original file under some sort of version control; any of the DVCS should fit the bill. 
+ #1 Yes, open() treats the file as a stream, as does readline(). It'll only read the next line. If you call read(), however, it'll read everything into memory. 
+
+ Your example code looks ok at first glance. Almost every solution will require you to copy the file elsewhere. Its not exactly easy to modify the contents of a file inplace without a 1:1 replacement. 
+
+ It may be faster to use some standard unix utilities (awk and sed most likely), but I lack the unix and bash-fu necessary to provide a full solution. 
+ #2 It's only wasteful if you don't have disk to spare. That is, fix it when it's a problem. Your solution looks ok as a first attempt. 
+
+ It's not wasteful of memory because a file handler is a stream. 
+ #3 Reading lines is simply done using a file iterator : 
+
+ for line in fin:
+  if line.contains("&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;"):
+   fout.writeline("\"")
+ 
+
+ Also consider the CSV writer object to write CSV files, e.g: 
+
+ import csv
+writer = csv.writer(open("some.csv", "wb"))
+writer.writerows(someiterable)
+ 
+ #4 With python you will have to create a new file for safety sake, it will cause alot less headaches than trying to write in place. 
+
+ The below listed reads your input 1 line at a time and buffers the columns (from what I understood of your test input file was 1 row) and then once the end of row delimiter is hit it will write that buffer to disk, flushing manually every 1000 lines of the original file. This will save some IO as well instead of writing every segment, 1000 writes of 32 bytes each will be faster than 4000 writes of 8 bytes. 
+
+ fin = open(input_fn, "rb")
+fout = open(output_fn, "wb")
+row_delim = "&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;"
+write_buffer = []
+
+for i, line in enumerate(fin):
+ if not i % 1000:
+  fout.flush()
+ if row_delim in line and i:
+  fout.write('"%s"\r\n'%'","'.join(write_buffer))
+  write_buffer = []
+ else:
+  write_buffer.append(line.strip())
+ 
+
+ Hope that helps. 
+
+ EDIT: Forgot to mention, while using .readline() is not a bad thing don't use .readlines() which will go and read the entire content of the file into a list containing each line which is incredibly inefficient. Using the built in iterator that comes with a file object is the best memory usage and speed. 
+ #5 @Constatin suggests that if you would be satisfied with replacing '&lt;>&lt;>&lt;>&lt;>&lt;>&lt;>&lt;>\n' by '"    \n' 
+then the replacement string is the same length, and in that case you can craft a solution to in-place editing with mmap . You will need python 2.6. It's vital that the file is opened in the right mode! 
+
+ 
+import mmap, os
+CHUNK = 2**20
+
+oldStr = ''
+newStr = '"    '
+strLen = len(oldStr)
+assert strLen==len(newStr)
+
+f = open("myfilename", "r+")
+size = os.fstat(f.fileno()).st_size
+
+for offset in range(0,size,CHUNK):
+ map = mmap.mmap(f.fileno(),
+     length=min(CHUNK+strLen,size-offset), # not beyond EOF
+     offset=offset)
+ index = 0 # start at beginning
+ while 1:
+  index = map.find(oldStr,index) # find next match
+  if index == -1: # no more matches in this map
+   break
+  map[index:index+strLen] = newStr
+
+f.close()
+ 
+
+ This code is not debugged! It works for me on a 3 MB test case, but it may not work on a large ( > 2GB) file - the mmap module still seems a bit immature, so I wouldn't rely on it too much. 
+
+ Looking at the bigger picture, from what you've posted it isn't clear that your file will end up as valid CSV. Also be aware that the tool you're planning to use to actually process the CSV may be flexible enough to deal with the file as it stands. 
+ #6 [For the problem exactly as stated] There's no way that this can be done without copying the data, in python or any other language. If your processing always replaced substrings with new substrings of equal length , maybe you could do it in-place. But whenever you replace &lt;>&lt;>&lt;>&lt;>&lt;>&lt;>&lt;> with " you are changing the position of all subsequent characters in the file. Copying from one place to another is the only way to handle this. 
+
+ EDIT: 
+
+ Note that the use of sed won't actually save any copying...sed doesn't really edit in-place either. From the GNU sed manual : 
+
+ 
+-i[SUFFIX] 
+--in-place[=SUFFIX] 
+ This option specifies that files are to be edited in-place. GNU sed does this by creating a temporary file and sending output to this file rather than to the standard output.
+ 
+
+ (emphasis mine.) 
+ #7 If you're delimiting fields with double quotes, it looks like you need to escape the double quotes you have occurring in your elements (for example 1231214 "" will need to be \n1231214 \"\" ). 
+
+ Something like 
+
+ fin = open("input", "r")
+fout = open("output", "w")
+for line in fin:
+ if line.contains("&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;&lt;&gt;"):
+  fout.writeline("\"")
+ else:
+  fout.writeline(line.replace('"',r'\"')
+fin.close()
+fout.close()

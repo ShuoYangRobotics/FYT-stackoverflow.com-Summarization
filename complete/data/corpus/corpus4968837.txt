@@ -1,0 +1,34 @@
+Question (ID-4968837): Postgres Performance Tips Loading in billions of rows I am in the middle of a project involving trying to grab numerous pieces of information out of 70GB worth of xml documents and loading it into a relational database (in this case postgres) I am currently using python scripts and psycopg2 to do this inserts and whatnot. I have found that as the number of rows in the some of the tables increase. (The largest of which is at around 5 million rows) The speed of the script (inserts) has slowed to a crawl. What was once taking a couple of minutes now takes about an hour. 
+
+ What can I do to speed this up? Was I wrong in using python and psycopg2 for this task? Is there anything I can do to the database that may speed up this process. I get the feeling I am going about this in entirely the wrong way. 
+ Answers (Total-6): #0 What are the settings for wal_buffers and checkpoint_segments? For large transactions, you have to tweak some settings. Check the manual . 
+
+ Consider the book PostgreSQL 9.0 High Performance as well, there is much more to tweak than just the database configuration to get high performance. 
+ #1 Considering the process was fairly efficient before and only now when the dataset grew up it slowed down my guess is it's the indexes. You may try dropping indexes on the table before the import and recreating them after it's done. That should speed things up. 
+ #2 I'd look at the rollback logs. They've got to be getting pretty big if you're doing this in one transaction. 
+
+ If that's the case, perhaps you can try committing a smaller transaction batch size. Chunk it into smaller blocks of records (1K, 10K, 100K, etc.) and see if that helps. 
+ #3 I'd try to use COPY instead of inserts. This is what backup tools use for fast loading. 
+
+ Check if all foreign keys from this table do have corresponding index on target table. Or better - drop them temporarily before copying and recreate after. 
+
+ Increase checkpoint_segments from default 3 (which means3*16MB=48MB) to a much higher number - try for example 32 (512MB). make sure you have enough space for this much additional data. 
+
+ If you can afford to recreate or restore your database cluster from scratch in case of system crash or power failure then you can start Postgres with "-F" option, which will enable OS write cache. 
+ #4 Take a look at http://pgbulkload.projects.postgresql.org/ 
+ #5 There is a list of hints on this topic in the Populating a Database section of the documentation. You might speed up general performance using the hints in Tuning Your PostgreSQL Server as well. 
+
+ The overhead of checking foreign keys might be growing as the table size increases, which is made worse because you're loading a single record at a time. If you're loading 70GB worth of data, it will be far faster to drop foreign keys during the load, then rebuild them when it's imported. This is particularly true if you're using single INSERT statements. Switching to COPY instead is not a guaranteed improvement either, due to how the pending trigger queue is managed--the issues there are discussed in that first documentation link. 
+
+ From the psql prompt, you can find the name of the constraint enforcing your foreign key and then drop it using that name like this: 
+
+ \d tablename
+ALTER TABLE tablename DROP CONSTRAINT constraint_name;
+ 
+
+ When you're done with loading, you can put it back using something like: 
+
+ ALTER TABLE tablename ADD CONSTRAINT constraint_name FOREIGN KEY (other_table) REFERENCES other_table (join_column);
+ 
+
+ One useful trick to find out the exact syntax to use for the restore is to do pgdump --schema-only on your database. The dump from that will show you how to recreate the structure you have right now.

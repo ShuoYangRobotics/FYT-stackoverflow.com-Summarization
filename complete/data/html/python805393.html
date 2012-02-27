@@ -1,0 +1,102 @@
+<h3>Question (ID-805393):</h3><h2>What is the best way to access stored procedures in Django's ORM</h2><p>I am designing a fairly complex database, and know that some of my queries will be far outside the scope of Django's ORM. Has anyone integrated SP's with Django's ORM successfully? If so, what RDBMS and how did you do it? </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You have to use the connection utility in Django:</p>
+
+<pre><code>from django.db import connection
+
+cursor = connection.cursor()
+cursor.execute("SQL STATEMENT CAN BE ANYTHING")
+</code></pre>
+
+<p>then you can fetch the data:</p>
+
+<pre><code>cursor.fetchone()
+</code></pre>
+
+<p>or:</p>
+
+<pre><code>cursor.fetchall()
+</code></pre>
+
+<p>More info here: <a href="http://docs.djangoproject.com/en/dev/topics/db/sql/" rel="nofollow">http://docs.djangoproject.com/en/dev/topics/db/sql/</a></p>
+<br /><b>#1</b><br /><p>Don't.</p>
+
+<p>Seriously.</p>
+
+<p>Move the stored procedure logic into your model where it belongs.  </p>
+
+<p>Putting some code in Django and some code in the database is a maintenance nightmare.  I've spent too many of my 30+ years in IT trying to clean up this kind of mess.    </p>
+<br /><b>#2</b><br /><p>We (musicpictures.com / eviscape.com) wrote that django snippet but its not the whole story (actually that code was only tested on Oracle at that time).</p>
+
+<p>Stored procedures make sense when you want to reuse tried and tested SP code or where one SP call will be faster than multiple calls to the database - or where security requires moderated access to the database - or where the queries are very complicated / multistep. We're using a hybrid model/SP approach against both Oracle and Postgres databases.</p>
+
+<p>The trick is to make it easy to use and keep it "django" like. We use a make_instance function which takes the result of cursor and creates instances of a model populated from the cursor. This is nice because the cursor might return additional fields. Then you can use those instances in your code / templates much like normal django model objects.</p>
+
+<pre><code>    def make_instance(instance, values):
+    '''
+    Copied from eviscape.com
+
+    generates an instance for dict data coming from an sp
+
+    expects:
+        instance - empty instance of the model to generate
+        values - dictionary from a stored procedure with keys that are named like the
+            model's attributes
+    use like:
+        evis = InstanceGenerator(Evis(), evis_dict_from_SP)
+
+    &gt;&gt;&gt; make_instance(Evis(), {'evi_id': '007', 'evi_subject': 'J. Bond, Architect'})
+    &lt;Evis: J. Bond, Architect&gt;
+
+    '''
+    attributes = filter(lambda x: not x.startswith('_'), instance.__dict__.keys())
+
+    for a in attributes:
+        try:
+            # field names from oracle sp are UPPER CASE
+            # we want to put PIC_ID in pic_id etc.
+            setattr(instance, a, values[a.upper()])
+            del values[a.upper()]
+        except:
+            pass
+
+    #add any values that are not in the model as well
+    for v in values.keys():
+        setattr(instance, v, values[v])
+        #print 'setting %s to %s' % (v, values[v])
+
+    return instance
+</code></pre>
+
+<p>#  Use it like this:<br />
+    pictures = [make_instance(Pictures(), item) for item in picture_dict]</p>
+
+<p>#  And here are some helper functions:</p>
+
+<pre><code>def call_an_sp(self, var):
+    cursor = connection.cursor()
+    cursor.callproc("fn_sp_name", (var,))
+    return self.fn_generic(cursor)
+
+
+def fn_generic(self, cursor):
+    msg = cursor.fetchone()[0]
+    cursor.execute('FETCH ALL IN "%s"' % msg)
+    thing = create_dict_from_cursor(cursor)
+    cursor.close()
+    return thing
+
+def create_dict_from_cursor(cursor):
+    rows = cursor.fetchall()
+    # DEBUG settings (used to) affect what gets returned. 
+    if DEBUG:
+        desc = [item[0] for item in cursor.cursor.description]
+    else:
+        desc = [item[0] for item in cursor.description]
+    return [dict(zip(desc, item)) for item in rows]
+</code></pre>
+
+<p>cheers, Simon.</p>
+<br /><b>#3</b><br /><p><a href="http://www.djangosnippets.org/snippets/118" rel="nofollow">Django Using Stored Procedure</a> - will give some idea. </p>
+<br /><b>#4</b><br /><p>If you want to look at an actual running project that uses SP, check out <a href="https://secure.caktusgroup.com/projects/minibooks/wiki" rel="nofollow">minibooks</a>.  A good deal of custom SQL and uses Postgres pl/pgsql for SP.  I think they're going to remove the SP eventually though (justification in <a href="https://secure.caktusgroup.com/projects/minibooks/ticket/92" rel="nofollow">trac ticket 92</a>).</p>
+<br /><b>#5</b><br /><p>I guess the improved raw sql queryset support in Django 1.2 can make this easier as you wouldn't have to roll your own make_instance type code. </p>
+<br />

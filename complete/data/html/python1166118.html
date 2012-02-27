@@ -1,0 +1,135 @@
+<h3>Question (ID-1166118):</h3><h2>How to strip decorators from a function in python</h2><p>Let's say I have the following:</p>
+
+<pre><code>def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(get_connection(...), *args, **kwargs)
+    return decorated
+
+@with_connection
+def spam(connection):
+    # Do something
+</code></pre>
+
+<p>I want to test the <code>spam</code> function without going through the hassle of setting up a connection (or whatever the decorator is doing).</p>
+
+<p>Given <code>spam</code>, how do I strip the decorator from it and get the underlying "undecorated" function?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>In the general case, you can't, because</p>
+
+<pre><code>@with_connection
+def spam(connection):
+    # Do something
+</code></pre>
+
+<p>is equivalent to</p>
+
+<pre><code>def spam(connection):
+    # Do something
+
+spam = with_connection(spam)
+</code></pre>
+
+<p>which means that the "original" spam might not even exist anymore. A (not too pretty) hack would be this:</p>
+
+<pre><code>def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(get_connection(...), *args, **kwargs)
+    decorated._original = f
+    return decorated
+
+@with_connection
+def spam(connection):
+    # Do something
+
+spam._original(testcon) # calls the undecorated function
+</code></pre>
+<br /><b>#1</b><br /><p>Behold, FuglyHackThatWillWorkForYourExampleButICantPromiseAnythingElse:</p>
+
+<pre><code> orig_spam = spam.func_closure[0].cell_contents
+</code></pre>
+
+<p><strong>Edit</strong>: For functions/methods decorated more than once and with more complicated decorators you can try using the following code. It relies on the fact, that decorated functions are __name__d differently than the original function.</p>
+
+<pre><code>def search_for_orig(decorated, orig_name):
+    for obj in (c.cell_contents for c in decorated.__closure__):
+    	if hasattr(obj, "__name__") and obj.__name__ == orig_name:
+    		return obj
+    	if hasattr(obj, "__closure__") and obj.__closure__:
+    		found = search_for_orig(obj, orig_name)
+    		if found:
+    			return found
+    return None
+
+ &gt;&gt;&gt; search_for_orig(spam, "spam")
+ &lt;function spam at 0x027ACD70&gt;
+</code></pre>
+
+<p>It's not fool proof though. It will fail if the name of the function returned from a decorator is the same as the decorated one. The order of hasattr() checks is also a heuristic,  there are decoration chains that return wrong results in any case.</p>
+<br /><b>#2</b><br /><p>balpha's solution can be made more generalizable with this meta-decorator:</p>
+
+<pre><code>def include_original(dec):
+    def meta_decorator(f):
+        decorator = dec(f)
+        decorator._original = f
+        return decorator
+    return meta_decorator
+</code></pre>
+
+<p>Then you can decorate your decorators with @include_original, and every one will have a testable (undecorated) version tucked away inside it.</p>
+<br /><b>#3</b><br /><p>The usual approach to testing such functions is to make any dependencies, such as get_connection, configurable. Then you can override it with a mock while testing. Basically the same as dependency injection in the Java world but a lot simpler thanks to Pythons dynamic nature.</p>
+
+<p>Code for it might look something like this:</p>
+
+<pre><code># decorator definition
+def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(with_connection.connection_getter(), *args, **kwargs)
+    return decorated
+
+# normal configuration
+with_connection.connection_getter = lambda: get_connection(...)
+
+# inside testsuite setup override it
+with_connection.connection_getter = lambda: "a mock connection"
+</code></pre>
+
+<p>Depending on your code you could find a better object than the decorator to stick the factory function on. The issue with having it on the decorator is that you'd have to remember to restore it to the old value in the teardown method.</p>
+<br /><b>#4</b><br /><p>Instead of doing..</p>
+
+<pre><code>def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(get_connection(...), *args, **kwargs)
+    return decorated
+
+@with_connection
+def spam(connection):
+    # Do something
+
+orig_spam = magic_hack_of_a_function(spam)
+</code></pre>
+
+<p>You could just do..</p>
+
+<pre><code>def with_connection(f):
+    ....
+
+def spam_f(connection):
+    ...
+
+spam = with_connection(spam_f)
+</code></pre>
+
+<p>..which is all the <code>@decorator</code> syntax does - you can then obviously access the original <code>spam_f</code> normally</p>
+<br /><b>#5</b><br /><p>Add a do-nothing decorator:</p>
+
+<pre><code>def do_nothing(f):
+    return f
+</code></pre>
+
+<p>After defining or importing with_connection but before you get to the methods that use it as a decorator, add:</p>
+
+<pre><code>if TESTING:
+    with_connection = do_nothing
+</code></pre>
+
+<p>Then if you set the global TESTING to True, you will have replaced with_connection with a do-nothing decorator.</p>
+<br />

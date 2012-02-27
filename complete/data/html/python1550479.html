@@ -1,0 +1,95 @@
+<h3>Question (ID-1550479):</h3><h2>Python: is using "..%(var)s.." % locals() a good practice?</h2><p>I discovered this pattern (or anti-pattern) and I am very happy with it.</p>
+
+<p>I feel it is very agile:</p>
+
+<pre><code>def example():
+    age = ...
+    name = ...
+    print "hello %(name)s you are %(age)s years old" % locals()
+</code></pre>
+
+<p>Sometimes I use its cousin:</p>
+
+<pre><code>def example2(obj):
+    print "The file at %(path)s has %(length)s bytes" % obj.__dict__
+</code></pre>
+
+<p>I don't need to create an artificial tuple and count parameters and keep the %s matching positions inside the tuple.</p>
+
+<p>Do you like it? Do/Would you use it? Yes/No, please explain.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>It's OK for small applications and allegedly "one-off" scripts, especially with the <code>vars</code> enhancement mentioned by @kaizer.se and the <code>.format</code> version mentioned by @RedGlyph. </p>
+
+<p>However, for large applications with a long maintenance life and many maintainers this practice can lead to maintenance headaches, and I think that's where @S.Lott's answer is coming from. Let me explain some of the issues involved, as they may not be obvious to anybody who doesn't have the scars from developing and maintaining large applications (or reusable components for such beasts).</p>
+
+<p>In a "serious" application, you would not have your format string hard-coded -- or, if you had, it would be in some form such as <code>_('Hello {name}.')</code>, where the <code>_</code> comes from <a href="http://docs.python.org/library/gettext.html" rel="nofollow">gettext</a> or similar i18n / L10n frameworks. The point is that such an application (or reusable modules that can happen to be used in such applications) must support internationalization (AKA i18n) and locatization (AKA L10n): you want your application to be able to emit "Hello Paul" in certain countries and cultures, "Hola Paul" in some others, "Ciao Paul" in others yet, and so forth. So, the format string gets more or less automatically substituted with another at runtime, depending on the current localization settings; instead of being hardcoded, it lives in some sort of database.  For all intents and purposes, imagine that format string always being a variable, not a string literal.</p>
+
+<p>So, what you have is essentially</p>
+
+<pre><code>formatstring.format(**locals())
+</code></pre>
+
+<p>and you can't trivially check exactly <em>what</em> local names the formatting is going to be using. You'd have to open and peruse the L10N database, identify the format strings that are going to be used here in different settings, verify all of them.</p>
+
+<p>So in practice you don't <em>know</em> what local names are going to get used -- which horribly crimps the maintenance of the function. You dare not rename or remove any local variable, as it might horribly break the user experience for users with some (to you) obscure combinaton of language, locale and preferences</p>
+
+<p>If you have superb integration / regression testing, the breakage will be caught before the beta release -- but QA will scream at you and the release will be delayed... and, let's be honest, while aiming for 100% coverage with <em>unit</em> tests is reasonable, it really isn't with <em>integration</em> tests, once you consider the combinatorial explosion of settings [[for L10N and for many more reasons]] and supported versions of all dependencies. So, you just don't blithely go around risking breakages because "they'll be caught in QA" (if you do, you may not last long in an environment that develops large apps or reusable components;-).</p>
+
+<p>So, in practice, you'll never remove the "name" local variable even though the User Experience folks have long switched that greeting to a more appropriate "Welcome, Dread Overlord!" (and suitably L10n'ed versions thereof). All because you went for <code>locals()</code>...</p>
+
+<p>So you're accumulating cruft because of the way you've crimped your ability to maintain and edit your code -- and maybe that "name" local variable only exists because it's been fetched from a DB or the like, so keeping it (or some other local) around is not just cruft, it's reducing your performance too. Is the surface convenience of <code>locals()</code> worth <strong>that</strong>?-)</p>
+
+<p>But wait, there's worse!  Among the many useful services a <code>lint</code>-like program (like, for example, <a href="http://www.logilab.org/857" rel="nofollow">pylint</a>) can do for you, is to warn you about unused local variables (wish it could do it for unused globals as well, but, for reusable components, that's just a tad too hard;-).  This way you'll catch most occasional misspellings such as <code>if ...: nmae = ...</code> very rapidly and cheaply, rather than by seeing a unit-test break and doing sleuth work to find out <em>why</em> it broke (you <em>do</em> have obsessive, pervasive unit tests that <strong>would</strong> catch this eventually, right?-) -- lint will tell you about an unused local variable <code>nmae</code> and you will immediately fix it.</p>
+
+<p>But if you have in your code a <code>blah.format(**locals())</code>, or equivalently a <code>blah % locals()</code>... you're SOL, pal!-)  How is poor lint going to know whether <code>nmae</code> is in fact an unused variable, or actually it does get used by whatever external function or method you're passing <code>locals()</code> to? It can't -- either it's going to warn anyway (causing a "cry wolf" effect that eventually leads you to ignore or disable such warnings), or it's never going to warn (with the same final effect: no warnings;-).</p>
+
+<p>Compare this to the "explicit is better than implicit" alternative...:</p>
+
+<pre><code>blah.format(name=name)
+</code></pre>
+
+<p>There -- none of the maintenance, performance, and am-I-hampering-lint worries, applies any more; bliss!  You make it immediately clear to everybody concerned (lint included;-) exactly <em>what</em> local variables are being used, and exactly for what purposes.</p>
+
+<p>I could go on, but I think this post is already pretty long;-).</p>
+
+<p>So, summarizing: "<strong>γνῶθι σεαυτόν</strong>!" Hmm, I mean, "know thyself!". And by "thyself" I actually mean "the purpose and scope of your code". If it's a 1-off-or-thereabouts thingy, never going to be i18n'd and L10n'd, will hardly need future maintenance, will never be reused in a broader context, etc, etc, then go ahead and use <code>locals()</code> for its small but neat convenience; if you know otherwise, or even if you're not entirely certain, err on the side of caution, and make things more explicit -- suffer the small inconvenience of spelling out exactly what you're going, and enjoy all the resulting advantages.</p>
+
+<p>BTW, this is just one of the examples where Python is striving to support both "small, one-off, exploratory, maybe interactive" programming (by allowing and supporting risky conveniences that extend well beyond <code>locals()</code> -- think of <code>import *</code>, <code>eval</code>, <code>exec</code>, and several other ways you can mush up namespaces and risk maintenance impacts for the sake of convenience), as well as "large, reusable, enterprise-y" apps and components. It can do a pretty good job at both, but only if you "know thyself" and avoid using the "convenience" parts except when you're absolutely certain you can in fact afford them. More often than not, the key consideration is, "what does this do to my namespaces, and awareness of their formation and use by the compiler, lint &amp;c, human readers and maintainers, and so on?". </p>
+
+<p>Remember, "Namespaces are one honking great idea -- let's do more of those!" is how the Zen of Python concludes... but Python, as a "language for consenting adults", lets <strong>you</strong> define the boundaries of what that implies, as a consequence of your development environment, targets, and practices. Use this power responsibly!-)</p>
+<br /><b>#1</b><br /><p>I think it is a great pattern because you are leveraging built-in functionality to reduce the code you need to write.  I personally find it quite Pythonic.</p>
+
+<p>I never write code that I don't need to write - less code is better than more code and this practice of using <code>locals()</code> for example allows me to write less code and is also very easy to read and understand.</p>
+<br /><b>#2</b><br /><p>The <code>"%(name)s" % &lt;dictionary&gt;</code> or even better, the <code>"{name}".format(&lt;parameters&gt;)</code> have the merit of </p>
+
+<ul>
+<li>being more readable than "%0s"</li>
+<li>being independent from the argument order</li>
+<li>not compelling to use all the arguments in the string</li>
+</ul>
+
+<p>I would tend to favour the str.format(), since it should be the way to do that in Python 3 (as per <a href="http://www.python.org/dev/peps/pep-3101/" rel="nofollow">PEP 3101</a>), and is already available from 2.6. With <code>locals()</code> though, you would have to do this:</p>
+
+<pre><code>print("hello {name} you are {age} years old".format(**locals()))
+</code></pre>
+<br /><b>#3</b><br /><p>Using the built-in <code>vars([object])</code> (<a href="http://docs.python.org/3.1/library/functions.html#vars" rel="nofollow">documentation</a>) might make the second look better to you:</p>
+
+<pre><code>def example2(obj):
+    print "The file at %(path)s has %(length)s bytes" % vars(obj)
+</code></pre>
+
+<p>The effect is of course just the same.</p>
+<br /><b>#4</b><br /><p>Never in a million years.  It's unclear what the context for formatting is: <code>locals</code> could include almost any variable. <code>self.__dict__</code> is not as vague.   Perfectly awful to leave future developers scratching their heads over what's local and what's not local.</p>
+
+<p>It's an intentional mystery.  Why saddle your organization with future maintenance headaches like that?</p>
+<br /><b>#5</b><br /><p>Regarding the "cousin", instead of <code>obj.__dict__</code>, it looks a lot better with new string formatting:</p>
+
+<pre><code>def example2(obj):
+    print "The file at {o.path} has {o.length} bytes".format(o=obj)
+</code></pre>
+
+<p>I use this a lot for <strong>repr</strong> methods, e.g.</p>
+
+<pre><code>def __repr__(self):
+    return "{s.time}/{s.place}/{s.warning}".format(s=self)
+</code></pre>
+<br />

@@ -1,0 +1,235 @@
+Question (ID-2439986): Python 3: Most efficient way to create a [func(i) for i in range(N)] list comprehension Say I have a function func(i) that creates an object for an integer i, and N is some nonnegative integer. Then what's the fastest way to create a list (not a range) equal to this list 
+
+ mylist = [func(i) for i in range(N)]
+ 
+
+ without resorting to advanced methods like creating a function in C? My main concern with the above list comprehension is that I'm not sure if python knows beforehand the length of range(N) to preallocate mylist, and therefore has to incrementally reallocate the list. Is that the case or is python clever enough to allocate mylist to length N first and then compute it's elements? If not, what's the best way to create mylist? Maybe this? 
+
+ mylist = [None]*N
+for i in range(N): mylist[i] = func(i)
+ 
+
+ RE-EDIT: Removed misleading information from a previous edit. 
+ Answers (Total-6): #0 Somebody wrote: """Python is smart enough. As long as the object you're iterating over has a __len__ or __length_hint__ method, Python will call it to determine the size and preallocate the array.""" 
+
+ As far as I can tell, there is no preallocation in a list comprehension . Python has no way of telling from the size of the INPUT what the size of the OUTPUT will be. 
+
+ Look at this Python 2.6 code: 
+
+ &gt;&gt;&gt; def foo(func, iterable):
+...  return [func(i) for i in iterable]
+...
+&gt;&gt;&gt; import dis; dis.dis(foo)
+ 2   0 BUILD_LIST    0 #### build empty list
+    3 DUP_TOP
+    4 STORE_FAST    2 (_[1])
+    7 LOAD_FAST    1 (iterable)
+    10 GET_ITER
+  &gt;&gt; 11 FOR_ITER    19 (to 33)
+    14 STORE_FAST    3 (i)
+    17 LOAD_FAST    2 (_[1])
+    20 LOAD_FAST    0 (func)
+    23 LOAD_FAST    3 (i)
+    26 CALL_FUNCTION   1
+    29 LIST_APPEND  #### stack[-2].append(stack[-1]); pop()
+    30 JUMP_ABSOLUTE   11
+  &gt;&gt; 33 DELETE_FAST    2 (_[1])
+    36 RETURN_VALUE
+ 
+
+ It just builds an empty list, and appends whatever the iteration delivers. 
+
+ Now look at this code, which has an 'if' in the list comprehension: 
+
+ &gt;&gt;&gt; def bar(func, iterable):
+...  return [func(i) for i in iterable if i]
+...
+&gt;&gt;&gt; import dis; dis.dis(bar)
+ 2   0 BUILD_LIST    0
+    3 DUP_TOP
+    4 STORE_FAST    2 (_[1])
+    7 LOAD_FAST    1 (iterable)
+    10 GET_ITER
+  &gt;&gt; 11 FOR_ITER    30 (to 44)
+    14 STORE_FAST    3 (i)
+    17 LOAD_FAST    3 (i)
+    20 JUMP_IF_FALSE   17 (to 40)
+    23 POP_TOP
+    24 LOAD_FAST    2 (_[1])
+    27 LOAD_FAST    0 (func)
+    30 LOAD_FAST    3 (i)
+    33 CALL_FUNCTION   1
+    36 LIST_APPEND
+    37 JUMP_ABSOLUTE   11
+  &gt;&gt; 40 POP_TOP
+    41 JUMP_ABSOLUTE   11
+  &gt;&gt; 44 DELETE_FAST    2 (_[1])
+    47 RETURN_VALUE
+&gt;&gt;&gt;
+ 
+
+ The same code, plus some code to avoid the LIST_APPEND. 
+
+ In Python 3.X, you need to dig a little deeper: 
+
+ &gt;&gt;&gt; import dis
+&gt;&gt;&gt; def comprehension(f, iterable): return [f(i) for i in iterable]
+...
+&gt;&gt;&gt; dis.dis(comprehension)
+ 1   0 LOAD_CLOSURE    0 (f)
+    3 BUILD_TUPLE    1
+    6 LOAD_CONST    1 (&lt;code object &lt;listcomp&gt; at 0x00C4B8D
+8, file "&lt;stdin&gt;", line 1&gt;)
+    9 MAKE_CLOSURE    0
+    12 LOAD_FAST    1 (iterable)
+    15 GET_ITER
+    16 CALL_FUNCTION   1
+    19 RETURN_VALUE
+&gt;&gt;&gt; dis.dis(comprehension.__code__.co_consts[1])
+ 1   0 BUILD_LIST    0
+    3 LOAD_FAST    0 (.0)
+  &gt;&gt; 6 FOR_ITER    18 (to 27)
+    9 STORE_FAST    1 (i)
+    12 LOAD_DEREF    0 (f)
+    15 LOAD_FAST    1 (i)
+    18 CALL_FUNCTION   1
+    21 LIST_APPEND    2
+    24 JUMP_ABSOLUTE   6
+  &gt;&gt; 27 RETURN_VALUE
+&gt;&gt;&gt;
+ 
+
+ It's the same old schtick: start off with building an empty list, then iterate over the iterable, appending to the list as required. I see no preallocation here. 
+
+ The optimisation that you are thinking about is used inside a single opcode e.g. the implementation of list.extend(iterable) can preallocate if iterable can accurately report its length. list.append(object) is given a single object, not an iterable. 
+ #1 There is no difference in computational complexity between using an autoresizing array and preallocating an array. At worst, it costs about O(2N). See here: 
+
+ http://stackoverflow.com/questions/200384/constant-amortized-time/249695#249695 
+
+ The cost of the function calls plus whatever happens in your function is going to make this extra n insignificant. This isn't something you should worry about. Just use the list comprehension. 
+ #2 If you use the timeit module, you may come to the opposite conclusion: list comprehension is faster than preallocation: 
+
+ f=lambda x: x+1
+N=1000000
+def lc():
+ return [f(i) for i in range(N)]
+def prealloc():
+ mylist = [None]*N
+ for i in range(N): mylist[i]=f(i)
+ return mylist
+def xr():
+ return map(f,xrange(N))
+
+if __name__=='__main__':
+ lc()
+ 
+
+ Warning : These are the results on my computer. You should try these tests yourself, as your results may be different depending on your version of Python and your hardware. (See the comments.) 
+
+ % python -mtimeit -s"import test" "test.prealloc()"
+10 loops, best of 3: 370 msec per loop
+% python -mtimeit -s"import test" "test.lc()"
+10 loops, best of 3: 319 msec per loop
+% python -mtimeit -s"import test" "test.xr()"
+10 loops, best of 3: 348 msec per loop
+ 
+
+ Note that unlike Javier's answer, I include mylist = [None]*N as part of the code timeit is to time when using the "pre-allocation" method. (It's not just part of the setup, since it is code one would need only if using pre-allocation.) 
+
+ PS. the time module (and time (unix) command) can give unreliable results . If you wish to time Python code, I'd suggest sticking with the timeit module. 
+ #3 Going to have to disagree with Javier here... 
+
+ With the following code: 
+
+ print '%5s | %6s | %6s' % ('N', 'l.comp', 'manual')
+print '------+--------+-------'
+for N in 10, 100, 1000, 10000:
+ num_iter = 1000000 / N
+
+ # Time for list comprehension.
+ t1 = timeit.timeit('[func(i) for i in range(N)]', setup='N=%d;func=lambda x:x' % N, number=num_iter)
+
+ # Time to build manually.
+ t2 = timeit.timeit('''mylist = [None]*N
+for i in range(N): mylist[i] = func(i)''', setup='N=%d;func=lambda x:x' % N, number=num_iter)
+
+ print '%5d | %2.4f | %2.4f' % (N, t1, t2)
+ 
+
+ I get the following table: 
+
+  N | l.comp | manual
+------+--------+-------
+ 10 | 0.3330 | 0.3597
+ 100 | 0.2371 | 0.3138
+ 1000 | 0.2223 | 0.2740
+10000 | 0.2185 | 0.2771
+ 
+
+ From this table it appears that the list comprehension faster than pre-allocation in every case of these varying lengths. 
+ #4 Interesting question. As of the following test, it seems that preallocation does not improve performance in the current CPython implementation (Python 2 code but result ranking is the same, except that there's no xrange in Python 3): 
+
+ N = 5000000
+
+def func(x):
+ return x**2
+
+def timeit(fn):
+ import time
+ begin = time.time()
+ fn()
+ end = time.time()
+ print "%-18s: %.5f seconds" % (fn.__name__, end - begin)
+
+def normal():
+ mylist = [func(i) for i in range(N)]
+
+def normalXrange():
+ mylist = [func(i) for i in xrange(N)]
+
+def pseudoPreallocated():
+ mylist = [None] * N
+ for i in range(N): mylist[i] = func(i)
+
+def preallocated():
+ mylist = [None for i in range(N)]
+ for i in range(N): mylist[i] = func(i)
+
+def listFromGenerator():
+ mylist = list(func(i) for i in range(N))
+
+def lazy():
+ mylist = (func(i) for i in xrange(N))
+
+
+
+timeit(normal)
+timeit(normalXrange)
+timeit(pseudoPreallocated)
+timeit(preallocated)
+timeit(listFromGenerator)
+timeit(lazy)
+ 
+
+ Results (ranking in parentheses): 
+
+ normal   : 7.57800 seconds (2)
+normalXrange  : 7.28200 seconds (1)
+pseudoPreallocated: 7.65600 seconds (3)
+preallocated  : 8.07800 seconds (5)
+listFromGenerator : 7.84400 seconds (4)
+lazy    : 0.00000 seconds
+ 
+
+ but with psyco.full() : 
+
+ normal   : 7.25000 seconds (3)
+normalXrange  : 7.26500 seconds (4)
+pseudoPreallocated: 6.76600 seconds (1)
+preallocated  : 6.96900 seconds (2)
+listFromGenerator : 10.50000 seconds (5)
+lazy    : 0.00000 seconds
+ 
+
+ As you can see, pseudo-preallocation is faster with psyco. In any case, there's not much of a difference between the xrange solution (which I'd recommend) and the other solutions. If you don't process all elements of the list later, you could also use the lazy method (shown in the code above) which will create a generator that produces elements by the time you iterate over it. 
+ #5 Using list comprehension to accomplish what you're trying to do would be more pythonic way to do it. Despite performance penalty:).

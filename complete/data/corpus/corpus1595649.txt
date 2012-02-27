@@ -1,0 +1,78 @@
+Question (ID-1595649): Threading in a PyQt application: Use Qt threads or Python threads? I'm writing a GUI application that regularly retrieves data through a web connection. Since this retrieval takes a while, this causes the UI to be unresponsive during the retrieval process (it cannot be split into smaller parts). This is why I'd like to outsource the web connection to a separate worker thread. 
+
+ [Yes, I know, now I have two problems .] 
+
+ Anyway, the application uses PyQt4, so I'd like to know what the better choice is: Use Qt's threads or use the Python threading module? What are advantages / disadvantages of each? Or do you have a totally different suggestion? 
+
+ Edit (re bounty): While the solution in my particular case will probably be using a non-blocking network request like Jeff Ober and Lukáš Lalinský suggested (so basically leaving the concurrency problems to the networking implementation), I'd still like a more in-depth answer to the general question: 
+
+ What are advantages and disadvantages of using PyQt4's (i.e. Qt's) threads over native Python threads (from the threading module)? 
+
+ 
+
+ Edit 2: Thanks all for you answers. Although there's no 100% agreement, there seems to be widespread consensus that the answer is "use Qt", since the advantage of that is integration with the rest of the library, while causing no real disadvantages. 
+
+ For anyone looking to choose between the two threading implementations, I highly recommend they read all the answers provided here, including the PyQt mailing list thread that abbot links to. 
+
+ There were several answers I considered for the bounty; in the end I chose abbot's for the very relevant external reference; it was, however, a close call. 
+
+ Thanks again. 
+ Answers (Total-7): #0 This was discussed not too long ago in PyQt mailing list. Short summary: 
+
+ It's mostly the same. The main difference is that QThreads are better integrated with Qt (asynchrnous signals/slots, event loop, etc.). Also, you can't use Qt from a Python thread (you can't for instance post event to the main thread through QApplication.postEvent): you need a QThread for that to work. 
+
+ A general rule of thumb might be to use QThreads if you're going to interact somehow with Qt, and use Python threads otherwise. 
+
+ And some earlier comment on this subject from PyQt's author: "they are both wrappers around the same native thread implementations". And both implementations use GIL in the same way. 
+ #1 The advantage of QThread is that it's integrated with the rest of the Qt library. That is, thread-aware methods in Qt will need to know in which thread they run, and to move objects between threads, you will need to use QThread . Another useful feature is running your own event loop in a thread. 
+
+ If you are accessing a HTTP server, you should consider QNetworkAccessManager . 
+ #2 Python's threads will be simpler and safer, and since it is for an I/O-based application, they are able to bypass the GIL. That said, have you considered non-blocking I/O using Twisted or non-blocking sockets/select? 
+
+ EDIT: more on threads 
+
+ Python threads 
+
+ Python's threads are system threads. However, Python uses a global interpreter lock (GIL) to ensure that the interpreter is only ever executing a certain size block of byte-code instructions at a time. Luckily, Python releases the GIL during input/output operations, making threads useful for simulating non-blocking I/O. 
+
+ Important caveat: This can be misleading, since the number of byte-code instructions does not correspond to the number of lines in a program. Even a single assignment may not be atomic in Python, so a mutex lock is necessary for any block of code that must be executed atomically, even with the GIL. 
+
+ QT threads 
+
+ When Python hands off control to a 3rd party compiled module, it releases the GIL. It becomes the responsibility of the module to ensure atomicity where required. When control is passed back, Python will use the GIL. This can make using 3rd party libraries in conjunction with threads confusing. It is even more difficult to use an external threading library because it adds uncertainty as to where and when control is in the hands of the module vs the interpreter. 
+
+ QT threads operate with the GIL released. QT threads are able to execute QT library code (and other compiled module code that does not acquire the GIL) concurrently. However, the Python code executed within the context of a QT thread still acquires the GIL, and now you have to manage two sets of logic for locking your code. 
+
+ In the end, both QT threads and Python threads are wrappers around system threads. Python threads are marginally safer to use, since those parts that are not written in Python (implicitly using the GIL) use the GIL in any case (although the caveat above still applies.) 
+
+ Non-blocking I/O 
+
+ Threads add extraordinarily complexity to your application. Especially when dealing with the already complex interaction between the Python interpreter and compiled module code. While many find event-based programming difficult to follow, event-based, non-blocking I/O is often much less difficult to reason about than threads. 
+
+ With asynchronous I/O, you can always be sure that, for each open descriptor, the path of execution is consistent and orderly. There are, obviously, issues that must be addressed, such as what to do when code depending on one open channel further depends on the results of code to be called when another open channel returns data. 
+
+ One nice solution for event-based, non-blocking I/O is the new Diesel library. It is restricted to Linux at the moment, but it is extraordinarily fast and quite elegant. 
+
+ It is also worth your time to learn pyevent , a wrapper around the wonderful libevent library, which provides a basic framework for event-based programming using the fastest available method for your system (determined at compile time). 
+ #3 I asked myself the same question when I was working to PyTalk . 
+
+ If you are using Qt, you need to use QThread to be able to use the Qt framework and expecially the signal/slot system. 
+
+ With the signal/slot engine, you will be able to talk from a thread to another and with every part of your project. 
+
+ Moreover, there is not very performance question about this choice since both are a C++ bindings. 
+
+ Here is my experience of PyQt and thread. 
+
+ I encourage you to use QThread . 
+ #4 Jeff has some good points. Only one main thread can do any GUI updates. If you do need to update the GUI from within the thread, Qt-4's queued connection signals make it easy to send data across threads and will automatically be invoked if you're using QThread; I'm not sure if they will be if you're using Python threads, although it's easy to add a parameter to connect() . 
+ #5 I can't really recommend either, but I can try describing differences between CPython and Qt threads. 
+
+ First of all, CPython threads do not run concurrently, at least not Python code. Yes, they do create system threads for each Python thread, however only the thread currently holding Global Interpreter Lock is allowed to run (C extensions and FFI code might bypass it, but Python bytecode is not executed while thread doesn't hold GIL). 
+
+ On the other hand, we have Qt threads, which are basically common layer over system threads, don't have Global Interpreter Lock, and thus are capable of running concurrently. I'm not sure how PyQt deals with it, however unless your Qt threads call Python code, they should be able to run concurrently (bar various extra locks that might be implemented in various structures). 
+
+ For extra fine-tuning, you can modify the amount of bytecode instructions that are interpreted before switching ownership of GIL - lower values mean more context switching (and possibly higher responsiveness) but lower performance per individual thread (context switches have their cost - if you try switching every few instructions it doesn't help speed.) 
+
+ Hope it helps with your problems :) 
+ #6 I can't comment on the exact differences between Python and PyQt threads, but I've been doing what you're attempting to do using QThread , QNetworkAcessManager and making sure to call QApplication.processEvents() while the thread is alive. If GUI responsiveness is really the issue you're trying to solve, the later will help.

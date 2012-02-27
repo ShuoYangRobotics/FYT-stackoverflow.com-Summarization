@@ -1,0 +1,107 @@
+Question (ID-8386016): Check Python code for certain statements I'm working on a system that allows users to run their code on our system. While their code is sandboxed, I would still like to know if their code is using certain statements, especially imports. This is used to do a quick check for malicious code or code that is against the guidelines for the platform, it will not be the only check, since the code is also checked by humans later, but filtering out the worst cases automatically would be preferable. 
+
+ So what would be the best way, without executing the code, to check if their code for example imports sys (or a part of sys )? I would hope there's a nicer/better way then regex-searching that code. 
+
+ Bonus question: What about more complex statements? For example calling foo from module bar ? 
+
+ EDIT: This is NOT a question about security. It's about finding certain statements inside code. See my comment. This user-code will only run inside the users sandbox, so they can just ruin their own sandbox. But if their code gets 'certified' it can run in other users sandboxes, before it gets certified it needs to be checked. And if an automated check can spot the worst offenses, that would be helpful. 
+ Answers (Total-7): #0 I really wouldn't bother trying to do this kind of artificial sandboxing because 
+
+ 1024 ** 1024 ** 1024
+ 
+
+ Will still chew up your interpreter. 
+
+ or even this 
+
+ eval("__vzcbeg__('gvzr').nfpgvzr()")
+ 
+
+ If you want some security look into pypy's sandbox its about the most secure way to run untrusted python code. There are a few python only modules like pysandbox but I personally suggest the pypy sandbox. 
+ #1 You can't do this just by static analysis of the code, since it can always do tricky things, e.g.: 
+
+ &gt;&gt;&gt; getattr(__builtins__, "__" + chr(105) + "mport__")("sys")
+&lt;module 'sys' (built-in)&gt;
+ 
+
+ As you can see, looking at the disassembly, code or ast won't help, as nowhere does it even contain the string "import": 
+
+ &gt;&gt;&gt; import dis
+&gt;&gt;&gt; dis.dis(lambda: getattr(__builtins__, "__" + chr(105) + "mport__")("sys"))
+ 1   0 LOAD_GLOBAL    0 (getattr)
+    3 LOAD_GLOBAL    1 (__builtins__)
+    6 LOAD_CONST    1 ('__')
+    9 LOAD_GLOBAL    2 (chr)
+    12 LOAD_CONST    2 (105)
+    15 CALL_FUNCTION   1
+    18 BINARY_ADD
+    19 LOAD_CONST    3 ('mport__')
+    22 BINARY_ADD
+    23 CALL_FUNCTION   2
+    26 LOAD_CONST    4 ('sys')
+    29 CALL_FUNCTION   1
+    32 RETURN_VALUE
+ 
+ #2 I don't think you can detect that sort of thing reliably at all. Consider the following: 
+
+ &gt;&gt;&gt; f = None
+&gt;&gt;&gt; b = vars()[[f for f in vars() if 'ti' in f][0]]
+&gt;&gt;&gt; m = getattr(b, [f for f in dir(b) if 't_' in f][0])
+&gt;&gt;&gt; m('x\x9c+\xae,\x06\x00\x02\xc1\x01`'.decode('zip'))
+&lt;module 'sys' (built-in)&gt;
+ 
+ #3 You may use the ast python module to analyze Python code. See my answer to a very similar question here: 
+
+ http://stackoverflow.com/a/8255293/589206 
+
+ Here's a solution for your import statement problem: 
+
+ import ast
+import sys
+
+class FunctionNameFinder(ast.NodeVisitor):
+  def visit_Import(self, node):
+    print "Importing on line", node.lineno, ":",
+    for i in node.names: print i.name,
+    print
+
+with open(sys.argv[1], 'rU') as f:
+  FunctionNameFinder().visit(ast.parse("".join(f.readlines())))
+ 
+
+ Of course, this won't help in cases where a malicious user is putting a lot of effort into obfuscating his code, but then, the only way to go is use a real sandbox. But that wasn't your question in the first place. 
+ #4 Unfortunately there is no right way to answer this. There is only one assured way to ensure that you can remain of any mis-happening. You can try to run inside VirtualBox . There are linux virtualbox images that you can download and bring up your VM. 
+Based on your n/w speed (unless you are still using the dial up network), it will take couple of hours to download, bring up your VM and test your script. 
+ #5 What you are trying to do is a common scenario: You are already doing dynamic analysis of code by running in a sandbox. On top of you'd like to have static analysis as well using another tool read the program for you. 
+
+ Both approaches have their own shortcomings and due to the nature of the computation, none of them can guarantee to provide you with all kinds of potential scenarios going wrong; however still the combination of two provides you a lot of useful information at a higher confidence level. 
+
+ In other popular languages, for example C/C++, there are robust tools (e.g. Lint) which can analyze the code deeply and report a lot of potential problems including those related to security. 
+
+ Unfortunately Python doesn't have tools having robustness level that high. Having said that, you can still do a lot. I think your best choice would to be to use PyLint. 
+
+ PyLint comes with some standard rules for the code analysis but you can override those to customize your own code smells. 
+
+ For instance, if you simply would like to see the kind of modules being used, you can use the imports checker . For handling more complex scenarios, you can customize and extend the functionality. Take a look at their documentation for enhancing PyLint . 
+
+ Take a look at the tutorial to get started: 
+ #6 While true sand boxing is indeed very difficult, if it is the import statement you try to catch, consider this: 
+
+ &gt;&gt;&gt; org_imp = __builtins__.__import__
+&gt;&gt;&gt; def imp_hook(*args, **kw):
+ if args[0] == 'sys':
+  print 'Gotcha!!'
+  return None
+ return org_imp
+
+&gt;&gt;&gt; __builtins__.__import__ = imp_hook
+&gt;&gt;&gt; import sys
+Gotcha!!
+&gt;&gt;&gt; sys
+&gt;&gt;&gt; print sys
+None
+ 
+
+ This work's regardless of the complexity of the import statement itself. 
+
+ Note: Don't just print &amp; return None, throw meaningful exceptions, but you get the idea!

@@ -1,0 +1,124 @@
+<h3>Question (ID-837606):</h3><h2>Find the oldest file (recursively) in a directory</h2><p>I'm writing a Python backup script and I need to find the oldest file in a directory (and its sub-directories). I also need to filter it down to *.avi files only.</p>
+
+<p>The script will always be running on a Linux machine. Is there some way to do it in Python or would running some shell commands be better?</p>
+
+<p>At the moment I'm running <code>df</code> to get the free space on a particular partition, and if there is less than 5 gigabytes free, I want to start deleting the oldest <code>*.avi</code> files until that condition is met.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>To do it in Python, you can use <a href="http://docs.python.org/library/os.html" rel="nofollow"><code>os.walk(path)</code></a> to iterate recursively over the files, and the <code>st_size</code> and <code>st_mtime</code> attributes of <a href="http://docs.python.org/library/os.html" rel="nofollow"><code>os.stat(filename)</code></a> to get the file sizes and modification times.</p>
+<br /><b>#1</b><br /><p>You can use <a href="http://docs.python.org/library/stat.html#module-stat" rel="nofollow">stat</a> and <a href="http://docs.python.org/library/fnmatch.html#module-fnmatch" rel="nofollow">fnmatch</a> modules together to find the files</p>
+
+<p>ST_MTIME refere to the last modification time. You can choose another value if you want</p>
+
+<pre><code>import os, stat, fnmatch
+file_list = []
+for filename in os.listdir('.'):
+    if fnmatch.fnmatch(filename, '*.avi'):
+        file_list.append((os.stat(filename)[stat.ST_MTIME], filename))
+</code></pre>
+
+<p>Then you can order the list by time and delete according to it.</p>
+
+<pre><code>file_list.sort(key=lambda a: a[0])
+</code></pre>
+<br /><b>#2</b><br /><p>I think the easiest way to do this would be to use find along with ls -t (sort files by time).</p>
+
+<p>something along these lines should do the trick (deletes oldest avi file under specified directory)</p>
+
+<pre><code>find / -name "*.avi" | xargs ls -t | tail -n 1 | xargs rm
+</code></pre>
+
+<p>step by step....</p>
+
+<p><strong>find / -name "*.avi"</strong> - find all avi files recursively starting at the root directory</p>
+
+<p><strong>xargs ls -t</strong> - sort all files found by modification time, from newest to oldest.</p>
+
+<p><strong>tail -n 1</strong> - grab the last file in the list (oldest)</p>
+
+<p><strong>xargs rm</strong> - and remove it</p>
+<br /><b>#3</b><br /><p>Hm. Nadia's answer is closer to what you <em>meant</em> to ask, however, for finding the (single) oldest file in a tree, try this:</p>
+
+<pre><code>import os
+def oldest_file_in_tree(rootfolder, extension=".avi"):
+    return min(
+        (os.path.join(dirname, filename)
+        for dirname, dirnames, filenames in os.walk(rootfolder)
+        for filename in filenames
+        if filename.endswith(extension)),
+        key=lambda fn: os.stat(fn).st_mtime)
+</code></pre>
+
+<p>With a little modification, you can get the <code>n</code> oldest files (similar to Nadia's answer):</p>
+
+<pre><code>import os, heapq
+def oldest_files_in_tree(rootfolder, count=1, extension=".avi"):
+    return heapq.nsmallest(count,
+        (os.path.join(dirname, filename)
+        for dirname, dirnames, filenames in os.walk(rootfolder)
+        for filename in filenames
+        if filename.endswith(extension)),
+        key=lambda fn: os.stat(fn).st_mtime)
+</code></pre>
+
+<p>Note that using the <code>.endswith</code> method allows calls as:</p>
+
+<pre><code>oldest_files_in_tree("/home/user", 20, (".avi", ".mov"))
+</code></pre>
+
+<p>to select more than one extension.</p>
+
+<p>Finally, should you want the complete list of files, ordered by modification time, in order to delete as many as required to free space, here's some code:</p>
+
+<pre><code>import os
+def files_to_delete(rootfolder, extension=".avi"):
+    return sorted(
+        (os.path.join(dirname, filename)
+         for dirname, dirnames, filenames in os.walk(rootfolder)
+         for filename in filenames
+         if filename.endswith(extension)),
+        key=lambda fn: os.stat(fn).st_mtime),
+        reverse=True)
+</code></pre>
+
+<p>and note that the <code>reverse=True</code> brings the oldest files at the end of the list, so that for the next file to delete, you just do a <code>file_list.pop()</code>.</p>
+
+<p>By the way, for a complete solution to your issue, since you are running on Linux, where the <code>os.statvfs</code> is available, you can do:</p>
+
+<pre><code>import os
+def free_space_up_to(free_bytes_required, rootfolder, extension=".avi"):
+    file_list= files_to_delete(rootfolder, extension)
+    while file_list:
+        statv= os.statvfs(rootfolder)
+        if statv.f_bfree*statv.f_bsize &gt;= free_bytes_required:
+            break
+        os.remove(file_list.pop())
+</code></pre>
+
+<p><code>statvfs.f_bfree</code> are the device free blocks and <code>statvfs.f_bsize</code> is the block size. We take the <code>rootfolder</code> statvfs, so mind any symbolic links pointing to other devices, where we could delete many files without actually freeing up space in this device.</p>
+<br /><b>#4</b><br /><p>Check out the linux command <a href="http://content.hccfl.edu/pollock/Unix/FindCmd.htm" rel="nofollow"><code>find</code></a>.</p>
+
+<p>Alternatively, <a href="http://www.linuxforums.org/forum/debian-linux-help/70289-remove-oldest-file-directory.html" rel="nofollow">this post</a> pipes together ls and tail to delete the oldest file in a directory. That could be done in a loop while there isn't enough free space.</p>
+
+<p>For reference, here's the shell code that does it (follow the link for more alternatives and a discussion): </p>
+
+<pre><code>ls -t -r -1 /path/to/files | head --lines 1 | xargs rm
+</code></pre>
+<br /><b>#5</b><br /><p>Here's another Python formulation, which a bit old-school compared to some others, but is easy to modify, and handles the case of no matching files without raising an exception.</p>
+
+<pre><code>import os
+
+def find_oldest_file(dirname="..", extension=".avi"):
+    oldest_file, oldest_time = None, None
+    for dirpath, dirs, files in os.walk(dirname):
+        for filename in files:
+            file_path = os.path.join(dirpath, filename)
+            file_time = os.stat(file_path).st_mtime
+                if file_path.endswith(extension) and (file_time&lt;oldest_time or oldest_time is None):
+                oldest_file, oldest_time = file_path, file_time
+    return oldest_file, oldest_time
+
+print find_oldest_file()
+</code></pre>
+<br /><b>#6</b><br /><p>The <a href="http://docs.python.org/library/os.html#files-and-directories" rel="nofollow">os module</a> provides the functions that you need to get directory listings and file info in Python.  I've found <a href="http://docs.python.org/library/os.html?highlight=walk#os.walk" rel="nofollow">os.walk</a> to be especially useful for walking directories recursively, and os.stat will give you detailed info (including modification time) on each entry.</p>
+
+<p>You may be able to do this easier with a simple shell command.  Whether that works better for you or not depends on what you want to do with the results.</p>
+<br />

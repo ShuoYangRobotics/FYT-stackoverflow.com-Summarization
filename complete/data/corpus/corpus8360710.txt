@@ -1,0 +1,362 @@
+Question (ID-8360710): How can I write a generic Python 2.2 function that returns a list of unset parameters? I have a function with many input parameters, and I need a function that will return a list of parameter names (not values) for each parameter whose value is '' or None 
+
+ Normally I'd throw an exception in such a method. If anyone wants to crack the problem by throwing an exception, that is fine. I still have the requirement that the function return the list of parameter names. 
+
+ To summarize 
+
+ 
+ Return a list of parameter names for parameters that are unset 
+ "unset" means the parameter's value is not empty string or None 
+ Accept a single parameter: a single dimension list or dict 
+ The list should contain the complete set of empty parameter names 
+ I need it to be backward compatible with Python 2.2 and Jython 
+ 2.2 is non-negotiable. The code must run on legacy systems that we have no authority to upgrade. Sucks to be us. 
+ The parameters are not command line arguments, but parameters to a
+function. 
+ The parameters are stored in individual variables, but I can manually put them into a dict if necessary. 
+ Instead of returning a list of Python variable names, return a list of user-friendly descriptions for each empty variable. Example: "Database Name" vs "db_name". 
+ 
+
+ Answers to questions raised: 
+
+ 
+ What if an unknown parameter is encountered? We don't care. We create the list of parameters to validate and select only those which are mandatory by virtue of the system's logic. Thus we'd never put an unknown parameter into the list of ones to validate 
+ What about UI parameters that are not mandatory or which must be validated in other ways (int vs. string, etc)? We would not put the non-mandatory params in the list we pass to the validation function. For other more complex validations, we handle these individually, adhoc. The reason this function seemed convenient is because empty parameters are the most common validation we do, and writing an if not foo: for each one gets tedious across functions, of which we have many. 
+ Please explain """By nature of our platform""". Also """it arrives in individual variables""" ... individual variables in what namespace? And what does """(preprocessing)""" mean? – John Machin 2 days ago. Answer: The variables are in the global namespace. We use code injection (similar to how a C preprocessor would substitute code for macro names, except we are substituting variable values for tags, similar to this: 
+
+ DATABASE_NAME = ^-^Put the variable the user entered for database name here^-^ 
+ 
+
+ which ends up like this after the preprocessor runs: 
+
+ DATABASE_NAME = "DB1"
+ 
+
+ Here is a concrete example showing why a simple method throwing an exception would not work. I have rewritten to use an exception rather than returning a value, by request: 
+
+ def validate_parameters(params_map):
+ """
+ map is like {foo: "this is foo"}
+ """
+ missing_params_info = []
+ for k,v in params_map.items():
+  if not k:
+   missing_params_info.append(v)
+ if missing_params_info:
+  raise TypeError('These parameters were unset: %s' % missing_params_info)
+
+params = {}
+params['foo'] = '1'
+params['bar'] = '2'
+params['empty'] = ''
+params['empty2'] = ''
+params['None'] = None
+params_map = {
+ params['foo']: 'this is foo',
+ params['bar']: 'this is bar',
+ params['empty']: 'this is empty',
+ params['empty2']: 'this is empty2',
+ params['None']: 'this is None',
+}
+
+print validate_parameters(params_map)
+
+
+bash-3.00# python /var/tmp/ck.py
+Traceback (most recent call last):
+ File "/var/tmp/ck.py", line 26, in ?
+ print validate_parameters(params_map)
+ File "/var/tmp/ck.py", line 10, in validate_parameters
+ raise TypeError('These parameters were unset: %s' % missing_params_info)
+TypeError: These parameters were unset: ['this is empty2', 'this is None']
+ 
+
+ Two reasons it doesn't work for us: It only prints empty2, even though there is another empty parameter, "empty". "empty" is overwritten by "empty2" because they use the same key in the map. 
+
+ Second reason: I need to get the list of descriptions into a variable at some point after running this function. Maybe this is possible with exceptions, but I don't know how right now. 
+
+ I've posted an answer that seems to solve all these problems, but is not ideal. I marked the question answered, but will change that if someone posts a better answer. 
+
+ Thanks! 
+ Answers (Total-8): #0 Why not Zoidberg a decorator? 
+
+ def argsnotempty(**requiredargs):
+
+ def decorator(func):
+
+  def wrapper(*args, **kwargs):
+   code  = func.func_code
+   argsreq = code.co_argcount - 1
+   argsrec = len(args)
+   posargs = code.co_varnames[1:argsreq + 1]
+   errs  = []
+
+   # validate positional args
+   for i, arg in enumerate(args):
+    if i == len(posargs):
+     break
+    # falsy but not False: 0, '', None, [], etc.
+    if not (arg or arg is False):
+     argname = posargs[i]
+     if argname in requiredargs:
+      errs.append(argname + " (" + requiredargs[argname] + ")")
+
+   # validate keyword args
+   for argname, arg in kwargs.iteritems():
+    if argname in requiredargs:
+     if not (arg or arg is False):
+      errs.append(argname + " (" + requiredargs[argname] + ")")
+
+   # make sure all required args are present
+   for argname in requiredargs:
+    if argname not in kwargs and argname not in posargs:
+     errs.append(argname + " (" + requiredargs[argname] + ")")
+
+   return func(errs, *args, **kwargs)
+
+  wrapper.__name__, wrapper.__doc__ = func.__name__, func.__doc__
+
+  return wrapper
+
+ return decorator
+ 
+
+ The decorator checks to make sure the specified arguments are not empty, then calls the wrapped function with the list of "friendly" argument names which are blank as the first argument. It also tries to check keyword arguments. Arguments that aren't specified to the decorator aren't checked. 
+
+ Usage: 
+
+ @argsnotempty(a="alpha", b="beta", g="gamma")
+def foo(errs, a, b, g):
+ print errs
+
+foo(3.14, "blarney", None) # prints "['g (gamma)']"
+ 
+
+ Here's an example of raising an exception if you don't get the values you need: 
+
+ @argsnotempty(a="alpha", b="beta", g="gamma")
+def bar(errs, a, b, g):
+ if errs:
+  raise ValueError("arguments " + ", ".join(errs) + " cannot be empty")
+
+bar(0, None, "")
+ 
+
+ Of course, you could tweak the decorator to do this for you, instead of including boilerplate code in each function. 
+
+ Edit: Fixed some buggage 
+ #1 I'm pretty sure I don't understand the question or how what you posted as your 'best solution' meets the requirements, but working just from: 
+
+ 
+ I have a function with many input parameters, and I need a function
+ that will return a list of parameter names (not values) for each
+ parameter whose value is '' or None 
+ 
+
+ Here's an easy way to do what that line seems to ask for: 
+
+ def validate_parameters(args):
+ unset = []
+ for k in args:
+  if args[k] is None or args[k]=="":
+   unset.append(k)
+ return unset
+ 
+
+ and then just call validate_parameters from the first line of a function: 
+
+ def foo(a, b, c):
+ print "Unset:", validate_parameters(locals())
+
+&gt;&gt;&gt; foo(1, None, 3)
+Unset: ['b']
+&gt;&gt;&gt; foo(1, None, "")
+Unset: ['c', 'b']
+ 
+
+ If it wasn't for the Python 2.2 requirement you could do it all in a single line list comprehension. The important thing is that you have to call it from the very first line of the function to ensure that locals() only picks up parameters and not any other local variables. 
+ #2 To check that all required parameters are being passed into your function, you could create a dictionary that maps all of the required parameters to None, and then copy and update that dictionary at the start of every method. 
+
+ needed_params = {'one': None, 'two': None, 'three': None}
+
+def my_func(**kwargs):
+ params = needed_params.copy()
+ params.update(kwargs)
+ for key, value in params.iteritems():
+  if not value:
+   raise TypeError("You need to provide the argument %s" % key)
+ result = do_stuff_here
+ return result
+ 
+
+ As noted in the comments, it's probably not a great idea to return a "user-friendly" description. Instead, you'll probably want to raise an error if a parameter is missing. Then you'll be able to handle this error elsewhere in your UI. 
+
+ Kindall suggests a decorator. Depending on how complicated you want the checking to be, I think you could get by with something a little simpler than his suggestion: 
+
+ def check_needed_params(target):
+ needed_params = {'one': None, 'two': None, 'three': ''}
+ def wrapper(*args, **kwargs):
+  params = needed_params.copy()
+  params.update(kwargs)
+  for key, value in params.iteritems():
+   if not value:
+    raise TypeError("You need to provide the argument '%s'" % key)
+  return target(**params)
+ return wrapper
+ 
+
+ You can use this to identify functions that need to have their parameters checked like so: 
+
+ @check_needed_params
+def adder(**kwargs):
+ return kwargs["one"] + kwargs["two"] + kwargs["three"]
+ 
+
+ Then, when this function is called, it will work seamlessly if you provide all the results, but will raise an error if you don't. 
+
+ &gt;&gt;&gt; adder(one=1, two=2, three=3)
+6
+&gt;&gt;&gt; adder(one=1, two=2)
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "c:/Users/.../python-6940fCr.py", line 8, in wrapper
+TypeError: You need to provide the argument three
+ 
+ #3 From you question it seems you want to validate command line arguments. In such a case have you considered using getopt 
+ #4 This is a common "lots of variables" pattern. 
+
+ def function( variable1, variable2, variable3, ..., variablen ):
+ """user-friendly description of the function.
+ :param variable1: meaning, units, range, whatever.
+ :param variable2: meaning, units, range, whatever.
+ ...
+ :param variablen: meaning, units, range, whatever.
+ :returns: range, type, whatever.
+ """
+ # do the processing
+ 
+
+ Do NOT check for missing or invalid parameters. Python already does all the type checking ever needed. Just write your code. Do nothing special or extra to "validate" the inputs.
+When exceptions arise, that means the inputs were bad. 
+
+ It's just that simple. 
+
+ Don't make it more complex by rewriting all of Python's type checking in extraneous if-statements. 
+
+ Also. 
+
+ NEVER mix "error returns" with valid returns. Any kind of bad input must lead to an exception. Good inputs return good values. Bad inputs raise exceptions. 
+
+ It's just that simple. Don't make it more complex. 
+
+ When calling this function, you can do this: 
+
+ the_variables = { 
+ 'variable1': some value,
+ 'variable2': some value,
+ ...
+ 'variablen': some value,
+}
+try:
+ function( **the_variables )
+except Exception:
+ print( function.__doc__ )
+ 
+
+ Anything missing? You get a TypeError . Anything incorrectly None or empty? You get a ValueError (or a TypeError, it depends). 
+
+ When something goes wrong, you print the user-friendly description of the function. 
+
+ This works pretty well and doesn't require very much programming at all. 
+ #5 Your function sounds quite large. Have you considered if it's appropriate to break it up or possibly turning it into a separate class? 
+ #6 This is the best answer I could come up with. It requires doing a lot of prep work before calling the function, so I don't like it. However, it meets all the requirements. 
+
+ Thanks to everyone who participated, and I apologize that the question needed so many amendments! 
+
+ def validate_parameters(params_map):
+ """
+ map is like {foo: "this is foo"}
+ """
+ missing_params_info = []
+ for k,v in params_map.items():
+  if not v:
+   missing_params_info.append(k)
+ return missing_params_info
+# or do this if you want to use exceptions:
+# if missing_params_info:
+#  raise TypeError('These parameters were unset: %s' % missing_params_info)
+
+params = {}
+params['foo'] = '1'
+params['bar'] = '2'
+params['empty'] = ''
+params['empty2'] = ''
+params['None'] = None
+
+reverse_params_map = {
+ 'this is foo' : params['foo'],
+ 'this is bar' : params['bar'],
+ 'this is empty' : params['empty'],
+ 'this is empty2' : params['empty2'],
+ 'this is None' : params['None'],
+}
+
+print validate_parameters(reverse_params_map)
+
+bash-3.00# python /var/tmp/ck.py
+['this is empty2', 'this is empty', 'this is None']
+ 
+ #7 The question remains very confusing. Very. 
+
+ It could be that you're asking about introspection into the function's code object: 
+
+ def noisy_typerror( func ):
+ def fix_exception( **kw ):
+  try:
+   # This is generally needless; mostly a waste of CPU cycles.
+   if not all(kw[arg] for arg in kw ):
+    raise TypeError
+   # Simply apply the function and see if a TypeError occurs 
+   return func( **kw )
+  except TypeError:
+   required= ", ".join( func.func_code.co_varnames[:func.func_code.co_argcount] )
+   provided= ", ".join( "{0}={1!r}".format(k,v) for k,v in kw.items() )
+   raise TypeError( "{2}( {0} ) got {1}".format(required, provided,func.func_name) )
+ return fix_exception
+
+@noisy_typerror
+def some_func( this, that, the_other ):
+ a= this
+ b= that
+ print( this, that, the_other )
+ 
+
+ To apply decorators in older version of Python 
+
+ def the_real_func( this, that, the_other ):
+ etc.
+
+some_func= noisy_typerror( the_real_func )
+ 
+
+ Here are some use cases for this decorator 
+
+ try:
+ some_func( this=2, that=3 )
+except TypeError, e:
+ print e 
+try:
+ some_func( this=4 )
+except TypeError, e:
+ print e 
+try:
+ some_func( this=2, that=3, the_other='' )
+except TypeError, e:
+ print e 
+ 
+
+ I get these kinds of results from printing the TypeError strings. 
+
+ some_func( this, that, the_other ) got this=2, that=3
+some_func( this, that, the_other ) got this=4
+some_func( this, that, the_other ) got this=2, the_other='', that=3

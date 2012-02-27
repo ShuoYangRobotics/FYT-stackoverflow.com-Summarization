@@ -1,0 +1,481 @@
+<h3>Question (ID-2420412):</h3><h2>Search for string allowing for one mismatch in any location of the string</h2><p>I am working with DNA sequences of length 25 (see examples below). I have a list of 230,000 and need to look for each sequence in the entire genome (toxoplasma gondii parasite). I am not sure how large the genome is, but much longer than 230,000 sequences.</p>
+
+<p>I need to look for each of my sequences of 25 characters, for example,  (AGCCTCCCATGATTGAACAGATCAT).</p>
+
+<p>The genome is formatted as a continuous string, i.e. (CATGGGAGGCTTGCGGAGCCTGAGGGCGGAGCCTGAGGTGGGAGGCTTGCGGAGTGCGGAGCCTGAGCCTGAGGGCGGAGCCTGAGGTGGGAGGCTT....)</p>
+
+<p>I don't care where or how many times it is found, only whether it is or not.<br>
+This is simple I think --  </p>
+
+<pre><code>str.find(AGCCTCCCATGATTGAACAGATCAT)
+</code></pre>
+
+<p>But I also what to find a close match defined as wrong (mismatched) at any location, but only one location, and record the location in the sequence. I am not sure how do do this. The only thing I can think of is using a wildcard and performing the search with a wildcard in each position. I.e., search 25 times.</p>
+
+<p>For example,<br>
+AGCCTCCCATGATTGAACAGATCAT<br>
+AGCCTCCCATGATAGAACAGATCAT</p>
+
+<p>A close match with a mismatch at position 13.</p>
+
+<p>Speed is not a big issue because I am only doing it 3 times, though it would be nice if it was fast.</p>
+
+<p>There are programs that do this -- find matches and partial matches -- but I am looking for a type of partial match that is not discoverable with these applications.</p>
+
+<p>Here is a similar post for perl, although they are only comparing sequences and not searching a continuous string : </p>
+
+<p><a href="http://stackoverflow.com/questions/1672782/fastest-way-to-find-mismatch-positions-between-two-strings-of-the-same-length">Related post</a></p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p><strong>Before you read on</strong>, have you looked at <a href="http://biopython.org/wiki/Main_Page" rel="nofollow">biopython</a>?</p>
+
+<p>It appears that you want to find approximate matches with one substitution error, and zero insertion/deletion errors i.e. a Hamming distance of 1.</p>
+
+<p>If you have a Hamming distance match function (see e.g. the link provided by Ignacio), you could use it like this to do a search for the first match:</p>
+
+<pre><code>any(Hamming_distance(genome[x:x+25], sequence) == 1 for x in xrange(len(genome)))
+</code></pre>
+
+<p>but this would be rather slow, because (1) the Hamming distance function would keep on grinding after the 2nd substitution error (2) after failure, it advances the cursor by one rather than skipping ahead based on what it saw (like a Boyer-Moore search does).</p>
+
+<p>You can overcome (1) with a function like this:</p>
+
+<pre><code>def Hamming_check_0_or_1(genome, posn, sequence):
+    errors = 0
+    for i in xrange(25):
+        if genome[posn+i] != sequence[i]:
+            errors += 1
+            if errors &gt;= 2:
+                return errors
+    return errors 
+</code></pre>
+
+<p>Note: that's intentionally not Pythonic, it's Cic, because you'd need to use C (perhaps via Cython) to get reasonable speed.</p>
+
+<p>Some work on bit-parallel approximate Levenshtein searches with skipping has been done by Navarro and Raffinot (google "Navarro Raffinot nrgrep") and this could be adapted to Hamming searches. Note that bit-parallel methods have limitations on length of query string and alphabet size but yours are 25 and 4 respectively so no problems there. Update: skipping probably not much help with an alphabet size of 4.</p>
+
+<p>When you google for Hamming distance search, you will notice lots of stuff about implementing it in hardware, and not much in software. This is a big hint that maybe whatever algorithm you come up with ought to be implemented in C or some other compiled language.</p>
+
+<p><strong>Update:</strong>  <strong>Working code for a bit-parallel method</strong></p>
+
+<p>I've also supplied a simplistic method for helping with the correctness checking, and I've packaged a variation of Paul's re code for some comparisons. Note that using re.finditer() delivers non-overlapping results, and this can cause a distance-1 match to shadow an exact match; see my last test case.</p>
+
+<p>The bit-parallel method has these features: guaranteed linear behaviour O(N) where N is text length. Note naive method is O(NM) as is the regex method (M is the pattern length). A Boyer-Moore-style method would be worst case O(NM) and expected O(N). Also the bit-parallel method can be used easily when input has to be buffered: it can be fed a byte or a megabyte at a time; no look-ahead, no problems with buffer boundaries. The big advantage: the speed of that simple per-input-byte code when coded in C.</p>
+
+<p>Downsides: the pattern length is effectively limited to the number of bits in a fast register e.g. 32 or 64. In this case the pattern length is 25; no problem. It uses extra memory (S_table) proportional to the number of distinct characters in the pattern. In this case, the "alphabet size" is only 4; no problem.</p>
+
+<p>Details from <a href="http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.20.8854" rel="nofollow">this technical report</a>. The algorithm there is for approximate search usin Levenshtein distance. To convert to using Hamming distance, I simply (!) removed the pieces of statement 2.1 that handle insertion and deletion. You'll notice lots of reference to "R" with a "d" superscript. "d" is distance. We need only 0 and 1. These "R"s become the R0 and R1 variables in the code below.</p>
+
+<pre><code># coding: ascii
+
+from collections import defaultdict
+import re
+
+_DEBUG = 0
+
+
+# "Fast Text Searching with Errors" by Sun Wu and Udi Manber
+# TR 91-11, Dept of Computer Science, University of Arizona, June 1991.
+# http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.20.8854
+
+def WM_approx_Ham1_search(pattern, text):
+    """Generate (Hamming_dist, start_offset)
+    for matches with distance 0 or 1"""
+    m = len(pattern)
+    S_table = defaultdict(int)
+    for i, c in enumerate(pattern):
+        S_table[c] |= 1 &lt;&lt; i
+    R0 = 0
+    R1 = 0
+    mask = 1 &lt;&lt; (m - 1)
+    for j, c in enumerate(text):
+        S = S_table[c]
+        shR0 = (R0 &lt;&lt; 1) | 1
+        R0 = shR0 &amp; S
+        R1 = ((R1 &lt;&lt; 1) | 1) &amp; S | shR0
+        if _DEBUG:
+            print "j= %2d msk=%s S=%s R0=%s R1=%s" \
+                % tuple([j] + map(bitstr, [mask, S, R0, R1]))
+        if R0 &amp; mask: # exact match
+            yield 0, j - m + 1
+        elif R1 &amp; mask: # match with one substitution
+            yield 1, j - m + 1
+
+if _DEBUG:
+
+    def bitstr(num, mlen=8):
+       wstr = ""
+       for i in xrange(mlen):
+          if num &amp; 1:
+             wstr = "1" + wstr
+          else:
+             wstr = "0" + wstr
+          num &gt;&gt;= 1
+       return wstr
+
+def Ham_dist(s1, s2):
+    """Calculate Hamming distance between 2 sequences."""
+    assert len(s1) == len(s2)
+    return sum(c1 != c2 for c1, c2 in zip(s1, s2))
+
+def long_check(pattern, text):
+    """Naively and understandably generate (Hamming_dist, start_offset)
+    for matches with distance 0 or 1"""
+    m = len(pattern)
+    for i in xrange(len(text) - m + 1):
+        d = Ham_dist(pattern, text[i:i+m])
+        if d &lt; 2:
+            yield d, i
+
+def Paul_McGuire_regex(pattern, text):
+    searchSeqREStr = (
+        '('
+        + pattern
+        + ')|('
+        + ')|('.join(
+            pattern[:i]
+            + "[ACTGN]".replace(c,'')
+            + pattern[i+1:]
+            for i,c in enumerate(pattern)
+            )
+        + ')'
+        )
+    searchSeqRE = re.compile(searchSeqREStr)
+    for match in searchSeqRE.finditer(text):
+        locn = match.start()
+        dist = int(bool(match.lastindex - 1))
+        yield dist, locn
+
+
+if __name__ == "__main__":
+
+    genome1 = "TTTACGTAAACTAAACTGTAA"
+    #         01234567890123456789012345
+    #                   1         2
+
+    tests = [
+        (genome1, "ACGT ATGT ACTA ATCG TTTT ATTA TTTA"),
+        ("T" * 10, "TTTT"),
+        ("ACGTCGTAAAA", "TCGT"), # partial match can shadow an exact match
+        ]
+
+    nfailed = 0
+    for genome, patterns in tests:
+        print "genome:", genome
+        for pattern in patterns.split():
+            print pattern
+            a1 = list(WM_approx_Ham1_search(pattern, genome))
+            a2 = list(long_check(pattern, genome))
+            a3 = list(Paul_McGuire_regex(pattern, genome))
+            print a1
+            print a2
+            print a3
+            print a1 == a2, a2 == a3
+            nfailed += (a1 != a2 or a2 != a3)
+    print "***", nfailed
+</code></pre>
+<br /><b>#1</b><br /><p>You might find the various routines in <a href="http://www.michael-noll.com/wiki/Python-Levenshtein" rel="nofollow">Python-Levenshtein</a> of some use.</p>
+<br /><b>#2</b><br /><pre><code>&gt;&gt;&gt; import re
+&gt;&gt;&gt; seq="AGCCTCCCATGATTGAACAGATCAT"
+&gt;&gt;&gt; genome = "CATGGGAGGCTTGCGGAGCCTGAGGGCGGAGCCTGAGGTGGGAGGCTTGCGGAGTGCGGAGCCTGAGCCTGAGGGCGGAGCCTGAGGTGGGAGGCTT..."
+&gt;&gt;&gt; seq_re=re.compile('|'.join(seq[:i]+'.'+seq[i+1:] for i in range(len(seq))))
+
+&gt;&gt;&gt; seq_re.findall(genome)  # list of matches
+[]  
+
+&gt;&gt;&gt; seq_re.search(genome) # None if not found, otherwise a match object
+</code></pre>
+
+<p>This one stops a the first match, so may be a bit faster when there are multiple matches</p>
+
+<pre><code>&gt;&gt;&gt; print "found" if any(seq_re.finditer(genome)) else "not found"
+not found
+
+&gt;&gt;&gt; print "found" if seq_re.search(genome) else "not found" 
+not found
+
+&gt;&gt;&gt; seq="CAT"
+&gt;&gt;&gt; seq_re=re.compile('|'.join(seq[:i]+'.'+seq[i+1:] for i in range(len(seq))))
+&gt;&gt;&gt; print "found" if seq_re.search(genome) else "not found"
+found
+</code></pre>
+
+<p>for a genome of length 10,000,000 you are looking at about 2.5 days for a single thread to scan 230,000 sequences, so you may want to split up the task onto a few cores/cpus.</p>
+
+<p>You can always start implementing a more efficient algorithm while this one is running :)</p>
+
+<p>If you should wish to search for single dropped or added elements change the regexp to this</p>
+
+<pre><code>&gt;&gt;&gt; seq_re=re.compile('|'.join(seq[:i]+'.{0,2}'+seq[i+1:] for i in range(len(seq))))
+</code></pre>
+<br /><b>#3</b><br /><p>I googled for "toxoplasma gondii parasite genome" to find some of these genome files online.  I found what I think was close, a file titled "TgondiiGenomic_ToxoDB-6.0.fasta" at <a href="http://toxodb.org" rel="nofollow">http://toxodb.org</a>, about 158Mb in size.  I used the following pyparsing expression to extract the gene sequences, it took just under 2 minutes:</p>
+
+<pre><code>fname = "TgondiiGenomic_ToxoDB-6.0.fasta"
+fastasrc = open(fname).read()   # yes! just read the whole dang 158Mb!
+
+"""
+Sample header:
+&gt;gb|scf_1104442823584 | organism=Toxoplasma_gondii_VEG | version=2008-07-23 | length=1448
+"""
+integer = Word(nums).setParseAction(lambda t:int(t[0]))
+genebit = Group("&gt;gb|" + Word(printables)("id") + SkipTo("length=") + 
+                "length=" + integer("genelen") + LineEnd() + 
+                Combine(OneOrMore(Word("ACGTN")),adjacent=False)("gene"))
+
+# read gene data from .fasta file - takes just under a couple of minutes
+genedata = OneOrMore(genebit).parseString(fastasrc)
+</code></pre>
+
+<p>(Surprise! some of the gene sequences include runs of 'N's!  What the heck is that about?!)</p>
+
+<p>Then I wrote this class as a subclass of the pyparsing Token class, for doing close matches:</p>
+
+<pre><code>class CloseMatch(Token):
+    def __init__(self, seq, maxMismatches=1):
+        super(CloseMatch,self).__init__()
+        self.name = seq
+        self.sequence = seq
+        self.maxMismatches = maxMismatches
+        self.errmsg = "Expected " + self.sequence
+        self.mayIndexError = False
+        self.mayReturnEmpty = False
+
+    def parseImpl( self, instring, loc, doActions=True ):
+        start = loc
+        instrlen = len(instring)
+        maxloc = start + len(self.sequence)
+
+        if maxloc &lt;= instrlen:
+            seq = self.sequence
+            seqloc = 0
+            mismatches = []
+            throwException = False
+            done = False
+            while loc &lt; maxloc and not done:
+                if instring[loc] != seq[seqloc]:
+                    mismatches.append(seqloc)
+                    if len(mismatches) &gt; self.maxMismatches:
+                        throwException = True
+                        done = True
+                loc += 1
+                seqloc += 1
+        else:
+            throwException = True
+
+        if throwException:
+            exc = self.myException
+            exc.loc = loc
+            exc.pstr = instring
+            raise exc
+
+        return loc, (instring[start:loc],mismatches)
+</code></pre>
+
+<p>For every match, this will return a tuple containing the actual string that was matched, and a list of the mismatch locations.  Exact matches would of course return an empty list for the second value.  (I like this class, I think I'll add it to the next release of pyparsing.)</p>
+
+<p>I then ran this code to search for "up-to-2-mismatch" matches in all of the sequences read from the .fasta file (recall that genedata is a sequence of ParseResults groups, each containing an id, an integer length, and a sequence string):</p>
+
+<pre><code>searchseq = CloseMatch("ATCATCGAATGGAATCTAATGGAAT", 2)
+for g in genedata:
+    print "%s (%d)" % (g.id, g.genelen)
+    print "-"*24
+    for t,startLoc,endLoc in searchseq.scanString(g.gene):
+        matched, mismatches = t[0]
+        print "MATCH:", searchseq.sequence
+        print "FOUND:", matched
+        if mismatches:
+            print "      ", ''.join(' ' if i not in mismatches else '*' 
+                            for i,c in enumerate(searchseq.sequence))
+        else:
+            print "&lt;exact match&gt;"
+        print "at location", startLoc
+        print
+    print
+</code></pre>
+
+<p>I took the search sequence at random from one of the gene bits, to be sure I could find an exact match, and just out of curiosity to see how many 1- and 2-element mismatches there were.</p>
+
+<p>This took a little while to run.  After 45 minutes, I had this output, listing each id and gene length, and any partial matches found:</p>
+
+<pre><code>scf_1104442825154 (964)
+------------------------
+
+scf_1104442822828 (942)
+------------------------
+
+scf_1104442824510 (987)
+------------------------
+
+scf_1104442823180 (1065)
+------------------------
+...
+</code></pre>
+
+<p>I was getting discouraged, not to see any matches until:</p>
+
+<pre><code>scf_1104442823952 (1188)
+------------------------
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAACGGAATCGAATGGAAT
+                *      *        
+at location 33
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCGAATGGAAT
+                       *        
+at location 175
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCGAATGGAAT
+                       *        
+at location 474
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCGAATGGAAT
+                       *        
+at location 617
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCGAATAGAAT
+                       *   *    
+at location 718
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGATTCGAATGGAAT
+                    *  *        
+at location 896
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCGAATGGTAT
+                       *     *  
+at location 945
+</code></pre>
+
+<p>And finally my exact match at:</p>
+
+<pre><code>scf_1104442823584 (1448)
+------------------------
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGACTCGAATGGAAT
+                    *  *        
+at location 177
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCAAATGGAAT
+                       *        
+at location 203
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCAAATGGAATCGAATGGAAT
+             *         *        
+at location 350
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCGAATGGAAA
+                       *       *
+at location 523
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCAAATGGAATCGAATGGAAT
+             *         *        
+at location 822
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCATCGAATGGAATCTAATGGAAT
+&lt;exact match&gt;
+at location 848
+
+MATCH: ATCATCGAATGGAATCTAATGGAAT
+FOUND: ATCGTCGAATGGAGTCTAATGGAAT
+          *         *           
+at location 969
+</code></pre>
+
+<p>So while this didn't set any speed records, I got the job done, and found some 2-matches too, in case they might be of interest.</p>
+
+<p>For comparison, here is an RE-based version, that finds 1-mismatch matches only:</p>
+
+<pre><code>import re
+seqStr = "ATCATCGAATGGAATCTAATGGAAT"
+searchSeqREStr = seqStr + '|' + \
+    '|'.join(seqStr[:i]+"[ACTGN]".replace(c,'') +seqStr[i+1:] 
+             for i,c in enumerate(seqStr))
+
+searchSeqRE = re.compile(searchSeqREStr)
+
+for g in genedata:
+    print "%s (%d)" % (g.id, g.genelen)
+    print "-"*24
+    for match in searchSeqRE.finditer(g.gene):
+        print "MATCH:", seqStr
+        print "FOUND:", match.group(0)
+        print "at location", match.start()
+        print
+    print
+</code></pre>
+
+<p>(At first, I tried searching the raw FASTA file source itself, but was puzzled why so few matches compared to the pyparsing version.  Then I realized that some of the matches must cross the line breaks, since the fasta file output is wrapped at n characters.)</p>
+
+<p>So after the first pyparsing pass to extract the gene sequences to match against, this RE-based searcher then took about another 1-1/2 minutes to scan all of the un-textwrapped sequences, to find all of the same 1-mismatch entries that the pyparsing solution did.</p>
+<br /><b>#4</b><br /><p>This hints of the <a href="http://en.wikipedia.org/wiki/Longest_common_subsequence_problem" rel="nofollow">longest common subsequence problem</a>. The problem with string similarity here is that you need to test against a continuous string of 230000 sequences; so if you are comparing one of your 25 sequences to the continuous string you'll get a very low similarity.</p>
+
+<p>If you compute the longest common subsequence between your 25 sequences and the continuous string, you'll know if it is in the string if the lengths are the same.</p>
+<br /><b>#5</b><br /><p>You could make a <a href="http://en.wikipedia.org/wiki/Trie" rel="nofollow">trie</a> out of all the different sequences that you want to match. Now is the tricky part of making a depth first search function down the trie that allows at most one mismatch.</p>
+
+<p>The advantage of this method is that you are searching through all of the sequences at once. This will save you a lot of comparisons. For instance, when you start at the top node and go down the 'A' branch, you have just saved yourself many thousands of comparisons because have just instantly matched with all sequences that start with 'A'. For a different argument, consider a slice of the genome that matches exactly with a given sequence. If you have a different sequence in your list of sequences that differs only in the last symbol, then using a trie has just saved you 23 comparison operations.</p>
+
+<p>Here is one way of implementing this. Convert 'A','C',T',G' to 0,1,2,3 or a variant of that. Then use tuples of tuples as your structure for your trie. At each node, the first element in your array corresponds with 'A', the second with 'C' and so on. If 'A' is a branch of this node, then there is another tuple of 4 elements as the first item of this node's tuple. If there isn't an 'A' branch, then set the first item to 0. At the bottom of the trie are nodes that have the id of that sequence so that it can be put into the list of matches.</p>
+
+<p>Here are recursive search functions allowing one mismatch for this sort of trie:</p>
+
+<pre><code>def searchnomismatch(node,genome,i):
+    if i == 25:
+        addtomatches(node)
+    else:
+        for x in range(4):
+            if node[x]:
+                if x == genome[i]:
+                    searchnomismatch(node[x],genome,i+1)
+                else:
+                    searchmismatch(node[x],genome,i+1,i)
+
+def searchmismatch(node,genome,i,where):
+    if i == 25:
+        addtomatches(node,where)
+    else:
+        if node[genome[i]]:
+            searchmismatch(node[genome[i]],genome,i+1,where)
+</code></pre>
+
+<p>Here, I start out the search with something like</p>
+
+<pre><code>searchnomismatch(trie,genome[ind:ind+25],0)
+</code></pre>
+
+<p>and addtomatches is something similar to</p>
+
+<pre><code>def addtomatches(id,where=-1):
+    matches.append(id,where)
+</code></pre>
+
+<p>where equal to -1 means there wasn't a mismatch. Anyway, I hope that I was clear enough so that you get the picture.</p>
+<br /><b>#6</b><br /><p>You could use Pythons built in capability to do the search with regular expression matching. </p>
+
+<p>re module in python
+<a href="http://docs.python.org/library/re.html" rel="nofollow">http://docs.python.org/library/re.html</a></p>
+
+<p>regular expression primer
+<a href="http://www.regular-expressions.info/" rel="nofollow">http://www.regular-expressions.info/</a></p>
+<br /><b>#7</b><br /><p>I ask this question on the biopython mailing list and got pointed to a great solution/program.
+@Michiel de Hoon
+Nexalign can do exactly what you are trying to do.
+See <a href="http://genome.gsc.riken.jp/osc/english/dataresource/" rel="nofollow">http://genome.gsc.riken.jp/osc/english/dataresource/</a>.</p>
+
+<p>It is amazing that is can find all 1 mismatch sequences from the 230,000 sequences I have in only 30sec.</p>
+
+<p>While this is the solution to my problem to be fair it is not the answer to my stackoverflow question. So I will make one of the solutions as the correct solution.
+Thanks for all the great input.</p>
+<br /><b>#8</b><br /><p>I guess this may come a bit late, but there is a tool named PatMaN that does exactly what you want:
+<a href="http://bioinf.eva.mpg.de/patman/" rel="nofollow">http://bioinf.eva.mpg.de/patman/</a></p>
+<br /><b>#9</b><br /><p>I tried some of the solutions, but as already written they are slow when dealing with a large amount of sequences (strings).</p>
+
+<p>I came up with using <a href="http://bowtie-bio.sourceforge.net/" rel="nofollow">bowtie</a> and mapping the substring of interest (soi) against a reference file which contains the strings in FASTA format. You can provide the number of allowed mismatches (0..3) and you get back the strings to which the soi mapped given the allowed mismatches. This works well and pretty fast.</p>
+<br />

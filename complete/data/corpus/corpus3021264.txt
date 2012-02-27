@@ -1,0 +1,62 @@
+Question (ID-3021264): Python tips for memory optimization I need to optimize the RAM usage of my application. 
+PLEASE spare me the lectures telling me I shouldn't care about memory when coding Python. I have a memory problem because I use very large default-dictionaries (yes, I also want to be fast). My current memory consumption is 350MB and growing. I already cannot use shared hosting and if my Apache opens more processes the memory doubles and triples... and it is expensive. 
+I have done extensive profiling and I know exactly where my problems are. 
+I have several large (>100K entries) dictionaries with Unicode keys. A dictionary starts at 140 bytes and grows fast, but the bigger problem is the keys. Python optimizes strings in memory (or so I've read) so that lookups can be ID comparisons ('interning' them). Not sure this is also true for unicode strings (I was not able to 'intern' them). 
+The objects stored in the dictionary are lists of tuples (an_object, an int, an int). 
+
+ 
+ my_big_dict[some_unicode_string].append((my_object, an_int, another_int)) 
+ 
+
+ I already found that it is worth while to split to several dictionaries because the tuples take a lot of space... 
+I found that I could save RAM by hashing the strings before using them as keys!
+But then, sadly, I ran into birthday collisions on my 32 bit system. (side question: is there a 64-bit key dictionary I can use on a 32-bit system?) 
+
+ Python 2.6.5 on both Linux(production) and Windows. 
+Any tips on optimizing memory usage of dictionaries / lists / tuples?
+I even thought of using C - I don't care if this very small piece of code is ugly. It is just a singular location. 
+
+ Thanks in advance! 
+ Answers (Total-7): #0 For a web application you should use a database, the way you're doing it you are creating one copy of your dict for each apache process, which is extremely wasteful. If you have enough memory on the server the database table will be cached in memory (if you don't have enough for one copy of your table, put more RAM into the server). Just remember to put correct indices on your database table or you will get bad performance. 
+ #1 I suggest the following: store all the values in a DB, and keep an in-memory dictionary with string hashes as keys. If a collision occurs, fetch values from the DB, otherwise (vast majority of the cases) use the dictionary. Effectively, it will be a giant cache. 
+
+ A problem with dictionaries in Python is that they use a lot of space: even an int-int dictionary uses 45-80 bytes per key-value pair on a 32-bit system. At the same time, an array.array('i') uses only 8 bytes per a pair of ints, and with a little bit of bookkeeping one can implement a reasonably fast array-based int → int dictionary. 
+
+ Once you have a memory-efficient implementation of an int-int dictionary, split your string → (object, int, int) dictionary into three dictionaries and use hashes instead of full strings. You'll get one int → object and two int → int dictionaries. Emulate the int → object dictionary as follows: keep a list of objects and store indexes of the objects as values of an int → int dictionary. 
+
+ I do realize there's a considerable amount of coding involved to get an array-based dictionary. I had had problem similar to yours and I have implemented a reasonably fast, very memory-efficient, generic hash-int dictionary. Here's my code (BSD license). It is array-based (8 bytes per pair), it takes care of key hashing and collision checking, it keeps the array (several smaller arrays, actually) ordered during writes and does binary search on reads. Your code is reduced to something like: 
+
+ dictionary = HashIntDict(checking = HashIntDict.CHK_SHOUTING)
+# ...
+database.store(k, v)
+try:
+ dictionary[k] = v
+except CollisionError:
+ pass
+# ...
+try:
+ v = dictionary[k]
+except CollisionError:
+ v = database.fetch(k)
+ 
+
+ The checking parameter specifies what happens when a collision occurs: CHK_SHOUTING raises CollisionError on reads and writes, CHK_DELETING returns None on reads and remains silent on writes, CHK_IGNORING doesn't do collision checking. 
+
+ What follows is a brief description of my implementation, optimization hints are welcome! The top-level data structure is a regular dictionary of arrays. Each array contains up to 2^16 = 65536 integer pairs (square root of 2^32 ). A key k and a corresponding value v are both stored in k/65536 -th array. The arrays are initialized on-demand and kept ordered by keys. Binary search is executed on each read and write. Collision checking is an option. If enabled, an attempt to overwrite an already existing key will remove the key and associated value from the dictionary, add the key to a set of colliding keys, and (again, optionally) raise an exception. 
+ #2 I've had situations where I've had a collection of large objects that I've needed to sort and filter by different methods based on several metadata properties. I didn't need the larger parts of them so I dumped them to disk. 
+
+ As you data is so simple in type, a quick SQLite database might solve all your problems, even speed things up a little. 
+ #3 Use shelve or a database to store the data instead of an in-memory dict. 
+ #4 If you want to stay with the in-memory data store, you could try something like memcached . 
+
+ That way, you can use a single in-memory key/value-store from all the Python processes. 
+
+ There are several python memcached client libraries. 
+ #5 Redis would be a great option here if you have the option to use it on a shared host - similar to memcached, but optimised for data structures. Redis also supports python bindings. 
+
+ I use it on a day to day basis for number crunching but also in production systems as a datastore and cannot recommend it highly enough. 
+
+ Als, di you have an topion to proxy your app behind nginx instead fo using Apache? You might find (if allowed) this proxy/webapp arrangement less hungry on resources. 
+
+ Good luck. 
+ #6 If you want to do extensive optimization and have full control on memory usage you could also write a C/C++ module. Using Swig the code wrapping into Python can be done easily, with some small performance overhead comparing to pure C Python module.

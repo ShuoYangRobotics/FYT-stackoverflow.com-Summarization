@@ -1,0 +1,163 @@
+<h3>Question ( ID-7495886 ) : </h3><h2>Use a class in the context of a different module </h2><p>I want to modify some classes in the standard library to use a different set of globals the ones that other classes in that module use . </p>
+<h2>Example </h2>
+<p>This example is an example only : </p>
+<pre><code># module_a.py
+
+my_global = []
+
+class A:
+    def __init__(self):
+        my_global.append(self)
+
+class B:
+    def __init__(self):
+        my_global.append(self)
+</code></pre>
+<p>In this example , If I create an instance of <span style="background-color:yellow;">A</span> , via <span style="background-color:yellow;">A</span> ( ) , it will call append on the object named by my_global . <span style="background-color:yellow;">But</span> now I wish to create a new module , import <span style="background-color:yellow;">B</span> to it , and have <span style="background-color:yellow;">B</span> use my_global from the module it 's been imported into , instead of the my_global from the module <span style="background-color:yellow;">B</span> was <span style="background-color:yellow;">original</span> defined . </p>
+<pre><code># module_b.py
+
+from module_a import B
+
+my_global = []
+</code></pre>
+<h2>Related </h2>
+<p>I 'm struggling to explain my problem , here is my previous attempt which did in fact ask something completely different : </p>
+<ul>Clone a module and <span style="background-color:yellow;">make</span> changes to the copy </ul>
+<h2>Update0 </h2>
+<ul>The example above is only for illustration of what I 'm trying to achieve . Since there is no variable scope for classes ( unlike say , C + + ) , I think a reference to a globals mapping is not stored in a class , but instead is attached to every function when defined . </ul>
+<h2>Update1 </h2>
+<p><span style="background-color:yellow;">An</span> example was requested from the standard library : </p>
+<p>Many ( maybe all ? ) of the classes in the <span style="background-color:yellow;">threading</span> module <span style="background-color:yellow;">make</span> use of globals such as _allocate_lock , get_ident , and _active , defined here and here . One can not change these globals without changing it for all the classes in that module . </p>
+<br /><h3><span style="background-color:yellow;">Answers</span> ( Total-7 ) : </h3><b># 0 </b><br /><p>You ca n't change the globals without affecting all other users of the module , but what you sort of can do is create a private copy of the whole module . </p>
+<p>I trust you are familiar with <span style="background-color:yellow;">sys.modules</span> , and that if you remove a module from there , Python forgets it was imported , but old objects referencing it will continue to do so. When imported again , a new copy of the module will be made . </p>
+<p><span style="background-color:yellow;">A</span> hacky solution to your problem could would be something like this : </p>
+<pre><code>import sys
+import threading
+
+# Remove the original module, but keep it around
+main_threading = sys.modules.pop('threading')
+
+# Get a private copy of the module
+import threading as private_threading
+
+# Cover up evidence by restoring the original
+sys.modules['threading'] = main_threading
+
+# Modify the private copy
+private_threading._allocate_lock = my_allocate_lock()
+</code></pre>
+<p><span style="background-color:yellow;">And</span> now , private_threading.Lock has globals entirely separate from <span style="background-color:yellow;">threading.Lock</span> ! </p>
+<p>Needless to say , the module was n't written with this in mind , and especially with a <span style="background-color:yellow;">system</span> module such as <span style="background-color:yellow;">threading</span> you might run into problems. For example , <span style="background-color:yellow;">threading._active</span> is supposed to contain all running threads , but with this solution , neither _active will have them all. The code may also eat your socks and set your house on fire , etc. Test rigorously . </p>
+<br /><b># 1 </b><br /><p>Okay , here 's a proof-of-concept that shows how to do it. Note that it only goes one level deep -- properties and nested functions are not adjusted. To implement that , as well as <span style="background-color:yellow;">make</span> this more robust , each function 's globals ( ) should be compared to the globals ( ) that should be replaced , and only <span style="background-color:yellow;">make</span> the substitution if they are the same . </p>
+<pre><code>def migrate_class(cls, globals):
+    """Recreates a class substituting the passed-in globals for the
+    globals already in the existing class.  This proof-of-concept
+    version only goes one-level deep (i.e. properties and other nested
+    functions are not changed)."""
+    name = cls.__name__
+    bases = cls.__bases__
+    new_dict = dict()
+    if hasattr(cls, '__slots__'):
+        new_dict['__slots__'] = cls.__slots__
+        for name in cls.__slots__:
+            if hasattr(cls, name):
+                attr = getattr(cls, name)
+                if callable(attr):
+                    closure = attr.__closure__
+                    defaults = attr.__defaults__
+                    func_code = attr.__code__
+                    attr = FunctionType(func_code, globals)
+                new_dict[name] = attr
+    if hasattr(cls, '__dict__'):
+        od = getattr(cls, '__dict__')
+        for name, attr in od.items():
+            if callable(attr):
+                closure = attr.__closure__
+                defaults = attr.__defaults__
+                kwdefaults = attr.__kwdefaults__
+                func_code = attr.__code__
+                attr = FunctionType(func_code, globals, name, defaults, closure)
+                if kwdefaults:
+                    attr.__kwdefaults__ = kwdefaults
+            new_dict[name] = attr
+    return type(name, bases, new_dict)
+</code></pre>
+<p><span style="background-color:yellow;">After</span> having gone through this excercise , I am really curious as to why you need to do this ? </p>
+<br /><b># 2 </b><br /><p>" One can not change these globals without changing it for all the classes in that module. " That 's the root of the problem is n't it , and a good explanation of the problem with global variables in general. The use of globals in <span style="background-color:yellow;">threading</span> tethers its classes to those global objects . </p>
+<p><span style="background-color:yellow;">By</span> the time you jerry-rig something to find and monkey patch each use of a global variable within an individual class from the module , are you any further ahead of just reimplementing the code for your own use ? </p>
+<p>The only work around that " might " be of use in your situation is something like mock . Mock 's patch decorators/context managers ( or something similar ) could be used to swap out a global variable for the life-time of a given object. It works well within the very controlled context of unit testing , but in any other circumstances I would n't recommend it and would think about just reimplementing the code to suit my needs . </p>
+<br /><b># 3 </b><br /><p>Globals are bad for exactly this reason , as I am sure you know well enough . </p>
+<p>I 'd try to reimplement <span style="background-color:yellow;">A</span> and <span style="background-color:yellow;">B</span> ( maybe by subclassing them ) in my own module and with all references to my_global replaced by an injected dependency on <span style="background-color:yellow;">A</span> and <span style="background-color:yellow;">B</span> , which I 'll call registry here . </p>
+<pre><code>class A(orig.A):
+
+    def __init__(self, registry):
+        self.registry = registry
+        self.registry.append(self)
+
+    # more updated methods
+</code></pre>
+<p>If you are creating all instances of <span style="background-color:yellow;">A</span> yourself you are pretty much done. You might want to create a <span style="background-color:yellow;">factory</span> which hides away the new init parameter . </p>
+<pre><code>my_registry = []
+def A_in_my_registry():
+    return A(my_registry)
+</code></pre>
+<p>If foreign code creates <span style="background-color:yellow;">orig.A</span> instances for you , and you would rather have new <span style="background-color:yellow;">A</span> instances , you have to hope the foreign code is customizeable with factories. If not , derive from the foreign classes and update them to use ( newly injected ) <span style="background-color:yellow;">A</span> factories instead. .... <span style="background-color:yellow;">And</span> rinse repeat for for the creation of those updated classes. I realize this can be tedious to almost impossible depending on the complexity of the foreign code , but most std libs are quite flat . </p>
+<p>-- </p>
+<p>Edit : Monkey patch std lib code . </p>
+<p>If you do n't mind monkey patching std libs , you could also try to modifiy the <span style="background-color:yellow;">original</span> classes to work with a redirection level which defaults to the <span style="background-color:yellow;">original</span> globals , but is customizable per instance : </p>
+<pre><code>import orig
+
+class A(orig.A):
+
+    def __init__(self, registry=orig.my_globals):
+        self.registry = registry
+        self.registry.append(self)
+
+    # more updated methods
+
+orig.A = A
+</code></pre>
+<p><span style="background-color:yellow;">As</span> before you will need to control creations of <span style="background-color:yellow;">A</span> which should use non " standard globals " , but you wo n't have different <span style="background-color:yellow;">A</span> classes around as long as you monkey patch early enough . </p>
+<br /><b># 4 </b><br /><p>If you use Python 3 , you can subclass <span style="background-color:yellow;">B</span> and redefine the __globals__ <span style="background-color:yellow;">attribute</span> of the <span style="background-color:yellow;">__init__</span> method like this : </p>
+<pre><code>from module_a import B
+
+function = type(lambda: 0)  # similar to 'from types import FunctionType as function', but faster
+my_global = []
+
+
+class My_B (B):
+    __init__ = function(B.__init__.__code__, globals(), '__init__',  B.__init__.__defaults__, B.__init__.__closure__)
+</code></pre>
+<br /><b># 5 </b><br /><p>IMHO it is not possible to override global variables.. . </p>
+<br /><b># 6 </b><br /><p>Globals are rarely a good idea . </p>
+<p>Implicit variables are rarely a good idea . </p>
+<p><span style="background-color:yellow;">An</span> implicitly-used global is easy to indict as also " rarely good " . </p>
+<p><span style="background-color:yellow;">Additionally</span> , you do n't want <span style="background-color:yellow;">A.__init__</span> ( ) doing anything " class-level " like updating some mysterious collection that exists for the class as a whole. That 's often a bad idea . </p>
+<p>Rather than mess with implicit class-level collection , you want a <span style="background-color:yellow;">Factory</span> in <span style="background-color:yellow;">module_a</span> that ( 1 ) creates <span style="background-color:yellow;">A</span> or <span style="background-color:yellow;">B</span> instances and ( b ) updates an explicit collection . </p>
+<p>You can then use this <span style="background-color:yellow;">factory</span> in <span style="background-color:yellow;">module_b</span> , except with a different collection . </p>
+<p>This can promote testability by exposing an implicit dependency . </p>
+<p><span style="background-color:yellow;">module_a.py</span> </p>
+<pre><code>class Factory( object ):
+    def __init__( self, collection ):
+        self.collection= collection
+    def make( self, name, *args, **kw ):
+        obj= eval( name )( *args, **kw )
+        self.collection.append( obj )
+        return obj
+
+module_collection = []
+factory= Factory( module_collection )
+</code></pre>
+<p><span style="background-color:yellow;">module_b.py</span> </p>
+<pre><code>module_collection = []
+factory = module_a.Factory( module_collection )
+</code></pre>
+<p>Now a client can do this </p>
+<pre><code>import module_b
+a = module_b.factory.make( "A" )
+b = module_b.factory.make( "B" )
+print( module_b.module_collection )
+</code></pre>
+<p>You can <span style="background-color:yellow;">make</span> the <span style="background-color:yellow;">API</span> a bit more fluent by making the <span style="background-color:yellow;">factory</span> " callable " ( implementing __call__ instead of <span style="background-color:yellow;">make</span> . </p>
+<p>The point is to <span style="background-color:yellow;">make</span> the collection explicit via a <span style="background-color:yellow;">factory</span> class . </p>
+<br />

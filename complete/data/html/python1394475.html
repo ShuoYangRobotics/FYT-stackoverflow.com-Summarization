@@ -1,0 +1,136 @@
+<h3>Question (ID-1394475):</h3><h2>python: combine sort-key-functions itemgetter and str.lower</h2><p>I want to sort a list of dictionaries by dictionary key, where I don't want to distinguish between upper and lower case characters.</p>
+
+<pre><code>dict1 = {'name':'peter','phone':'12355'}
+dict2 = {'name':'Paul','phone':'545435'}
+dict3 = {'name':'klaus','phone':'55345'}
+dict4 = {'name':'Krishna','phone':'12345'}
+dict5 = {'name':'Ali','phone':'53453'}
+dict6 = {'name':'Hans','phone':'765756'}
+list_of_dicts = [dict1,dict2,dict3,dict4,dict5,dict6]
+
+key_field = 'name'
+list_of_dicts.sort(key=itemgetter(key_field))
+# how to combine key=itemgetter(key_field) and key=str.lower? 
+for list_field in list_of_dicts:
+    print list_field[key_field]
+</code></pre>
+
+<p>should provide</p>
+
+<pre><code>Ali, Hans, klaus, Krishna, Paul, peter
+</code></pre>
+
+<p>and not</p>
+
+<pre><code>klaus, peter, Ali, Hans, Krishna, Paul
+</code></pre>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>In the general case, you'll want to write your key-extraction fucntion for sorting purposes; only in special (though important) cases it happens that you can just reuse an existing callable to extract the keys for you, or just conjoin a couple of existing ones (in a "quick and dirty" way using <code>lambda</code>, since there's no built-in way to do function composition).</p>
+
+<p>If you often need to perform these two kinds of operations for key extraction (get an item and call a method on that item), I suggest:</p>
+
+<pre><code>def combiner(itemkey, methodname, *a, **k):
+  def keyextractor(container):
+    item = container[itemkey]
+    method = getattr(item, methodname)
+    return method(*a, **k)
+  return keyextractor
+</code></pre>
+
+<p>so <code>listofdicts.sort(key=combiner('name', 'lower'))</code> will work in your case.</p>
+
+<p>Note that while excessive generalization has costs, tasteful and moderate generalization (leaving the item key, method name, and method arguments if any, as runtime-determined, in this case) generally has benefits -- one general function, not more complex than a dozen specific and specialized ones (with the extractor, method to call, or both, hardwired in their code), will be easier to maintain (and, of course, much easier to reuse!-).</p>
+<br /><b>#1</b><br /><p>How about this:</p>
+
+<pre><code>list_of_dicts.sort(key=lambda a: a['name'].lower())
+</code></pre>
+<br /><b>#2</b><br /><p>You probably should go with a lambda for the sake of readability. But as an interesting study into higher order functions, here's the extended version of q-combinator in Python (also known as the queer bird combinator). This allows you to create a new function by composing two functions</p>
+
+<pre><code> def compose(inner_func, *outer_funcs):
+     if not outer_funcs:
+         return inner_func
+     outer_func = compose(*outer_funcs)
+     return lambda *args, **kwargs: outer_func(inner_func(*args, **kwargs))
+
+ from operator import itemgetter, methodcaller
+ name_lowered = compose(itemgetter('name'), methodcaller('lower'))
+ print(name_lowered( {'name': 'Foo'} ))
+</code></pre>
+
+<p>If you reverse the definitions of inner and outer in the <code>compose</code> function, you get the more traditional b-combinator (bluebird). I like the q-combinator more because of the similarity to unix pipes.</p>
+<br /><b>#3</b><br /><pre><code>def lower_getter(field):
+    def _getter(obj):
+        return obj[field].lower()
+    return _getter
+
+list_of_dicts.sort(key=lower_getter(key_field))
+</code></pre>
+<br /><b>#4</b><br /><p>This solution will use your system locale, and as a bonus, it will sort eventual other characters according to the current locale as well (Will put "ü" after "u" in a german locale etc).</p>
+
+<pre><code>from locale import setlocale, strxfrm, LC_ALL
+import operator
+
+# call setlocale to init current locale
+setlocale(LC_ALL, "")
+
+def locale_keyfunc(keyfunc):  
+  def locale_wrapper(obj):
+    return strxfrm(keyfunc(obj))
+  return locale_wrapper
+
+list_of_dicts.sort(key=locale_keyfunc(operator.itemgetter("name")))
+</code></pre>
+
+<p>This of course uses that the locale sort is the User interface "natural" sort that you wish to emulate with .lower().</p>
+
+<p>I'm amazed that python's <code>locale</code> module is unknown and unused, it for sure is an important component in the application I write (translated to multiple languages, but the locale module is important for even getting <em>one</em> module right. Case in point: in swedish 'V' and 'W' sort alike, so you have to collate them. <code>locale</code> does all that for you.).
+In the <code>POSIX</code> locale (not default), this will revert to sorting "a" after "Z".</p>
+<br /><b>#5</b><br /><p>Personally, I wish there were two functions in the Python standard library (probably in functools):</p>
+
+<pre><code>def compose(*funcs):
+	"""
+	Compose any number of unary functions into a single unary
+	function.
+
+	&gt;&gt;&gt; import textwrap
+	&gt;&gt;&gt; str.strip(textwrap.dedent(compose.__doc__)) == compose(str.strip, textwrap.dedent)(compose.__doc__)
+	True
+	"""
+
+	compose_two = lambda f1, f2: lambda v: f1(f2(v))
+	return reduce(compose_two, funcs)
+
+def method_caller(method_name, *args, **kwargs):
+	"""
+	Return a function that will call a named method on the
+	target object with optional positional and keyword
+	arguments.
+
+	&gt;&gt;&gt; lower = method_caller('lower')
+	&gt;&gt;&gt; lower('MyString')
+	'mystring'
+	"""
+	def call_method(target):
+		func = getattr(target, method_name)
+		return func(*args, **kwargs)
+	return call_method
+</code></pre>
+
+<p>I have implemented these for my own use in <a href="https://svn.jaraco.com/jaraco/python/jaraco.util/jaraco/util/functools.py" rel="nofollow">jaraco.util.functools</a>. </p>
+
+<p>Either way, now your code is quite clear, self-documented, and robust (IMO).</p>
+
+<pre><code>lower = method_caller('lower')
+get_name = itemgetter('name')
+lowered_name = compose(lower, get_name)
+
+list_of_dicts.sort(key=lowered_name)
+</code></pre>
+<br /><b>#6</b><br /><pre><code>from functools import partial
+
+def nested_funcs(*funcs):
+    return partial(reduce, lambda arg, func: func(arg), funcs)
+
+
+sorted(list_of_dicts, key=nested_funcs(itemgetter('name'), str.strip, str.lower))
+</code></pre>
+<br />

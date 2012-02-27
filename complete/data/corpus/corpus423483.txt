@@ -1,0 +1,120 @@
+Question (ID-423483): Python unittest with expensive setup My test file is basically: 
+
+ class Test(unittest.TestCase):
+ def testOk():
+  pass
+
+if __name__ == "__main__":
+ expensiveSetup()
+ try:
+  unittest.main()
+ finally:
+  cleanUp()
+ 
+
+ However, I do wish to run my test through Netbeans testing tools, and to do that I need unittests that don't rely on an environment setup done in main . Looking at http://stackoverflow.com/questions/402483/caching-result-of-setup-using-python-unittest - it recommends using Nose. However, I don't think Netbeans supports this. I didn't find any information indicating that it does. Additionally, I am the only one here actually writing tests, so I don't want to introduce additional dependencies for the other 2 developers unless they are needed. 
+
+ How can I do the setup and cleanup once for all the tests in my TestSuite? 
+
+ The expensive setup here is creating some files with dummy data, as well as setting up and tearing down a simple xml-rpc server. I also have 2 test classes, one testing locally and one testing all methods over xml-rpc. 
+ Answers (Total-7): #0 If you use Python >= 2.7, the best approach would be be to use 
+
+ def setUpClass(klass):
+ # ...
+ 
+
+ to perform some initialization once for all tests belonging to the given class. 
+ #1 You can save the state if expensiveSetup() is run or not. 
+
+ __expensiveSetup_has_run = False
+
+class ExpensiveSetupMixin(unittest.TestCase):
+ def setUp(self):
+  global __expensiveSetup_has_run
+  super(ExpensiveSetupMixin, self).setUp()
+  if __expensiveSetup_has_run is False:
+   expensiveSetup()
+   __expensiveSetup_has_run = True
+ 
+
+ Or some kind of variation of this. Maybe pinging xml-rpc server and create a new one if it isn't answering. 
+
+ But the unit-testing way AFAIK is to setup and teardown per unittest even if it is expensive. 
+ #2 First of all, what S. Lott said. However!, you do not want to do that. There is a reason setUp and tearDown are wrapped around each test: they help preserve the determinism of testing. 
+
+ Otherwise, if some test places the system in a bad state, your next tests may fail. Ideally, each of your tests should be independent. 
+
+ Also, if you insist on doing it this way, instead of writing by hand self.runTest1(), self.runTest2(), you might want to do a bit of introspection in order to find the methods to run. 
+ #3 Won't package-level initialization do it for you? From the Nose Wiki : 
+
+ 
+ nose allows tests to be grouped into
+ test packages. This allows
+ package-level setup; for instance, if
+ you need to create a test database or
+ other data fixture for your tests, you
+ may create it in package setup and
+ remove it in package teardown once per
+ test run, rather than having to create
+ and tear it down once per test module
+ or test case. 
+ 
+ To create package-level setup and
+ teardown methods, define setup and/or
+ teardown functions in the __init__.py 
+ of a test package. Setup methods may
+ be named setup , setup_package , setUp ,
+ or setUpPackage ; teardown may be named
+ teardown , teardown_package , tearDown 
+ or tearDownPackage . Execution of tests
+ in a test package begins as soon as
+ the first test module is loaded from
+ the test package. 
+ 
+ #4 You can assure setUp and tearDown execute once if you have only one test method, runTest . This method can do whatever else it wants. Just be sure you don't have any methods with names that start with test . 
+
+ class MyExpensiveTest( unittest.TestCase ):
+ def setUp( self ):
+  self.resource = owThatHurts()
+ def tearDown( self ):
+  self.resource.flush()
+  self.resource.finish()
+ def runTest( self ):
+  self.runTest1()
+  self.tunTest2()
+ def runTest1( self ):
+  self.assertEquals(...)
+ def runTest2( self ):
+  self.assertEquals(...)
+ 
+
+ It doesn't automagically figure out what to run. If you add a test method, you also have to update runTest. 
+ #5 This is what I do: 
+
+ class TestSearch(unittest.TestCase):
+"""General Search tests for...."""
+
+matcher = None
+counter  = 0
+num_of_tests = None
+
+def setUp(self): # pylint: disable-msg=C0103 
+ """Only instantiate the matcher once"""
+ if self.matcher is None:
+  self.__class__.matcher = Matcher()
+  self.__class__.num_of_tests = len(filter(self.isTestMethod, dir(self)))
+ self.__class__.counter = self.counter + 1 
+
+def tearDown(self): # pylint: disable-msg=C0103
+ """And kill it when done"""
+ if self.counter == self.num_of_tests:
+  print 'KILL KILL KILL'
+  del self.__class__.matcher
+ 
+
+ Sadly (because I do want my tests to be independent and deterministic), I do this a lot (because system testing that take less than 5 minutes are also important). 
+ #6 I know nothing about Netbeans, but I though I should mention zope.testrunner and it's support for a nifty thing: Layers. Basically, you do the testsetup in separate classes, and attach those classes to the tests. These classes can inherit from each other, forming a layer of setups. The testrunner will then only call each setup once, and saving the state of that in memory, and instead of setting up and tearing down, it will simply just copy the relevant layer context as a setup. 
+
+ This speeds up test setup a lot, and is used when you test Zope products and Plone, where the testsetup often needs you to start a Plone CMS server, create a Plone site and add loads of content, a process that can take upwards half a minute. Doing that for each test method is obviously impossible, but with layers it is done only once. This shortens the test setup and protects the test methods from each other, and therefore means that the testing continues to be determenistic. 
+
+ So I don't know of zope.testrunner will work for you, but it's worth a try.

@@ -1,0 +1,201 @@
+<h3>Question (ID-5338338):</h3><h2>Performance gain using MPI</h2><p>I tested the performance gain of parallelizing the (nearly) "embarassingly parallel" (i.e. perfectly parallelizable) algorithm of summing up the first <code>N</code> integers: </p>
+
+<p>The serial algorithm is simply:</p>
+
+<pre><code>N = 100000000
+print sum(range(N))
+</code></pre>
+
+<p>Execution time on my dual core laptop (Lenovo X200): 0m21.111s.</p>
+
+<p>The parallelized (with mpi4py) version uses 3 nodes; node 0 calculates the sum of the lower half of the interger, node 1 calculates the sum of the upper half. The both send their results (via <code>comm.send</code>) to node 2 which sums up both numbers and prints the result: </p>
+
+<pre><code>from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+N = 100000000
+
+if rank == 0: 
+  s = sum(range(N/2))
+  comm.send(s,dest=2,tag=11)
+elif rank == 1:
+  s = sum(range(N/2+1,N))
+  comm.send(s,dest=2,tag=11)
+elif rank == 2:
+  s1 = comm.recv(source=0, tag=11)
+  s2 = comm.recv(source=1, tag=11)
+  print s1+s2
+</code></pre>
+
+<p>Both cores of my dual-core-laptop are fully used; Execution time now: 15.746s.</p>
+
+<p>My Question: At least in theory, the execution time should nearly be halfed. Which overhead eats the missing 4 seconds? (surely not s1+s2). Are those send- / receive-Commands that time-consuming??</p>
+
+<p><strong>Edit:</strong> After reading the answers and rethinking the question, I think the 4 seconds (in some runs even more than that) are eaten by the high memory traffic caused by the generation of two lists of length 50000000; the two cores of my laptop share a common memory (at least main memory; I think they have separate L2-Caches) and exactly this is the bottleneck: so, very often, both cores want to access memory at the same time (for getting the next list element) and one of them has to wait...</p>
+
+<p>If I use <code>xrange</code> instead of <code>range</code>, the next list elements are generated lazily and little memory is allocated. 
+I tested it and running the same programm as above with xrange takes just 11 seconds!</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>How are you doing the timing, and what's your laptop?</p>
+
+<p>If you're doing the timing from the shell, you may be (as BiggAl suggests) hitting a delay just starting up python.   That's real overhead and worth knowing about, but probably isn't your immediate concern.    And I have trouble imaginging that this contributes 4 seconds of overhead... [<strong>Edited to add</strong>: although BiggAl suggests it really may be, under Windows]</p>
+
+<p>I think a more likely concern is memory bandwidth limitation.    While you are going to fully use both your cores with this setup, you only have so much memory bandwidth, and that may end up being the limitation here.   Each core is trying to write a lot of data (the range(N/2)) and then read it in (the sum) to do a fairly modest amount of computation (an
+integer) and so I suspect computation isn't the bottleneck.</p>
+
+<p>I ran your same setup using timeit on a Nehalem box with pretty good memory-bandwidth per core, and did get the expected speedup:</p>
+
+<pre><code>from mpi4py import MPI
+import timeit
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+N = 10000000
+
+def parSum():
+    if rank == 0:
+        ...etc
+
+def serSum():
+    s = sum(range(N))
+
+if rank == 0:
+    print 'Parallel time:'
+    tp = timeit.Timer("parSum()","from __main__ import parSum")
+    print tp.timeit(number=10)
+
+    print 'Serial time:'
+    ts = timeit.Timer("serSum()","from __main__ import serSum")
+    print ts.timeit(number=10)
+</code></pre>
+
+<p>from which I got </p>
+
+<pre><code>$ mpirun -np 3 python ./sum.py
+Parallel time:
+1.91955494881
+Serial time:
+3.84715008736
+</code></pre>
+
+<p>If you think it's a memory bandwidth issue, you can test that by making the computation
+artificially compute-heavy; say using numpy and doing sum of more complicated functions of range:  <code>sum(numpy.sin(range(N/2+1,N)))</code>, say.   That should tilt the balance from memory access to computation.  </p>
+<br /><b>#1</b><br /><p>In what follows, I assume you're using Python 2.x.</p>
+
+<p>Depending on the hardware spec of your laptop, it is likely that there's heavy memory contention between processes 0 and 1.</p>
+
+<p><code>range(100000000/2)</code> creates a list that takes 1.5GB of RAM on my PC, so you're looking at 3GB of RAM between the two processes. Using two cores to iterate over the two lists will likely result in memory bandwidth issues (and/or swapping). This is the most likely cause of the imperfect parallelization.</p>
+
+<p>Using <code>xrange</code> instead of <code>range</code> won't generate the lists and should parallelize a lot better by making the computation CPU-bound.</p>
+
+<p>By the way, there's a bug in your code: the second <code>(x)range</code> should start at <code>N/2</code>, not <code>N/2+1</code>.</p>
+<br /><b>#2</b><br /><blockquote>
+  <p>My Question: At least in theory, the execution time should nearly be halfed. Which overhead eats the missing 4 seconds?</p>
+</blockquote>
+
+<p>Some thoughts:</p>
+
+<ul>
+<li>Are you using python 2? If so, use <code>xrange</code> since it creates a generator/iterator object. It could save some milliseconds because <code>range</code> will be creating a fully fledged dictionary it keeps adding to, whereas <code>xrange</code> doesn't. If using python 3, <code>range</code> creates an iterator by default. Likely this won't save you very much time/memory in practise, but the python dev's clearly thought it was worth implementing everything as a generator, because that's one of the big things in python 3.</li>
+<li>Theoretically the algorithm bit should be 2x faster. In practise, it is more complicated than that. There is a cost for setting up threads or processes at the start of the algorithm which will add time to your run time; finally, there's a cost for synchronising the result at the end (waiting on joins). So the 2x speed increase will never actually be realised. For small values of any algorithm it is well known that serial algorithms outperform threaded counterparts; it is only when you reach an order of magnitude where the cost of thread creation is negligible compared to the work to be done that you notice an astronomical speed increase.</li>
+<li><p>Balancing of work may be a problem. On a 32 bit system, the maximum size of number that can fit into a register (and so be O(1) for add given the size of the numbers) is 4294967296 (2^32). Your sum, at large values, is 4999999950000000. Bignum addition is O(n) for the number of limbs (elements in the array) that you need, so you reach a slowdown as soon as you start using bignums as opposed to anything you can handle in a single memory address.</p>
+
+<pre><code>y = 0
+for x in xrange(1, 100000000):
+    if (x+y) &gt; 2**32:
+        print "X is " + str(x)
+        print "y is " + str(y)
+        break
+    else:
+        y += x
+</code></pre>
+
+<p>That shows you at what n in N addition starts to become more expensive. I'd try timing the sum up to that value and the sum of values from there up to N and then adjust your work queue so that you split at an appropriate time.</p>
+
+<p>Of course, on 64-bit systems you shouldn't be noticing this issue, since 2^64 is bigger than your total sum, <em>unless</em> python internally does not use <code>uint64_t</code>. I would have thought it does.</p></li>
+</ul>
+<br /><b>#3</b><br /><p>Please read this <a href="http://en.wikipedia.org/wiki/Amdahl%27s_law" rel="nofollow">Amdahl's Law</a></p>
+
+<p>Your OS includes a large number of non-parallelizable bottlenecks.  Your language library may also have some bottlenecks.</p>
+
+<p>Interestingly, your intel hardware's Memory Write Ordering may also have some number of non-parallelizable bottlenecks.</p>
+<br /><b>#4</b><br /><p>Load balancing is one theory, also there is also going to be an obvious communication latency, but I wouldn't expect any of these, even in combination, to have that great a performance loss. I would guess that your largest overhead is that of starting 2 more instances of the python interpreter. Hopefully if you experiment with larger number you should find that the overhead does not in fact grow proportionality to N, but actually is a large constant plus a term dependent on N. For this reason you may want to stop the algorithm from going parallel for number less than some amount at which the performance improves.</p>
+
+<p>I'm not intimately acquainted with mpi, however it may be that you are better creating a pool of workers at the start of your application and have them wait for tasks, rather than creating them on the fly. This requires a more complex design, but only incurs the interpreter initialisation penalty once per application run.</p>
+<br /><b>#5</b><br /><p>Probably its a bad load balancing: Node 0 has less work than node 1 since summing up the lower N/2 integers is faster than summing up the upper N/2 integers. As a consequence, node 2 gets the message from node 0 quite early and has to wait relatively long for node 1.</p>
+
+<p><strong>EDIT</strong>: Sven Marnach is right; it's not the load balancing since <code>sum(range(N))</code> and <code>sum(range(N,2*N))</code> takes the same amount of time.</p>
+<br /><b>#6</b><br /><p>I wrote a bit of code to test what bits of the mpi infrastructure take up time.  This version of your code can use an abritary number of cores from 1 to lots and lots.  The work is divided up evenly amongst the cores and sent back to host 0 to total.  Host 0 also does work.</p>
+
+<pre><code>import time
+
+t = time.time()
+import pypar
+print 'pypar init time', time.time()-t, 'seconds'
+
+rank = pypar.rank()
+hosts = pypar.size()
+
+N = 100000000
+
+nStart = (N/hosts) * rank
+if rank==hosts-1:
+    nStop = N
+else:
+    nStop = ( ((N/hosts) * (rank+1)) )
+print rank, 'working on', nStart, 'to', nStop
+
+t = time.time()
+s = sum(xrange(nStart,nStop))
+if rank == 0:
+    for p in range(1,hosts):
+        s += pypar.receive(p)
+        pypar.send(s,p) 
+else:
+    pypar.send(s,0) 
+    s = pypar.receive(0)
+if rank==0:
+    print rank, 'total', s, 'in', time.time()-t, 'seconds'
+pypar.Finalize()
+</code></pre>
+
+<p>Results:</p>
+
+<pre><code>pypar init time 1.68600010872 seconds
+1 working on 12500000 to 25000000
+pypar init time 1.80400013924 seconds
+2 working on 25000000 to 37500000
+pypar init time 1.98699998856 seconds
+3 working on 37500000 to 50000000
+pypar init time 2.16499996185 seconds
+4 working on 50000000 to 62500000
+Pypar (version 2.1.4.7) initialised MPI OK with 8 processors
+pypar init time 1.5720000267 seconds
+0 working on 0 to 12500000
+0 total 4999999950000000 in 1.40100002289 seconds
+pypar init time 2.34000015259 seconds
+6 working on 75000000 to 87500000
+pypar init time 2.64600014687 seconds
+7 working on 87500000 to 100000000
+pypar init time 2.23900008202 seconds
+5 working on 62500000 to 75000000
+</code></pre>
+
+<p>Starting up the pypar and mpi libraries takes about 2.5 seconds.  Then the actual work takes 1.4 seconds, to calculate and communicate back to host 0.  Running as a single core it takes about 11 seconds.  So using 8 cores scales nicely. </p>
+
+<p>Starting the mpiexec and python takes almost no time at all.  As this pathetic test shows:</p>
+
+<pre><code>c:\Data\python speed testing&gt;time  0&lt;enter.txt
+The current time is: 10:13:07.03
+Enter the new time:
+
+c:\Data\python speed testing&gt;mpiexec -n 1 python printTime.py
+time.struct_time(tm_year=2011, tm_mon=8, tm_mday=4, tm_hour=10, tm_min=13, tm_sec=7, tm_wday=3, tm_yday=216, tm_isdst=0)
+</code></pre>
+
+<p>Splitting out the actual time to run the summation from the time to setup the data and libraries yields good scalling of peformance improvements.</p>
+
+<p><img src="http://i.stack.imgur.com/NwdwK.png" alt="Graph of Seconds by hosts"></p>
+<br />

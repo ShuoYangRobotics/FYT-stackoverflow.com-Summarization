@@ -1,0 +1,174 @@
+<h3>Question ( ID-653368 ) : </h3><h2>How to create a Python <span style="background-color:yellow;">decorator</span> that can be used either with or without parameters ? </h2><p>I 'd like to create a Python <span style="background-color:yellow;">decorator</span> that can be used either with parameters : </p>
+<pre><code>@redirect_output("somewhere.log")
+def foo():
+    ....
+</code></pre>
+<p>or without them ( for instance to redirect the output to stderr by default ) : </p>
+<pre><code>@redirect_output
+def foo():
+    ....
+</code></pre>
+<p>Is that at all possible ? </p>
+<p>Note that I 'm not looking for a different solution to the problem of redirecting output , it 's just an example of the syntax I 'd like to achieve . </p>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>Using keyword <span style="background-color:yellow;">arguments</span> with default values ( as suggested by kquinn ) is a good idea , but will require you to include the parenthesis : </p>
+<pre><code>@redirect_output()
+def foo():
+    ...
+</code></pre>
+<p>If you would like a version that works without the parenthesis on the <span style="background-color:yellow;">decorator</span> you will have to account both scenarios in your <span style="background-color:yellow;">decorator</span> code . </p>
+<p>If you were using Python 3.0 you could use keyword only <span style="background-color:yellow;">arguments</span> for this : </p>
+<pre><code>def redirect_output(fn=None,*,destination=None):
+  destination = sys.stderr if destination is None else destination
+  def wrapper(*args, **kwargs):
+    ... # your code here
+  if fn is None:
+    def decorator(fn):
+      return functools.update_wrapper(wrapper, fn)
+    return decorator
+  else:
+    return functools.update_wrapper(wrapper, fn)
+</code></pre>
+<p>In Python 2.x this can be emulated with varargs tricks : </p>
+<pre><code>def redirected_output(*fn,**options):
+  destination = options.pop('destination', sys.stderr)
+  if options:
+    raise TypeError("unsupported keyword arguments: %s" % 
+                    ",".join(options.keys()))
+  def wrapper(*args, **kwargs):
+    ... # your code here
+  if fn:
+    return functools.update_wrapper(wrapper, fn[0])
+  else:
+    def decorator(fn):
+      return functools.update_wrapper(wrapper, fn)
+    return decorator
+</code></pre>
+<p>Any of these versions would allow you to write code like this : </p>
+<pre><code>@redirected_output
+def foo():
+    ...
+
+@redirected_output(destination="somewhere.log")
+def bar():
+    ...
+</code></pre>
+<br /><b># 1 </b><br /><p>A python <span style="background-color:yellow;">decorator</span> is called in a fundamentally different way depending on whether you give it <span style="background-color:yellow;">arguments</span> or not. The decoration is actually just a ( syntactically restricted ) expression . </p>
+<p>In your first example : </p>
+<pre><code>@redirect_output("somewhere.log")
+def foo():
+    ....
+</code></pre>
+<p>the function <span style="background-color:yellow;">redirect_output</span> is called with the given <span style="background-color:yellow;">argument</span> , which is expected to return a <span style="background-color:yellow;">decorator</span> function , which itself is called with <span style="background-color:yellow;">foo</span> as an <span style="background-color:yellow;">argument</span> , which ( finally ! ) is expected to return the final decorated function . </p>
+<p>The equivalent code looks like this : </p>
+<pre><code>def foo():
+    ....
+d = redirect_output("somewhere.log")
+foo = d(foo)
+</code></pre>
+<p>The equivalent code for your second example looks like : </p>
+<pre><code>def foo():
+    ....
+d = redirect_output
+foo = d(foo)
+</code></pre>
+<p>So you can do what you 'd like but not in a totally seamless way : </p>
+<pre><code>import types
+def redirect_output(arg):
+    def decorator(file, f):
+        def df(*args, **kwargs):
+            print 'redirecting to ', file
+            return f(*args, **kwargs)
+        return df
+    if type(arg) is types.FunctionType:
+        return decorator(sys.stderr, arg)
+    return lambda f: decorator(arg, f)
+</code></pre>
+<p>This should be ok unless you wish to use a function as an <span style="background-color:yellow;">argument</span> to your <span style="background-color:yellow;">decorator</span> , in which case the <span style="background-color:yellow;">decorator</span> will wrongly assume it has no <span style="background-color:yellow;">arguments.</span> It will also fail if this decoration is applied to another decoration that does not return a function type . </p>
+<p>An alternative method is just to require that the <span style="background-color:yellow;">decorator</span> function is always called , even if it is with no <span style="background-color:yellow;">arguments</span> . In this case , your second example would look like this : </p>
+<pre><code>@redirect_output()
+def foo():
+    ....
+</code></pre>
+<p>The <span style="background-color:yellow;">decorator</span> function code would look like this : </p>
+<pre><code>def redirect_output(file = sys.stderr):
+    def decorator(file, f):
+        def df(*args, **kwargs):
+            print 'redirecting to ', file
+            return f(*args, **kwargs)
+        return df
+    return lambda f: decorator(file, f)
+</code></pre>
+<br /><b># 2 </b><br /><p>You need to detect both cases , for example using the type of the first <span style="background-color:yellow;">argument</span> , and accordingly return either the <span style="background-color:yellow;">wrapper</span> ( when used without parameter ) or a <span style="background-color:yellow;">decorator</span> ( when used with <span style="background-color:yellow;">arguments</span> ) . </p>
+<pre><code>from functools import wraps
+import inspect
+
+def redirect_output(fn_or_output):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **args):
+            # Redirect output
+            try:
+                return fn(*args, **args)
+            finally:
+                # Restore output
+        return wrapper
+
+    if inspect.isfunction(fn_or_output):
+        # Called with no parameter
+        return decorator(fn_or_output)
+    else:
+        # Called with a parameter
+        return decorator
+</code></pre>
+<p>When using the @ <span style="background-color:yellow;">redirect_output</span> ( " output.log " ) syntax , <span style="background-color:yellow;">redirect_output</span> is called with a single <span style="background-color:yellow;">argument</span> " output.log " , and it must return a <span style="background-color:yellow;">decorator</span> accepting the function to be decorated as an <span style="background-color:yellow;">argument.</span> When used as @ <span style="background-color:yellow;">redirect_output</span> , it is called directly with the function to be decorated as an <span style="background-color:yellow;">argument</span> . </p>
+<p>Or in other words : the @ syntax must be followed by an expression whose result is a function accepting a function to be decorated as its sole <span style="background-color:yellow;">argument</span> , and returning the decorated function. The expression itself can be a function call , which is the case with @ <span style="background-color:yellow;">redirect_output</span> ( " output.log " ) . Convoluted , but true : - ) </p>
+<br /><b># 3 </b><br /><p>Generally you can give default <span style="background-color:yellow;">arguments</span> in Python.. . </p>
+<pre><code>def redirect_output(fn, output = stderr):
+    # whatever
+</code></pre>
+<p>Not sure if that works with <span style="background-color:yellow;">decorators</span> as well , though. I do n't know of any reason why it would n't . </p>
+<br /><b># 4 </b><br /><p>Have you tried keyword <span style="background-color:yellow;">arguments</span> with default values ? Something like </p>
+<pre><code>def decorate_something(foo=bar, baz=quux):
+    pass
+</code></pre>
+<br /><b># 5 </b><br /><p>You can use default <span style="background-color:yellow;">argument</span> like that : </p>
+<pre><code>import sys
+def redirect_output(fn, output = sys.stderr):
+    ...
+</code></pre>
+<p>Not however , that default <span style="background-color:yellow;">arguments</span> are bound when function definition is parsed. So if you 'd redirect all of stderr elsewhere , it wo n't work. So the other option is " magic " default value : </p>
+<pre><code>def redirect_output(fn, output = '#stderr#'):
+    if(output == '#stderr#')
+       import sys
+       output = sys.stderr
+    #you might also use None as value to redirect nowhere.
+    if(output == None)
+       import os.path
+       if(os.path.exists('/dev/null')) 
+          # one of many UNIX flavours
+          output = open('/dev/null','w')
+       else:
+          # Windows of something like that
+          output = open('nul:', 'w')           
+
+    ...
+</code></pre>
+<p>Now this way following will work as expected : </p>
+<pre><code>import sys
+sys.stderr = open('/var/log/error.log','w+')
+
+@redirect_output
+def foo():
+   ...
+</code></pre>
+<br /><b># 6 </b><br /><p>Building on vartec 's answer : </p>
+<pre><code>imports sys
+
+def redirect_output(func, output=None):
+    if output is None:
+        output = sys.stderr
+    if isinstance(output, basestring):
+        output = open(output, 'w') # etc...
+    # everything else...
+</code></pre>
+<br />

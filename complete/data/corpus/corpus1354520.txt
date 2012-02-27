@@ -1,0 +1,59 @@
+Question (ID-1354520): Storing huge hash table in a file in Python Hey. I have a function I want to memoize, however, it has too many possible values. Is there any convenient way to store the values in a text file and make it read from them? For example, something like storing a pre-computed list of primes up to 10^9 in a text file? I know it's slow to read from a text file but there's no other option if the amount of data is really huge. Thanks! 
+ Answers (Total-7): #0 For a list of primes up to 10**9 , why do you need a hash? What would the KEYS be?! Sounds like a perfect opportunity for a simple, straightforward binary file! By the Prime Number Theorem , there's about 10**9/ln(10**9) such primes -- i.e. 50 millions or a bit less. At 4 bytes per prime, that's only 200 MB or less -- perfect for an array.array("L") and its methods such as fromfile , etc (see the docs ). In many cases you could actually suck all of the 200 MB into memory, but, worst case, you can get a slice of those (e.g. via mmap and the fromstring method of array.array ), do binary searches there (e.g. via bisect ), etc, etc. 
+
+ When you DO need a huge key-values store -- gigabytes, not a paltry 200 MB!-) -- I used to recommend shelve but after unpleasant real-life experience with huge shelves (performance, reliability, etc), I currently recommend a database engine instead -- sqlite is good and comes with Python, PostgreSQL is even better, non-relational ones such as CouchDB can be better still, and so forth. 
+ #1 You can use the shelve module to store a dictionary like structure in a file. From the Python documentation: 
+
+ import shelve
+
+d = shelve.open(filename) # open -- file may get suffix added by low-level
+       # library
+
+d[key] = data # store data at key (overwrites old data if
+    # using an existing key)
+data = d[key] # retrieve a COPY of data at key (raise KeyError if no
+    # such key)
+del d[key]  # delete data stored at key (raises KeyError
+    # if no such key)
+flag = d.has_key(key) # true if the key exists
+klist = d.keys() # a list of all existing keys (slow!)
+
+# as d was opened WITHOUT writeback=True, beware:
+d['xx'] = range(4) # this works as expected, but...
+d['xx'].append(5) # *this doesn't!* -- d['xx'] is STILL range(4)!
+
+# having opened d without writeback=True, you need to code carefully:
+temp = d['xx']  # extracts the copy
+temp.append(5)  # mutates the copy
+d['xx'] = temp  # stores the copy right back, to persist it
+
+# or, d=shelve.open(filename,writeback=True) would let you just code
+# d['xx'].append(5) and have it work as expected, BUT it would also
+# consume more memory and make the d.close() operation slower.
+
+d.close()  # close it
+ 
+ #2 You could also just go with the ultimate brute force, and create a Python file with just a single statement in it: 
+
+ seedprimes = [3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,61,67,71,73,
+79,83,89,97,101,103,107,109,113,127,131,137,139,149,151,157,163,167,173, ...
+ 
+
+ and then just import it. (Here is file with the primes up to 1e5: http://python.pastebin.com/f177ec30 ). 
+
+ from primes_up_to_1e9 import seedprimes
+ 
+ #3 For Project Euler , I stored a precomputed list of primes up to 10**8 in a text file just by writing them in comma separated format. It worked well for that size, but it doesn't scale well to going much larger. 
+
+ If your huge is not really that huge, I would use something simple like me, otherwise I would go with shelve as the others have said. 
+ #4 Just naively sticking a hash table onto disk will result in about 5 orders of magnitude performance loss compared to an in memory implementation (or at least 3 if you have a SSD). When dealing with hard disks you'll want to extract every bit of data-locality and caching you can get. 
+
+ The correct choice will depend on details of your use case. How much performance do you need? What kind of operations do you need on data-structure? Do you need to only check if the table contains a key or do you need to fetch a value based on the key? Can you precompute the table or do you need to be able to modify it on the fly? What kind of hit rate are you expecting? Can you filter out a significant amount of the operations using a bloom filter? Are the requests uniformly distributed or do you expect some kind of temporal locality? Can you predict the locality clusters ahead of time? 
+
+ If you don't need ultimate performance or can parallelize and throw hardware at the problem check out some distributed key-value stores . 
+ #5 You can also go one step down the ladder and use pickle . Shelve imports from pickle ( link ), so if you don't need the added functionality of shelve, this may spare you some clock cycles (although, they really don't matter to you, as you have choosen python to do large number storing) 
+ #6 Let's see where the bottleneck is. When you're going to read a file, the hard drive has to turn enough to be able to read from it; then it reads a big block and caches the results. 
+
+ So you want some method that will guess exactly what position in file you're going to read from and then do it exactly once. I'm pretty much sure standard DB modules will work for you, but you can do it yourself -- just open the file in binary mode for reading/writing and store your values as, say, 30-digits (=100-bit = 13-byte) numbers. 
+
+ Then use standard file methods .

@@ -1,0 +1,175 @@
+<h3>Question (ID-128259):</h3><h2>What is the best way to store set data in Python?</h2><p>Here is my situation. I have a list of data that looks like this:</p>
+
+<p>[(id__1_, description, id_type), (id__2_, description, id_type), ... , (id__n_, description, id_type))</p>
+
+<p>The data is loaded from multiple files that all belong to the same grouping. In each grouping there could be multiples of the same id, each coming from different files. I don't care about the duplicates, so I thought a nice way to store all of this would be to throw it into a Set type. However there is a problem, sometimes for the same id the descriptions can vary slightly like this,</p>
+
+<p>IPI00110753</p>
+
+<ul>
+<li>Tubulin alpha-1A chain</li>
+<li>Tubulin alpha-1 chain</li>
+<li>Alpha-tubulin 1</li>
+<li>Alpha-tubulin isotype M-alpha-1</li>
+</ul>
+
+<p>(Note this example is taken from the <a href="http://www.uniprot.org/uniprot/P68369" rel="nofollow">uniprot protein database</a>) </p>
+
+<p>Now I don't care if the descriptions vary. Initially it might seem like I could just throw them away (because I could look them up in a database later). However I can't do this because there is a chance that the protein database I am using will not contain a listing for a certain identifier. If this happens I will want to be able to display the human readable description to the biologists so they know roughly what protein they are looking at.</p>
+
+<p>I am currently solving this problem by using a dictionary type. However I don't really like this solution because it uses a lot of memory (I have a lot of these ID's). This is only an intermediary listing of them. There is some additional processing the ID's go through before they are placed in the database so I would like to keep my data-structure smaller.</p>
+
+<p>I have two questions really. First, will I get a smaller memory footprint using the Set type (over the dictionary type) for this, or should I use a sorted list where I check every time I insert into the list to see if the ID exists, or is there a third solution that I haven't thought of? If the Set type is the better answer how do I key it to look at just the first element of the tuple instead of the whole thing? </p>
+
+<p>Thank you for reading my question, <br>
+Tim</p>
+
+<p><strong>Update</strong></p>
+
+<p>based on some of the comments I received let me clarify a little. Most of what I do with data-structure is insert into it. I only read it twice, once to annotate it with additional information,* and once to do be inserted into the database. However down the line there may be additional annotation that is done before I insert into the database. Unfortunately I don't know if that will happen at this time. </p>
+
+<p>Right now I am looking into storing this data in a structure that is not based on a hash-table (ie. a dictionary). I would like the new structure to be fairly quick on insertion, but reading it can be linear since I only really do it twice. I am trying to move away from the hash table to save space. Is there a better structure or is a hash-table about as good as it gets?</p>
+
+<p>*The information is a list of Swiss-Prot protein identifiers that I get by querying uniprot.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Sets don't have keys.  The element <strong>is</strong> the key.</p>
+
+<p>If you think you want keys, you have a mapping.  More-or-less by definition.</p>
+
+<p>Sequential list lookup can be slow, even using a binary search.  Mappings use hashes and are fast.</p>
+
+<p>Are you talking about a dictionary like this?</p>
+
+<pre><code>{ 'id1': [ ('description1a', 'type1'), ('description1b','type1') ], 
+  'id2': [ ('description2', 'type2') ],
+...
+}
+</code></pre>
+
+<p>This sure seems minimal.  ID's are only represented once.</p>
+
+<p>Perhaps you have something like this?</p>
+
+<pre><code>{ 'id1': ( ('description1a', 'description1b' ), 'type1' ),
+  'id2': ( ('description2',), 'type2' ),
+...
+}
+</code></pre>
+
+<p>I'm not sure you can find anything more compact unless you resort to using the <code>struct</code> module.</p>
+<br /><b>#1</b><br /><p>I'm assuming the problem you try to solve by cutting down on the memory you use is the address space limit of your process. Additionally you search for a data structure that allows you fast insertion and reasonable sequential read out.</p>
+
+<h2>Use less structures except strings (str)</h2>
+
+<p>The question you ask is how to structure your data in one process to use less memory. The one canonical answer to this is (as long as you still need associative lookups), use as little other structures then python strings (str, not unicode) as possible. A python hash (dictionary) stores the references to your strings fairly efficiently (it is not a b-tree implementation).</p>
+
+<p>However I think that you will not get very far with that approach, since what you face are huge datasets that might eventually just exceed the process address space and the physical memory of the machine you're working with altogether.</p>
+
+<h2>Alternative Solution</h2>
+
+<p>I would propose a different solution that does not involve changing your data structure to something that is harder to insert or interprete.</p>
+
+<ul>
+<li>Split your information up in multiple processes, each holding whatever datastructure is convinient for that. </li>
+<li>Implement inter process communication with sockets such that processes might reside on other machines altogether. </li>
+<li>Try to divide your data such as to minimize inter process communication (i/o is glacially slow compared to cpu cycles). </li>
+</ul>
+
+<p>The advantage of the approach I outline is that</p>
+
+<ul>
+<li>You get to use two ore more cores on a machine fully for performance</li>
+<li>You are not limited by the address space of one process, or even the physical memory of one machine</li>
+</ul>
+
+<p>There are numerous packages and aproaches to distributed processing, some of which are</p>
+
+<ul>
+<li><a href="http://pypi.python.org/pypi/linda/0.5.1" rel="nofollow">linda</a></li>
+<li><a href="http://pypi.python.org/pypi/processing/0.52" rel="nofollow">processing</a></li>
+</ul>
+<br /><b>#2</b><br /><p>If you're doing an n-way merge with removing duplicates, the following may be what you're looking for.</p>
+
+<p>This generator will merge any number of sources.  Each source must be a sequence.
+The key must be in position 0.  It yields the merged sequence one item at a time.</p>
+
+<pre><code>def merge( *sources ):
+    keyPos= 0
+    for s in sources:
+        s.sort()
+    while any( [len(s)&gt;0 for s in sources] ):
+        topEnum= enumerate([ s[0][keyPos] if len(s) &gt; 0 else None for s in sources ])
+        top= [ t for t in topEnum if t[1] is not None ]
+        top.sort( key=lambda a:a[1] )
+        src, key = top[0]
+        #print src, key
+        yield sources[ src ].pop(0)
+</code></pre>
+
+<p>This generator removes duplicates from a sequence.  </p>
+
+<pre><code>def unique( sequence ):
+    keyPos= 0
+    seqIter= iter(sequence)
+    curr= seqIter.next()
+    for next in seqIter:
+        if next[keyPos] == curr[keyPos]:
+            # might want to create a sub-list of matches
+            continue
+        yield curr
+        curr= next
+    yield curr
+</code></pre>
+
+<p>Here's a script which uses these functions to produce a resulting sequence which is the union of all the sources with duplicates removed.</p>
+
+<pre><code>for u in unique( merge( source1, source2, source3, ... ) ):
+    print u
+</code></pre>
+
+<p>The complete set of data in each sequence must exist in memory once because we're sorting in memory.   However, the resulting sequence does not actually exist in memory.  Indeed, it works by consuming the other sequences.  </p>
+<br /><b>#3</b><br /><p>How about using <code>{id: (description, id_type)}</code> dictionary? Or <code>{(id, id_type): description}</code> dictionary if (id,id_type) is the key.</p>
+<br /><b>#4</b><br /><p>Sets in Python are implemented using hash tables. In earlier versions, they were actually implemented using sets, but that has changed AFAIK. The only thing you save by using a set would then be the size of a pointer for each entry (the pointer to the value). </p>
+
+<p>To use only a part of a tuple for the hashcode, you'd have to subclass tuple and override the hashcode method:</p>
+
+<pre><code>class ProteinTuple(tuple):
+     def __new__(cls, m1, m2, m3):
+         return tuple.__new__(cls, (m1, m2, m3))
+
+     def __hash__(self):
+         return hash(self[0])
+</code></pre>
+
+<p>Keep in mind that you pay for the extra function call to <code>__hash__</code> in this case, because otherwise it would be a C method.</p>
+
+<p>I'd go for Constantin's suggestions and take out the id from the tuple and see how much that helps.</p>
+<br /><b>#5</b><br /><p>It's still murky, but it sounds like you have some several lists of [(id, description, type)...]</p>
+
+<p>The id's are unique within a list and consistent between lists.</p>
+
+<p>You want to create a UNION: a single list, where each id occurs once, with possibly multiple descriptions.</p>
+
+<p>For some reason, you think a mapping might be too big.  Do you have any evidence of this?  Don't over-optimize without actual measurements.  </p>
+
+<p>This may be (if I'm guessing correctly) the standard "merge" operation from multiple sources.</p>
+
+<pre><code>source1.sort()
+source2.sort()
+result= []
+while len(source1) &gt; 0 or len(source2) &gt; 0:
+    if len(source1) == 0:
+        result.append( source2.pop(0) )
+    elif len(source2) == 0:
+        result.append( source1.pop(0) )
+    elif source1[0][0] &lt; source2[0][0]:
+        result.append( source1.pop(0) )
+    elif source2[0][0] &lt; source1[0][0]:
+        result.append( source2.pop(0) )
+    else:
+        # keys are equal
+        result.append( source1.pop(0) )
+        # check for source2, to see if the description is different.
+</code></pre>
+
+<p>This assembles a union of two lists by sorting and merging.  No mapping, no hash.</p>
+<br />

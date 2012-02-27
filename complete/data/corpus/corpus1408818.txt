@@ -1,0 +1,220 @@
+Question (ID-1408818): Getting the the keyword arguments actually passed to a Python method I'm dreaming of a Python method with explicit keyword args: 
+
+ def func(a=None, b=None, c=None):
+ for arg, val in magic_arg_dict.items(): # Where do I get the magic?
+  print '%s: %s' % (arg, val)
+ 
+
+ I want to get a dictionary of only those arguments the caller actually passed into the method, just like **kwargs , but I don't want the caller to be able to pass any old random args, unlike **kwargs . 
+
+ &gt;&gt;&gt; func(b=2)
+b: 2
+&gt;&gt;&gt; func(a=3, c=5)
+a: 3
+c: 5
+ 
+
+ So: is there such an incantation? In my case, I happen to be able to compare each argument against its default to find the ones that are different, but this is kind of inelegant and gets tedious when you have nine arguments. For bonus points, provide an incantation that can tell me even when the caller passes in a keyword argument assigned its default value: 
+
+ &gt;&gt;&gt; func(a=None)
+a: None
+ 
+
+ Tricksy! 
+
+ Edit: The (lexical) function signature has to remain intact. It's part of a public API, and the primary worth of the explicit keyword args lies in their documentary value. Just to make things interesting. :) 
+ Answers (Total-7): #0 I was inspired by lost-theory's decorator goodness, and after playing about with it for a bit came up with this: 
+
+ def actual_kwargs():
+ """
+ Decorator that provides the wrapped function with an attribute 'actual_kwargs'
+ containing just those keyword arguments actually passed in to the function.
+ """
+ def decorator(function):
+  def inner(*args, **kwargs):
+   inner.actual_kwargs = kwargs
+   return function(*args, **kwargs)
+  return inner
+ return decorator
+
+
+if __name__ == "__main__":
+
+ @actual_kwargs()
+ def func(msg, a=None, b=False, c='', d=0):
+  print msg
+  for arg, val in sorted(func.actual_kwargs.iteritems()):
+   print ' %s: %s' % (arg, val)
+
+ func("I'm only passing a", a='a')
+ func("Here's b and c", b=True, c='c')
+ func("All defaults", a=None, b=False, c='', d=0)
+ func("Nothin'")
+ try:
+  func("Invalid kwarg", e="bogon")
+ except TypeError, err:
+  print 'Invalid kwarg\n %s' % err
+ 
+
+ Which prints this: 
+
+ 
+I'm only passing a
+ a: a
+Here's b and c
+ b: True
+ c: c
+All defaults
+ a: None
+ b: False
+ c: 
+ d: 0
+Nothin'
+Invalid kwarg
+ func() got an unexpected keyword argument 'e'
+ 
+
+ I'm happy with this. A more flexible approach is to pass the name of the attribute you want to use to the decorator, instead of hard-coding it to 'actual_kwargs', but this is the simplest approach that illustrates the solution. 
+
+ Mmm, Python is tasty. 
+ #1 Here is the easiest and simplest way: 
+
+ def func(a=None, b=None, c=None):
+ args = locals().copy()
+ print args
+
+func(2, "egg")
+ 
+
+ This give the output: {'a': 2, 'c': None, 'b': 'egg'} .
+The reason args should be a copy of the locals dictionary is that dictionaries are mutable, so if you created any local variables in this function args would contain all of the local variables and their values, not just the arguments. 
+
+ More documentation on the built-in locals function here . 
+ #2 One possibility: 
+
+ def f(**kw):
+ acceptable_names = set('a', 'b', 'c')
+ if not (set(kw) &lt;= acceptable_names):
+ raise WhateverYouWantException(whatever)
+ ...proceed...
+ 
+
+ IOW, it's very easy to check that the passed-in names are within the acceptable set and otherwise raise whatever you'd want Python to raise (TypeError, I guess;-). Pretty easy to turn into a decorator, btw. 
+
+ Another possibility: 
+
+ _sentinel = object():
+def f(a=_sentinel, b=_sentinel, c=_sentinel):
+ ...proceed with checks `is _sentinel`...
+ 
+
+ by making a unique object _sentinel you remove the risk that the caller might be accidentally passing None (or other non-unique default values the caller could possibly pass). This is all object() is good for, btw: an extremely-lightweight, unique sentinel that cannot possibly be accidentally confused with any other object (when you check with the is operator). 
+
+ Either solution is preferable for slightly different problems. 
+ #3 How about using a decorator to validate the incoming kwargs? 
+
+ def validate_kwargs(*keys):
+ def entangle(f):
+  def inner(*args, **kwargs):
+   for key in kwargs:
+    if not key in keys:
+     raise ValueError("Received bad kwarg: '%s', expected: %s" % (key, keys))
+   return f(*args, **kwargs)
+  return inner
+ return entangle
+
+###
+
+@validate_kwargs('a', 'b', 'c')
+def func(**kwargs):
+ for arg,val in kwargs.items():
+  print arg, "-&gt;", val
+
+func(b=2)
+print '----'
+func(a=3, c=5)
+print '----'
+func(d='not gonna work')
+ 
+
+ Gives this output: 
+
+ b -&gt; 2
+----
+a -&gt; 3
+c -&gt; 5
+----
+Traceback (most recent call last):
+ File "kwargs.py", line 20, in &lt;module&gt;
+ func(d='not gonna work')
+ File "kwargs.py", line 6, in inner
+ raise ValueError("Received bad kwarg: '%s', expected: %s" % (key, keys))
+ValueError: Received bad kwarg: 'd', expected: ('a', 'b', 'c')
+ 
+ #4 There's probably better ways to do this, but here's my take: 
+
+ def CompareArgs(argdict, **kwargs):
+ if not set(argdict.keys()) &lt;= set(kwargs.keys()):
+  # not &lt;= may seem weird, but comparing sets sometimes gives weird results.
+  # set1 &lt;= set2 means that all items in set 1 are present in set 2
+  raise ValueError("invalid args")
+
+def foo(**kwargs):
+ # we declare foo's "standard" args to be a, b, c
+ CompareArgs(kwargs, a=None, b=None, c=None)
+ print "Inside foo"
+
+
+if __name__ == "__main__":
+ foo(a=1)
+ foo(a=1, b=3)
+ foo(a=1, b=3, c=5)
+ foo(c=10)
+ foo(bar=6)
+ 
+
+ and its output: 
+
+ 
+Inside foo
+Inside foo
+Inside foo
+Inside foo
+Traceback (most recent call last):
+ File "a.py", line 18, in 
+ foo(bar=6)
+ File "a.py", line 9, in foo
+ CompareArgs(kwargs, a=None, b=None, c=None)
+ File "a.py", line 5, in CompareArgs
+ raise ValueError("invalid args")
+ValueError: invalid args
+ 
+
+ This could probably be converted to a decorator, but my decorators need work. Left as an exercise to the reader :P 
+ #5 Perhaps raise an error if they pass any *args? 
+
+ def func(*args, **kwargs):
+ if args:
+ raise TypeError("no positional args allowed")
+ arg1 = kwargs.pop("arg1", "default")
+ if kwargs:
+ raise TypeError("unknown args " + str(kwargs.keys()))
+ 
+
+ It'd be simple to factor it into taking a list of varnames or a generic parsing function to use. It wouldn't be too hard to make this into a decorator (python 3.1), too: 
+
+ def OnlyKwargs(func):
+ allowed = func.__code__.co_varnames
+ def wrap(*args, **kwargs):
+ assert not args
+ # or whatever logic you need wrt required args
+ assert sorted(allowed) == sorted(kwargs)
+ return func(**kwargs)
+ 
+
+ Note: i'm not sure how well this would work around already wrapped functions or functions that have *args or **kwargs already. 
+ #6 Mostly Magic is not the answer: 
+
+ def funky(a=None, b=None, c=None):
+ for name, value in [('a', a), ('b', b), ('c', c)]:
+  print name, value

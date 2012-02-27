@@ -1,0 +1,91 @@
+Question (ID-2520018): What algorithms are suitable for this simple machine learning problem? I have a what I think is a simple machine learning question. 
+
+ Here is the basic problem: I am repeatedly given a new object and a list of descriptions about the object. For example: new_object: 'bob' new_object_descriptions: ['tall','old','funny'] . I then have to use some kind of machine learning to find previously handled objects that have the 10 or less most similar descriptions, for example, past_similar_objects: ['frank','steve','joe'] . Next, I have an algorithm that can directly measure whether these objects are indeed similar to bob, for example, correct_objects: ['steve','joe'] . The classifier is then given this feedback training of successful matches. Then this loop repeats with a new object.
+a
+Here's the pseudo-code: 
+
+ Classifier=new_classifier()
+
+while True:
+ new_object,new_object_descriptions = get_new_object_and_descriptions()
+ past_similar_objects = Classifier.classify(new_object,new_object_descriptions)
+ correct_objects = calc_successful_matches(new_object,past_similar_objects)
+ Classifier.train_successful_matches(object,correct_objects)
+ 
+
+ But, there are some stipulations that may limit what classifier can be used: 
+
+ 
+ There will be millions of objects put into this classifier so classification and training needs to scale well to millions of object types and still be fast. I believe this disqualifies something like a spam classifier that is optimal for just two types: spam or not spam. (Update: I could probably narrow this to thousands of objects instead of millions, if that is a problem.) 
+ Again, I prefer speed when millions of objects are being classified, over accuracy. 
+ Update: The classifier should return the 10 (or fewer) most similar objects, based on feedback from past training. Without this limit, an obvious cheat would be for the classifier could just return all past objects :) 
+ 
+
+ What are decent, fast machine learning algorithms for this purpose? 
+
+ Note: The calc_successful_matches distance metric is extremely expensive to calculate and that's why I'm using a fast machine learning algorithm to try to guess which objects will be close before I actually do the expensive calculation. 
+ Answers (Total-6): #0 An algorithm that seems to meet your requirements (and is perhaps similar to what John the Statistician is suggesting) is Semantic Hashing . The basic idea is that it trains a deep belief network (a type of neural network that some have called 'neural networks 2.0' and is a very active area of research right now) to create a hash of the list of descriptions of an object into binary number such that the Hamming distance between the numbers correspond to similar objects. Since this just requires bitwise operations it can be pretty fast, and since you can use it to create a nearest neighbor-style algorithm it naturally generalizes to a very large number of classes. This is very good state of the art stuff. Downside: it's not trivial to understand and implement, and requires some parameter tuning. The author provides some Matlab code here . A somewhat easier algorithm to implement and is closely related to this one is Locality Sensitive Hashing. 
+
+ Now that you say that you have an expensive distance function you want to approximate quickly, I'm reminded of another very interesting algorithm that does this, Boostmap . This one uses boosting to create a fast metric which approximates an expensive to calculate metric. In a certain sense it's similar to the above idea but the algorithms used are different. The authors of this paper have several papers on related techniques, all pretty good quality (published in top conferences) that you might want to check out. 
+ #1 You could use the vector space model (http://en.wikipedia.org/wiki/Vector_space_model). I think what you are trying to learn is how to weight terms in considering how close two object description vectors are to each other, say for example in terms of a simplified mutual information. This could be very efficient as you could hash from terms to vectors, which means you wouldn't have to compare objects without shared features. The naive model would then have an adjustable weight per term (this could either be per term per vector, per term overall, or both), as well as a threshold. The vector space model is a widely used technique (for example, in Apache Lucene, which you might be able to use for this problem), so you'll be able to find out a lot about it through further searches. 
+
+ Let me give a very simple formulation of this in terms of your example. Given bob: ['tall','old','funny'], I retrieve 
+
+ frank: ['young','short,'funny']
+steve: ['tall','old','grumpy']
+joe: ['tall','old'] 
+
+ as I am maintaining a hash from funny->{frank,...}, tall->{steve, joe,...}, and old->{steve, joe,...} 
+
+ I calculate something like the overall mutual information: weight of shared tags/weight of bob's tags. If that weight is over the threshold, I include them in the list. 
+
+ When training, if I make a mistake I modify the shared tags. If my error was including frank, I reduce the weight for funny, while if I make a mistake by not including Steve or Joe, I increase the weight for tall and old. 
+
+ You can make this as sophisticated as you'd like, for example by including weights for conjunctions of terms. 
+ #2 SVM is pretty fast. LIBSVM for Python, in particular, provides a very decent implementation of Support Vector Machine for classification. 
+ #3 do you really need a machine learning algorithm for this? What is your metric for similarity? You've mentioned the dimensionality of the number of objects, what about the size of the trait set for each person? Are there a maximum number of trait types? I might try something like this: 
+
+ 1) Have a dictionary mapping trait to a list of names named map 
+
+ for each person p 
+
+ for each trait t in p 
+
+ map[t].add(p); 
+
+ 2) then when I want to find the closest person, I'd take my dictionary and create a new temp one: 
+
+ dictionary mapping name to count called cnt 
+
+ for each trait t in my person of interest 
+
+ for each person p in map[t] 
+
+ cnt[p]++; 
+
+ then the entry with the highest count is closest 
+
+ 
+
+ The benefit here is the map is only created once. if the traits per person is small, and the types of available traits are large, then the algorithm should be fast. 
+ #4 This project departs from typical classification applications in two notable ways: 
+
+ 
+ Rather than outputting the class which the new object is thought to belong to (or possibly outputting an array of these classes, each with probability / confidence level), the "classifier" provides a list of "neighbors" which are "close enough" to the new object. 
+ With each new classification, an objective function, independent from the classifier, provides the list of the correct "neighbors"; in turn the corrected list (a subset of the list provided by the classifier ?) is then used to train the classifier 
+ 
+
+ The idea behind the second point is probably that future objects submitted to the classifier and with similar to the current object should get better "classified" (be associated with a more correct set of previously seen objects) since the on-going training re-enforces connections to positive (correct) matches, while weakening the connection to objects which the classifier initially got wrong. 
+
+ These two characteristics introduce distinct problems. 
+ - The fact that the output is a list of objects rather than a "prototype" (or category identifier of sorts) make it difficult to scale as the number of objects seen so far grows toward the millions of instances as suggested in the question. 
+ - The fact that the training is done on the basis of a subset of the matches found by the classifier, may introduce over-fitting, whereby the classifier could become "blind" to features (dimensions) which it, accidentally, didn't weight as important/relevant, in the early parts of the training. (I may be assuming too much with regards to the objective function in charge of producing the list of "correct" objects) 
+
+ Possibly, the scaling concern could be handled by having a two-step process, with a first classifier, based the K-Means algorithm or something similar, which would produce a subset of the overall object collection (of objects previously seen) as plausible matches for the current object (effectively filtering out say 70% or more of collection). These possible matches would then be evaluated on the basis of Vector Space Model (particularly relevant if the feature dimensions are based on factors rather than values) or some other models. The underlying assumption for this two-step process is that the object collection will effectively expose clusters (it may just be relatively evenly distributed along the various dimensions). 
+
+ Another way to further limit the number of candidates to evaluate, as the size of the previously seen objects grows, is to remove near duplicates and to only compare with one of these (but to supply the full duplicate list in the result, assuming that if the new object is close to the "representative" of this near duplicate class, all members of the class would also match) 
+
+ The issue of over-fitting is trickier to handle. A possible approach would be to [sometimes] randomly add objects to the matching list which the classifier would not normally include. The extra objects could be added on the basis of their distance relative distance to the new object (i.e. making it a bit more probable that a relatively close object be added) 
+ #5 What you describe is somewhat similar to the Locally Weighted Learning algorithm, which given a query instance, it trains a model locally around the neighboring instances weighted by their distances to the query one. 
+
+ Weka (Java) has an implementation of this in weka.classifiers.lazy.LWL

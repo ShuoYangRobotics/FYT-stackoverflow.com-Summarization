@@ -1,0 +1,795 @@
+Question (ID-526255): Probability distribution in Python I have a bunch of keys that each have an unlikeliness variable. I want to randomly choose one of these keys, yet I want it to be more unlikely for unlikely (key, values) to be chosen than a less unlikely (a more likely) object. I am wondering if you would have any suggestions, preferably an existing python module that I could use, else I will need to make it myself. 
+
+ I have checked out the random module; it does not seem to provide this. 
+
+ I have to make such choices many millions of times for 1000 different sets of objects each containing 2,455 objects. Each set will exchange objects among each other so the random chooser needs to be dynamic. With 1000 sets of 2,433 objects, that is 2,433 million objects; low memory consumption is crucial. And since these choices are not the bulk of the algorithm, I need this process to be quite fast; CPU-time is limited. 
+
+ Thx 
+
+ Update: 
+
+ Ok, I tried to consider your suggestions wisely, but time is so limited... 
+
+ I looked at the binary search tree approach and it seems too risky (complex and complicated). The other suggestions all resemble the ActiveState recipe. I took it and modified it a little in the hope of making more efficient: 
+
+ def windex(dict, sum, max):
+ '''an attempt to make a random.choose() function that makes
+ weighted choices accepts a dictionary with the item_key and
+ certainty_value as a pair like:
+ &gt;&gt;&gt; x = [('one', 20), ('two', 2), ('three', 50)], the
+ maximum certainty value (max) and the sum of all certainties.'''
+ n = random.uniform(0, 1)
+ sum = max*len(list)-sum 
+ for key, certainty in dict.iteritems():
+  weight = float(max-certainty)/sum
+  if n &lt; weight:
+   break
+  n = n - weight
+ return key
+ 
+
+ I am hoping to get an efficiency gain from dynamically maintaining the sum of certainties and the maximum certainty. Any further suggestions are welcome. You guys saves me so much time and effort, while increasing my effectiveness, it is crazy. Thx! Thx! Thx! 
+
+ Update2: 
+
+ I decided to make it more efficient by letting it choose more choices at once. This will result in an acceptable loss in precision in my algo for it is dynamic in nature. Anyway, here is what I have now: 
+
+ def weightedChoices(dict, sum, max, choices=10):
+ '''an attempt to make a random.choose() function that makes
+ weighted choices accepts a dictionary with the item_key and
+ certainty_value as a pair like:
+ &gt;&gt;&gt; x = [('one', 20), ('two', 2), ('three', 50)], the
+ maximum certainty value (max) and the sum of all certainties.'''
+ list = [random.uniform(0, 1) for i in range(choices)]
+ (n, list) = relavate(list.sort())
+ keys = []
+ sum = max*len(list)-sum 
+ for key, certainty in dict.iteritems():
+  weight = float(max-certainty)/sum
+  if n &lt; weight:
+   keys.append(key)
+   if list: (n, list) = relavate(list)
+   else: break
+  n = n - weight
+ return keys
+def relavate(list):
+ min = list[0]
+ new = [l - min for l in list[1:]]
+ return (min, new)
+ 
+
+ I haven't tried it out yet. If you have any comments/suggestions, please do not hesitate. Thx! 
+
+ Update3: 
+
+ I have been working all day on a task-tailored version of Rex Logan's answer. Instead of a 2 arrays of objects and weights, it is actually a special dictionary class; which makes things quite complex since Rex's code generates a random index... I also coded a test case that kind of resembles what will happen in my algo (but I can't really know until I try!). The basic principle is: the more a key is randomly generated often, the more unlikely it will be generated again: 
+
+ import random, time
+import psyco
+psyco.full()
+
+class ProbDict():
+ """
+ Modified version of Rex Logans RandomObject class. The more a key is randomly
+ chosen, the more unlikely it will further be randomly chosen. 
+ """
+ def __init__(self,keys_weights_values={}):
+  self._kw=keys_weights_values
+  self._keys=self._kw.keys()
+  self._len=len(self._keys)
+  self._findSeniors()
+  self._effort = 0.15
+  self._fails = 0
+ def __iter__(self):
+  return self.next()
+ def __getitem__(self, key):
+  return self._kw[key]
+ def __setitem__(self, key, value):
+  self.append(key, value)
+ def __len__(self):
+  return self._len
+ def next(self):
+  key=self._key()
+  while key:
+   yield key
+   key = self._key()
+ def __contains__(self, key):
+  return key in self._kw
+ def items(self):
+  return self._kw.items()
+ def pop(self, key): 
+  try:
+   (w, value) = self._kw.pop(key)
+   self._len -=1
+   if w == self._seniorW:
+    self._seniors -= 1
+    if not self._seniors:
+     #costly but unlikely:
+     self._findSeniors()
+   return [w, value]
+  except KeyError:
+   return None
+ def popitem(self):
+  return self.pop(self._key())
+ def values(self):
+  values = []
+  for key in self._keys:
+   try:
+    values.append(self._kw[key][1])
+   except KeyError:
+    pass
+  return values
+ def weights(self):
+  weights = []
+  for key in self._keys:
+   try:
+    weights.append(self._kw[key][0])
+   except KeyError:
+    pass
+  return weights
+ def keys(self, imperfect=False):
+  if imperfect: return self._keys
+  return self._kw.keys()
+ def append(self, key, value=None):
+  if key not in self._kw:
+   self._len +=1
+   self._kw[key] = [0, value]
+   self._keys.append(key)
+  else:
+   self._kw[key][1]=value
+ def _key(self):
+  for i in range(int(self._effort*self._len)):
+   ri=random.randint(0,self._len-1) #choose a random object
+   rx=random.uniform(0,self._seniorW)
+   rkey = self._keys[ri]
+   try:
+    w = self._kw[rkey][0]
+    if rx &gt;= w: # test to see if that is the value we want
+     w += 1
+     self._warnSeniors(w)
+     self._kw[rkey][0] = w
+     return rkey
+   except KeyError:
+    self._keys.pop(ri)
+  # if you do not find one after 100 tries then just get a random one
+  self._fails += 1 #for confirming effectiveness only
+  for key in self._keys:
+   if key in self._kw:
+    w = self._kw[key][0] + 1
+    self._warnSeniors(w)
+    self._kw[key][0] = w
+    return key
+  return None
+ def _findSeniors(self):
+  '''this function finds the seniors, counts them and assess their age. It
+  is costly but unlikely.'''
+  seniorW = 0
+  seniors = 0
+  for w in self._kw.itervalues():
+   if w &gt;= seniorW:
+    if w == seniorW:
+     seniors += 1
+    else:
+     seniorsW = w
+     seniors = 1
+  self._seniors = seniors
+  self._seniorW = seniorW
+ def _warnSeniors(self, w):
+  #a weight can only be incremented...good
+  if w &gt;= self._seniorW:
+   if w == self._seniorW:
+    self._seniors+=1
+   else:
+    self._seniors = 1
+    self._seniorW = w
+def test():
+ #test code
+ iterations = 200000
+ size = 2500
+ nextkey = size 
+
+
+ pd = ProbDict(dict([(i,[0,i]) for i in xrange(size)]))
+ start = time.clock()
+ for i in xrange(iterations):
+  key=pd._key()
+  w=pd[key][0]
+  if random.randint(0,1+pd._seniorW-w):
+   #the heavier the object, the more unlikely it will be removed
+   pd.pop(key)
+  probAppend = float(500+(size-len(pd)))/1000
+  if random.uniform(0,1) &lt; probAppend:
+   nextkey+=1
+   pd.append(nextkey)
+ print (time.clock()-start)*1000/iterations, "msecs / iteration with", pd._fails, "failures /", iterations, "iterations"
+ weights = pd.weights()
+ weights.sort()
+ print "avg weight:", float(sum(weights))/pd._len, max(weights), pd._seniorW, pd._seniors, len(pd), len(weights)
+ print weights
+test()
+ 
+
+ Any comments are still welcome. @Darius: your binary trees are too complex and complicated for me; and I do not think its leafs can be removed efficiently... Thx all 
+ Answers (Total-12): #0 This activestate recipe gives an easy-to-follow approach, specifically the version in the comments that doesn't require you to pre-normalize your weights: 
+
+ import random
+
+def weighted_choice(items):
+ """items is a list of tuples in the form (item, weight)"""
+ weight_total = sum((item[1] for item in items))
+ n = random.uniform(0, weight_total)
+ for item, weight in items:
+  if n &lt; weight:
+   return item
+  n = n - weight
+ return item
+ 
+
+ This will be slow if you have a large list of items. A binary search would probably be better in that case... but would also be more complicated to write, for little gain if you have a small sample size. Here's an example of the binary search approach in python if you want to follow that route. 
+
+ (I'd recommend doing some quick performance testing of both methods on your dataset. The performance of different approaches to this sort of algorithm is often a bit unintuitive.) 
+
+ 
+
+ Edit: I took my own advice, since I was curious, and did a few tests. 
+
+ I compared four approaches: 
+
+ *The weighted_choice function above.* 
+
+ A binary-search choice function like so: 
+
+ def weighted_choice_bisect(items):
+ added_weights = []
+ last_sum = 0
+
+ for item, weight in items:
+  last_sum += weight
+  added_weights.append(last_sum)
+
+ return items[bisect.bisect(added_weights, random.random() * last_sum)][0]
+ 
+
+ A compiling version of 1: 
+
+ def weighted_choice_compile(items):
+ """returns a function that fetches a random item from items
+
+ items is a list of tuples in the form (item, weight)"""
+ weight_total = sum((item[1] for item in items))
+ def choice(uniform = random.uniform):
+  n = uniform(0, weight_total)
+  for item, weight in items:
+   if n &lt; weight:
+    return item
+   n = n - weight
+  return item
+ return choice
+ 
+
+ A compiling version of 2: 
+
+ def weighted_choice_bisect_compile(items):
+ """Returns a function that makes a weighted random choice from items."""
+ added_weights = []
+ last_sum = 0
+
+ for item, weight in items:
+  last_sum += weight
+  added_weights.append(last_sum)
+
+ def choice(rnd=random.random, bis=bisect.bisect):
+  return items[bis(added_weights, rnd() * last_sum)][0]
+ return choice
+ 
+
+ I then built a big list of choices like so: 
+
+ choices = [(random.choice("abcdefg"), random.uniform(0,50)) for i in xrange(2500)]
+ 
+
+ And an excessively simple profiling function: 
+
+ def profiler(f, n, *args, **kwargs):
+ start = time.time()
+ for i in xrange(n):
+  f(*args, **kwargs)
+ return time.time() - start
+ 
+
+ The results: 
+
+ (Seconds taken for 1,000 calls to the function.) 
+
+ 
+ Simple uncompiled: 0.918624162674 
+ Binary uncompiled: 1.01497793198 
+ Simple compiled: 0.287325024605 
+ Binary compiled: 0.00327413797379 
+ 
+
+ The "compiled" results include the average time taken to compile the choice function once. (I timed 1,000 compiles, then divided that time by 1,000, and added the result to the choice function time.) 
+
+ So: if you have a list of items+weights which change very rarely, the binary compiled method is by far the fastest. 
+ #1 In comments on the original post, Nicholas Leonard suggests that both the exchanging and the sampling need to be fast. Here's an idea for that case; I haven't tried it. 
+
+ If only sampling had to be fast, we could use an array of the values together with the running sum of their probabilities, and do a binary search on the running sum (with key being a uniform random number) -- an O(log(n)) operation. But an exchange would require updating all of the running-sum values appearing after the entries exchanged -- an O(n) operation. (Could you choose to exchange only items near the end of their lists? I'll assume not.) 
+
+ So let's aim for O(log(n)) in both operations. Instead of an array, keep a binary tree for each set to sample from. A leaf holds the sample value and its (unnormalized) probability. A branch node holds the total probability of its children. 
+
+ To sample, generate a uniform random number x between 0 and the total probability of the root, and descend the tree. At each branch, choose the left child if the left child has total probability &lt;= x . Else subtract the left child's probability from x and go right. Return the leaf value you reach. 
+
+ To exchange, remove the leaf from its tree and adjust the branches that lead down to it (decreasing their total probability, and cutting out any single-child branch nodes). Insert the leaf into the destination tree: you have a choice of where to put it, so keep it balanced. Picking a random child at each level is probably good enough -- that's where I'd start. Increase each parent node's probability, back up to the root. 
+
+ Now both sampling and exchange are O(log(n)) on average. (If you need guaranteed balance, a simple way is to add another field to the branch nodes holding the count of leaves in the whole subtree. When adding a leaf, at each level pick the child with fewer leaves. This leaves the possibility of a tree getting unbalanced solely by deletions; this can't be a problem if there's reasonably even traffic between the sets, but if it is, then choose rotations during deletion using the leaf-count information on each node in your traversal.) 
+
+ Update: On request, here's a basic implementation. Haven't tuned it at all. Usage: 
+
+ &gt;&gt;&gt; t1 = build_tree([('one', 20), ('two', 2), ('three', 50)])
+&gt;&gt;&gt; t1
+Branch(Leaf(20, 'one'), Branch(Leaf(2, 'two'), Leaf(50, 'three')))
+&gt;&gt;&gt; t1.sample()
+Leaf(50, 'three')
+&gt;&gt;&gt; t1.sample()
+Leaf(20, 'one')
+&gt;&gt;&gt; t2 = build_tree([('four', 10), ('five', 30)])
+&gt;&gt;&gt; t1a, t2a = transfer(t1, t2)
+&gt;&gt;&gt; t1a
+Branch(Leaf(20, 'one'), Leaf(2, 'two'))
+&gt;&gt;&gt; t2a
+Branch(Leaf(10, 'four'), Branch(Leaf(30, 'five'), Leaf(50, 'three')))
+ 
+
+ Code: 
+
+ import random
+
+def build_tree(pairs):
+ tree = Empty()
+ for value, weight in pairs:
+  tree = tree.add(Leaf(weight, value))
+ return tree
+
+def transfer(from_tree, to_tree):
+ """Given a nonempty tree and a target, move a leaf from the former to
+ the latter. Return the two updated trees."""
+ leaf, from_tree1 = from_tree.extract()
+ return from_tree1, to_tree.add(leaf)
+
+class Tree:
+ def add(self, leaf):
+  "Return a new tree holding my leaves plus the given leaf."
+  abstract
+ def sample(self):
+  "Pick one of my leaves at random in proportion to its weight."
+  return self.sampling(random.uniform(0, self.weight))
+ def extract(self):
+  """Pick one of my leaves and return it along with a new tree
+  holding my leaves minus that one leaf."""
+  return self.extracting(random.uniform(0, self.weight))  
+
+class Empty(Tree):
+ weight = 0
+ def __repr__(self):
+  return 'Empty()'
+ def add(self, leaf):
+  return leaf
+ def sampling(self, weight):
+  raise Exception("You can't sample an empty tree")
+ def extracting(self, weight):
+  raise Exception("You can't extract from an empty tree")
+
+class Leaf(Tree):
+ def __init__(self, weight, value):
+  self.weight = weight
+  self.value = value
+ def __repr__(self):
+  return 'Leaf(%r, %r)' % (self.weight, self.value)
+ def add(self, leaf):
+  return Branch(self, leaf)
+ def sampling(self, weight):
+  return self
+ def extracting(self, weight):
+  return self, Empty()
+
+def combine(left, right):
+ if isinstance(left, Empty): return right
+ if isinstance(right, Empty): return left
+ return Branch(left, right)
+
+class Branch(Tree):
+ def __init__(self, left, right):
+  self.weight = left.weight + right.weight
+  self.left = left
+  self.right = right
+ def __repr__(self):
+  return 'Branch(%r, %r)' % (self.left, self.right)
+ def add(self, leaf):
+  # Adding to a random branch as a clumsy way to keep an
+  # approximately balanced tree.
+  if random.random() &lt; 0.5:
+   return combine(self.left.add(leaf), self.right)
+  return combine(self.left, self.right.add(leaf))
+ def sampling(self, weight):
+  if weight &lt; self.left.weight:
+   return self.left.sampling(weight)
+  return self.right.sampling(weight - self.left.weight)
+ def extracting(self, weight):
+  if weight &lt; self.left.weight:
+   leaf, left1 = self.left.extracting(weight)
+   return leaf, combine(left1, self.right)
+  leaf, right1 = self.right.extracting(weight - self.left.weight)
+  return leaf, combine(self.left, right1)
+ 
+
+ Update 2: In answering another problem , Jason Orendorff points out that the binary trees can be kept perfectly balanced by representing them in an array just like the classical heap structure. (This saves the space spent on pointers, too.) See my comments to that answer for how to adapt his code to this problem. 
+ #2 I would use this recipe . You will need to add a weight to your objects, but that is just a simple ratio and put them in a list of tuples (object, conviction/(sum of convictions)). This should be easy to do using a list comprehension. 
+ #3 I suggest you port this PHP implementation of weighted random to Python. In particular, the binary-search-based second algorithm helps address your speed concerns. 
+ #4 Here is a version that generates a random index that allows for changing the weights on the fly. It chooses a random object and then generates a random number between 0 and 100 then does a test of this value against the weight to determine if to choose the random element or to try again. After 100 tries if nothing is found just pick a random index and call it a day. The two interesting methods are GetRdnObject which returns a random object and RemoveRndObject which removes and returns a random object. There is also an iterator so you can loop over the objects with the most probable coming out first. 
+
+ Edit: Here is the math behind this method. The normal method for weighted items is to generate the sum and then probx=weightx/sumw. This has a performance problem because you either have to generate a map that is size sumw each time a weight changes or you have to do a search each time a random number is generated to find the value. 
+
+ My method uses a probability tree that would have the exact same probability distribution if you were to make it infinitely large. However the terms fall off at a fairly fast rate so I capped my tree at 100 levels and then just pick a item to give it an end condition. To accomplish this I needed a standard max weight which I choose to be 100. 
+
+ Using this the algorithm is the following. If there are n items choose one at random ri which gives the standard not weighted probability 1/n that each item will be chosen. Then calculate another random in the range 0 to maxw and if r &lt; w[ri] return item ri.
+Else repeat by choosing another random ri and repeating the test. 
+
+ Here is the math. 
+
+ 
+  n = number of items 
+  sumw = sum(wx)
+  px=wx/100 prob of returning item if given a chance
+  qx = 1-px 
+  sqx = sum of all qx
+  Pi is the overall probability that an item will be returned
+  s = sum k=0 to inf (sqx/n)**k
+  It can be shown that
+  Pi = px*s/n == wx/sumw
+
+  Instead of allowing an infinite sum I choose to sum s only over 
+  the first 100 tries which makes s with the end condition
+  s= (sum k=0 to 99 of (sqx/n)**k) + ((sqx/n)**100)/n
+
+  The difference between the two is someting in the order of 10**-15.
+  You can reduce the max tries to something like 50 or 25 with not 
+  a huge loss in accuracy.
+ 
+
+ You can think of it as all of the weights are setting the path length and shorter the path ie larger the weight the more probable that that item will be selected. 
+
+ import random
+
+class RandomObject:
+ """
+ The objects are in a list
+ ex [o1,o2,o3,o4]
+ The weight list should contain values between 0 and 100.
+ ex [0.1,1,10,100]
+ it is up to the caller to make sure object list and weight list are same size
+ """
+
+ def __init__(self,olist, wlist,n=0,remove=False):
+  self._odata = olist[:]
+  self._wdata = wlist[:]
+  self._len=len(wlist)
+  if n==0:
+   self._n=self._len
+  else:
+   self._n=n
+  self._remove=remove
+
+
+ def __iter__(self):
+  return self.next()
+
+ def next(self):
+  while (self._len &gt; 0) and (self._n&gt;0):
+   self._n -= 1
+   i=self.i()
+   if i &lt; self._len:
+    if self._remove:
+     self._len -=1
+     self._wdata.pop(i)
+     yield self._odata.pop(i)
+    else:
+     yield self._odata[i]
+
+
+ def GetObject(self,i):
+  if i &lt; self._len:
+   return self._odata[i]
+  else:
+   return None
+
+ def GetWeight(self,i):
+  if i &lt; self._len:
+   return self._wdata[i]
+  else:
+   return 0
+
+ def SetWeight(self,i,w):
+  if i &lt; self._len:
+   self._wdata[i]=w
+
+ def RemoveObject(self,i):
+  if i &lt; self._len:
+   self._len -=1
+   self._wdata.pop(i)
+   return self._odata.pop(i)
+  else:
+   return None
+
+ def Remove(self,i):
+  if (self._len &gt;0 ) and (i &lt; self._len):
+   self._len -=1
+   self._wdata.pop(i)
+
+ def Append(self,o,w):
+  self._len +=1
+  self._wdata.append(w)
+  self._odata.append(o)
+
+ def Insert(self,i,o,w):
+  if i &lt; self._len:
+   self._len +=1
+   self._wdata.insert(i,w)
+   self._odata.insert(i,o)
+  else:
+   self._len +=1
+   self._wdata.append(w)
+   self._odata.append(o)
+
+ def GetRdnObject(self):
+  i=self.i()
+  if (self._len &gt;0 ) and (i &lt; self._len):
+   return [self._odata[i],i]
+  else:
+   return None
+
+ def RemoveRndObject(self):
+  i=self.i()
+  if (self._len &gt;0 ) and (i &lt; self._len):
+   self._len -=1
+   self._wdata.pop(i)
+   return [self._odata.pop(i),i]
+  else:
+   return None
+
+ def i(self):
+  for i in range(100):
+   ri=random.randint(0,self._len-1) #choose a random object
+   rx=random.uniform(0,100)
+   if rx &lt;= self._wdata[ri]: # test to see if that is the value we want
+    return ri
+  # if you do not find one after 100 tries then just get a random one
+  return random.randint(0,self._len-1)    
+
+
+
+#test code
+o=[1,2,3,4]
+wx=[0.1,1,10,100] #weight list
+ro=RandomObject(o,wx)
+
+l=[]
+for i in range(100):
+ o=ro.GetRdnObject()
+ l.append(o[0])
+
+print("random list=",l)
+
+
+#modify the weights
+ro.SetWeight(0,100) 
+ro.SetWeight(1,50)
+ro.SetWeight(2,0)
+ro.SetWeight(3,0)
+
+l=[]
+for i in range(100):
+ o=ro.GetRdnObject()
+ l.append(o[0])
+
+print("random list=",l)
+
+arsize=2500
+lpsz=100
+wx=[x*100/arsize for x in range(arsize)] #weight list
+o=[x for x in range(arsize)]
+
+ro=RandomObject(o,wx)
+
+l=[]
+
+print("loop size=",lpsz)
+for j in range(lpsz):
+ o=ro.RemoveRndObject()
+ l.append(o[0])
+
+print("random list=",l)
+
+arsize=100
+wx=[x*100/arsize for x in range(arsize)] #weight list
+o=[x for x in range(arsize)]
+
+#iterate over the objects
+l=[]
+for x in RandomObject(o,wx,50):
+ l.append(x)
+
+print("random list=",l)
+ 
+ #5 The simplest thing to do is to use random.choice (which uses a uniform distribution) and vary the frequency of occurrence on the object in the source collection. 
+
+ &gt;&gt;&gt; random.choice([1, 2, 3, 4])
+4
+ 
+
+ ... vs: 
+
+ &gt;&gt;&gt; random.choice([1, 1, 1, 1, 2, 2, 2, 3, 3, 4])
+2
+ 
+
+ So your objects could have a base occurrence rate (n) and between 1 and n objects are added to the source collection as a function of the conviction rate. This method is really simple; however, it can have significant overhead if the number of distinct objects is large or the conviction rate needs to be very fine grained. 
+
+ Alternatively, if you generate more that one random number using a uniform distribution and sum them, numbers occurring near the mean are more probable that those occurring near the extremes (think of rolling two dice and the probability of getting 7 versus 12 or 2). You can then order the objects by conviction rate and generate a number using multiple die rolls which you use to calculate and index into the objects. Use numbers near the mean to index low conviction objects and numbers near the extremes to index high conviction items. You can vary the precise probability that a given object will be selected by changing the "number of sides" and number of your "dice" (it may be simpler to put the objects into buckets and use dice with a small number of sides rather than trying to associate each object with a specific result): 
+
+ &gt;&gt;&gt; die = lambda sides : random.randint(1, sides)
+&gt;&gt;&gt; die(6)
+3
+&gt;&gt;&gt; die(6) + die(6) + die(6)
+10
+ 
+ #6 You want to give each object a weight. The bigger the weight the more likely it will happen. More precisely probx =weight/sum_all_weights. 
+
+ Then generate a random number in the range 0 to sum_all_weights
+and map it to each object. 
+
+ This code allows you to generate a random index and it is mapped when the object is created for speed. If all of your sets of objects have the same distribution then you can get by with only one RandomIndex object. 
+
+ import random
+
+class RandomIndex:
+ def __init__(self, wlist):
+  self._wi=[]
+  self._rsize=sum(wlist)-1
+  self._m={}
+  i=0
+  s=wlist[i]
+  for n in range(self._rsize+1):
+   if n == s:
+    i+=1
+    s+=wlist[i]
+   self._m[n]=i 
+
+ def i(self):
+  rn=random.randint(0,self._rsize)
+  return self._m[rn]
+
+
+sx=[1,2,3,4]
+
+
+wx=[1,10,100,1000] #weight list
+ri=RandomIndex(wx)
+
+cnt=[0,0,0,0]
+
+for i in range(1000):
+ cnt[ri.i()] +=1 #keep track of number of times each index was generated
+
+print(cnt)
+ 
+ #7 Here is a classic way to do it, in pseudocode, where random.random() gives you a random float from 0 to 1. 
+
+ let z = sum of all the convictions
+let choice = random.random() * z 
+iterate through your objects:
+ choice = choice - the current object's conviction
+ if choice &lt;= 0, return this object
+return the last object
+ 
+
+ For an example: imagine you have two objects, one with weight 2, another with weight 4. You generate a number from 0 to 6. If choice is between 0 and 2, which will happen with 2/6 = 1/3 probability, then it will get subtracted by 2 and the first object is chosen. If choice is between 2 and 6, which will happen with 4/6 = 2/3 probability, then the first subtraction will still have choice being > 0, and the second subtraction will make the 2nd object get chosen. 
+ #8 A very easy and simple way of doing this is to set weights for each of the values, and it wouldn't require much memory. 
+
+ You could probably use a hash/dictionary to do this. 
+
+ What you'll want to do is to have the random number, x , multiplied and summed over the entire set of things you want selected, and divide that result over the number of objects in your set. 
+
+ Pseudo-code: 
+
+ objectSet = [(object1, weight1), ..., (objectN, weightN)]
+sum = 0
+rand = random()
+for obj, weight in objectSet
+ sum = sum+weight*rand
+choice = objectSet[floor(sum/objectSet.size())]
+ 
+
+ EDIT : I just thought of how slow my code would be with very large sets (it's O(n)). The following pseudo-code is O(log(n)), and is basically using a binary search. 
+
+ objectSet = [(object1, weight1), ..., (objectN, weightN)]
+sort objectSet from less to greater according to weights
+choice = random() * N # where N is the number of objects in objectSet
+do a binary search until you have just one answer
+ 
+
+ There are implementations of binary search in Python all over the 'net, so no need repeating here. 
+ #9 Here's a better answer for a special probability distribution, the one Rex Logan's answer seems to be geared at. The distribution is like this: each object has an integer weight between 0 and 100, and its probability is in proportion to its weight. Since that's the currently accepted answer, I guess this is worth thinking about. 
+
+ So keep an array of 101 bins. Each bin holds a list of all of the objects with its particular weight. Each bin also knows the total weight of all its objects. 
+
+ To sample: pick a bin at random in proportion to its total weight. (Use one of the standard recipes for this -- linear or binary search.) Then pick an object from the bin uniformly at random. 
+
+ To transfer an object: remove it from its bin, put it in its bin in the target, and update both bins' weights. (If you're using binary search for sampling, you must also update the running sums that uses. This is still reasonably fast since there aren't many bins.) 
+ #10 (A year later)
+ Walker's alias method for random objects with different probablities is very fast and very simple 
+ #11 I was needed in faster functions, for non very large numbers. So here it is, in Visual C++: 
+
+ #undef _DEBUG // disable linking with python25_d.dll
+#include &lt;Python.h&gt;
+#include &lt;malloc.h&gt;
+#include &lt;stdlib.h&gt;
+
+static PyObject* dieroll(PyObject *, PyObject *args)
+{
+ PyObject *list;
+ if (!PyArg_ParseTuple(args, "O:decompress", &amp;list))
+  return NULL;
+
+ if (!PyList_Check(list)) 
+  return PyErr_Format(PyExc_TypeError, "list of numbers expected ('%s' given)", list-&gt;ob_type-&gt;tp_name), NULL;
+
+ int size = PyList_Size(list);
+
+ if (size &lt; 1)
+  return PyErr_Format(PyExc_TypeError, "got empty list"), NULL;
+
+ long *array = (long*)alloca(size*sizeof(long));
+
+ long sum = 0;
+ for (int i = 0; i &lt; size; i++) {
+  PyObject *o = PyList_GetItem(list, i);
+
+  if (!PyInt_Check(o))
+   return PyErr_Format(PyExc_TypeError, "list of ints expected ('%s' found)", o-&gt;ob_type-&gt;tp_name), NULL;
+  long n = PyInt_AsLong(o);
+  if (n == -1 &amp;&amp; PyErr_Occurred())
+   return NULL;
+  if (n &lt; 0)
+   return PyErr_Format(PyExc_TypeError, "list of positive ints expected (negative found)"), NULL;
+
+  sum += n; //NOTE: integer overflow
+  array[i] = sum;
+ }
+
+ if (sum &lt;= 0)
+  return PyErr_Format(PyExc_TypeError, "sum of numbers is not positive"), NULL;
+
+ int r = rand() * (sum-1) / RAND_MAX; //NOTE: rand() may be too small (0x7fff). rand() * sum may result in integer overlow.
+
+ assert(array[size-1] == sum);
+ assert(r &lt; sum &amp;&amp; r &lt; array[size-1]);
+ for (int i = 0; i &lt; size; ++i)
+ {
+  if (r &lt; array[i])
+   return PyInt_FromLong(i);
+ }
+ return PyErr_Format(PyExc_TypeError, "internal error."), NULL;
+}
+
+static PyMethodDef module_methods[] = 
+{
+ {"dieroll", (PyCFunction)dieroll, METH_VARARGS, "random index, beased on weights" },
+ {NULL} /* Sentinel */
+};
+
+PyMODINIT_FUNC initdieroll(void) 
+{
+ PyObject *module = Py_InitModule3("dieroll", module_methods, "dieroll");
+ if (module == NULL)
+  return;
+}

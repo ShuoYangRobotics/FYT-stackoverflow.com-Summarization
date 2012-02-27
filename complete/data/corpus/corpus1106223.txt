@@ -1,0 +1,194 @@
+Question (ID-1106223): How are these type of python decorators written? I'd like to write a decorator that would limit the number of times a function can be executed, something along the following syntax : 
+
+ 
+@max_execs(5)
+def my_method(*a,**k):
+ # do something here
+ pass
+ 
+
+ I think it's possible to write this type of decorator, but I don't know how. I think a function won't be this decorator's first argument, right? I'd like a "plain decorator" implementation, not some class with a call method. 
+
+ The reason for this is to learn how they are written. Please explain the syntax, and how that decorator works. 
+ Answers (Total-6): #0 This is what I whipped up. It doesn't use a class, but it does use function attributes: 
+
+ def max_execs(n=5):
+ def decorator(fn):
+  fn.max = n
+  fn.called = 0
+  def wrapped(*args, **kwargs):
+   fn.called += 1
+   if fn.called &lt;= fn.max:
+    return fn(*args, **kwargs)
+   else:
+    # Replace with your own exception, or something
+    # else that you want to happen when the limit
+    # is reached
+    raise RuntimeError("max executions exceeded")
+  return wrapped
+ return decorator
+ 
+
+ max_execs returns a functioned called decorator , which in turn returns wrapped . decoration stores the max execs and current number of execs in two function attributes, which then get checked in wrapped . 
+
+ Translation: When using the decorator like this: 
+
+ @max_execs(5)
+def f():
+ print "hi!"
+ 
+
+ You're basically doing something like this: 
+
+ f = max_execs(5)(f)
+ 
+ #1 Decorator is merely a callable that transforms a function into something else. In your case, max_execs(5) must be a callable that transforms a function into another callable object that will count and forward the calls. 
+
+ class helper:
+ def __init__(self, i, fn):
+  self.i = i
+  self.fn = fn
+ def __call__(self, *args, **kwargs):
+  if self.i &gt; 0:
+   self.i = self.i - 1
+   return self.fn(*args, **kwargs)
+
+class max_execs:
+ def __init__(self, i):
+  self.i = i
+ def __call__(self, fn):
+  return helper(self.i, fn)
+ 
+
+ I don't see why you would want to limit yourself to a function (and not a class). But if you really want to... 
+
+ def max_execs(n):
+ return lambda fn, i=n: return helper(i, fn)
+ 
+ #2 There are two ways of doing it. The object-oriented way is to make a class: 
+
+ class max_execs:
+ def __init__(self, max_executions):
+  self.max_executions = max_executions
+  self.executions = 0
+
+ def __call__(self, func):
+  @wraps(func)
+  def maybe(*args, **kwargs):
+   if self.executions &lt; self.max_executions:
+    self.executions += 1
+    return func(*args, **kwargs)
+   else:
+    print "fail"
+  return maybe
+ 
+
+ See this question for an explanation of wraps . 
+
+ I prefer the above OOP approach for this kind of decorator, since you've basically got a private count variable tracking the number of executions. However, the other approach is to use a closure, such as 
+
+ def max_execs(max_executions):
+ executions = [0]
+ def actual_decorator(func):
+  @wraps(func)
+  def maybe(*args, **kwargs):
+   if executions[0] &lt; max_executions:
+    executions[0] += 1
+    return func(*args, **kwargs)
+   else:
+    print "fail"
+  return maybe
+ return actual_decorator
+ 
+
+ This involved three functions. The max_execs function is given a parameter for the number of executions and returns a decorator that will restrict you to that many calls. That function, the actual_decorator , does the same thing as our __call__ method in the OOP example. The only weirdness is that since we don't have a class with private variables, we need to mutate the executions variable which is in the outer scope of our closure. Python 3.0 supports this with the nonlocal statement, but in Python 2.6 or earlier, we need to wrap our executions count in a list so that it can be mutated. 
+ #3 Without relying to a state in a class, you have to save the state (count) in the function itself: 
+
+ def max_execs(count):
+ def new_meth(meth):
+  meth.count = count
+  def new(*a,**k):
+   meth.count -= 1
+   print meth.count   
+   if meth.count&gt;=0:
+    return meth(*a,**k)
+  return new
+ return new_meth
+
+@max_execs(5)
+def f():
+ print "invoked"
+
+[f() for _ in range(10)]
+ 
+
+ It gives: 
+
+ 5
+invoked
+4
+invoked
+3
+invoked
+2
+invoked
+1
+invoked
+0
+-1
+-2
+-3
+-4
+ 
+ #4 This method does not modify function internals, instead wraps it into a callable object. 
+
+ Using class slows down execution by ~20% vs using the patched function! 
+
+ def max_execs(n=1):
+ class limit_wrapper:
+  def __init__(self, fn, max):
+   self.calls_left = max
+   self.fn = fn
+  def __call__(self,*a,**kw):
+   if self.calls_left &gt; 0:
+    self.calls_left -= 1
+    return self.fn(*a,**kw)
+   raise Exception("max num of calls is %d" % self.i)
+
+
+ def decorator(fn):
+  return limit_wrapper(fn,n)
+
+ return decorator
+
+@max_execs(2)
+def fun():
+ print "called"
+ 
+ #5 I know you said you didn't want a class, but unfortunately that's the only way I can think of how to do it off the top of my head. 
+
+ class mymethodwrapper:
+ def __init__(self):
+  self.maxcalls = 0
+ def mymethod(self):
+  self.maxcalls += 1
+  if self.maxcalls &gt; 5:
+   return
+  #rest of your code
+  print "Code fired!"
+ 
+
+ Fire it up like this 
+
+ a = mymethodwrapper
+for x in range(1000):
+ a.mymethod()
+ 
+
+ The output would be: 
+
+ &gt;&gt;&gt; Code fired!
+&gt;&gt;&gt; Code fired!
+&gt;&gt;&gt; Code fired!
+&gt;&gt;&gt; Code fired!
+&gt;&gt;&gt; Code fired!

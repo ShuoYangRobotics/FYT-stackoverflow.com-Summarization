@@ -1,0 +1,153 @@
+Question (ID-44101): invisible watermarks in images How do you insert invisible watermarks in images for copyright purposes? I'm looking for a python library. 
+
+ What algorithm do you use? What about performance and efficiency? 
+ Answers (Total-11): #0 You might want to look into Steganography; that is hiding data inside of images. There are forms that won't get lost if you convert to a lossier format or even crop parts of the image out. 
+ #1 I use the following code. It requires PIL: 
+
+ def reduceOpacity(im, opacity):
+ """Returns an image with reduced opacity."""
+ assert opacity &gt;= 0 and opacity &lt;= 1
+ if im.mode != 'RGBA':
+  im = im.convert('RGBA')
+ else:
+  im = im.copy()
+ alpha = im.split()[3]
+ alpha = ImageEnhance.Brightness(alpha).enhance(opacity)
+ im.putalpha(alpha)
+ return im
+
+def watermark(im, mark, position, opacity=1):
+ """Adds a watermark to an image."""
+ if opacity &lt; 1:
+  mark = reduceOpacity(mark, opacity)
+ if im.mode != 'RGBA':
+  im = im.convert('RGBA')
+ # create a transparent layer the size of the image and draw the
+ # watermark in that layer.
+ layer = Image.new('RGBA', im.size, (0,0,0,0))
+ if position == 'tile':
+  for y in range(0, im.size[1], mark.size[1]):
+   for x in range(0, im.size[0], mark.size[0]):
+    layer.paste(mark, (x, y))
+ elif position == 'scale':
+  # scale, but preserve the aspect ratio
+  ratio = min(float(im.size[0]) / mark.size[0], float(im.size[1]) / mark.size[1])
+  w = int(mark.size[0] * ratio)
+  h = int(mark.size[1] * ratio)
+  mark = mark.resize((w, h))
+  layer.paste(mark, ((im.size[0] - w) / 2, (im.size[1] - h) / 2))
+ else:
+  layer.paste(mark, position)
+ # composite the watermark with the layer
+ return Image.composite(layer, im, layer)
+
+img = Image.open('/path/to/image/to/be/watermarked.jpg')
+
+mark1 = Image.open('/path/to/watermark1.png')
+mark2 = Image.open('/path/to/watermark2.png')
+
+img = watermark(img, mark1, (img.size[0]-mark1.size[0]-5, img.size[1]-mark1.size[1]-5), 0.5)
+img = watermark(img, mark2, 'scale', 0.01)
+ 
+
+ The watermark is too faint to see. Only a solid color image would really show it. I can use it to create an image that doesn't show a watermark, but if I do a bit-by-bit subtraction using the original image, I can demonstrate that my watermark is there. 
+
+ If you want to see how it works, go to TylerGriffinPhotography.com . Each image on the site is watermarked twice: once with the watermark in the lower right corner at 50% opacity (5px from the edge), and once over the whole image at 1% opacity (using "scale", which scales the watermark to the whole image). Can you figure out what the second, low opacity watermark shape is? 
+ #2 What about Exif? It's probably not as secure as what you're thinking, but most users don't even know it exists and if you make it that easy to read the watermark information those who care will still be able to do it anyway. 
+ #3 I don't think there is a library that does this out of the box. If you want to implement your own, I would definitely go with the Python Imaging Library (PIL). 
+
+ This is a Python Cookbook recipe that uses PIL to add a visible watermark to an image. If it's enough for your needs, you could use this to add a watermark with enough transparency that it is only visible if you know what you are looking for. 
+ #4 I'm looking for "unbreakable" watermarks, so data stored in exif or image metadata are out. 
+
+ I have found some interesting stuff on the web while waiting for replies here:
+ http://www.cosy.sbg.ac.at/~pmeerw/Watermarking/ 
+
+ There is a master thesis that's fairly exhaustive about algorithms and their caracteristics (what they do and how unbreakable they are). I haven't got any time to read it in depth, but this stuff looks serious. There are algorithms that support JPEG compression, cropping, gamma correction or down scaling in some way. It's C, but I can port it to Python or use C libraries from Python. 
+
+ However, it's from 2001 and I guess 7 years are a long time in this field :( Does anybody have some similar and more recent stuff? 
+ #5 Well, invisible watermarking is not that easy. Check digimarc, what money did they earn on it. There is no free C/Python code that a lonely genius has written a leave it for free usage. I've implemented my own algorithm and the name of the tool is SignMyImage. Google it if interested ... F> 
+ #6 If you're talking about steganography , here's an old not too-fancy module I did for a friend once (Python 2.x code): 
+
+ the code 
+
+ from __future__ import division
+
+import math, os, array, random
+import itertools as it
+import Image as I
+import sys
+
+def encode(txtfn, imgfn):
+ with open(txtfn, "rb") as ifp:
+  txtdata= ifp.read()
+ txtdata= txtdata.encode('zip')
+
+ img= I.open(imgfn).convert("RGB")
+ pixelcount= img.size[0]*img.size[1]
+## sys.stderr.write("image %dx%d\n" % img.size)
+
+ factor= len(txtdata) / pixelcount
+ width= int(math.ceil(img.size[0]*factor**.5))
+ height= int(math.ceil(img.size[1]*factor**.5))
+
+ pixelcount= width * height
+ if pixelcount &lt; len(txtdata): # just a sanity check
+  sys.stderr.write("phase 2, %d bytes in %d pixels?\n" % (len(txtdata), pixelcount))
+  sys.exit(1)
+## sys.stderr.write("%d bytes in %d pixels (%dx%d)\n" % (len(txtdata), pixelcount, width, height))
+ img= img.resize( (width, height), I.ANTIALIAS)
+
+ txtarr= array.array('B')
+ txtarr.fromstring(txtdata)
+ txtarr.extend(random.randrange(256) for x in xrange(len(txtdata) - pixelcount))
+
+ newimg= img.copy()
+ newimg.putdata([
+  (
+   r &amp; 0xf8 |(c &amp; 0xe0)&gt;&gt;5,
+   g &amp; 0xfc |(c &amp; 0x18)&gt;&gt;3,
+   b &amp; 0xf8 |(c &amp; 0x07),
+  )
+  for (r, g, b), c in it.izip(img.getdata(), txtarr)])
+ newimg.save(os.path.splitext(imgfn)[0]+'.png', optimize=1, compression=9)
+
+def decode(imgfn, txtfn):
+ img= I.open(imgfn)
+ with open(txtfn, 'wb') as ofp:
+  arrdata= array.array('B',
+   ((r &amp; 0x7) &lt;&lt; 5 | (g &amp; 0x3) &lt;&lt; 3 | (b &amp; 0x7)
+   for r, g, b in img.getdata())).tostring()
+  findata= arrdata.decode('zip')
+  ofp.write(findata)
+
+if __name__ == "__main__":
+ if sys.argv[1] == 'e':
+  encode(sys.argv[2], sys.argv[3])
+ elif sys.argv[1] == 'd':
+  decode(sys.argv[2], sys.argv[3])
+ 
+
+ the algorithm 
+
+ It stores a byte of data per image pixel using: the 3 least-significant bits of the blue band, the 2 LSB of the green one and the 3 LSB of the red one. 
+
+ encode function: An input text file is compressed by zlib, and the input image is resized (keeping proportions) to ensure that there are at least as many pixels as compressed bytes. A PNG image with the same name as the input image (so don't use a ".png" filename as input if you leave the code as-is :) is saved containing the steganographic data. 
+
+ decode function: The previously stored zlib-compressed data are extracted from the input image, and saved uncompressed under the provided filename. 
+
+ I verified the old code still runs, so here's an example image containing steganographic data: 
+
+ 
+
+ You'll notice that the noise added is barely visible. 
+ #7 I was going to post an answer similar to Ugh. I would suggest putting a small TXT file describing the image source (and perhaps a small copyright statement, if one applies) into the image in a manner that is difficult to detect and break. 
+ #8 I'm not sure how important it is to be unbreakable, but a simple solution might just be to append a text file to the end of the image. Something like "This image belongs to ...". 
+
+ If you open the image in a viewer/browser, it looks like a normal jpeg, but if you open it in a text editor, the last line would be readable. 
+
+ The same method allows you include an actual file into an image. ( hide a file inside of an image ) I've found that it's a bit hit-or-miss, but 7-zip files seem to work. You could hide all sorts of copywrite goodies inside the image. 
+
+ Again, it's not unbreakable by any stretch of the imagination, but it's completely invisible to the naked eye. 
+ #9 Some image formats have headers where you can store arbitrary information as well. 
+For example, the PNG specification has a chunk where you can store text data. This is similar to the answers above, but without adding random data to the image data itself. 
+ #10 There is a newer (2005) digital watermarking FAQ at watermarkingworld.org

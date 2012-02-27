@@ -1,0 +1,123 @@
+Question (ID-2111765): Problem when using python logging in django and unicode totally confused by now... I am developing in python/django and using python logging. All of my app requires unicode and all my models have only a unicode ()`, return u'..' methods implemented. Now when logging I have come upon a really strange issue that it took a long time to discover that I could reproduce it. I have tried both Py 2.5.5 and Py 2.6.4 and same thing. So 
+
+ Whenever I do some straight forward logging like: 
+
+ logging.debug(u'new value %s' % group) 
+ 
+
+ this calls the models group. unicode (): return unicode(group.name) 
+
+ My unicode methods all looks like this: 
+
+ def __unicode__(self):
+ return u'%s - %s (%s)' % (self.group, self.user.get_full_name(), self.role)
+ 
+
+ This works even if group.name is XXX or ÄÄÄ (requiring unicode). But when I for some reason want to log a set, list, dictionary, django-query set and the individual instances in e.g. the list might be unicode or not I get into trouble... 
+
+ So this will get me a UnicodeDecodingError whenever a group.name requires unicode like Luleå (my hometown) 
+
+ logging.debug(u'new groups %s' % list_of_groups)
+ 
+
+ Typically I get an error like this: 
+
+ Exception Type:  UnicodeDecodeError
+Exception Value: ('ascii', '&lt;RBACInstanceRoleSet: s2 | \xc3\x84\xc3\x96\xc3\x96\xc3\x85\xc3\x85\xc3\x85 Gruppen&gt;]', 106, 107, 'ordinal not in range(128)')
+ 
+
+ But if I do print list_of_groups everything gets out nice on terminal 
+
+ So, my understanding is that the list starts to generate itself and does repr() on all its elements and they return their values - in this case it should be 's2 | ÅÄÖÖ', then the list presents itself as (ascii, the-stuff-in-the-list) and then when trying to Decode the ascii into unicode this will of course not work -- since one of the elements in the list has returened a u'...' of itself when repr was done on it. 
+
+ But why is this????´ 
+
+ And why do things work and unicode/ascii is handled correctly whenever I log simple things like group.name and so or group and the unicode methods are called. Whenever I get lazy and want to log a list, set or other things go bad whenever a unicode character is encountered... 
+
+ Some more examples that work and fail. If group.name I go to the model field and group calls the __unicode__() 
+
+  logging.debug("1. group: %s " % group.name) # WORKS
+ logging.debug(u"2. group: %s " % group) # WORKS
+ logging.debug("3. group: %s " % group) # FAILS
+ logging.debug(u"4. group: %s " % group.name) # WORKS
+ logging.debug("5. group: %s " % group.name) # WORKS
+ 
+
+ ...and I really thought I had a grip on Unicode ;-( 
+ Answers (Total-6): #0 Try to use this code in the top of your views.py 
+
+ #-*- coding: utf-8 -*-
+...
+ 
+ #1 Here's my test code: 
+
+ #-*- coding: utf-8 -*-          
+class Wrap:           
+ def __init__(self, s): self.s = s
+ def __repr__(self): return repr(self.s) 
+ def __unicode__(self): return unicode(self.s)
+ def __str__(self): return str(self.s)
+
+s = 'hello' # a plaintext string
+u = 'ÅÄÖÖ'.decode('utf-8') 
+l = [s,u]
+test0 = unicode(repr(l))
+test1 = 'string %s' % l
+test2 = u'unicode %s' % l
+ 
+
+ The above works fine when you run it. However, if you change the declaration of repr to:
+  def repr (self): return unicode(self.s) 
+
+ Then it aborts with: 
+
+ Traceback (most recent call last):
+ File "mytest.py", line 13, in &lt;module&gt; unicode(l)
+UnicodeEncodeError: 'ascii' codec can't encode characters in position 0-3:
+ ordinal not in range(128)
+ 
+
+ So it looks like someone in the object hierarchy has a repr() implementation which is incorrectly returning a unicode string instead of a normal string. As someone else mentioned, when you do a format string like 
+
+ 'format %s' % mylist
+ 
+
+ and mylist is a sequence, python automatically calls repr() on it rather than unicode() (since there is no "correct" way to represent a list as a unicode string). 
+
+ It may be django that's at fault here, or maybe you've implemented __repr__ incorrectly in one of your models. 
+
+#
+ #2 I don't understand what it is you don't understand, if you see what I mean. Your middle paragraph: 
+
+ 
+ So, my understanding is that the list starts to generate itself and does repr() on all its elements and they return their values - in this case it should be 's2 | ÅÄÖÖ', then the list presents itself as (ascii, the-stuff-in-the-list) and then when trying to Decode the ascii into unicode this will of course not work -- since one of the elements in the list has returened a u'...' of itself when repr was done on it. 
+ 
+
+ explains exactly what is going on - outputting a list isn't the same as printing all its elements, because under the hood all it does is call repr() on each element in the list. Rather than outputting the raw list, you could log a list comprehension which calls unicode on each element, which would fix it. 
+ #3 I can't reproduce your problem with a simple test: 
+
+ 
+Python 2.6.4 (r264:75706, Dec 7 2009, 18:45:15) 
+[GCC 4.4.1] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import logging
+>>> group = u'Luleå'
+>>> logging.warning('Group: %s', group)
+WARNING:root:Group: Luleå
+>>> logging.warning(u'Group: %s', group)
+WARNING:root:Group: Luleå
+>>> 
+ 
+
+ So, as Daniel says, there is probably something which is not proper Unicode in what you're passing to logging. 
+
+ Also, I don't know what handlers you're using, but make sure if there are file handlers that you explicitly specify the output encoding to use, and if there are stream handlers you also wrap any output stream which needs it with an encoding wrapper such as is provided by the codecs module (and pass the wrapped stream to logging). 
+ #4 I ended following advice as answered and going over all code and doing list comprehension or similar when trying to log a set/list/dict/django queryset. So adapting and adding things like this solved it for me: 
+
+ logging.debug(u"new groups: %s" % [unicode(g) for g in list_of_groups])
+ 
+
+ So now all I have to do is remember never ever to forget to do this ;-) 
+ #5 have you tried manually making any result unicode? 
+
+ logging.debug(u'new groups %s' % unicode(list_of_groups("UTF-8"))

@@ -1,0 +1,250 @@
+<h3>Question (ID-4514803):</h3><h2>Diamond problem when using MixIns in Python</h2><p>Please consider the following code implementing a simple <code>MixIn</code>:</p>
+
+<pre><code>class Story(object):
+    def __init__(self, name, content):  
+     self.name = name
+     self.content = content    
+
+class StoryHTMLMixin(object):
+    def render(self):
+     return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+         "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+         % (self.name, self.content))
+
+def MixIn(TargetClass, MixInClass):
+    if MixInClass not in TargetClass.__bases__:
+     TargetClass.__bases__ += (MixInClass,)
+
+if __name__ == "__main__":
+    my_story = Story("My Life", "&lt;p&gt;Is good.&lt;/p&gt;")
+    # plug-in the MixIn here
+    MixIn(Story, StoryHTMLMixin)
+    # now I can render the story as HTML
+    print my_story.render()
+</code></pre>
+
+<p>Running <code>main</code> leads to the following error:</p>
+
+<pre><code>TypeError: Cannot create a consistent method resolution
+order (MRO) for bases object, StoryHTMLMixin
+</code></pre>
+
+<p>The problem is that both <code>Story</code> and <code>StoryHTMLMixin</code> are derived from <code>object</code>, and the <a href="http://en.wikipedia.org/wiki/Diamond_problem" rel="nofollow">diamond problem</a> arises.</p>
+
+<p>The solution is simply to make <code>StoryHTMLMixin</code> an <em>old-style class</em>, i.e., remove the inheritance from <code>object</code>, thus, changing the definition of the class <code>StoryHTMLMixin</code> to:</p>
+
+<pre><code>class StoryHTMLMixin:
+    def render(self):
+     return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+         "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+         % (self.name, self.content))
+</code></pre>
+
+<p>leads to the following result when running <code>main</code>:</p>
+
+<pre><code>&lt;html&gt;&lt;title&gt;My Life&lt;/title&gt;&lt;body&gt;&lt;p&gt;Is good.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
+</code></pre>
+
+<p>I don't like having to use <em>old style classes</em>, so my question is:</p>
+
+<p><strong>Is this the correct way to handle this problem in Python, or is there a better way?</strong></p>
+
+<p>Edit:</p>
+
+<p>I see that the class <code>UserDict</code> in the <a href="http://svn.python.org/view/python/branches/release27-maint/Lib/UserDict.py?view=markup" rel="nofollow">latest Python source</a> defines a MixIn resorting to the old style classes (as presented in my example).</p>
+
+<p>As recommended by all, I may resort to redefining the functionality that I want to attain (namely, the binding of methods at run time) without using MixIns. However, the point still remains - is this the only use case where messing with the MRO is unsolvable without resorting to reimplementation or falling back to old-style classes?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>It's easier to see what's happening if we eliminate the <code>__bases__</code> magic and write our the classes you're creating explicitly:</p>
+
+<pre><code>class StoryHTMLMixin(object):
+    def render(self):
+        return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+            "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+            % (self.name, self.content))
+
+class Story(object, StoryHTMLMixin):
+    def __init__(self, name, content):
+        self.name = name
+        self.content = content
+</code></pre>
+
+<p>That's the end result of what you're doing--or what it would be if it succeeded.  It results in the same error.</p>
+
+<p>Notice that this isn't actually diamond inheritance.  That involves four classes, where two base classes each inherit a common fourth class; Python's multiple inheritance deals with that.</p>
+
+<p>Here you have just three classes, leading to inheritance that looks like this:</p>
+
+<pre><code>StoryHTMLMixin &lt;--- Story
+            |   _____/
+            |  |
+            v  v
+           object
+</code></pre>
+
+<p>Python doesn't know how to resolve this.</p>
+
+<p>I don't know about a workaround for this.  In principle the solution would be to remove <code>object</code> from the bases of <code>Story</code> at the same time you add <code>StoryHTMLMixin</code> to it, but that isn't allowed for somewhat opaque, internal reasons (<code>TypeError: __bases__ assignment: 'StoryHTMLMixin' deallocator differs from 'object'</code>).</p>
+
+<p>I've never found any practical, real-world use for modifying classes like this anyway.  It just seems obfuscated and confusing--if you want a class that derives from those two classes, just create a class normally.</p>
+
+<p>Ed:</p>
+
+<p>Here's an approach that does something similar to yours, but without modifying classes in-place.  Note how it returns a new class, deriving dynamically from the arguments of the function.  This is much clearer--you can't inadvertently modify objects that are already instantiated, for example.</p>
+
+<pre><code>class Story(object):
+    def __init__(self, name, content):
+        self.name = name
+        self.content = content
+
+class StoryHTMLMixin(object):
+    def render(self):
+        return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+            "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+            % (self.name, self.content))
+
+def MixIn(TargetClass, MixInClass, name=None):
+    if name is None:
+        name = "mixed_%s_with_%s" % (TargetClass.__name__, MixInClass.__name__)
+
+    class CombinedClass(TargetClass, MixInClass):
+        pass
+
+    CombinedClass.__name__ = name
+    return CombinedClass
+
+if __name__ == "__main__":
+    MixedStory = MixIn(Story, StoryHTMLMixin, "MixedStory")
+    my_story = MixedStory("My Life", "&lt;p&gt;Is good.&lt;/p&gt;")
+    print my_story.render()
+</code></pre>
+<br /><b>#1</b><br /><p>EDIT: My bad, the bug is a separate issue (thanks @Glenn Maynard). The following hack still works, as long as your mixin inherits directly from <code>object</code>.</p>
+
+<pre><code>class Text(object): pass
+class Story(Text):
+    ....
+</code></pre>
+
+<hr>
+
+<p>However, I think that mixins are not the neatest solution to your problem. Both other solutions provided (a class decorator and an ordinary subclass) clearly mark the <code>Story</code> class as renderable, while your solution conceals this fact. That is, the existence of the <code>render</code> method in the other solutions is <em>explicit</em> while in your solution it is hidden. I think this will cause confusion later, especially if you come to rely more heavily on the mixin methodology.</p>
+
+<p>Personally I like the class decorator.</p>
+<br /><b>#2</b><br /><p>Why don't you use mixins directly instead of hacking around in the mro?</p>
+
+<pre><code>class Story(object):
+    def __init__(self, name, content):  
+     self.name = name
+     self.content = content    
+
+class StoryHTMLMixin(object):
+    def render(self):
+     return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+         "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+         % (self.name, self.content))
+
+class StoryHTML(Story, StoryHTMLMixin):
+    pass
+
+
+print StoryHTML('asd','asdf').render() # works just fine
+</code></pre>
+
+<p>If you really, really, <em>really</em> want to glue extra methods on a class, that is not a big problem. Well, except that it's evil and bad practice. Anyways, you can change a class at any time: </p>
+
+<pre><code># first, the story
+x = Story('asd','asdf')
+
+# changes a class object
+def stick_methods_to_class( cls, *methods):
+    for m in methods:
+        setattr(cls, m.__name__, m)
+
+# a bare method to glue on
+def render(self):
+ return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+     "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+     % (self.name, self.content))
+
+# change the class object
+stick_methods_to_class(Story, render)
+
+print x.render()
+</code></pre>
+
+<p>But in the end, the question remains: Why should classes suddenly grow extra methods? That's the stuff horror movies are made of ;-)</p>
+<br /><b>#3</b><br /><p>You could try using a decorator to add the functionality instead:</p>
+
+<pre><code>def render(obj):
+  return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+    "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+    % (obj.name, obj.content))
+
+def renderable(cls):
+  cls.render = render
+  return cls
+
+@renderable
+class Story(object):
+  ...
+</code></pre>
+<br /><b>#4</b><br /><blockquote>
+  <p>However, the point still remains - is
+  this the only use case where messing
+  with the MRO is unsolvable without
+  resorting to reimplementation or
+  falling back to old-style classes?</p>
+</blockquote>
+
+<p>Others have suggested better solutions -- such as explicit construction of the
+desired class -- but to answer your edited question, it is <em>possible</em> to define
+the mixin without resorting to old-style classes:</p>
+
+<pre><code>class Base(object): pass
+
+class Story(Base):
+    def __init__(self, name, content):  
+     self.name = name
+     self.content = content    
+
+class StoryHTMLMixin(Base):
+    def render(self):
+     return ("&lt;html&gt;&lt;title&gt;%s&lt;/title&gt;"
+         "&lt;body&gt;%s&lt;/body&gt;&lt;/html&gt;"
+         % (self.name, self.content))
+
+def MixIn(TargetClass, MixInClass):
+    if MixInClass not in TargetClass.__bases__:
+        TargetClass.__bases__ = (MixInClass,)+TargetClass.__bases__
+
+if __name__ == "__main__":
+    my_story = Story("My Life", "&lt;p&gt;Is good.&lt;/p&gt;")
+    # plug-in the MixIn here
+    MixIn(Story, StoryHTMLMixin)
+    # now I can render the story as HTML
+    print my_story.render()
+</code></pre>
+
+<p>yields</p>
+
+<pre><code>&lt;html&gt;&lt;title&gt;My Life&lt;/title&gt;&lt;body&gt;&lt;p&gt;Is good.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
+</code></pre>
+<br /><b>#5</b><br /><p>Aside from everything said by the previous answers (and being evil and a bad idea), your problem is:</p>
+
+<ol>
+<li><p>Bases should be ordered the other way around</p>
+
+<p><code>TargetClass.__bases__ = (MixInClass,) + TargetClass.__bases__</code></p></li>
+<li><p><a href="http://bugs.python.org/issue672115" rel="nofollow">http://bugs.python.org/issue672115</a> - The easiest workaround is to inherit everything from a user defined class and not object, like</p>
+
+<pre><code>class MyBase(object): pass
+
+
+class Story(MyBase):
+     ...
+
+
+class StoryHTMLMixin(MyBase):
+     ...
+</code></pre></li>
+</ol>
+<br />

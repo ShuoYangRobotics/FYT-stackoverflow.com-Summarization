@@ -1,0 +1,90 @@
+<h3>Question (ID-6597133):</h3><h2>Python/PySerial bit operator on string</h2><p>I'm using PySerial (Python 2.7) to read information from a device like this:</p>
+
+<p>buffer += ser.read(3)</p>
+
+<p>Now I have three bytes in buffer (i.e. 0xAE0259) which is of type str. Since I'm new to Python, I'm looking for the "pythonian" way to cut off the left most (0xAE) of the three bytes and then interpret the remaining two as int.
+First I thought of a bit mask: buffer &amp;= 0xFFFF
+but python won't let me use bit operators on str.
+Any attempt to convert buffer to int failed as well. 
+Then I read about the 'bitstring module' which let's me slice ranges of bits out of a BitArray, but I guess that using it for this would be a little over the top?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You need to know whether multi-byte types are big or little endian and whether it's signed or unsigned. Assuming the two bytes are an unsigned, big-endian short, I would do the following:</p>
+
+<pre><code>&gt;&gt;&gt; buf = '\xAE\x02\x59'
+&gt;&gt;&gt; from struct import unpack
+&gt;&gt;&gt; unpack('&gt;BH', buf)
+(174, 601)
+</code></pre>
+
+<p>'>' means big endian. 'B' is the first unsigned byte, which you don't want. 'H' is an unsigned short.</p>
+<br /><b>#1</b><br /><p>There are two easy ways to do it.  One way would be to convert your buffer to a hexdecimal integer, and use a bit-mask to get the last 32 bits.  The other is to use the slice operator to get the last 4 characters, and interpret that remainder as a hexadecimal integer.</p>
+
+<pre><code>&gt;&gt;&gt; buffer = 'AE0259'
+&gt;&gt;&gt; print int(buffer, 16) &amp; 0xFFFF
+601
+&gt;&gt;&gt; print int(buffer[-4:], 16) 
+601
+</code></pre>
+
+<hr>
+
+<p>EDIT - eryksun has the right answer, but I wanted to update my example for the actual use case.</p>
+
+<pre><code>&gt;&gt;&gt; buffer = '\xAE\x02\x59'
+&gt;&gt;&gt; # print the integer value of the last two binary "characters"
+&gt;&gt;&gt; print sum((ord(x) &lt;&lt; i*8 for i,x in enumerate(buffer[:-2-1:-1])))
+601
+&gt;&gt;&gt; # print the integer value all binary "characters" 
+&gt;&gt;&gt; # with a bitmask of the lower 32 digits
+&gt;&gt;&gt; print sum((ord(x) &lt;&lt; i*8 for i,x in enumerate(buffer[::-1]))) &amp; 0xFFFF
+601
+</code></pre>
+<br /><b>#2</b><br /><p>There's a pure python module that might help you handling bit operation:</p>
+
+<p><a href="http://code.google.com/p/python-bitstring" rel="nofollow">code.google.com/p/python-bitstring</a></p>
+<br /><b>#3</b><br /><p>If you only need to do byte unpacking then the <code>struct</code> module is your friend (see eryksun's answer) as is the <a href="http://docs.python.org/library/functions.html#bytearray" rel="nofollow"><code>bytearray</code></a> type:</p>
+
+<pre><code>&gt;&gt;&gt; ba = bytearray('\xae\x02\x59')
+</code></pre>
+
+<p>This allows you to index and slice at the byte level</p>
+
+<pre><code>&gt;&gt;&gt; hex(ba[0])
+'0xae'
+&gt;&gt;&gt; ba[1:3]
+bytearray(b'\x02Y')
+</code></pre>
+
+<p>In terms of converting multiple bytes to ints this is quite helpful, but you're unlikely to gain much over <code>struct</code> unless you have some unusual byte lengths. Your two byte conversion to int becomes:</p>
+
+<pre><code>&gt;&gt;&gt; (ba[1] &lt;&lt; 8) + ba[2]
+601
+</code></pre>
+
+<p>You say in a comment that you'd like a general way of doing bitwise slicing too. I'm afraid there isn't one - your best place to start is with shifting and masking from a bytearray. That's why modules like <a href="http://python-bitstring.googlecode.com" rel="nofollow">bitstring</a> are useful (I wrote it btw) - you get someone else to do all the tedious error-prone stuff!</p>
+
+<pre><code>&gt;&gt;&gt; b = bitstring.Bits(ba)
+&gt;&gt;&gt; b[8:].uint
+601
+&gt;&gt;&gt; b.unpack('hex:8, uint:16')
+['ae', 601]
+</code></pre>
+<br /><b>#4</b><br /><p>if <code>buffer</code> is a string, you could "cut off" the remaining characters by trimming the string like this:</p>
+
+<pre><code>newstr = buffer[1:]
+</code></pre>
+<br /><b>#5</b><br /><p>@ironchefpython suggested what you should use, except that your comment indicates that your buffer actually consists of binary data. Assuming that is the case, this solution should work, though it is not very elegant:</p>
+
+<pre><code>from struct import unpack
+def strmask(buffer, mask):
+   #calculate the number of bytes to extract
+   mask_length = mask.bit_length() / 8  + (1 if mask.bit_length() % 8 &gt; 0 else 0)
+   #extract those bytes and put them into a Python int, then perform the mask
+   return mask &amp; reduce(lambda l,r: (l&lt;&lt;8)+r, unpack("B" * mask_length, buffer[-1 * mask_length:]))
+</code></pre>
+
+<p>This yields the result you want -for example:</p>
+
+<pre><code>&gt;&gt;&gt; print strmask('\xAE\x02\x59', 0xFFFF)
+601
+</code></pre>
+<br />

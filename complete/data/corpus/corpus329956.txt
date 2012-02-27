@@ -1,0 +1,116 @@
+Question (ID-329956): Python crypt module -- what's the correct use of salts? First, context: I'm trying to create a command-line-based tool (Linux) that
+requires login. Accounts on this tool have nothing to do with
+system-level accounts -- none of this looks at /etc/passwd. 
+
+ I am planning to store user accounts in a text file using the same format (roughly) as /etc/passwd. 
+
+ Despite not using the system-level password files, using crypt seemed
+to be a good practice to use, as opposed to storing passwords in
+cleartext. (While crypt is certainly better than storing passwords in
+cleartext, I'm open to other ways of doing this.) 
+
+ My crypt knowledge is based on this:
+ http://www.python.org/doc/2.5.2/lib/module-crypt.html 
+
+ The documentation seems to ask for something that isn't possible: "it
+is recommended to use the full crypted password as salt when checking
+for a password." 
+
+ Huh? If I'm creating the crypted password (as in, when creating a user
+record) how can I use the crypted password as a salt? It
+doesn't exist yet. (I'm assuming that you must use the same salt for creating and checking a password.) 
+
+ I've tried using the plaintext password as a salt. This does
+work, but has two problems; one easily overcome, and one serious: 
+
+ 1) The first two letters of the plaintext password are included in the
+crypted password. You can fix this by not writing the first two
+characters to the file: 
+
+ user_record = '%s:%s:%s' % (user_name, crypted_pw[2:], user_type)
+ 
+
+ 2) By using the plaintext password as the salt, you would seem to be
+reducing the amount of entropy in the system. Possibly I'm
+misunderstanding the purpose of the salt. 
+
+ The best practice I've been able to derive is to use the first two
+characters from the username as the salt. Would this be appropriate,
+or is there something I've missed that makes that a bad move? 
+
+ My understanding of a salt is that it prevents pre-computing password
+hashes from a dictionary. I could use a standard salt for all
+passwords (such as my initials, "JS,") but that seems to be less of a
+burden for an attacker than using two characters from each user's username. 
+ Answers (Total-9): #0 Python's crypt() is a wrapper for the system's crypt() function. From the Linux crypt() man page: 
+
+ 
+char *crypt(const char *key, const char *salt);
+
+key is a user’s typed password.
+salt is a two-character string chosen from the set [a–zA–Z0–9./]. 
+This string is used to perturb the algorithm in one of 4096 
+different ways.
+ 
+
+ Emphasis is on " two-character string". Now, if you look at crypt()'s behavior in Python: 
+
+ &gt;&gt;&gt; crypt.crypt("Hello", "World")
+'Wo5pEi/H5/mxU'
+&gt;&gt;&gt; crypt.crypt("Hello", "ABCDE")
+'AB/uOsC7P93EI'
+ 
+
+ you discover that the first two characters of the result always coincide with the first two characters of the original salt, which indeed form the true two-character-salt itself.
+That is, the result of crypt() has the form 2char-salt + encrypted-pass.
+Hence, there is no difference in the result if instead of passing the two-character-salt or the original many-characters-salt you pass the whole encrypted password. 
+
+ Note: the set [a–zA–Z0–9./] contains 64 characters, and 64&#42;64=4096. Here's how two characters relate to " 4096 different ways". 
+ #1 You're misunderstanding the documentation; it says that since the length of the salt may vary depending on the underlying crypt() implementation, you should provide the entire crypted password as the salt value when checking passwords . That is, instead of pulling the first two chars off to be the salt, just toss in the whole thing. 
+
+ Your idea of having the initial salt be based on the username seems okay. 
+ #2 For the use of the crypt module: 
+
+ When GENERATING the crypted password, you provide the salt. It might as well be random to increase resistance to brute-forcing, as long as it meets the listed conditions. When CHECKING a password, you should provide the value from getpwname, in case you are on a system that supports larger salt sizes and didn't generate it yourself. 
+
+ General comments: 
+
+ If this has nothing to do w/ actual system logins, there is nothing preventing you from using a stronger method than crypt. You could randomly generate N characters of per-user salt, to be combined with the user's password in a SHA-1 hash. 
+
+ string_to_hash = user.stored_salt + entered_password
+successful_login = (sha1(string_to_hash) == user.stored_password_hash)
+ 
+
+ UPDATE: While this is far more secure against rainbow tables, the method above still has cryptographic weaknesses. Correct application of an HMAC algorithm can yet further increase your security, but is beyond my realm of expertise. 
+ #3 Here's some general advice on salting passwords: 
+
+ 
+ In general, salts are used to make ranbow tables too costly to compute. So, you should add a little randomized salt to all your password hashes, and just store it in plaintext next to the hashed password value. 
+ Use HMAC - it's a good standard, and it's more secure than concatenating the password and salt. 
+ Use SHA1: MD5 is broken. No offense intended if you knew this, just being thorough. ;) 
+ 
+
+ I would not have the salt be a function of the password. An attacker would have to generate a rainbow table to have an instant-lookup database of passwords, but they'd only have to do that once. If you choose a random 32-bit integer, they'd have to generate 2^32 tables, which (unlike a deterministic salt) costs way, way too much memory (and time). 
+ #4 The password, or anything derived from the password, should never be used as salt. The salt for a particular password should be unpredictable. 
+
+ A username or part of the user name is tolerable, but even better would be random bytes from a cryptographic RNG. 
+ #5 Use PBKDF2, see this comment on a different thread (includes Python implementation). 
+ #6 Best yet, try to wire your tool into using PAM and don't do crypto yourself unless you plan to spend a lot of time reading. :) 
+
+ As far as I understand things, MD5 and SHA and SHA1 have weaknesses and you are safest moving to a SHA-2 or another hashing method. Or, better yet, try linking against PAM. :) 
+ #7 For some added strength, you can get the crypt module to use md5 by using a salt in the format. 
+
+ $1$ABCDEFGH$
+ 
+
+ where ABCDEFGH is your salt string. 
+
+ &gt;&gt;&gt; p = crypt.crypt('password', '$1$s8Ty3/f$')
+&gt;&gt;&gt; p
+Out: '$1$s8Ty3/f$0H/M0JswK9pl3X/e.n55G1'
+&gt;&gt;&gt; p == crypt.crypt('password', p)
+Out: True
+ 
+
+ (note that this is a gnu extension to crypt, see "man crypt" on a linux system). MD5 (and now even SHA1) may be "broken", but they are still relatively good for password hashes, and md5 is still the standard for linux local passwords. 
+ #8 Take a look at the article TrueCrypt explained by Björn Edström. It contains easy to understand explanation of how truecrypt works and a simple Python implementation of some of truecrypt's functionality including password management.

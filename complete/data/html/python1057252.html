@@ -1,0 +1,112 @@
+<h3>Question (ID-1057252):</h3><h2>Django: How do I access the request object or any other variable in a form's clean() method?</h2><p>I am trying to request.user for a form's clean method, but how can I access the request object? Can I modify the clean method to allow variables input?</p>
+
+<p>Thanks.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>The answer by Ber - storing it in threadlocals - is a very bad idea. There's absolutely no reason to do it this way.</p>
+
+<p>A much better way is to override the form's <code>__init__</code> method to take an extra keyword argument, <code>request</code>. This stores the request in the <em>form</em>, where it's required, and from where you can access it in your clean method.</p>
+
+<pre><code>class MyForm(forms.Form):
+
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request', None)
+        super(MyForm, self).__init__(*args, **kwargs)
+
+
+    def clean(self):
+        ... access the request object via self.request ...
+</code></pre>
+
+<p>and in your view:</p>
+
+<pre><code>myform = MyForm(request.POST, request=request)
+</code></pre>
+<br /><b>#1</b><br /><p>The usual aproach is to store the request object in a thread-local reference using a middleware. Then you can access this from anywhere in you app, including the Form.clean() method.</p>
+
+<p>Changing the signature of the Form.clean() method means you have you own, modified version of Django, which may not be what you want.</p>
+
+<p>Thank middleware count look something like this:</p>
+
+<pre><code>import threading
+_thread_locals = threading.local()
+
+def get_current_request():
+    return getattr(_thread_locals, 'request', None)
+
+class ThreadLocals(object):
+    """
+    Middleware that gets various objects from the
+    request object and saves them in thread local storage.
+    """
+    def process_request(self, request):
+        _thread_locals.request = request
+</code></pre>
+
+<p>Register this middleware as described in the <a href="http://docs.djangoproject.com/en/dev/topics/http/middleware/" rel="nofollow">Django docs</a></p>
+<br /><b>#2</b><br /><p><strong>UPDATED 10/25/2011</strong>: I'm now using this with a metaclass instead of method, as Django 1.3 displays some weirdness otherwise.</p>
+
+<pre><code>class MyModelAdmin(admin.ModelAdmin):
+    form = MyCustomForm
+    def get_form(self, request, obj=None, **kwargs):
+        ModelForm = super(MyModelAdmin, self).get_form(request, obj, **kwargs)
+        class ModelFormMetaClass(ModelForm):
+            def __new__(cls, *args, **kwargs):
+                kwargs['request'] = request
+                return ModelForm(*args, **kwargs)
+        return ModelFormMetaClass
+</code></pre>
+
+<p>Then override <code>MyCustomForm.__init__</code> as follows:</p>
+
+<pre><code>class MyCustomForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop('request', None)
+        super(MyCustomForm, self).__init__(*args, **kwargs)
+</code></pre>
+
+<p>You can then access the request object from any method of <code>ModelForm</code> with <code>self.request</code>.</p>
+<br /><b>#3</b><br /><p>I ran into this particular problem when customizing the admin. I wanted a certain field to be validated based on the particular admin's credentials.</p>
+
+<p>Since I did not want to modify the view to pass the request as an argument to the form, the following is what I did:</p>
+
+<pre><code>class MyCustomForm(forms.ModelForm):
+    class Meta:
+        model = MyModel
+
+    def clean(self):
+        # make use of self.request here
+
+class MyModelAdmin(admin.ModelAdmin):
+    form = MyCustomForm
+    def get_form(self, request, obj=None, **kwargs):
+        ModelForm = super(MyModelAdmin, self).get_form(request, obj=None, **kwargs)
+        def form_wrapper(*args, **kwargs):
+            a = ModelForm(*args, **kwargs)
+            a.request = request
+            return a
+    return form_wrapper
+</code></pre>
+<br /><b>#4</b><br /><p>fresh cheese from cheesebaker@pypi: <a href="http://pypi.python.org/pypi?%3aaction=display&amp;name=django-contrib-requestprovider&amp;version=1.0.1" rel="nofollow">django-requestprovider</a></p>
+<br /><b>#5</b><br /><p>You can't always use this method (and its probably bad practice), but if you are only using the form in one view you could scope it inside the view method itself.</p>
+
+<pre><code>def my_view(request):
+
+    class ResetForm(forms.Form):
+        password = forms.CharField(required=True, widget=forms.PasswordInput())
+
+        def clean_password(self):
+            data = self.cleaned_data['password']
+            if not request.user.check_password(data):
+                raise forms.ValidationError("The password entered does not match your account password.")
+            return data
+
+    if request.method == 'POST':
+        form = ResetForm(request.POST, request.FILES)
+        if form.is_valid():
+
+            return HttpResponseRedirect("/")
+    else:
+        form = ResetForm()
+
+    return render_to_response(request, "reset.html")
+</code></pre>
+<br />

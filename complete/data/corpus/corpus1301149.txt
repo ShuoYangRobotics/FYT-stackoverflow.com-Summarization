@@ -1,0 +1,149 @@
+Question (ID-1301149): Fastest ways to key-wise add a list of dicts together in python Say I have a bunch of dictionaries 
+
+ a = {'x': 1.0, 'y': 0.5, 'z': 0.25 }
+b = {'w': 0.5, 'x': 0.2 }
+ 
+
+ There's only two there, but the question is regarding an arbitary amount. 
+
+ What's the fastest way to find the mean value for each key? The dicts are quite sparse, so there will be a lot of cases where lots of keys aren't present in various dicts. 
+
+ The result I'm looking for is a new dictionary which has all the keys and the mean values for each one. The values are always floats, I'm happy to dip into ctypes. The approach I have is slower than I'd like, possibly because in my case I'm using defaultdicts which means I'm actually initialising values even if they're not there. If this is the cause of the slowness I'm happy to refactor, just want to make sure I'm not missing anything obvious. 
+
+ Edit: I think I was misleading with what the result should be, if the value isn't present it should act as 0.0, so the result for the above example would be: 
+
+ {'w':0.25,'x':0.6,'y':0.25,'z':0.125}
+ 
+
+ So the division is by the total number of unique keys. 
+
+ The main thing I'm wondering is if there's a sneaky way to divide the whole dict by the length in one step, or do the additions in one step. Basically a very fast vector addition and division. I've looked briefly at numpy arrays, but they don't seem to apply to dicts and if I converted the dicts to lists I'd have to remove the sparseness property (by explicitly setting absent values to 0). 
+ Answers (Total-6): #0 It may be proven through profiling that this isn't quite the fastest but... 
+
+ import collections
+
+a = {'x': 1.0, 'y': 0.5, 'z': 0.25 }
+b = {'w': 0.5, 'x': 0.2 }
+dicts = [a,b]
+
+totals = collections.defaultdict(list)
+avg = {}
+
+for D in dicts:
+ for key,value in D.iteritems():
+  totals[key].append(value)
+
+for key,values in totals.iteritems():
+ avg[key] = sum(values) / len(values)
+ 
+
+ I'm guessing that allowing Python to use the built-ins sum() and len() is going to gain some performance over calculating the mean as you see new values, but I could sure be wrong about that. 
+ #1 This works: 
+
+ import collections
+
+data= [
+ {'x': 1.0, 'y': 0.5, 'z': 0.25 },
+ {'w': 0.5, 'x': 0.2 }
+ ]
+
+tally = collections.defaultdict(lambda: (0.0, 0))
+
+for d in data:
+ for k,v in d.items():
+  sum, count = tally[k]
+  tally[k] = (sum+v, count+1)
+
+results = {}
+for k, v in tally.items():
+ t = tally[k]
+ results[k] = t[0]/t[1]
+
+print results
+ 
+
+ I don't know if it's faster than yours, since you haven't posted your code. 
+
+ {'y': 0.5, 'x': 0.59999999999999998, 'z': 0.25, 'w': 0.5}
+ 
+
+ I tried in tally to avoid storing all the values again, simply accumulating the sum and count I'd need to compute the average at the end. Often, the time bottleneck in a Python program is in the memory allocator, and using less memory can help a lot with speed. 
+ #2 &gt;&gt;&gt; def avg(items):
+...  return sum(items) / len(items)
+... 
+&gt;&gt;&gt; hashes = [a, b]
+&gt;&gt;&gt; dict([(k, avg([h.get(k) or 0 for h in hashes])) for k in set(sum((h.keys() for h in hashes), []))])
+{'y': 0.25, 'x': 0.59999999999999998, 'z': 0.125, 'w': 0.25}
+ 
+
+ Explanation: 
+
+ 
+ The set of keys in all of the hashes, no repeats. 
+
+ set(sum((h.keys() for h in hashes), []))
+ 
+ The average value for each key in the above set, using 0 if the value doesn't exist in a particular hash. 
+
+ (k, avg([h.get(k) or 0 for h in hashes]))
+ 
+ 
+ #3 It is possible that your bottleneck might be due to excessive memory use. Consider using iteritems to leverage the power of generators. 
+
+ Since you say your data is sparse, that will probably not be the most efficient. Consider this alternate usage of iterators: 
+
+ dicts = ... #Assume this is your dataset
+totals = {}
+lengths = {}
+means = {}
+for d in dicts:
+ for key,value in d.iteritems():
+  totals.setdefault(key,0)
+  lengths.setdefault(key,0)
+  totals[key] += value
+  length[key] += 1
+for key,value in totals.iteritems():
+ means[key] = value / lengths[key]
+ 
+
+ Here totals, lengths, and means are the only data structures you create. This ought to be fairly speedy, since it avoids having to create auxiliary lists and only loops through each dictionary exactly once per key it contains. 
+
+ Here's a second approach that I doubt will be an improvement in performance over the first, but it theoretically could, depending on your data and machine, since it will require less memory allocation: 
+
+ dicts = ... #Assume this is your dataset
+key_set = Set([])
+for d in dicts: key_set.update(d.keys())
+means = {}
+def get_total(dicts, key):
+ vals = (dict[key] for dict in dicts if dict.has_key(key))
+ return sum(vals)
+def get_length(dicts, key):
+ vals = (1 for dict in dicts if dict.has_key(key))
+ return sum(vals)
+def get_mean(dicts,key):
+ return get_total(dicts,key)/get_length(dicts,key)
+for key in key_set:
+ means[key] = get_mean(dicts,key)
+ 
+
+ You do end up looping through all dictionaries twice for each key, but need no intermediate data structures other than the key_set. 
+ #4 scipy.sparse supports sparse matrices -- the dok_matrix form seems reasonably suited to your needs (you'll have to use integer coordinates, though, so a separate pass will be needed to collect and put in any arbitrary but definite order the string keys you currently have). If you have a huge number of very large and sparse "arrays", the performance gains might possibly be worth the complications. 
+ #5 It's simple but this could work: 
+
+ a = { 'x': 1.0, 'y': 0.5, 'z': 0.25 }
+b = { 'w': 0.5, 'x': 0.2 }
+
+ds = [a, b]
+result = {}
+
+for d in ds:
+ for k, v in d.iteritems():
+  result[k] = v + result.get(k, 0)
+
+n = len(ds)
+result = dict((k, amt/n) for k, amt in result.iteritems())
+
+print result
+ 
+
+ I have no idea how it compares to your method since you didn't post any code.

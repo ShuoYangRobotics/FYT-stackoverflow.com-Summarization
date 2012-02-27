@@ -1,0 +1,119 @@
+<h3>Question (ID-5172668):</h3><h2>Map with no arguments and class method?</h2><p>It seems pretty simple:</p>
+
+<pre><code># builtins work fine:
+&gt;&gt;&gt; map (str, [(), (), ()])
+['()', '()', '()']
+
+# but no luck for class methods:
+&gt;&gt;&gt; class C (object):
+...   def m(self):
+...     return 42
+... 
+&gt;&gt;&gt; c = C()
+&gt;&gt;&gt; map(c.m, [(), (), ()])
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: m() takes exactly 1 argument (2 given)
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p><code>map(f, L)</code> always calls <code>f</code> with a single argument whose values are taken from <code>L</code>. It's always a single argument, never zero. The <code>()</code>s in the list are not argument lists, they are empty tuples. Outside of a function call, things in parentheses <em>aren't</em> arguments to a function, they are objects called "tuples" (think of them as immutable lists). Check the difference between <code>str()</code> and <code>str(())</code> - <code>str</code> with no arguments gives <code>''</code> and <em>not</em> <code>'()'</code>.</p>
+
+<p>If you have tuples of arguments and want to call a callable (function or method) with these arguments, you can use <code>itertools.starmap</code>. In particular, if you pass empty tuples the functions will be called with no arguments. It returns an iterator, so if you need a list you need to explicitly use <code>list()</code> over the result</p>
+
+<pre><code>&gt;&gt;&gt; import itertools
+&gt;&gt;&gt; f = lambda: 42
+&gt;&gt;&gt; L = [(), (), ()]
+&gt;&gt;&gt; values = itertools.starmap(f, L)
+&gt;&gt;&gt; print list(values)
+[42, 42, 42]
+</code></pre>
+
+<p>In the general case, it works with any tuple of arguments:</p>
+
+<pre><code>&gt;&gt;&gt; f = lambda *x: sum(x)
+&gt;&gt;&gt; L = [(1,2), (4, ), (5,6)]
+&gt;&gt;&gt; values = itertools.starmap(f, L)
+&gt;&gt;&gt; print list(values)
+[3, 4, 11]
+</code></pre>
+
+<p>If you want to simply call a function multiple times and get the result, you might consider using a list comprehension or a generator expression instead.</p>
+
+<pre><code>&gt;&gt;&gt; f = lambda: 42
+&gt;&gt;&gt; [f() for _ in xrange(3)]
+[42, 42, 42]
+&gt;&gt;&gt; values = (f() for _ in xrange(3))
+&gt;&gt;&gt; print list(values)
+[42, 42, 42]
+</code></pre>
+
+<p>If you have a list of empty tuples like in your example, you might use <code>xrange(len(L))</code> in the place of <code>xrange(3)</code>.</p>
+<br /><b>#1</b><br /><p>That's not a class method, it lacks the <code>classmethod</code> decorator and <code>self</code> should be <code>cls</code>. But you don't want a class method here anyway, as class methods are methods which operate on classes (you can pass other objects, of course, but that's not the intended use case - the <code>@classmethod</code> would be grossly misleading).</p>
+
+<p>You're looking for the term "unbound method", which you get by refering to a member of the <em>class</em>, not to an instance thereof. Use <code>C.m</code>. Note of course that the method will be called with <code>self</code> as (in your example) a tuple and not an instance of <code>C</code>. Normally, such trickery should be restricted to avoid this (e.g. <code>str.lower</code> and a bunch of strings is O.K.).</p>
+<br /><b>#2</b><br /><p>You need to add a parameter to your m method, where the argument of the map will be passed.</p>
+
+<pre><code>class C (object):
+    def m(self, x):
+        return 42
+
+&gt;&gt;&gt; c = C()
+&gt;&gt;&gt; map(c.m, [(), (), ()])
+[42, 42, 42]
+</code></pre>
+
+<p>See, c.m is a bound method, already like calling m(c), you need a placeholder for the additional parameter passed by map</p>
+
+<p><code>c</code> and the argument passed by map are the 2 arguments to <code>m</code> your stack trace is complaining about:</p>
+
+<pre><code>TypeError: m() takes exactly 1 argument (2 given)
+</code></pre>
+<br /><b>#3</b><br /><p>You forgot your decorator to make it a class method, but you probably want a static method:</p>
+
+<p>static:</p>
+
+<pre><code>class C(object):
+    @staticmethod
+    def m(arg):
+        return 42
+</code></pre>
+
+<p>class:</p>
+
+<pre><code>class C(object):
+    @classmethod
+    def m(cls, arg):
+        #cls is a reference to the actual "C" type, not an instance of the "C" class.
+        return 42
+</code></pre>
+<br /><b>#4</b><br /><p>First, that's not a class method. A class method takes the class as it's first argument, and is called on the class, not an instance of it:</p>
+
+<pre><code>class C(object):
+    @classmethod
+    def m(cls):
+        return 42
+
+map(C.m, range(10))
+</code></pre>
+
+<p>However, that will still break because <code>map</code> passes in each item from the iterable to the function, and your method only accepts one argument, the class.</p>
+
+<p>If you change your method to accept the extra argument (<code>def m(cls, arg)</code>), it will work. You could also use an instance method instead of a class method:</p>
+
+<pre><code>class C(object):
+    def m(self, *args): # or def m(self, n)
+        return 42
+c = C()
+map(c.m, range(10))
+</code></pre>
+<br /><b>#5</b><br /><p>m is a 1-argument method that takes an object of type C.  The syntax "c.m" is actually equivalent to "m(c)", which is just 42.  But 42 is not a function you can map over a list like [(),(),()].</p>
+
+<p>The following should work:</p>
+
+<pre><code>class C (object):
+    def f(self): return lambda x: x+1
+
+two,three,four = map(C().f(), [1,2,3])
+</code></pre>
+
+<p>Now C().<em>*</em>  returns a function, instead of a constant.</p>
+<br />

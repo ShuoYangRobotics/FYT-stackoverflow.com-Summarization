@@ -1,0 +1,196 @@
+<h3>Question (ID-4424397):</h3><h2>python data type to track duplicates</h2><p>I often keep track of duplicates with something like this:</p>
+
+<pre><code>processed = set() 
+for big_string in strings_generator:
+    if big_string not in processed:
+        processed.add(big_string)
+        process(big_string)
+</code></pre>
+
+<p>I am dealing with massive amounts of data so don't want to maintain the processed set in memory. I have a version that uses sqlite to store the data on disk, but then this process runs much slower.</p>
+
+<p>To cut down on memory use what do you think of using hashes like this:</p>
+
+<pre><code>processed = set() 
+for big_string in string_generator:
+    key = hash(big_string)
+    if key not in ignored:
+        processed.add(key)
+        process(big_string)    
+</code></pre>
+
+<p>The drawback is I could lose data through occasional hash collisions. 
+1 collision in 1 billion hashes would not be a problem for my use. </p>
+
+<p>I tried the md5 hash but found generating the hashes became a bottleneck.  </p>
+
+<p>What would you suggest instead?</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>I'm going to assume you are hashing web pages. You have to hash at most <a href="http://www.worldwidewebsize.com/" rel="nofollow">55 billion web pages</a> (and that measure almost certainly overlooks some overlap). </p>
+
+<p>You are willing to accept a less than one in a billion chance of collision, which means that if we look at a hash function which number of collisions is close to what we would get if the hash was truly random[ˆ1], we want a hash range of size <code>(55*10ˆ9)*10ˆ9</code>. That is <code>log2((55*10ˆ9)*10ˆ9) = 66</code> bits.</p>
+
+<p>[ˆ1]: since the hash can be considered to be chosen at random for this purpose,
+       <code>p(collision) = (occupied range)/(total range)</code></p>
+
+<p>Since there is a speed issue, but no real cryptographic concern, we can use a > 66-bits non-cryptographic hash <a href="http://www.strchr.com/hash_functions?allcomments=1#comment_155" rel="nofollow">with the nice collision distribution property outlined above</a>.</p>
+
+<p>It looks like we are looking for the 128-bit version of the <a href="https://code.google.com/p/smhasher/wiki/MurmurHash3" rel="nofollow">Murmur3</a> hash. People have been reporting <a href="https://groups.google.com/group/alembic-dev/browse_thread/thread/179db1ebb7c6b51f?pli=1" rel="nofollow">speed increases upwards of 12x</a> comparing Murmur3_128 to MD5 on a 64-bit machine. You can use <a href="https://code.google.com/p/smhasher/" rel="nofollow">this library</a> to do your speed tests. See also this related <a href="http://stackoverflow.com/a/5400389/47978">answer</a>, which:</p>
+
+<ul>
+<li>shows speed test results in the range of python's <code>str_hash</code>, which speed you have already deemed acceptable <a href="http://stackoverflow.com/a/8606962/47978">elsewhere</a> – though python's <code>hash</code> is a 32-bit hash leaving you only <code>2ˆ32/(10ˆ9)</code> (that is only 4) values stored with a less than one in a billion chance of collision.</li>
+<li>spawned a <a href="https://github.com/phensley/python-smhasher" rel="nofollow">library of python bindings</a> that you should be able to use directly.</li>
+</ul>
+
+<p>Finally, I hope to have outlined the reasoning that could allow you to compare with other functions of varied size should you feel the need for it (e.g. if you up your collision tolerance, if the size of your indexed set is smaller than the whole Internet, etc, ...).</p>
+<br /><b>#1</b><br /><p>You have to decide which is more important:  space or time.</p>
+
+<p>If time, then you need to create unique representations of your <code>large_item</code> which take as little space as possible (probably some <code>str</code> value) that is easy (i.e. quick) to calculate and will not have collisions, and store them in a <code>set</code>.</p>
+
+<p>If space, find the quickest disk-backed solution you can and store the smallest possible unique value that will identify a <code>large_item</code>.</p>
+
+<p>So either way, you want small unique identifiers -- depending on the nature of <code>large_item</code> this may be a big win, or not possible.</p>
+
+<p><strong>Update</strong></p>
+
+<blockquote>
+  <p>they are strings of html content</p>
+</blockquote>
+
+<p>Perhaps a hybrid solution then:  Keep a <code>set</code> in memory of the normal Python hash, while also keeping the actual html content on disk, keyed by that hash; when you check to see if the current <code>large_item</code> is in the <code>set</code> and get a positive, double-check with the disk-backed solution to see if it's a real hit or not, then skip or process as appropriate.  Something like this:</p>
+
+<pre><code>import dbf
+on_disk = dbf.Table('/tmp/processed_items', 'hash N(17,0); value M')
+index = on_disk.create_index(lambda rec: rec.hash)
+
+fast_check = set()
+def slow_check(hashed, item):
+    matches = on_disk.search((hashed,))
+    for record in matches:
+        if item == record.value:
+            return True
+    return False
+
+for large_item in many_items:
+    hashed = hash(large_item) # only calculate once
+    if hashed not in fast_check or not slow_check(hashed, large_item):
+        on_disk.append((hashed, large_item))
+        fast_check.add(hashed)
+        process(large_item)    
+</code></pre>
+
+<p>FYI: <code>dbf</code> is a module I wrote which you can find on <a href="http://python.org/pypi/dbf" rel="nofollow">PyPI</a></p>
+<br /><b>#2</b><br /><p>If many_items already resides in memory, you are not creating another copy of the large_item. You are just storing a reference to it in the ignored set.</p>
+
+<p>If many_items is a file or some other generator, you'll have to look at other alternatives.</p>
+
+<p>Eg if many_items is a file, perhaps you can store a pointer to the item in the file instead of the actual item</p>
+<br /><b>#3</b><br /><p>As you have already seen few options but unfortunately none of them can fully address the situation partly because</p>
+
+<ol>
+<li>Memory Constraint, to store entire object in memory</li>
+<li>No perfect Hash function, and for huge data set change of collision is there.</li>
+<li>Better Hash functions (md5) are slower</li>
+<li>Use of database like sqlite would actually make things slower</li>
+</ol>
+
+<p>As I read this following excerpt </p>
+
+<blockquote>
+  <p>I have a version that uses sqlite to store the data on disk, but then this process runs much slower.</p>
+</blockquote>
+
+<p>I feel if you work on this, it might help you marginally. Here how it should be</p>
+
+<ol>
+<li>Use <a href="http://en.wikipedia.org/wiki/Tmpfs" rel="nofollow">tmpfs</a> to create a ramdisk. tmpfs has several advantages over other implementation because it supports swapping of less-used space to swap space.</li>
+<li>Store the sqlite database on the ramdisk.</li>
+<li>Change the size of the ramdisk and profile your code to check your performance.</li>
+</ol>
+
+<p>I suppose you already have a working code to save your data in sqllite. You only need to define a tmpfs and use the path to store your database.</p>
+
+<p>Caveat: This is a linux only solution</p>
+<br /><b>#4</b><br /><p>a bloom filter? <a href="http://en.wikipedia.org/wiki/Bloom_filter" rel="nofollow">http://en.wikipedia.org/wiki/Bloom_filter</a></p>
+<br /><b>#5</b><br /><p>well you can always decorate <code>large_item</code> with a <code>processed</code> flag. Or something similar.</p>
+<br /><b>#6</b><br /><p>You can give a try to the str type __hash__ function.</p>
+
+<pre><code>In [1]: hash('http://stackoverflow.com')
+Out[1]: -5768830964305142685 
+</code></pre>
+
+<p>It's definitely not a cryptographic hash function, but with a little chance you won't have too much collision. It works as described here: <a href="http://effbot.org/zone/python-hash.htm" rel="nofollow">http://effbot.org/zone/python-hash.htm</a>.</p>
+<br /><b>#7</b><br /><p>I suggest you profile standard Python hash functions and choose the fastest: they are all "safe" against collisions enough for your application.</p>
+
+<p>Here are some benchmarks for <code>hash</code>, <code>md5</code> and <code>sha1</code>:</p>
+
+<pre><code>In [37]: very_long_string = 'x' * 1000000
+In [39]: %timeit hash(very_long_string)
+10000000 loops, best of 3: 86 ns per loop
+
+In [40]: from hashlib import md5, sha1
+
+In [42]: %timeit md5(very_long_string).hexdigest()
+100 loops, best of 3: 2.01 ms per loop
+
+In [43]: %timeit sha1(very_long_string).hexdigest()
+100 loops, best of 3: 2.54 ms per loop
+</code></pre>
+
+<p><code>md5</code> and <code>sha1</code> are comparable in speed. <code>hash</code> is 20k times faster for this string and it does not seem to depend much on the size of the string itself.</p>
+<br /><b>#8</b><br /><p>how does your sql lite version work? If you insert all your strings into a database table and then run the query "select distinct big_string from table_name", the database should optimize it for you.</p>
+
+<p>Another option for you would be to use hadoop.</p>
+
+<p>Another option could be to split the strings into partitions such that each partition is small enough to fit in memory. then you only need to check for duplicates within each partition. the formula you use to decide the partition will choose the same partition for each duplicate. the easiest way is to just look at the first few digits of the string e.g.:</p>
+
+<pre><code>d=defaultdict(int)
+for big_string in strings_generator:
+    d[big_string[:4]]+=1
+print d
+</code></pre>
+
+<p>now you can decide on your partitions, go through the generator again and write each big_string to a file that has the start of the big_string in the filename. Now you could just use your original method on each file and just loop through all the files</p>
+<br /><b>#9</b><br /><p>This can be achieved much more <em>easily</em> by performing simpler checks first, then investigating these cases with more elaborate checks. The example below contains extracts of your code, <strong>but</strong> it is performing the checks on much smaller sets of data. It does this by first matching on a simple case that is cheap to check. And if you find that a <code>(filesize, checksum)</code> pairs are not discriminating enough you can easily change it for a more cheap, yet vigorous check.</p>
+
+<pre><code># Need to define the following functions
+def GetFileSize(filename):
+    pass
+def GenerateChecksum(filename):
+    pass
+def LoadBigString(filename):
+    pass
+
+# Returns a list of duplicates pairs.
+def GetDuplicates(filename_list):
+    duplicates = list()
+    # Stores arrays of filename, mapping a quick hash to a list of filenames.
+    filename_lists_by_quick_checks = dict()
+    for filename in filename_list:
+        quickcheck = GetQuickCheck(filename)
+        if not filename_lists_by_quick_checks.has_key(quickcheck):
+            filename_lists_by_quick_checks[quickcheck] = list()
+        filename_lists_by_quick_checks[quickcheck].append(filename)
+    for quickcheck, filename_list in filename_lists.iteritems():
+        big_strings = GetBigStrings(filename_list)
+        duplicates.extend(GetBigstringDuplicates(big_strings))
+    return duplicates
+
+def GetBigstringDuplicates(strings_generator):
+    processed = set()
+    for big_string in strings_generator:
+        if big_sring not in processed:
+            processed.add(big_string)
+            process(big_string)
+
+# Returns a tuple containing (filesize, checksum).
+def GetQuickCheck(filename):
+    return (GetFileSize(filename), GenerateChecksum(filename))
+
+# Returns a list of big_strings from a list of filenames.
+def GetBigStrings(file_list):
+    big_strings = list()
+    for filename in file_list:
+        big_strings.append(LoadBigString(filename))
+    return big_strings
+</code></pre>
+<br />

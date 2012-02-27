@@ -1,0 +1,169 @@
+Question (ID-1819124): Image comparison algorithm I'm trying to compare images to each other to find out whether they are different. First I tried to make a Pearson correleation of the RGB values, which works also quite good unless the pictures are a litte bit shifted. So if a have a 100% identical images but one is a little bit moved, I get a bad correlation value. 
+
+ Any suggestions for a better algorithm? 
+
+ BTW, I'm talking about to compare thousand of imgages... 
+
+ Edit:
+Here is an example of my pictures (microscopic): 
+
+ im1: http://www.freeimagehosting.net/uploads/c603225337.jpg 
+
+ im2: http://www.freeimagehosting.net/uploads/9b78f22f42.jpg 
+
+ im3: http://www.freeimagehosting.net/uploads/854dcd81eb.jpg 
+
+ im1 and im2 are the same but a little bit shifted/cutted, im3 should be recognized as completly different... 
+
+ Edit: 
+ Problem is solved with the suggestions of Peter Hansen! Works very well! Thanks to all answers! Some results can be found here
+ http://www.file-upload.net/download-2054026/image%5Fcomparision.pdf.html 
+ Answers (Total-7): #0 A similar question was asked a year ago and has numerous responses, including one regarding pixelizing the images, which I was going to suggest as at least a pre-qualification step (as it would exclude very non-similar images quite quickly). 
+
+ There are also links there to still-earlier questions which have even more references and good answers. 
+
+ Here's an implementation using some of the ideas with Scipy, using your above three images (saved as im1.jpg, im2.jpg, im3.jpg, respectively). The final output shows im1 compared with itself, as a baseline, and then each image compared with the others. 
+
+ &gt;&gt;&gt; import scipy as sp
+&gt;&gt;&gt; from scipy.misc import imread
+&gt;&gt;&gt; from scipy.signal.signaltools import correlate2d as c2d
+&gt;&gt;&gt;
+&gt;&gt;&gt; def get(i):
+...  # get JPG image as Scipy array, RGB (3 layer)
+...  data = imread('im%s.jpg' % i)
+...  # convert to grey-scale using W3C luminance calc
+...  data = sp.inner(data, [299, 587, 114]) / 1000.0
+...  # normalize per http://en.wikipedia.org/wiki/Cross-correlation
+...  return (data - data.mean()) / data.std()
+...
+&gt;&gt;&gt; im1 = get(1)
+&gt;&gt;&gt; im2 = get(2)
+&gt;&gt;&gt; im3 = get(3)
+&gt;&gt;&gt; im1.shape
+(105, 401)
+&gt;&gt;&gt; im2.shape
+(109, 373)
+&gt;&gt;&gt; im3.shape
+(121, 457)
+&gt;&gt;&gt; c11 = c2d(im1, im1, mode='same') # baseline
+&gt;&gt;&gt; c12 = c2d(im1, im2, mode='same')
+&gt;&gt;&gt; c13 = c2d(im1, im3, mode='same')
+&gt;&gt;&gt; c23 = c2d(im2, im3, mode='same')
+&gt;&gt;&gt; c11.max(), c12.max(), c13.max(), c23.max()
+(42105.00000000259, 39898.103896795357, 16482.883608327804, 15873.465425120798)
+ 
+
+ So note that im1 compared with itself gives a score of 42105, im2 compared with im1 is not far off that, but im3 compared with either of the others gives well under half that value. You'd have to experiment with other images to see how well this might perform and how you might improve it. 
+
+ Run time is long... several minutes on my machine. I would try some pre-filtering to avoid wasting time comparing very dissimilar images, maybe with the "compare jpg file size" trick mentioned in responses to the other question, or with pixelization. The fact that you have images of different sizes complicates things, but you didn't give enough information about the extent of butchering one might expect, so it's hard to give a specific answer that takes that into account. 
+ #1 I have one done this with an image histogram comparison. My basic algorithm was this: 
+
+ 
+ Split image into red, green and blue 
+ Create normalized histograms for red, green and blue channel and concatenate them into a vector (r0...rn, g0...gn, b0...bn) where n is the number of "buckets", 256 should be enough 
+ subtract this histogram from the histogram of another image and calculate the distance 
+ 
+
+ here is some code with numpy and pil 
+
+ r = numpy.asarray(im.convert( "RGB", (1,0,0,0, 1,0,0,0, 1,0,0,0) ))
+g = numpy.asarray(im.convert( "RGB", (0,1,0,0, 0,1,0,0, 0,1,0,0) ))
+b = numpy.asarray(im.convert( "RGB", (0,0,1,0, 0,0,1,0, 0,0,1,0) ))
+hr, h_bins = numpy.histogram(r, bins=256, new=True, normed=True)
+hg, h_bins = numpy.histogram(g, bins=256, new=True, normed=True)
+hb, h_bins = numpy.histogram(b, bins=256, new=True, normed=True)
+hist = numpy.array([hr, hg, hb]).ravel()
+ 
+
+ if you have two histograms, you can get the distance like this: 
+
+ diff = hist1 - hist2
+distance = numpy.sqrt(numpy.dot(diff, diff))
+ 
+
+ If the two images are identical, the distance is 0, the more they diverge, the greater the distance. 
+
+ It worked quite well for photos for me but failed on graphics like texts and logos. 
+ #2 If your problem is about shifted pixels, maybe you should compare against a frequency transform. 
+
+ The FFT should be OK ( numpy has an implementation for 2D matrices ), but I'm always hearing that Wavelets are better for this kind of tasks ^_^ 
+
+ About the performance, if all the images are of the same size, if I remember well, the FFTW package created an specialised function for each FFT input size, so you can get a nice performance boost reusing the same code... I don't know if numpy is based on FFTW, but if it's not maybe you could try to investigate a little bit there. 
+
+ Here you have a prototype... you can play a little bit with it to see which threshold fits with your images. 
+
+ import Image
+import numpy
+import sys
+
+def main():
+ img1 = Image.open(sys.argv[1])
+ img2 = Image.open(sys.argv[2])
+
+ if img1.size != img2.size or img1.getbands() != img2.getbands():
+ 	return -1
+
+ s = 0
+ for band_index, band in enumerate(img1.getbands()):
+ 	m1 = numpy.fft.fft2(numpy.array([p[band_index] for p in img1.getdata()]).reshape(*img1.size))
+ 	m2 = numpy.fft.fft2(numpy.array([p[band_index] for p in img2.getdata()]).reshape(*img2.size))
+ 	s += numpy.sum(numpy.abs(m1-m2))
+ print s
+
+if __name__ == "__main__":
+ sys.exit(main())
+ 
+
+ Another way to proceed might be blurring the images, then subtracting the pixel values from the two images. If the difference is non nil, then you can shift one of the images 1 px in each direction and compare again, if the difference is lower than in the previous step, you can repeat shifting in the direction of the gradient and subtracting until the difference is lower than a certain threshold or increases again. That should work if the radius of the blurring kernel is larger than the shift of the images. 
+
+ Also, you can try with some of the tools that are commonly used in the photography workflow for blending multiple expositions or doing panoramas, like the Pano Tools . 
+ #3 You really need to specify the question better, but, looking at those 5 images, the organisms all seem to be oriented the same way. If this is always the case, you can try doing a normalized cross-correlation between the two images and taking the peak value as your degree of similarity. I don't know of a normalized cross-correlation function in Python, but there is a similar fftconvolve() function and you can do the circular cross-correlation yourself: 
+
+ a = asarray(Image.open('c603225337.jpg').convert('L'))
+b = asarray(Image.open('9b78f22f42.jpg').convert('L'))
+f1 = rfftn(a)
+f2 = rfftn(b)
+g = f1 * f2
+c = irfftn(g)
+ 
+
+ This won't work as written since the images are different sizes, and the output isn't weighted or normalized at all. 
+
+ The location of the peak value of the output indicates the offset between the two images, and the magnitude of the peak indicates the similarity. There should be a way to weight/normalize it so that you can tell the difference between a good match and a poor match. 
+
+ This isn't as good of an answer as I want, since I haven't figured out how to normalize it yet, but I'll update it if I figure it out, and it will give you an idea to look into. 
+ #4 I have done some image processing course long ago, and remember that when matching I normally started with making the image grayscale, and then sharpening the edges of the image so you only see edges. You (the software) can then shift and subtract the images until the difference is minimal. 
+
+ If that difference is larger than the treshold you set, the images are not equal and you can move on to the next. Images with a smaller treshold can then be analyzed next. 
+
+ I do think that at best you can radically thin out possible matches, but will need to personally compare possible matches to determine they're really equal. 
+
+ I can't really show code as it was a long time ago, and I used Khoros/Cantata for that course. 
+ #5 First off, correlation is a very CPU intensive rather inaccurate measure for similarity. Why not just go for the sum of the squares if differences between individual pixels? 
+
+ A simple solution, if the maximum shift is limited: generate all possible shifted images and find the one that is the best match. Make sure you calculate your match variable (i.e. correllation) only over the subset of pixels that can be matched in all shifted images. Also, your maximum shift should be significantly smaller than the size of your images. 
+
+ If you want to use some more advances image processing techniques I suggest you look at SIFT this is a very powerfull method that (theoretically anyway) can properly match items in images independent of translation, rotation and scale. 
+ #6 I guess you could do something like this: 
+
+ 
+ estimate vertical / horizontal displacement of reference image vs the comparison image. a 
+simple SAD (sum of absolute difference) with motion vectors would do to. 
+ shift the comparison image accordingly 
+ compute the pearson correlation you were trying to do 
+ 
+
+ Shift measurement is not difficult. 
+
+ 
+ Take a region (say about 32x32) in comparison image. 
+ Shift it by x pixels in horizontal and y pixels in vertical direction. 
+ Compute the SAD (sum of absolute difference) w.r.t. original image 
+ Do this for several values of x and y in a small range (-10, +10) 
+ Find the place where the difference is minimum 
+ Pick that value as the shift motion vector 
+ 
+
+ Note: 
+
+ If the SAD is coming very high for all values of x and y then you can anyway assume that the images are highly dissimilar and shift measurement is not necessary.

@@ -1,0 +1,292 @@
+Question (ID-1611019): Python: static variable decorator I'd like to create a decorator like below, but I can't seem to think of an implementation that works. I'm starting to think it's not possible, but thought I would ask you guys first. 
+
+ I realize there's various other ways to create static variables in Python, but I find those ways ugly. I'd really like to use the below syntax, if possible. 
+
+ @static(x=0)
+def f():
+ x += 1
+ print x
+
+f() #prints 1
+f() #prints 2
+ 
+
+ I don't care if the implementation of static is long or hackity, as long as it works like above. 
+
+ I created this version, but it only allows a &lt;function&gt;.&lt;varname&gt; syntax, which gets cumbersome pretty quickly with longer function and variable names. 
+
+ def static(**assignments):
+ def decorate(func):
+  for var, val in assignments.items():
+   setattr(func, var, val)
+  return func
+ return decorate
+ 
+
+ Various things I thought of, but couldn't get to work were: 
+
+ 
+ Changing f (the decorated function) into a callable class, and somehow storing the static vars in self transparently. 
+ Modifying the globals of f() inside the decorator, and somehow inserting 'global x' statements into the code for f. 
+ Changing f into a generator where we bind the variables by hand and then execute f's code directly. 
+ 
+ Answers (Total-7): #0 By the time your decorator gets the function object f , it's already been compiled -- specifically, it's been compiled with the knowledge that x is local (because it's assigned with the += assignment), the normal optimization (in 2.* you can defeat the optimization, at a staggering price in performance, by starting f with exec '' ; in 2.* , you cannot defeat the optimization). Essentially, to use the syntax you crave, you have to recompile f (by recovering its sources, if you know they'll be available at runtime, or, much harder, by bytecode hacks) with somehow-modified sources -- once you've decided to go that way, the simplest approach is probably to change x into f.x throughout the body of f . 
+
+ Personally, if and when I find myself fighting so hard against the language (or other technology) that I'm trying to bend to my will to impose my desires, I acknowledge that I'm either using the wrong language (or other technology), if those desires are absolutely crucial, and then the solution must be to change technology; or, if those desires are not that crucial, give up on them. 
+
+ Either way, I give up trying to distort the language too far away from its obvious design intentions: even if I did come up with some hacky, fragile kludge, it would no doubt be unmaintainable. In this case, Python's desire intentions are very clear: barenames that get re-bound within a functions are locals of that function unless explicitly designated as globals -- period. So, your attempt to make barenames (that get re-bound within a function) mean something completely different than "locals" is exactly this kind of fight. 
+
+ Edit : If you're willing to give up on the insistence on using barenames for your "statics", then suddenly you're not fighting against Python any more, but rather "going with the grain" of the language (despite the design glitch of global [and nonlocal ], but, that's a separate rant;-). So, for example: 
+
+ class _StaticStuff(object):
+ _static_stack = []
+ def push(self, d):
+ self._static_stack.append(d)
+ def pop(self):
+ self._static_stack.pop()
+ def __getattr__(self, n):
+ return self._static_stack[-1][n]
+ def __setattr__(self, n, v):
+ self._static_stack[-1][n] = v
+import __builtin__
+__builtin__.static = _StaticStuff()
+
+def with_static(**variables):
+ def dowrap(f):
+ def wrapper(*a, **k):
+  static.push(variables)
+  try: return f(*a, **k)
+  finally: static.pop()
+ return wrapper
+ return dowrap
+
+@with_static(x=0)
+def f():
+ static.x += 1
+ print static.x
+
+f()
+f()
+ 
+
+ This works just like you desire, printing 1 and then 2. (I'm using __builtin__ to make it simplest to use with_static to decorate functions living in any module whatsoever, of course). You could have several different implementations, but the key point of any good implementation is that "static variables" will be qualified names, not barenames -- making it explicit that they're not local variables, playing with the grain of the language, and so forth. (Similar built-in containers, and qualified names based on them, should have been used in Python's design, instead of the global and nonlocal design glitches, to indicate other kinds of variables that aren't local ones and therefore should not be using barenames... ah well, you can implement yourself a globvar special container on the same lines of the above static ones, without even needing decoration, though I'm not so sure that is entirely feasible for the nonlocal case [perhaps with some decoration and the tiniest amount of black magic...;=)]). 
+
+ Edit : a comments points out that the code as given doesn't work when you only decorate a function that returns a closure (instead of decorating the closure itself). That's right: of course, you have to decorate the specific function that uses the static (and there can be only one, by definition of function- static variables!), not a random function that doesn't in fact use the static but rather just happens to be in some lexical connection with the one that does . For example: 
+
+ def f():
+ @with_static(x=0)
+ def g():
+ static.x += 1
+ print static.x
+ return g
+
+x = f()
+x()
+x()
+ 
+
+ this works, while moving the decorator to f instead of g doesn't (and couldn't possibly). 
+
+ If the actual desiderata are not about static variables (visible and usable only within a single function) but some hybrid thing that's usable throughout a certain peculiar bundle of functions, that needs to be specified very precisely (and no doubt implemented very differently, depending on what the actual specs are ) -- and ideally that needs to happen in a new and separate SO questions, because this one (which is specifically about static instead), and this answer to this specific question, are already plenty big enough. 
+ #1 Here is a decorator that seems to work.
+Note that this requires return locals() at the end of the function due to being unable to set locals from the outside (I don't have much experience programming so if there is a way, I don't know it). 
+
+ class Static(object):
+def __init__(self, **kwargs):
+ self.kwargs = kwargs
+
+def __call__(self, f):
+ def wrapped_f():
+  try:
+   new_kwargs = {}
+   for key in self.kwargs:
+    i = getattr(f, key)
+    new_kwargs[key] = i
+   self.kwargs = new_kwargs
+  except:
+   pass
+  for key, value in f(**self.kwargs).items():
+   setattr(f, key, value)
+ return wrapped_f
+
+@Static(x=0, y=5, z='...')
+def f(x, y, z):
+ x += 1
+ y += 5
+ print x, y, z
+ return locals()
+ 
+
+ The output would be: 
+
+ &gt;&gt;&gt; f()
+1 10 ...
+&gt;&gt;&gt; f()
+2 15 ...
+&gt;&gt;&gt; f()
+3 20 ...
+ 
+
+ EDIT: 
+
+ I found something at http://code.activestate.com/recipes/410698/ and decided to try adding it to this. It works without the return now. 
+
+ EDIT again: Changed to to make it a few seconds faster.
+Edit 3; changed to function instead of class 
+
+ def static(**kwargs):
+ def wrap_f(function):
+  def probeFunc(frame, event, arg):
+   if event == 'call':
+    frame.f_locals.update(kwargs)
+    frame.f_globals.update(kwargs)
+   elif event == 'return':
+    for key in kwargs:
+     kwargs[key] = frame.f_locals[key]
+    sys.settrace(None)
+   return probeFunc
+  def traced():
+   sys.settrace(probeFunc)
+   function()
+  return traced
+ return wrap_f
+ 
+
+ tested: 
+
+ @static(x=1)
+def f():
+ x += 1
+
+global_x = 1
+def test_non_static():
+ global global_x
+ global_x += 1
+
+
+print 'Timeit static function: %s' % timeit.timeit(f)
+print 'Timeit global variable: %s' % timeit.timeit(test_non_static)
+ 
+
+ output: 
+
+ Timeit static function: 5.10412869535
+Timeit global variable: 0.242917510783
+ 
+
+ Using settrace slows it down quite drastically. 
+ #2 You could do something like that (but I haven't tested this extensively; used CPython 2.6): 
+
+ import types
+
+def static(**dict):
+ def doWrap(func):
+  scope = func.func_globals
+  scope.update(dict)
+  return types.FunctionType(func.func_code, scope)
+ return doWrap
+
+# if foo() prints 43, then it's wrong
+x = 42
+
+@static(x = 0)
+def foo():
+ global x
+ x += 1
+ print(x)
+
+foo() # =&gt; 1
+foo() # =&gt; 2
+ 
+
+ It requires declaring those variables as global and shadows top-level global variables, but otherwise should work. Not sure about performance, though. 
+ #3 Here is a really simple solution that works just like normal python static variables. 
+
+ def static(**kwars):
+ def wrap(f):
+ for key, value in kwargs.items():
+  setattr(f, key, value)
+ return f
+ return wrap
+ 
+
+ Example usage: 
+
+ @static(a=0)
+def foo(x):
+ foo.a += 1
+ return x+foo.a
+
+foo(1) # =&gt; 2
+foo(2) # =&gt; 4
+foo(14) # =&gt; 17
+ 
+
+ This more closely matches the normal way of doing python static variables 
+
+ def foo(x):
+ foo.a += 1
+ return x+foo.a
+foo.a = 10
+ 
+ #4 Here's something that might be much clearer. It doesn't involve any decorators or hacking. 
+
+ class F( object ):
+ def __init__( self ):
+  self.x= 0
+ def __call__( self ):
+  self.x += 1
+  print self.x
+
+f= F()
+ 
+
+ Now you have your function f with a static variable. 
+
+ f() #prints 1
+f() #prints 2
+ 
+ #5 How about this, without decorators? 
+
+ class State(dict):
+ """Object interface to dict."""
+ def __getattr__(self, name):
+  try:
+   return self[name]
+  except KeyError:
+   raise AttributeError, name
+
+def f(d=State(x=0)):
+ d.x += 1
+ return d.x
+ 
+
+ And here is it in action: 
+
+ &gt;&gt;&gt; f()
+1
+&gt;&gt;&gt; f()
+2
+&gt;&gt;&gt; f()
+3
+ 
+ #6 When you need to save state between invocations of a function, you are almost always better off using a generator/coroutine or an object. Since you want to use "bare" variable names, then you'll want the coroutine version. 
+
+ # the coroutine holds the state and yields rather than returns values
+def totalgen(x=0, y=0, z=0):
+ while True:
+  a, b, c = (yield x, y, z)
+  x += a
+  y += b
+  z += c
+
+# the function provides the expected interface to callers
+def runningtotal(a, b, c, totalgen=totalgen()):
+ try:
+  return totalgen.send((a, b, c)) # conveniently gives TypeError 1st time
+ except TypeError:
+  totalgen.next()     # initialize, discard results
+  return totalgen.send((a, b, c))
+ 
+
+ The result is a function that accumulates totals of the three values passed to it, exactly as if it had static variables, but the accumulators are plain old local variables in what is essentially an infinite generator.

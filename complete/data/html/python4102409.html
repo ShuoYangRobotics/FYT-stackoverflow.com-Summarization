@@ -1,0 +1,155 @@
+<h3>Question (ID-4102409):</h3><h2>8 Character Random Code</h2><p>I've been through answers to a few similar questions asked on SO, but could not find what I was looking for.</p>
+
+<p>Is there a more efficient way to generate 8 character unique IDs, base 36 (0-9A-Z), than generating a unique ID and querying the DB to see if it already exists and repeating until you get a unique ID that has not been used?</p>
+
+<p>Other solutions I found use time, but this is perhaps too easy to guess and may not work well in distributed systems.  Consider these IDs to be promo codes.</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>One option is to do it the other way round: generate a huge number of them in the database whenever you need to, then either fetch a single one from the DB when you need one, or reserve a whole bunch of them for your particular process (i.e. mark them as "potentially used" in the database) and then dole them out from memory.</p>
+<br /><b>#1</b><br /><p>I question that your "inefficient" approach is actually inefficient.  Consider this:</p>
+
+<ul>
+<li>There are 36^8 == 2,821,109,907,456 (2.8 Trillion) possible IDs.</li>
+<li>If you have N existing IDs, the chance of a new randomly generated ID colliding is N in ~2.8 trillion.</li>
+<li>Unless N is in the hundreds of billions, you "generate a unique ID and querying the DB to see if it already exists" algorithm will almost always terminate in one cycle.</li>
+</ul>
+
+<p>With careful design, you should be able to generate a guaranteed unique ID in one database request, almost all of the time ... unless you have an awfully large number of existing IDs.  (And if you do, just add another couple of characters to the ID and the problem goes away again.)</p>
+
+<p>If you want to, you can reduce the average number of database operations to less than one per ID by generating the IDs in batches, but their are potential complications, especially if you need to record the number of IDs that are actually in use.</p>
+
+<p>But, if you have at most 150,000 IDs (I assume, generated over a long period of time) then creating the IDs in batches is not worth the effort ... unless you are doing a bulk upload operation.</p>
+<br /><b>#2</b><br /><p>the answer is <strong><em>YES</em></strong> you simply have to generate them randomly, and then, check that you have not used that one already.</p>
+
+<p>This is exactly how your bank account number, and the like, is created. (But see below.)</p>
+
+<p>(Of course there is only a tiny chance you will get a collision, but you have to check. On systems like this, I always have it email the admin or make a note somewhere, if there is a collision.  Indeed, the fact that there is a collision (or many collisions!) is your signal that something has gone wrong.)</p>
+
+<p>Note that there is absolutely nothing "inefficient" about this. In the course of establishing a new user you will be doing 10s of 100s of big database lookups ("that username already exists" "your cousin is already a member" "that branch ID does not exist" etc etc). It is utterly no big deal to check that the Human-Known-User-Id is unique.</p>
+
+<p><em><strong>Note that of course you have to lock up the relevant table</em></strong> (or whatever you're working with) while you create one and check that it's unique. On a huge world-wide commercial system with multiple access and creation that is a bit of a hassle.</p>
+
+<p><em><strong>Here's a probably BETTER APPROACH</em></strong>, Bradford. This is what is usually done in large commercial systems. Just make up a big list of them (ie, generate millions of them randomly, beforehand, and check that they are all unique as you generate). Then have a little server that shoots them out (being careful to lock up, etc etc). That's the actual answer to how it's done on a large commercial system.</p>
+
+<p>(Really, having gotten a supposedly-not-yet-used new ID from such a server, I would <strong>still</strong> just check that it has not been used already, as a failsafe. It would be crazy not to - it's only one DB call, and you're making 10s/100s DB calls to set up a new account.)</p>
+
+<p>By the way, normally Human-Readable-Ids are NOT SO RANDOM. You would almost certainly not have zeros at the start. And many companies don't like zeros at the end. Personally I think you should never have three of anything in a row, and most large commercial systems enforce that for IDs (even two in a row is perhaps no good - it's your choice). If you are using letters ("your code is XMJUYTD") you will almost certainly simply leave out problem letters (I, O, etc). If you are mixing letters and numbers, you would probably leave out number zero. So, it's not so easy to construct a tasteful human-side-userID that makes you and customers happy!</p>
+
+<p>In summary</p>
+
+<p><strong>(1) Almost certainly in practice, premake a big list of them and use that.</strong></p>
+
+<p><strong>(2) Don't forget to lock up and so on.</strong></p>
+
+<p><strong>(3) There is nothing whatsoever "inefficient" about what you describe; you describe how it is actually done in real life on big systems.</strong></p>
+<br /><b>#3</b><br /><p>Unfortunately, 8 base 36 digits is a bit small. It's only 2 million million possible IDs, so if you generate 1.4 million randomly you have about a half chance of a collision.</p>
+
+<p>You could possibly use a PRNG with a large period, and map its current state to your ID space via some bijection. A 41 bit LFSR wouldn't be uncrackable, but might be reasonably OK if the thing you're protecting isn't all that valuable. You could distribute somewhat without having to access the DB all the time, by providing different nodes with a different position to start the cycle.</p>
+
+<p>The trouble with any such deterministic method, of course, is that once it's broken it's completely broken, and you can no longer trust any IDs. So doling numbers out of a database is probably the way to go, and distribute by doling them out in batches of a thousand or whatever.</p>
+
+<p>If you had a larger ID space, then you could use more secure techniques, for example the ID could consist of something to identify the source, an incrementing serial number for that source, and an HMAC using a key unique to the source.</p>
+<br /><b>#4</b><br /><p>If there is only one source of IDs (that is: you don't need to coordinate multiple independent sources on different machines) you can do the following:</p>
+
+<ul>
+<li><p>Calculate the maximum number of bits that a number may have so that it doesn't exceed the information contained in an 8-symbol string of 0-9A-Z. This would be <code>floor(log2(36^8))</code> = 41 bits.</p></li>
+<li><p>Have a counter (with 41 bits) start at zero</p></li>
+<li>Return <code>transform(counter++)</code> for each ID request</li>
+</ul>
+
+<p>The <code>transform</code> function has to be bijective and can be an arbitrarily long sequence of the following operations (which are all bijective themselves when they are calculated modulo <code>2^41</code>):</p>
+
+<ul>
+<li>xor with a fixed value</li>
+<li>rotate left or right by a fixed value</li>
+<li>reorder the bits by a fixed mapping (a generalization of the rotation above)</li>
+<li>add or subtract a fixed value</li>
+</ul>
+
+<p>When you are finished with that, you only need another function <code>encode(number)</code> to transform the number to base36.</p>
+<br /><b>#5</b><br /><p>Here's some python code for generating random, base36 IDs.</p>
+
+<pre><code>import random
+
+def base36encode(number, alphabet='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+    '''
+    Convert positive integer to a base36 string.
+
+    Source: http://en.wikipedia.org/wiki/Base_36#Python_Conversion_Code
+    '''
+    if not isinstance(number, (int, long)):
+        raise TypeError('number must be an integer')
+
+    # Special case for zero
+    if number == 0:
+        return '0'
+
+    base36 = ''
+
+    sign   = ""
+    if number &lt; 0:
+        sign  ='-'
+        number=-number
+
+    while number != 0:
+        number, i = divmod(number, len(alphabet))
+        base36 = alphabet[i] + base36
+
+    return sign + base36
+
+def generateID(length=8):
+    '''Generates a base36 ID.'''
+
+    random.seed()
+    id = base36encode(random.randint(0, (36**length)-1))
+
+    # append 0s to ensure desired length
+    while len(id) &lt; length:
+        id = '0' + id
+
+    return id
+
+def generateMultipleIDs(n):
+    '''Generate n number of unique, base36 IDs.'''
+
+    output = set()
+
+    while len(output) &lt; n:
+        output.add(generateID())
+
+    return output
+</code></pre>
+<br /><b>#6</b><br /><p>I once solved a similar problem using C++ involving a smaller number of possible IDs, but there might be useful to consider some ways to scale it up. Basically I created a big bitmap for all the possible IDs and would just lookup whether one was in use by testing the proper bit for it.</p>
+
+<p>To minimize RAM requirements, I stored the bitmap in a raw binary file and used random-access file i/o to seek to the byte with the corresponding bit in it I needed to check and/or set.</p>
+
+<p>Your much larger ID space would require a 328 GB bitmap, which is likely out of the question. On the other hand, a Python <code>set</code> of the used IDs might be acceptable, depending on how many IDs you think might actually end up being used. Other alternatives might be some sort of <a href="http://en.wikipedia.org/wiki/Sparse_file" rel="nofollow">sparse file</a> or sparse matrix technique, such as those in <a href="http://docs.scipy.org/doc/scipy/reference/sparse.html" rel="nofollow">scipy.sparse</a>.</p>
+
+<p>Hope this helps.</p>
+<br /><b>#7</b><br /><p>I do something similar to generate activation codes: 8-letter lowercase strings that are single-use. They are intended to be used within a short time of being generated (usually within minutes, but possibly not for up to a week), but must be unique. When they have been used, they are removed from the database.</p>
+
+<p>I just generate a value and see if it is in use in the database. This works for now, because there are not heaps of unused codes sitting in the database, but are still not easy to guess, even if you have been provided with one.</p>
+
+<p>As for the generation code:</p>
+
+<pre><code>def _generate_code(self, length):
+    random.seed()
+    candidates = string.lowercase[:26]
+    result = ""
+    for i in range(length):
+        result += random.choice(candidates)
+    return result
+</code></pre>
+<br /><b>#8</b><br /><p>Does it need to be cryptographically secure? </p>
+
+<p>If not, pc(n) = a + bn, where b is prime relative to 36^8 will do. Use an array of byte.</p>
+
+<pre><code>foo(int n, byte[] a, byte[] b) {
+  byte[] r = new byte[8];
+  int carry=0;
+  for(int i = 0; i&lt;8;i++) {
+    int x = carry + a[i] + n*b[i];
+    r[i] = x % 36;
+    carry = x / 36;      
+  }
+}
+</code></pre>
+<br />

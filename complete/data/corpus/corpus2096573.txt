@@ -1,0 +1,125 @@
+Question (ID-2096573): counting combinations and permutations efficiently I have some code to count permutations and combinations, and I'm trying to make it work better for large numbers. 
+
+ I've found a better algorithm for permutations that avoids large intermediate results, but I still think I can do better for combinations. 
+
+ So far, I've put in a special case to reflect the symmetry of nCr, but I'd still like to find a better algorithm that avoids the call to factorial(r), which is an unnecessarily large intermediate result. Without this optimization, the last doctest takes too long trying to calculate factorial(99000). 
+
+ Can anyone suggest a more efficient way to count combinations? 
+
+ from math import factorial
+
+def product(iterable):
+ prod = 1
+ for n in iterable:
+  prod *= n
+ return prod
+
+def npr(n, r):
+ """
+ Calculate the number of ordered permutations of r items taken from a
+ population of size n.
+
+ &gt;&gt;&gt; npr(3, 2)
+ 6
+ &gt;&gt;&gt; npr(100, 20)
+ 1303995018204712451095685346159820800000
+ """
+ assert 0 &lt;= r &lt;= n
+ return product(range(n - r + 1, n + 1))
+
+def ncr(n, r):
+ """
+ Calculate the number of unordered combinations of r items taken from a
+ population of size n.
+
+ &gt;&gt;&gt; ncr(3, 2)
+ 3
+ &gt;&gt;&gt; ncr(100, 20)
+ 535983370403809682970
+ &gt;&gt;&gt; ncr(100000, 1000) == ncr(100000, 99000)
+ True
+ """
+ assert 0 &lt;= r &lt;= n
+ if r &gt; n // 2:
+  r = n - r
+ return npr(n, r) // factorial(r)
+ 
+ Answers (Total-7): #0 Two fairly simple suggestions: 
+
+ 
+ To avoid overflow, do everything in log space. Use the fact that log(a * b) = log(a) + log(b), and log(a / b) = log(a) - log(b). This makes it easy to work with very large factorials: log(n! / m!) = log(n!) - log(m!), etc. 
+ Use the gamma function instead of factorial. You can find one in scipy.stats.loggamma . It's a much more efficient way to calculate log-factorials than direct summation. loggamma(n) == log(factorial(n - 1)) , and similarly, gamma(n) == factorial(n - 1) . 
+ 
+ #1 if n is not far from r then using the recursive definition of combination is probably better, since xC0 == 1 you will only have a few iterations: 
+
+ The relevant recursive definition here is: 
+
+ nCr = (n-1)C(r-1) * n/r 
+
+ This can be nicely computed using tail recursion with the following list: 
+
+ [(n - r, 0), (n - r + 1, 1), (n - r + 2, 2), ..., (n - 1, r - 1), (n, r)] 
+
+ which is of course easily generated in Python (we omit the first entry since nC0 = 1) by izip(xrange(n - r + 1, n+1), xrange(1, r+1)) Note that this assumes r &lt;= n you need to check for that and swap them if they are not. Also to optimize use if r &lt; n/2 then r = n - r. 
+
+ Now we simply need to apply the recursion step using tail recursion with reduce. We start with 1 since nC0 is 1 and then multiply the current value with the next entry from the list as below. 
+
+ from itertools import izip
+
+reduce(lambda x, y: x * y[0] / y[1], izip(xrange(n - r + 1, n+1), xrange(1, r+1)), 1)
+ 
+ #2 If you are computing N choose K (which is what I think you're doing with ncr), there is a dynamic programming solution that may be a lot faster. This will avoid factorial, plus you can keep the table if you want for later use. 
+
+ Here is a teaching link for it: 
+
+ http://www.csc.liv.ac.uk/~ped/teachadmin/algor/dyprog.html 
+
+ I am unsure of how to better solve your first problem, though, sorry. 
+
+ Edit: Here is the mock-up. There are some pretty hilarious off-by-one errors, so it can certainly stand some more clean up. 
+
+ import sys
+n = int(sys.argv[1])+2#100
+k = int(sys.argv[2])+1#20
+table = [[0]*(n+2)]*(n+2)
+
+for i in range(1,n):
+ table[i][i] = 1
+for i in range(1,n):
+ for j in range(1,n-i):
+  x = i+j
+  if j == 1: table[x][j] = 1
+  else: table[x][j] = table[x-1][j-1] + table[x-1][j]
+
+print table[n][k]
+ 
+ #3 If you don't need a pure-python solution, gmpy might help ( gmpy.comb is very fast). 
+ #4 If your problem does not require knowing the exact number of permutations or combinations, then you could use Stirling's approximation for the factorial. 
+
+ That would lead to code like this: 
+
+ import math
+
+def stirling(n):
+ # http://en.wikipedia.org/wiki/Stirling%27s_approximation
+ return math.sqrt(2*math.pi*n)*(n/math.e)**n
+
+def npr(n,r):
+ return (stirling(n)/stirling(n-r) if n&gt;20 else
+   math.factorial(n)/math.factorial(n-r))
+
+def ncr(n,r): 
+ return (stirling(n)/stirling(r)/stirling(n-r) if n&gt;20 else
+   math.factorial(n)/math.factorial(r)/math.factorial(n-r))
+
+print(npr(3,2))
+# 6
+print(npr(100,20))
+# 1.30426670868e+39
+print(ncr(3,2))
+# 3
+print(ncr(100,20))
+# 5.38333246453e+20
+ 
+ #5 Using xrange() instead of range() will speed things up slightly due to the fact that no intermediate list is created, populated, iterated through, and then destroyed. Also, reduce() with operator.mul . 
+ #6 For N choose K you could use Pascals triangle. Basically you would need to keep array of size N around to compute all the N choose K values. Only additions would be required.

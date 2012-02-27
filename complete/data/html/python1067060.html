@@ -1,0 +1,206 @@
+<h3>Question (ID-1067060):</h3><h2>Translating Perl to Python</h2><p>I found this Perl script while <a href="http://stackoverflow.com/questions/18671/quick-easy-way-to-migrate-sqlite3-to-mysql/25860">migrating my SQLite database to mysql</a></p>
+
+<p>I was wondering (since I don't know Perl) how could one rewrite this in Python?</p>
+
+<p>Bonus points for the shortest (code) answer :)</p>
+
+<p><strong>edit</strong>: sorry I meant shortest code, not strictly shortest answer</p>
+
+<pre><code>#! /usr/bin/perl
+
+while ($line = &lt;&gt;){
+    if (($line !~  /BEGIN TRANSACTION/) &amp;&amp; ($line !~ /COMMIT/) &amp;&amp; ($line !~ /sqlite_sequence/) &amp;&amp; ($line !~ /CREATE UNIQUE INDEX/)){
+
+        if ($line =~ /CREATE TABLE \"([a-z_]*)\"(.*)/){
+                $name = $1;
+                $sub = $2;
+                $sub =~ s/\"//g; #"
+                $line = "DROP TABLE IF EXISTS $name;\nCREATE TABLE IF NOT EXISTS $name$sub\n";
+        }
+        elsif ($line =~ /INSERT INTO \"([a-z_]*)\"(.*)/){
+                $line = "INSERT INTO $1$2\n";
+                $line =~ s/\"/\\\"/g; #"
+                $line =~ s/\"/\'/g; #"
+        }else{
+                $line =~ s/\'\'/\\\'/g; #'
+        }
+        $line =~ s/([^\\'])\'t\'(.)/$1THIS_IS_TRUE$2/g; #'
+        $line =~ s/THIS_IS_TRUE/1/g;
+        $line =~ s/([^\\'])\'f\'(.)/$1THIS_IS_FALSE$2/g; #'
+        $line =~ s/THIS_IS_FALSE/0/g;
+        $line =~ s/AUTOINCREMENT/AUTO_INCREMENT/g;
+        print $line;
+    }
+}
+</code></pre>
+
+<p>Some additional code was necessary to successfully migrate the sqlite database (handles one line Create table statements, foreign keys, fixes a bug in the original program that converted empty fields <code>''</code> to <code>\'</code>. </p>
+
+<p>I <a href="http://stackoverflow.com/questions/18671/quick-easy-way-to-migrate-sqlite3-to-mysql/1067365#1067365">posted the code on the migrating my SQLite database to mysql Question</a></p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Here's a pretty literal translation with just the minimum of obvious style changes (putting all code into a function, using string rather than re operations where possible).</p>
+
+<pre><code>import re, fileinput
+
+def main():
+  for line in fileinput.input():
+    process = False
+    for nope in ('BEGIN TRANSACTION','COMMIT',
+                 'sqlite_sequence','CREATE UNIQUE INDEX'):
+      if nope in line: break
+    else:
+      process = True
+    if not process: continue
+    m = re.search('CREATE TABLE "([a-z_]*)"(.*)', line)
+    if m:
+      name, sub = m.groups()
+      line = '''DROP TABLE IF EXISTS %(name)s;
+CREATE TABLE IF NOT EXISTS %(name)s%(sub)s
+'''
+      line = line % dict(name=name, sub=sub)
+    else:
+      m = re.search('INSERT INTO "([a-z_]*)"(.*)', line)
+      if m:
+        line = 'INSERT INTO %s%s\n' % m.groups()
+        line = line.replace('"', r'\"')
+        line = line.replace('"', "'")
+    line = re.sub(r"([^'])'t'(.)", r"\1THIS_IS_TRUE\2", line)
+    line = line.replace('THIS_IS_TRUE', '1')
+    line = re.sub(r"([^'])'f'(.)", r"\1THIS_IS_FALSE\2", line)
+    line = line.replace('THIS_IS_FALSE', '0')
+    line = line.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+    print line,
+
+main()
+</code></pre>
+<br /><b>#1</b><br /><p><a href="http://stackoverflow.com/questions/1067060/translating-perl-to-python/1067151#1067151">Alex Martelli's solution above</a> works good, but needs some fixes and additions:</p>
+
+<p>In the lines using regular expression substitution, the insertion of the matched groups must be double-escaped OR the replacement string must be prefixed with r to mark is as regular expression:</p>
+
+<pre><code>line = re.sub(r"([^'])'t'(.)", "\\1THIS_IS_TRUE\\2", line)
+</code></pre>
+
+<p>or</p>
+
+<pre><code>line = re.sub(r"([^'])'f'(.)", r"\1THIS_IS_FALSE\2", line)
+</code></pre>
+
+<p>Also, this line should be added before print:</p>
+
+<pre><code>line = line.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+</code></pre>
+
+<p>Last, the column names in create statements should be backticks in MySQL. Add this in line 15:</p>
+
+<pre><code>  sub = sub.replace('"','`')
+</code></pre>
+
+<p>Here's the complete script with modifications:</p>
+
+<pre><code>import re, fileinput
+
+def main():
+  for line in fileinput.input():
+    process = False
+    for nope in ('BEGIN TRANSACTION','COMMIT',
+                 'sqlite_sequence','CREATE UNIQUE INDEX'):
+      if nope in line: break
+    else:
+      process = True
+    if not process: continue
+    m = re.search('CREATE TABLE "([a-z_]*)"(.*)', line)
+    if m:
+      name, sub = m.groups()
+      sub = sub.replace('"','`')
+      line = '''DROP TABLE IF EXISTS %(name)s;
+CREATE TABLE IF NOT EXISTS %(name)s%(sub)s
+'''
+      line = line % dict(name=name, sub=sub)
+    else:
+      m = re.search('INSERT INTO "([a-z_]*)"(.*)', line)
+      if m:
+        line = 'INSERT INTO %s%s\n' % m.groups()
+        line = line.replace('"', r'\"')
+        line = line.replace('"', "'")
+    line = re.sub(r"([^'])'t'(.)", "\\1THIS_IS_TRUE\\2", line)
+    line = line.replace('THIS_IS_TRUE', '1')
+    line = re.sub(r"([^'])'f'(.)", "\\1THIS_IS_FALSE\\2", line)
+    line = line.replace('THIS_IS_FALSE', '0')
+    line = line.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+    if re.search('^CREATE INDEX', line):
+        line = line.replace('"','`')
+    print line,
+
+main()
+</code></pre>
+<br /><b>#2</b><br /><p>Here is a slightly better version of the original.</p>
+
+<pre><code>#! /usr/bin/perl
+use strict;
+use warnings;
+use 5.010; # for s/\K//;
+
+while( &lt;&gt; ){
+  next if m'
+    BEGIN TRANSACTION   |
+    COMMIT              |
+    sqlite_sequence     |
+    CREATE UNIQUE INDEX
+  'x;
+
+  if( my($name,$sub) = m'CREATE TABLE \"([a-z_]*)\"(.*)' ){
+    # remove "
+    $sub =~ s/\"//g; #"
+    $_ = "DROP TABLE IF EXISTS $name;\nCREATE TABLE IF NOT EXISTS $name$sub\n";
+
+  }elsif( /INSERT INTO \"([a-z_]*)\"(.*)/ ){
+    $_ = "INSERT INTO $1$2\n";
+
+    # " =&gt; \"
+    s/\"/\\\"/g; #"
+    # " =&gt; '
+    s/\"/\'/g; #"
+
+  }else{
+    # '' =&gt; \'
+    s/\'\'/\\\'/g; #'
+  }
+
+  # 't' =&gt; 1
+  s/[^\\']\K\'t\'/1/g; #'
+
+  # 'f' =&gt; 0
+  s/[^\\']\K\'f\'/0/g; #'
+
+  s/AUTOINCREMENT/AUTO_INCREMENT/g;
+  print;
+}
+</code></pre>
+<br /><b>#3</b><br /><p>Based on <a href="http://docs.python.org/dev/howto/regex.html" rel="nofollow">http://docs.python.org/dev/howto/regex.html</a> ...</p>
+
+<ol>
+<li>Replace <code>$line =~ /.*/</code> with <code>re.search(r".*", line)</code>.</li>
+<li><code>$line !~ /.*/</code> is just <code>!($line =~ /.*/)</code>.</li>
+<li>Replace <code>$line =~ s/.*/x/g</code> with <code>line=re.sub(r".*", "x", line)</code>.</li>
+<li>Replace <code>$1</code> through <code>$9</code> inside <code>re.sub</code> with <code>\1</code> through <code>\9</code> respectively.</li>
+<li>Outside a sub, save the return value, i.e. <code>m=re.search()</code>, and replace <code>$1</code> with the return value of <code>m.group(1)</code>.</li>
+<li>For <code>"INSERT INTO $1$2\n"</code> specifically, you can do <code>"INSERT INTO %s%s\n" % (m.group(1), m.group(2))</code>.</li>
+</ol>
+<br /><b>#4</b><br /><p>I am not sure what is so hard to understand about this that it requires a snide remark as in your comment above. Note that <code>&lt;&gt;</code> is called the diamond operator. <code>s///</code> is the substitution operator and <code>//</code> is the match operator <code>m//</code>.</p>
+<br /><b>#5</b><br /><p>all of scripts on this page can't deal with simple sqlite3:</p>
+
+<pre><code>PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE Filename (
+  FilenameId INTEGER,
+  Name TEXT DEFAULT '',
+  PRIMARY KEY(FilenameId) 
+  );
+INSERT INTO "Filename" VALUES(1,'');
+INSERT INTO "Filename" VALUES(2,'bigfile1');
+INSERT INTO "Filename" VALUES(3,'%gconf-tree.xml');
+</code></pre>
+
+<p>None were able to reformat "table_name" into proper mysql's `table_name` . Some messed up empty string value.</p>
+<br /><b>#6</b><br /><p>Shortest? The tilde signifies a regex in perl. "import re" and go from there. The only key differences are that you'll be using \1 and \2 instead of $1 and $2 when you assign values, and you'll be using %s for when you're replacing regexp matches inside strings.</p>
+<br /><b>#7</b><br /><p>Real issue is do you know actually how to migrate the database? What is presented is merely a search and replace loop.</p>
+<br />

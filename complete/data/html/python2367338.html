@@ -1,0 +1,122 @@
+<h3>Question (ID-2367338):</h3><h2>Sed script to edit csv file Or Python</h2><p>In our project we need to import the csv file to postgres.
+There are multiple types of files meaning the length of the file changes as some files are with fewer columns and some with all of them.</p>
+
+<p>We need a fast way to import this file to postgres. I want to use COPY FROM of the postgres since the speed requirement of the processing are very high(almost 150 files per minute with 20K file size each).</p>
+
+<p>Since the file columns numbers are not fixed, I need to pre-process the file before I pass it to the postgres procedure. The pre-processing is simply to add extra commas in the csv  for columns, which are not there in the file.</p>
+
+<p>There are two options for me to preprocess the file - use python or use Sed.</p>
+
+<p>My first question is, what would be the fastest way of pre-process the file?</p>
+
+<p>Second question is,   If I use sed how would I insert a comma after say 4th, 5th comma fields?<br>
+e.g.  if file has entries like
+1,23,56,we,89,2009-12-06 
+and I need to edit the file with final output like:
+1,23,56,we,,89,,2009-12-06 </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Are you aware of the fact that <a href="http://www.postgresql.org/docs/8.3/static/sql-copy.html" rel="nofollow"><code>COPY FROM</code></a> lets you specify which columns (as well as in which order they) are to be imported?</p>
+
+<pre><code>COPY tablename ( column1, column2, ... ) FROM ...
+</code></pre>
+
+<p>Specifying directly, at the Postgres level, which columns to import and in what order, will typically be the fastest and most efficient import method.</p>
+
+<p>This having been said, there is a much simpler (and portable) way of using <code>sed</code> (than what has been presented in other posts) to <a href="http://www.grymoire.com/Unix/Sed.html#uh-8" rel="nofollow">replace an <em>n</em> th occurrence</a>, e.g. replace the 4th and 5th occurrences of a comma with double commas:</p>
+
+<pre><code>echo '1,23,56,we,89,2009-12-06' | sed -e 's/,/,,/5;s/,/,,/4'
+</code></pre>
+
+<p>produces:</p>
+
+<pre><code>1,23,56,we,,89,,2009-12-06
+</code></pre>
+
+<p>Notice that I replaced the rightmost fields (#5) first.</p>
+
+<p>I see that you have also tagged your question as <code>perl</code>-related, although you make no explicit reference to <code>perl</code> in the body of the question; here would be one possible implementation which gives you the flexibility of also reordering or otherwise processing fields:</p>
+
+<pre><code>echo '1,23,56,we,89,2009-12-06' |
+  perl -F/,/ -nae 'print "$F[0],$F[1],$F[2],$F[3],,$F[4],,$F[5]"'
+</code></pre>
+
+<p>also produces:</p>
+
+<pre><code>1,23,56,we,,89,,2009-12-06
+</code></pre>
+
+<p>Very similarly with <code>awk</code>, for the record:</p>
+
+<pre><code>echo '1,23,56,we,89,2009-12-06' |
+  awk -F, '{print $1","$2","$3","$4",,"$5",,"$6}'
+</code></pre>
+
+<p>I will leave Python to someone else. :)</p>
+
+<p>Small note on the Perl example: I am using the <code>-a</code> and <code>-F</code> options to autosplit so I have a shorter command string; however, this leaves the newline embedded in the last field (<code>$F[5]</code>) which is fine as long as that field doesn't have to be reordered somewhere else. Should that situation arise, slightly more typing would be needed in order to zap the newline via <code>chomp</code>, then <code>split</code> by hand and finally print our own newline character <code>\n</code> (the <code>awk</code> example above does not have this problem):</p>
+
+<pre><code>perl -ne 'chomp;@F=split/,/;print "$F[0],$F[1],$F[2],$F[3],,$F[4],,$F[5]\n"'
+</code></pre>
+
+<h3>EDIT (an idea inspired by Vivin):</h3>
+
+<pre><code>COMMAS_TO_DOUBLE="1 4 5"
+echo '1,23,56,we,89,2009-12-06' |
+  sed -e `for f in $COMMAS_TO_DOUBLE ; do echo "s/,/,,/$f" ; done |
+    sort -t/ -k4,4nr | paste -s -d ';'`
+
+1,,23,56,we,,89,,2009-12-06
+</code></pre>
+
+<p>Sorry, couldn't resist it. :)</p>
+<br /><b>#1</b><br /><p>To answer your first question, <code>sed</code> would have less overhead, but might be painful. <code>awk</code> would be a little better (it's more powerful). Perl or Python have more overhead, but would be easier to work with (regarding Perl, that's maybe a little subjective ;). Personally, I'd use Perl).</p>
+
+<p>As far as the second question, I think the problem might be a little more complex. For example, don't you need to examine the string to figure out what fields are actually missing? Or is it guaranteed that it will always be the 4th and 5th? If it's the first case case, it would be <em>way</em> easier to do this in Python or Perl rather than in <code>sed</code>. Otherwise:</p>
+
+<pre><code>echo "1,23,56,we,89,2009-12-06" | sed -e 's/\([^,]\+\),\([^,]\+\),\([^,]\+\),\([^,]\+\),\([^,]\+\),/\1,\2,\3,\4,,\5,,/'
+</code></pre>
+
+<p>or (easier on the eyes):</p>
+
+<pre><code>echo "1,23,56,we,89,2009-12-06" | sed -e 's/\(\([^,]\+,\)\{3\}\)\([^,]\+\),\([^,]\+\),/\1,\3,,\4,,/'
+</code></pre>
+
+<p>This will add a comma after the 5th and 4th columns assuming there are no other commas in the text.</p>
+
+<p>Or you can use two <code>sed</code>s for something that's a little less ugly (only slightly, though):</p>
+
+<pre><code>echo "1,23,56,we,89,2009-12-06" | sed -e 's/\(\([^,]*,\)\{4\}\)/\1,/' | sed -e 's/\(\([^,]*,\)\{6\}\)/\1,/'
+</code></pre>
+<br /><b>#2</b><br /><p>@OP, you are processing a csv file, which have distinct fields and delimiters. Use a tool that can split on delimiters and give you fields to work with easily. sed is not one of them, although it can be done, as some of the answers suggested, but you will get sed regex that is hard to read when it gets complicated. Use tools like awk/Python/Perl where they work with fields and delimiters easily, best of all, modules that specifically tailored to processing csv is available. For your example, a simple Python approach (without the use of csv module which ideally you should try to use it)</p>
+
+<pre><code>for line in open("file"):
+    line=line.rstrip() #strip new lines
+    sline=line.split(",")
+    if len(sline) &lt; 8: # you want exact 8 fields
+        sline.insert(4,"")
+        sline.insert(6,"")
+        line=','.join(sline)
+    print line
+</code></pre>
+
+<p>output</p>
+
+<pre><code>$ more file
+1,23,56,we,89,2009-12-06
+
+$ ./python.py
+1,23,56,we,,89,,2009-12-06
+</code></pre>
+<br /><b>#3</b><br /><pre><code>sed 's/^([^,]*,){4}/&amp;,/' &lt;original.csv &gt;output.csv
+</code></pre>
+
+<p>Will add a comma after the 4th comma separated field (by matching 4 repetitions of <code>&lt;anything&gt;,</code> and then adding a comma after that). Note that there is a catch; make sure none of these values are quoted strings with commas in them.</p>
+
+<p>You could chain multiple replacements via pipes if necessary, or modify the regex to add in any needed commas at the same time (though that gets more complex; you'd need to use subgroup captures in your replacement text).</p>
+<br /><b>#4</b><br /><p>Don't know regarding speed, but here is sed expr that should do the job:</p>
+
+<pre><code>sed -i 's/\(\([^,]*,\)\{4\}\)/\1,/' file_name
+</code></pre>
+
+<p>Just replace 4 by desured number of columns</p>
+<br /><b>#5</b><br /><p>Depending on your requirements, consider using <a href="http://en.wikipedia.org/wiki/Etl" rel="nofollow">ETL</a> software for this and future tasks.  Tools like <a href="http://www.pentaho.com/" rel="nofollow">Pentaho</a> and <a href="http://www.talend.com/index.php" rel="nofollow">Talend</a> offer you a great deal of flexibility and you don't have to write a single line of code.</p>
+<br />

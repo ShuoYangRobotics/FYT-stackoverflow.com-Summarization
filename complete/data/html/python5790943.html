@@ -1,0 +1,169 @@
+<h3>Question (ID-5790943):</h3><h2>Full text searching XML data with Python: best practices, pros & cons</h2><p><strong>Task</strong></p>
+
+<p>I want to use Python for doing full text searches of XML data.</p>
+
+<p><strong>Example data</strong></p>
+
+<pre><code>&lt;elements&gt;
+  &lt;elem id="1"&gt;some element&lt;/elem&gt;
+  &lt;elem id="2"&gt;some other element&lt;/elem&gt;
+  &lt;elem id="3"&gt;some element
+    &lt;nested id="1"&gt;
+    other nested element
+    &lt;/nested&gt;
+  &lt;/elem&gt;
+&lt;/elements&gt;
+</code></pre>
+
+<p><strong>Basic functionality</strong></p>
+
+<p>The most basic functionality I want is that a search for "other" in an XPath ("/elements/elem") returns <em>at least</em> the value of the ID attribute for the matching element (elem 2) and nested element (elem 3, nested 1) or the matching XPaths.</p>
+
+<p><strong>Ideal functionality</strong></p>
+
+<p>The solution should be flexible and scalable. I am looking for possible combinations of these features:</p>
+
+<ul>
+<li>search nested elements (infinite depth)</li>
+<li>search attributes</li>
+<li>search for sentences and paragraphs</li>
+<li>search using wildcards</li>
+<li>search using fuzzy matching</li>
+<li>return precise matching info</li>
+<li>good search speed for large XML files</li>
+</ul>
+
+<p><strong>Question</strong></p>
+
+<p>I don't expect a solution with all of the ideal functionality, I'll have to combine different existing functionalities and code the rest myself. But first I would like to know more about what there is out there, which libraries and approaches you would usually use for this, what their pros and cons are.</p>
+
+<p>EDIT: Thanks for the answers so far, I added detail and <strong>started a bounty</strong>.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Not sure if that will be enough for your needs, but <a href="http://lxml.de" rel="nofollow">lxml</a> has support for <a href="http://lxml.de/xpathxslt.html#regular-expressions-in-xpath" rel="nofollow">regular expressions in xpath</a> (meaning: you can use xpath 1.0 plus the <a href="http://www.exslt.org/regexp/index.html" rel="nofollow">EXSLT extension functions for regular expressions</a>)</p>
+
+<p>Compared to the feature list that was added later:</p>
+
+<ul>
+<li>search nested elements (infinite depth): yes</li>
+<li>search attributes: yes</li>
+<li>search for sentences and paragraphs: no. Assuming that "paragraphs" are actual xml elements, then yes. But "sentences" as such, no.</li>
+<li>search using wildcards: yes (regular expressions)</li>
+<li>search using fuzzy matching: no (assuming stemming, synonyms and so on...)</li>
+<li>return precise matching info: yes</li>
+<li>good search speed for large XML files: yes, except when your files are so extremely large that you would actually need a fulltext index to get good speed anyway.</li>
+</ul>
+
+<p>The only way to satisfy all your request that I see, would be to load your files into a native xml database that supports "real" fulltext search (via XQuery Fulltext probably) and use that. (can't help you much further with that, maybe <a href="http://modis.ispras.ru/sedna/index.html" rel="nofollow">Sedna</a>, which seems to have a python API and seems to supports fulltext search?)</p>
+<br /><b>#1</b><br /><pre><code>select="/elements/elem//[contains(.,'other')]"
+</code></pre>
+
+<p>see also <a href="http://stackoverflow.com/questions/614797/xpath-find-a-node-that-has-a-given-attribute-whose-value-contains-a-string/614826#614826">xpath: find a node that has a given attribute whose value contains a string</a></p>
+<br /><b>#2</b><br /><p>I think you would be best served using a full text search engine like Solr: <a href="http://lucene.apache.org/solr/" rel="nofollow">http://lucene.apache.org/solr/</a></p>
+
+<p>What you can do is store a "document" in solr for each <code>&lt;elem /&gt;</code> in your xml.  You can store any data you like in the document.  Then you can search against the index and grab the <code>id</code> field stored in the matching documents.  This will be very fast for a large set of documents.</p>
+<br /><b>#3</b><br /><p>I'd recommend the following two:</p>
+
+<p><strong>Use XPath 2.0</strong>. It <strong><a href="http://www.w3.org/TR/xpath-functions/#string.match" rel="nofollow">supports regular expressions</a></strong>.</p>
+
+<p>Or, </p>
+
+<p><strong>Use <a href="http://www.w3.org/TR/xpath-full-text-10/" rel="nofollow">XQuery and XPath (2.0) Full Text</a></strong>, which has even more powerful features.</p>
+<br /><b>#4</b><br /><p>So, recently I had to create a XML to JSON converter. It doesn't conform exactly to the JSON standard, but it comes pretty close. The xml2json function returns a dictionary representation of the xml object. All element attributes are included in a dictionary with a key of attributes and element text are included in the text key.</p>
+
+<p>For example, your xml object would look like this after its conversion:</p>
+
+<pre><code>json = {'elements': 
+    {'elem': [
+        {'attributes': {'id', '1'}, 'text': 'some element'},
+        {'attributes': {'id', '2'}, 'text': 'some other element'},
+        {'attributes': {'id', '3'}, 'text': 'some element', 'nested': {
+            'attributes': {'id', '1'}, 'text': 'other nested element'}},
+    ]}
+</code></pre>
+
+<p>Here is the xml2json function.</p>
+
+<pre><code>def xml2json(x):
+    def get_attributes(atts):
+        atts = dict(atts)
+        d = {}
+        for k, v in atts.items():
+            d[k] = v.value
+        return d
+
+    def get_children(n, d):
+        tmp = {}
+        d.setdefault(n.nodeName, {})
+        if n.attributes:
+            tmp['attributes'] = get_attributes(n.attributes)
+        if n.hasChildNodes():
+            for c in n.childNodes:
+                if c.nodeType == c.TEXT_NODE or c.nodeName == '#cdata-section':
+                    tmp['text'] = c.data
+                else:
+                    children = get_children(c, {})
+                    for ck, cv in children.items():
+                        if ck in d[n.nodeName]:
+                            if not isinstance(d[n.nodeName][ck], list):
+                                tmpv = d[n.nodeName][ck]
+                                d[n.nodeName][ck] = []
+                                d[n.nodeName][ck].append(tmpv)
+                            d[n.nodeName][ck].append(cv)
+                        else:
+                            d[n.nodeName][ck] = cv
+
+        for tk, tv in tmp.items():
+            d[n.nodeName][tk] = tv
+
+        return d
+
+    return get_children(x.firstChild, {})
+</code></pre>
+
+<p>Here is the searchjson function.</p>
+
+<pre><code>def searchjson(sobj, reg):
+    import re
+    results = []
+    if isinstance(sobj, basestring):
+        # search the string and return the output
+        if re.search(reg, sobj):
+            results.append(sobj)
+    else:
+        # dictionary
+        for k, v in sobj.items():
+            newv = v
+            if not isinstance(newv, list):
+                newv = [newv]
+
+            for elem in newv:
+                has_attributes = False
+                if isinstance(elem, dict):
+                    has_attributes = bool(elem.get('attributes', False))
+                res = searchjson(elem, reg)
+                res = [] if not res else res
+                for r in res:
+                    r_is_dict = isinstance(r, dict)
+                    r_no_attributes = r_is_dict and 'attributes' not in r.keys()
+                    if has_attributes and r_no_attributes :
+                        r.update({'attributes': elem.get('attributes', {})})
+
+                    results.append({k: r})
+
+    return results
+</code></pre>
+
+<p>The search function I created after reading your question. It hasn't been 100% tested and probably has a few bugs, but I think it would be a good start for you. As for what you're looking for, it searches nested elements, attributes, using wildcards. It also returns the id of the elements.</p>
+
+<p>You can use the function like so, where xml is the xml object to search and reg is a regex pattern string to search for, ex: 'other', 'oth.*', '.<em>the.</em>' will all find the elements with "other" in them.</p>
+
+<pre><code>json = xml2json(xml)
+results = searchjson(json, reg='other')
+</code></pre>
+
+<p>results will be a list of dictionaries.</p>
+
+<p>Hope it helps.</p>
+<br /><b>#5</b><br /><p>For single large files accessed by a Python script, you should look at <a href="http://xapian.org/" rel="nofollow">Xapian</a> it is a full featured full text indexing and search engine, that is mature and robust and has <strong>wonderful</strong> first class Python bindings. It works with Python like it was written in Python, no external servers to run or any silliness like that.</p>
+
+<p>If you don't need to persist the indexes, and can use the in memory database it will be extremely fast. It is faster than Lucene based solutions and uses a tiny fraction of the resources.</p>
+<br />

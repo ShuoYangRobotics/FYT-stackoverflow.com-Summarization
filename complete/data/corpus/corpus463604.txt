@@ -1,0 +1,185 @@
+Question (ID-463604): What is the preferred way to type-check variables in Python? I have a Python function that takes a numeric argument that must be an integer in order for it behave correctly. What is the preferred way of verifying this in Python? 
+
+ My first reaction is to do something like this: 
+
+ def isInteger(n):
+ return int(n) == n
+ 
+
+ But I can't help thinking that this is 1) expensive 2) ugly and 3) subject to the tender mercies of machine epsilon. 
+
+ Does Python provide any native means of type checking variables? Or is this considered to be a violation of the language's dynamically typed design? 
+
+ EDIT: since a number of people have asked - the application in question works with IPv4 prefixes, sourcing data from flat text files. If any input is parsed into a float, that record should be viewed as malformed and ignored. 
+ Answers (Total-7): #0 isinstance(n, int)
+ 
+
+ If you need to know whether it's definitely an actual int and not a subclass of int (generally you shouldn't need to do this): 
+
+ type(n) is int
+ 
+
+ this: 
+
+ return int(n) == n
+ 
+
+ isn't such a good idea, as cross-type comparisons can be true - notably int(3.0)==3.0 
+ #1 Yeah, as Evan said, don't type check. Just try to use the value: 
+
+ def myintfunction(value):
+ """ Please pass an integer """
+ return 2 + value
+ 
+
+ That doesn't have a typecheck. It is much better! Let's see what happens when I try it: 
+
+ &gt;&gt;&gt; myintfunction(5)
+7
+ 
+
+ That works, because it is an integer. Hm. Lets try some text. 
+
+ &gt;&gt;&gt; myintfunction('text')
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "&lt;stdin&gt;", line 3, in myintfunction
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+ 
+
+ It shows an error, TypeError, which is what it should do anyway. If caller wants to catch that, it is possible. 
+
+ What would you do if you did a typecheck? Show an error right? So you don't have to typecheck because the error is already showing up automatically. 
+
+ Plus since you didn't typecheck, you have your function working with other types: 
+
+ Floats: 
+
+ &gt;&gt;&gt; print myintfunction(2.2)
+4.2
+ 
+
+ Complex numbers: 
+
+ &gt;&gt;&gt; print myintfunction(5j)
+(2+5j)
+ 
+
+ Decimals: 
+
+ &gt;&gt;&gt; import decimal
+&gt;&gt;&gt; myintfunction(decimal.Decimal('15'))
+Decimal("17")
+ 
+
+ Even completely arbitrary objects that can add numbers! 
+
+ &gt;&gt;&gt; class MyAdderClass(object):
+...  def __radd__(self, value):
+...    print 'got some value: ', value
+...    return 25
+... 
+&gt;&gt;&gt; m = MyAdderClass()
+&gt;&gt;&gt; print myintfunction(m)
+got some value: 2
+25
+ 
+
+ So you clearly get nothing by typechecking. And lose a lot. 
+
+ 
+
+ UPDATE: 
+
+ Since you've edited the question, it is now clear that your application calls some upstream routine that makes sense only with ints. 
+
+ That being the case, I still think you should pass the parameter as received to the upstream function. The upstream function will deal with it correctly e.g. raising an error if it needs to. I highly doubt it your function that deals with IPs will behave strangely if you pass it a float. If you can give us the name of the library we can check that for you. 
+
+ But... If the upstream function will behave incorrectly and kill some kids if you pass it a float (I still highly doubt it), then just just call int() on it: 
+
+ def myintfunction(value):
+ """ Please pass an integer """
+ return upstreamfunction(int(value))
+ 
+
+ You're still not typechecking, so you get most benefits of not typechecking. 
+
+ 
+
+ If even after all that, you really want to type check, despite it reducing your application's readability and performance for absolutely no benefit, use an assert to do it. 
+
+ assert isinstance(...)
+assert type() is xxxx
+ 
+
+ That way we can turn off assert s and remove this &lt;sarcasm&gt; feature &lt;/sarcasm&gt; from the program by calling it as 
+
+ python -OO program.py
+ 
+ #2 Don't type check. The whole point of duck typing is that you shouldn't have to. For instance, what if someone did something like this: 
+
+ class MyInt(int):
+ # ... extra stuff ...
+ 
+ #3 Programming in Python and performing typechecking as you might in other languages does seem like choosing a screwdriver to bang a nail in with. It is more elegant to use Python's exception handling features. 
+
+ From an interactive command line, you can run a statement like: 
+
+ int('sometext')
+ 
+
+ That will generate an error - ipython tells me: 
+
+ &lt;type 'exceptions.ValueError'&gt;: invalid literal for int() with base 10: 'sometext'
+ 
+
+ Now you can write some code like: 
+
+ try:
+ int(myvar) + 50
+except ValueError:
+ print "Not a number"
+ 
+
+ That can be customised to perform whatever operations are required AND to catch any errors that are expected. It looks a bit convoluted but fits the syntax and idioms of Python and results in very readable code (once you become used to speaking Python). 
+ #4 if type(n) is int
+ 
+
+ This checks if n is a Python int, and only an int. It won't accept subclasses of int . 
+
+ Type-checking, however, does not fit the "Python way". You better use n as an int, and if it throws an exception, catch it and act upon it. 
+ #5 I would be tempted to to something like: 
+
+ def check_and_convert(x):
+ x = int(x)
+ assert 0 &lt;= x &lt;= 255, "must be between 0 and 255 (inclusive)"
+ return x
+
+class IPv4(object):
+ """IPv4 CIDR prefixes is A.B.C.D/E where A-D are 
+  integers in the range 0-255, and E is an int 
+  in the range 0-32."""
+
+ def __init__(self, a, b, c, d, e=0):
+  self.a = check_and_convert(a)
+  self.b = check_and_convert(a)
+  self.c = check_and_convert(a)
+  self.d = check_and_convert(a)
+  assert 0 &lt;= x &lt;= 32, "must be between 0 and 32 (inclusive)"
+  self.e = int(e)
+ 
+
+ That way when you are using it anything can be passed in yet you only store a valid integer. 
+ #6 how about: 
+
+ def ip(string):
+ subs = string.split('.')
+ if len(subs) != 4:
+  raise ValueError("incorrect input")
+ out = tuple(int(v) for v in subs if 0 &lt;= int(v) &lt;= 255)
+ if len(out) != 4:
+  raise ValueError("incorrect input")
+ return out
+ 
+
+ ofcourse there is the standard isinstance(3, int) function ...

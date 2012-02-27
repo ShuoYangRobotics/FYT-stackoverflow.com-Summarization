@@ -1,0 +1,169 @@
+Question (ID-68477): Send file using POST from a Python script Is there a way to send a file using POST from a Python script? 
+ Answers (Total-8): #0 Blatant self-promotion: 
+
+ check out my poster module for python. It handles the multipart/form-data encoding, as well as supporting streaming uploads (so you don't have to load the entire file into memory before submitting the HTTP POST request). 
+ #1 Yes. You'd use the urllib2 module, and encode using the multipart/form-data content type. Here is some sample code to get you started -- it's a bit more than just file uploading, but you should be able to read through it and see how it works: 
+
+ user_agent = "image uploader"
+default_message = "Image $current of $total"
+
+import logging
+import os
+from os.path import abspath, isabs, isdir, isfile, join
+import random
+import string
+import sys
+import mimetypes
+import urllib2
+import httplib
+import time
+import re
+
+def random_string (length):
+ return ''.join (random.choice (string.letters) for ii in range (length + 1))
+
+def encode_multipart_data (data, files):
+ boundary = random_string (30)
+
+ def get_content_type (filename):
+ 	return mimetypes.guess_type (filename)[0] or 'application/octet-stream'
+
+ def encode_field (field_name):
+ 	return ('--' + boundary,
+ 	  'Content-Disposition: form-data; name="%s"' % field_name,
+ 	  '', str (data [field_name]))
+
+ def encode_file (field_name):
+ 	filename = files [field_name]
+ 	return ('--' + boundary,
+ 	  'Content-Disposition: form-data; name="%s"; filename="%s"' % (field_name, filename),
+ 	  'Content-Type: %s' % get_content_type(filename),
+ 	  '', open (filename, 'rb').read ())
+
+ lines = []
+ for name in data:
+ 	lines.extend (encode_field (name))
+ for name in files:
+ 	lines.extend (encode_file (name))
+ lines.extend (('--%s--' % boundary, ''))
+ body = '\r\n'.join (lines)
+
+ headers = {'content-type': 'multipart/form-data; boundary=' + boundary,
+    'content-length': str (len (body))}
+
+ return body, headers
+
+def send_post (url, data, files):
+ req = urllib2.Request (url)
+ connection = httplib.HTTPConnection (req.get_host ())
+ connection.request ('POST', req.get_selector (),
+      *encode_multipart_data (data, files))
+ response = connection.getresponse ()
+ logging.debug ('response = %s', response.read ())
+ logging.debug ('Code: %s %s', response.status, response.reason)
+
+def make_upload_file (server, thread, delay = 15, message = None,
+      username = None, email = None, password = None):
+
+ delay = max (int (delay or '0'), 15)
+
+ def upload_file (path, current, total):
+ 	assert isabs (path)
+ 	assert isfile (path)
+
+ 	logging.debug ('Uploading %r to %r', path, server)
+ 	message_template = string.Template (message or default_message)
+
+ 	data = {'MAX_FILE_SIZE': '3145728',
+ 	  'sub': '',
+ 	  'mode': 'regist',
+ 	  'com': message_template.safe_substitute (current = current, total = total),
+ 	  'resto': thread,
+ 	  'name': username or '',
+ 	  'email': email or '',
+ 	  'pwd': password or random_string (20),}
+ 	files = {'upfile': path}
+
+ 	send_post (server, data, files)
+
+ 	logging.info ('Uploaded %r', path)
+ 	rand_delay = random.randint (delay, delay + 5)
+ 	logging.debug ('Sleeping for %.2f seconds------------------------------\n\n', rand_delay)
+ 	time.sleep (rand_delay)
+
+ return upload_file
+
+def upload_directory (path, upload_file):
+ assert isabs (path)
+ assert isdir (path)
+
+ matching_filenames = []
+ file_matcher = re.compile (r'\.(?:jpe?g|gif|png)$', re.IGNORECASE)
+
+ for dirpath, dirnames, filenames in os.walk (path):
+ 	for name in filenames:
+ 		file_path = join (dirpath, name)
+ 		logging.debug ('Testing file_path %r', file_path)
+ 		if file_matcher.search (file_path):
+ 			matching_filenames.append (file_path)
+ 		else:
+ 			logging.info ('Ignoring non-image file %r', path)
+
+ total_count = len (matching_filenames)
+ for index, file_path in enumerate (matching_filenames):
+ 	upload_file (file_path, index + 1, total_count)
+
+def run_upload (options, paths):
+ upload_file = make_upload_file (**options)
+
+ for arg in paths:
+ 	path = abspath (arg)
+ 	if isdir (path):
+ 		upload_directory (path, upload_file)
+ 	elif isfile (path):
+ 		upload_file (path)
+ 	else:
+ 		logging.error ('No such path: %r' % path)
+
+ logging.info ('Done!')
+ 
+ #2 This code might be of use to you 
+ #3 Chris Atlee's poster library works really well for this (particularly the convenience function poster.encode.multipart_encode() ). As a bonus, it supports streaming of large files without loading an entire file into memory. See also Python issue 3244 . 
+ #4 You may also want to have a look at httplib2 , with examples . I find using httplib2 is more concise than using the built-in HTTP modules. 
+ #5 The only thing that stops you from using urlopen directly on a file object is the fact that the builtin file object lacks a len definition. A simple way is to create a subclass, which provides urlopen with the correct file. 
+I have also modified the Content-Type header in the file below. 
+
+ import urllib2
+class EnhancedFile(file):
+ def __init__(self, *args, **keyws):
+  file.__init__(self, *args, **keyws)
+
+ def __len__(self):
+  return int(os.fstat(self.fileno())[6])
+
+theFile = EnhancedFile('a.xml', 'r')
+theUrl = "http://example.com/abcde"
+theHeaders= {'Content-Type': 'text/xml'}
+
+theRequest = urllib2.Request(theUrl, theFile, theHeaders)
+
+response = urllib2.urlopen(theRequest)
+
+theFile.close()
+
+
+for line in response:
+ print line
+ 
+ #6 This post: 
+
+ http://www.nerdwho.com/blog/57/enviando-arquivos-e-dados-ao-mesmo-tempo-via-http-post-usando-utf-8/ 
+
+ Resolves a problem with special characters in the file or in the parameter. The code is based on an ActiveState recipe. 
+ #7 import urllib2
+
+if __name__ == "__main__":
+ conn = urllib2.urlopen(u"http://localhost/someurl.cgi", 
+       u"This is your POST data")
+
+ # Do something with the response.

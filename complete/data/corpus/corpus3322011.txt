@@ -1,0 +1,137 @@
+Question (ID-3322011): Is this method of file locking acceptable? We have 10 Linux boxes that must run 100 different tasks each week. These computers work at these tasks mostly at night when we are at home. One of my coworkers is working on a project to optimize run time by automating the starting of the tasks with Python. His program is going to read a list of tasks, grab an open task, mark that task as in progress in the file, and then once the task is finished mark the task as complete in the file. The task files will be on our network mount. 
+
+ We realize it is not recommended to have multiple instances of a program accessing the same file, but we don't really see any other option. While he was looking for a way of preventing 2 computers from writing to the file at the same time, I came up with a method of my own, which seemed easier to implement than the methods we found online. My method is to check if the file exists, wait a few seconds if it doesn't, and then temporarily move the file if it does. I wrote a script to test this method: 
+
+ #!/usr/bin/env python
+
+import time, os, shutil
+from shutil import move
+from os import path
+
+
+fh = "testfile"
+fhtemp = "testfiletemp"
+
+
+while os.path.exists(fh) == False:
+ time.sleep(3)
+
+move(fh, fhtemp)
+f = open(fhtemp, 'w')
+line = raw_input("type something: ")
+print "writing to file"
+f.write(line)
+raw_input("hit enter to close file.")
+f.close()
+move(fhtemp, fh)
+ 
+
+ In our tests this method has worked, but I was wondering if we might have some problems that we aren't seeing by using this. I realize that disaster could result from two computers running exists() at the same time. It's unlikely that two computers would get to that point at the same time since the tasks are anywhere between 20 minutes and 8 hours. 
+ Answers (Total-6): #0 You've basically developed a filesystem version of the binary semaphore (or mutex). It's a well-studied structure used for locking, so as long as you get the implementation details right, it should work. The trick is to get the "test and set" operation, or in your case "check existence and move," to be truly atomic. For that I'd use something like this: 
+
+ lock_acquired = False
+while not lock_acquired:
+ try:
+  move(fh, fhtemp)
+ except:
+  sleep(3)
+ else:
+  lock_acquired = True
+# do your writing
+move(fhtemp, fh)
+lock_acquired = False
+ 
+
+ The program as you had it would work most of the time, but as mentioned you could have issues if another process moved the file between the check for its existence and the call to move . I suppose you could work around that, but I'd personally recommend sticking with a well-tested mutex algorithm. (I've translated/ported the above code sample from Modern Operating Systems by Andrew Tanenbaum, but it's possible that I've introduced errors in the conversion - just fair warning) 
+
+ By the way, the man page for the open function on Linux offers this solution for file locking: 
+
+ 
+ The solution for performing atomic file locking using a lockfile is to create a unique file on the same file system (e.g., incorporating hostname and pid), use link(2) to make a link to the lockfile. If link() returns 0, the lock is successful. Otherwise, use stat(2) on the unique file to check if its link count has increased to 2, in which case the lock is also successful. 
+ 
+
+ To implement that in Python, you could do something like this: 
+
+ # each instance of the process should have a different filename here
+process_lockfile = '/path/to/hostname.pid.lock'
+# all processes should have the same filename here
+global_lockfile = '/path/to/lockfile'
+# create the file if necessary (only once, at the beginning of each process)
+with open(process_lockfile, 'w') as f:
+ f.write('\n') # or maybe write the hostname and pid
+
+# now, each time you have to lock the file:
+lock_acquired = False
+while not lock_acquired:
+ try:
+  link(process_lockfile, global_lockfile)
+ except:
+  lock_acquired = (stat(process_lockfile).st_nlinks == 2)
+ else:
+  lock_acquired = True
+# do your writing
+unlink(global_lockfile)
+lock_acquired = False
+ 
+ #1 File move/rename is generally an atomic operation on most OSes, so it is probably a workable solution. 
+
+ You will want to add an exception check on your move and open calls, though, in case some other process moved the file between your existence check and the move (or if the move failed to complete). 
+
+ Edit 
+
+ To summarize the proper flow that will work: 
+
+ 
+ Issue move from A to A.[myID] 
+ Try to open A.[myID] 
+ If #1 or #2 fails, we didn't get the lock; wait a little bit and then go back to #1. Otherwise, we got the lock, continue. 
+ Make modifications. 
+ Issue move from A.[myID] to A. (Should never fail.) This releases the lock. 
+ 
+
+ A good option for [myID] is the PID of the process (possibly also include the host, if running on multiple systems). 
+ #2 If you don't track your move calls to see if they succeeded or not, you'll never know if you fall victim to a timing window. Remember that if anything can go wrong it will, at the worst possible time . 
+
+ Rather than using the contents of the file as a flag, maybe you could use the filename itself? For each task rename the file "task_waiting_to_run" to "task_running" to "task_complete". If the rename from "task_waiting_to_run" to "task_running" fails, that means another box got there first. 
+ #3 EDIT : It's also common practice to identify the process that renamed the file. That way, should the process die before restoring it to its original name, it would be possible to trace the file's ownership and determine whether to intervene. 
+
+ I've inserted (barely tested) os and socket calls to add this functionality. Use at your own risk. 
+
+ 
+
+ If two processes are competing to rename the file, then having them check for its existence first will not prevent a race condition; it will only delay the time when it occurs. 
+
+ The docs for shutil.move are (sadly) not explicit about throwing an IOError if the file does not exist, but that seems a reasonable expectation -- and I found it does happen in practice: 
+
+ import shutil
+import os
+import socket
+
+oldname = "foobar.txt"
+newname = (oldname + "." + socket.gethostbyaddr(socket.gethostname())[0]
+   + "." + str(os.getpid()))
+i_win = True
+try:
+ shutil.move(oldname, newname)
+except IOError, e:
+ print "File does not exist"
+ i_win = False
+except Exception, e:
+ print e
+ i_win = False
+
+if i_win:
+ print "I got it!"
+ 
+
+ This means that only one process can think it has succeeded in renaming the file. 
+ #4 Seems to me you are putting too much effort to accomplish something that can be simple if you change your data structure. Right now you have a single file that contains list of the tasks. 
+
+ How about making the task queue a directory instead, where each pending task is a file? Then the process is as easy as picking a task from directory "Pending", moving it to directory (say) "Running" and after it is done, move the task file to directory "Completed". Since file move is atomic operation, there will be no race condition (if move fails, means another worker just snatched it first, so pick up next task). 
+
+ Also, checking the progress is as easy as issuing ls on one of the directories :-) 
+ #5 Relying on network filesystems for locking is a problem that has plagued systems for years (and still often doesn't work quite how you expect it) 
+
+ Why not use something designed to be explicitly multiuser and transactional, like a database system? (I like Postgres personally...) 
+
+ It's probably a bit overkill, but the workings are generally easy to understand for something like this. It also makes it easier to expand to add new functionality later.

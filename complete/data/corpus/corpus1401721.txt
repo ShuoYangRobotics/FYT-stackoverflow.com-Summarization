@@ -1,0 +1,184 @@
+Question (ID-1401721): Convert list of objects to a list of integers and a lookup table To illustrate what I mean by this, here is an example 
+
+ messages = [
+ ('Ricky', 'Steve', 'SMS'),
+ ('Steve', 'Karl', 'SMS'),
+ ('Karl', 'Nora', 'Email')
+]
+ 
+
+ I want to convert this list and a definition of groups to a list of integers and a lookup dictionary so that each element in the group gets a unique id. That id should map to the element in the lookup table like this 
+
+ messages_int, lookup_table = create_lookup_list(
+    messages, ('person', 'person', 'medium'))
+
+print messages_int
+[ (0, 1, 0),
+ (1, 2, 0),
+ (2, 3, 1) ]
+
+print lookup_table
+{ 'person': ['Ricky', 'Steve', 'Karl', 'Nora'],
+ 'medium': ['SMS', 'Email']
+}
+ 
+
+ I wonder if there is an elegant and pythonic solution to this problem. 
+
+ I am also open to better terminology than create_lookup_list etc 
+ Answers (Total-7): #0 defaultdict combined with the itertools.count().next method is a good way to assign identifiers to unique items. Here's an example of how to apply this in your case: 
+
+ from itertools import count
+from collections import defaultdict
+
+def create_lookup_list(data, domains):
+ domain_keys = defaultdict(lambda:defaultdict(count().next))
+ out = []
+ for row in data:
+  out.append(tuple(domain_keys[dom][val] for val, dom in zip(row, domains)))
+ lookup_table = dict((k, sorted(d, key=d.get)) for k, d in domain_keys.items())
+ return out, lookup_table
+ 
+
+ Edit: note that count().next becomes count().__next__ or lambda: next(count()) in Python 3. 
+ #1 Mine's about the same length and complexity: 
+
+ import collections
+
+def create_lookup_list(messages, labels):
+
+ # Collect all the values
+ lookup = collections.defaultdict(set)
+ for msg in messages:
+  for l, v in zip(labels, msg):
+   lookup[l].add(v)
+
+ # Make the value sets lists
+ for k, v in lookup.items():
+  lookup[k] = list(v)
+
+ # Make the lookup_list
+ lookup_list = []
+ for msg in messages:
+  lookup_list.append([lookup[l].index(v) for l, v in zip(labels, msg)])
+
+ return lookup_list, lookup
+ 
+ #2 In Otto's answer (or anyone else's with string->id dicts), I'd replace (if obsessing over speed is your thing): 
+
+ # create the lookup table
+lookup_dict = {}
+for group in indices:
+ lookup_dict[group] = sorted(indices[group].keys(),
+   lambda e1, e2: indices[group][e1]-indices[group][e2])
+ 
+
+ by 
+
+ # k2i must map keys to consecutive ints [0,len(k2i)-1)
+def inverse_indices(k2i):
+ inv=[0]*len(k2i)
+ for k,i in k2i.iteritems():
+  inv[i]=k
+ return inv
+
+lookup_table = dict((g,inverse_indices(gi)) for g,gi in indices.iteritems())
+ 
+
+ This is better because direct assignment to each item in the inverse array directly is faster than sorting. 
+ #3 Here is my own solution - I doubt it's the best 
+
+ def create_lookup_list(input_list, groups):
+ # use a dictionary for the indices so that the index lookup 
+ # is fast (not necessarily a requirement)
+ indices = dict((group, {}) for group in groups) 
+ output = []
+
+ # assign indices by iterating through the list
+ for row in input_list:
+  newrow = []
+  for group, element in zip(groups, row):
+   if element in indices[group]:
+    index = indices[group][element]
+   else:
+    index = indices[group][element] = len(indices[group])
+   newrow.append(index)
+  output.append(newrow)
+
+ # create the lookup table
+ lookup_dict = {}
+ for group in indices:
+  lookup_dict[group] = sorted(indices[group].keys(),
+    lambda e1, e2: indices[group][e1]-indices[group][e2])
+
+ return output, lookup_dict
+ 
+ #4 This is a bit simpler, and more direct. 
+
+ from collections import defaultdict
+
+def create_lookup_list( messages, schema ):
+ def mapped_rows( messages ):
+  for row in messages:
+   newRow= []
+   for col, value in zip(schema,row):
+    if value not in lookups[col]:
+     lookups[col].append(value)
+    code= lookups[col].index(value)
+    newRow.append(code)
+   yield newRow
+ lookups = defaultdict(list)
+ return list( mapped_rows(messages) ), dict(lookups)
+ 
+
+ If the lookups were proper dictionaries, not lists, this could be simplified further. 
+Make your "lookup table" have the following structure 
+
+ { 'person': {'Ricky':0, 'Steve':1, 'Karl':2, 'Nora':3},
+ 'medium': {'SMS':0, 'Email':1}
+}
+ 
+
+ And it can be further reduced in complexity. 
+
+ You can turn this working copy of the lookups into it's inverse as follows: 
+
+ &gt;&gt;&gt; lookups = { 'person': {'Ricky':0, 'Steve':1, 'Karl':2, 'Nora':3},
+  'medium': {'SMS':0, 'Email':1}
+ }
+&gt;&gt;&gt; dict( ( d, dict( (v,k) for k,v in lookups[d].items() ) ) for d in lookups )
+{'person': {0: 'Ricky', 1: 'Steve', 2: 'Karl', 3: 'Nora'}, 'medium': {0: 'SMS', 1: 'Email'}}
+ 
+ #5 Here is my solution, it's not better - it's just different :) 
+
+ def create_lookup_list(data, keys):
+ encoded = []
+ table = dict([(key, []) for key in keys])
+
+ for record in data:
+  msg_int = []
+  for key, value in zip(keys, record):
+   if value not in table[key]:
+    table[key].append(value)
+   msg_int.append(table[key].index(value)) 
+  encoded.append(tuple(msg_int))
+
+ return encoded, table
+ 
+ #6 Here is mine, the inner function lets me write the index-tuple as a generator. 
+
+ def create_lookup_list( data, format):
+ table = {}
+ indices = []
+ def get_index( item, form ):
+  row = table.setdefault( form, [] )
+  try:
+   return row.index( item )
+  except ValueError:
+   n = len( row )
+   row.append( item )
+   return n
+ for row in data:
+  indices.append( tuple( get_index( item, form ) for item, form in zip( row, format ) ))
+
+ return table, indices

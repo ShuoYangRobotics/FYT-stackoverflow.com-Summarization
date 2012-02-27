@@ -1,0 +1,125 @@
+Question (ID-4218961): Why fmod(1.0,0.1) == .1? I experienced this phenomenon in Python first, but it turned out that it is the common answer, for example MS Excel gives this. Wolfram Alpha gives an interesting schizoid answer, where it states that the rational approximation of zero is 1/5. ( 1.0 mod 0.1 ) 
+
+ On the other hand, if I implement the definition by hand it gives me the 'right' answer (0). 
+
+ def myFmod(a,n):
+ return a - floor(a/n) * n
+ 
+
+ What is going on here. Do I miss something? 
+ Answers (Total-6): #0 Because 0.1 isn't 0.1; that value isn't representable in double precision, so it gets rounded to the nearest double-precision number, which is exactly: 
+
+ 0.1000000000000000055511151231257827021181583404541015625
+ 
+
+ When you call fmod , you get the remainder of division by the value listed above, which is exactly: 
+
+ 0.0999999999999999500399638918679556809365749359130859375
+ 
+
+ which rounds to 0.1 (or maybe 0.09999999999999995 ) when you print it. 
+
+ In other words, fmod works perfectly, but you're not giving it the input that you think you are. 
+
+ 
+
+ Edit: Your own implementation gives you the correct answer because it is less accurate , believe it or not. First off, note that fmod computes the remainder without any rounding error; the only source of inaccuracy is the representation error introduced by using the value 0.1 . Now, let's walk through your implementation, and see how the rounding error that it incurs exactly cancels out the representation error. 
+
+ Evaluate a - floor(a/n) * n one step at a time, keeping track of the exact values computed at each stage: 
+
+ First we evaluate 1.0/n , where n is the closest double-precision approximation to 0.1 as shown above. The result of this division is approximately: 
+
+ 9.999999999999999444888487687421760603063276150363492645647081359...
+ 
+
+ Note that this value is not a representable double precision number -- so it gets rounded . To see how this rounding happens, let's look at the number in binary instead of decimal: 
+
+ 1001.1111111111111111111111111111111111111111111111111 10110000000...
+ 
+
+ The space indicates where the rounding to double precision occurs. Since the part after the round point is larger than the exact half-way point, this value rounds up to exactly 10 . 
+
+ floor(10.0) is, predictably, 10.0 . So all that's left is to compute 1.0 - 10.0*0.1 . 
+
+ In binary, the exact value of 10.0 * 0.1 is: 
+
+ 1.0000000000000000000000000000000000000000000000000000 0100
+ 
+
+ again, this value is not representable as a double, and so is rounded at the position indicated by a space. This time it rounds down to exactly 1.0 , and so the final computation is 1.0 - 1.0 , which is of course 0.0 . 
+
+ Your implementation contains two rounding errors, which happen to exactly cancel out the representation error of the value 0.1 in this case. fmod , by contrast, is always exact (at least on platforms with a good numerics library), and exposes the representation error of 0.1 . 
+ #1 This result is due to machine floating point representation. In your method, you are 'casting' (kinda) the float to an int and do not have this issue. The 'best' way to avoid such issues (esp for mod ) is to multiply by a sufficiently large enough int (only 10 is needed in your case) and perform the operation again. 
+
+ 
+ fmod(1.0,0.1) 
+ 
+ fmod(10.0,1.0) = 0 
+ 
+ #2 From man fmod : 
+
+ 
+ The fmod() function computes the floating-point remainder of dividing x
+ by y. The return value is x - n * y, where n is the quotient of x / y,
+ rounded towards zero to an integer. 
+ 
+
+ So what happens is: 
+
+ 
+ In fmod(1.0, 0.1) , the 0.1 is actually slightly larger than 0.1 because the value cannot be exactly represented as a float. 
+ So n = x / y = 1.0 / 0.1000something = 9.9999something 
+ When rounded towards 0, n actually becomes 9 
+ x - n * y = 1.0 - 9 * 0.1 = 0.1 
+ 
+
+ Edit: As for why it works with floor(x/y) , as far as I can tell this seems to be an FPU quirk. On x86, fmod uses the fprem instruction, whereas x/y will use fdiv . Curiously 1.0/0.1 seems to return exactly 10.0 : 
+
+ &gt;&gt;&gt; struct.pack('d', 1.0/0.1) == struct.pack('d', 10.0)
+True
+ 
+
+ I suppose fdiv uses a more precise algorithm than fprem . Some discussion can be found here: http://www.rapideuphoria.com/cgi-bin/esearch.exu?thread=1&amp;fromMonth=A&amp;fromYear=8&amp;toMonth=C&amp;toYear=8&amp;keywords=%22Remainder%22 
+ #3 fmod returns x-i*y, which is less than y, and i is an integer. 0.09.... is because of floating point precision. try fmod(0.3, 0.1) -&gt; 0.09... but fmod(0.4, 0.1) -&gt; 0.0 because 0.3 is 0.2999999... as a float. 
+
+ fmod(1/(2.**n), 1/(2.**m) will never produce anything but 0.0 for integer n>=m. 
+ #4 This gives the right answer: 
+
+ a = 1.0
+b = 0.1
+
+a1,a2 = a.as_integer_ratio()
+b1,b2 = b.as_integer_ratio()
+div = float(a1*b2) / float(a2*b1)
+mod = a - b*div
+print mod
+# 0.0
+ 
+
+ I think it works because by it uses rational equivalents of the two floating point numbers which provides a more accurate answer. 
+ #5 The Python divmod function is instructive here. It tells you both the quotient and remainder of a division operation. 
+
+ $ python
+&gt;&gt;&gt; 0.1
+0.10000000000000001
+&gt;&gt;&gt; divmod(1.0, 0.1)
+(9.0, 0.09999999999999995)
+ 
+
+ When you type 0.1, the computer can't represent that exact value in binary floating-point arithmetic, so it chooses the closest number that it can represent, 0.10000000000000001. Then when you perform the division operation, floating-point arithmetic decides that the quotient has to be 9, since 0.10000000000000001 * 10 is larger than 1.0. This leaves you with a remainder that is slightly less than 0.1. 
+
+ I would want to use the new Python fractions module to get exact answers. 
+
+ &gt;&gt;&gt; from fractions import Fraction
+&gt;&gt;&gt; Fraction(1, 1) % Fraction(1, 10)
+Fraction(0, 1)
+ 
+
+ IOW, (1/1) mod (1/10) = (0/1) , which is equivalent to 1 mod 0.1 = 0 . 
+
+ Another option is to implement the modulus operator yourself, allowing you to specify your own policy. 
+
+ &gt;&gt;&gt; x = 1.0
+&gt;&gt;&gt; y = 0.1
+&gt;&gt;&gt; x / y - math.floor(x / y)
+0.0

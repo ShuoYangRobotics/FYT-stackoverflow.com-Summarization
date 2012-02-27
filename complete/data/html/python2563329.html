@@ -1,0 +1,70 @@
+<h3>Question (ID-2563329):</h3><h2>Regex matching very slow</h2><p>I am trying to parse a PDF to extract the text from it (please don't suggest any libraries to do this, as this is part of learning the format).<br />
+I have already handled deflating it to put it in the alphanumeric format. I now need to extract the text from the text blocks.<br />
+So, my current pattern is <code>BT.*?\((.*?)\).*?ET</code> (with DOTMATCHALL set) to match something like:</p>
+
+<pre><code>BT
+   /F13 12 Tf
+   288 720 Td
+   (ABC) Tj
+ET
+</code></pre>
+
+<p>The only bit I want is the text ABC in the brackets.<br />
+The above is only formatted like that to make it clear to see. In the deflated text it may be all in one line, it may not be. There is no gurantee that the BT/ET will be at the start of a line. There may be spaces and text before/after the bracketed section, there may not be. There will however, be only one bracketed section per BT/ET block.</p>
+
+<p>The above pattern works, but is really slow, I assume it is because the regex library is failing to match the pattern that matches the text between BT and the (ABC) many times.<br />
+The regex is pre-compiled in an attempt to speed it up, but it seems negligible.<br /></p>
+
+<p>How may I speed this up?  </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>How many of these blocks might appear in a document?</p>
+
+<p>Often slow Regex execution is the result of catastrophic backtracking, as described here: <a href="http://www.regular-expressions.info/catastrophic.html" rel="nofollow">http://www.regular-expressions.info/catastrophic.html</a></p>
+
+<p>I don't know what regex technology you're using, but you could try to use lookaround assertions, as described here:
+<a href="http://www.regular-expressions.info/lookaround.html" rel="nofollow">http://www.regular-expressions.info/lookaround.html</a></p>
+
+<p>These allow you to first just match what you want, <code>ABC</code> inside parentheses, and then validate that it is preceded by some value and followed by some other value.</p>
+<br /><b>#1</b><br /><p>Are you sure the regex is correct and pulls out ABC as a match? What language's regex engine is this? Using my regular expression debugger shows that:</p>
+
+<p><code>"BT.*?((.*?)).*?ET"</code> doesn't pull out ABC and in fact must find the string 'ET' then backtrack back to find everything else.</p>
+
+<p><code>"BT.*?\\((.*?)\\).*?ET"</code> works as expected with a single pass left to right.</p>
+<br /><b>#2</b><br /><p>You can't just parse the PDF with a regex to extract the text. In most cases the text in inside compressed binary blobs or encoded. A PDF with the text shown like this is very much the exception.</p>
+<br /><b>#3</b><br /><p>There's not really enough info for a definite answer--or maybe you're assuming we know more about PDF than you do.  Are there always parenthesized chunks inside these <code>BT...ET</code> sections?  Is there always only one of them?  Is the <code>BT</code> or <code>ET</code> always at the beginning of a line?  If so, I would suggest</p>
+
+<pre><code>(?m)^BT[^()]*\((.*?)\)[^()]*?^ET
+</code></pre>
+
+<p>If I knew how PDF represented literal parentheses, I could probably come up with something more efficient.</p>
+
+<p>EDIT: According to the PDF spec, literal parentheses have to be escaped with a backslash, and there are a bunch of other backslash-escape sequences.  So try this:</p>
+
+<pre><code>(?s)\bBT\b[^()]*\(((?:[^()\\]*(?:\\.[^()\\]*)*))\)
+</code></pre>
+
+<p>This part--<code>[^()\\]*(?:\\.[^()\\]*)*</code>--matches a block of text which may contain escaped characters (including parens), but not unescaped parens.  I know it looks ugly, but it's the most efficient way, since Python doesn't support atomic groups or possessive quantifiers.</p>
+
+<p><code>(?s)</code> allows <code>.</code> to match newlines, and <code>\bBT\b</code> makes sure the <code>BT</code> isn't part of a longer "word".  I'm reasonably confident that this is all I need to match all of the actual text content, so I don't bother matching the stuff after the closing paren.</p>
+<br /><b>#4</b><br /><p>here's one without regex. simple string parsing using Python internals.</p>
+
+<pre><code>&gt;&gt;&gt; xtract="""
+... BT
+...    /F13 12 Tf
+...    288 720 Td
+...    (ABC) Tj
+... ET
+...
+... """
+&gt;&gt;&gt; for chunk in xtract.split("ET"):
+...     if "BT" in chunk:
+...         for brace in chunk.split(")"):
+...             if "(" in brace:
+...                  print brace[brace.find("(")+1:]
+...
+ABC
+</code></pre>
+<br /><b>#5</b><br /><p>Since there will be only one bracketed expression between a <code>BT</code> and an <code>ET</code>, you could try the following regular expression for speed:</p>
+
+<pre><code>r"(?s)\bBT\b[^(]*\(([^)]*)\).*?\bET\b"
+</code></pre>
+<br />

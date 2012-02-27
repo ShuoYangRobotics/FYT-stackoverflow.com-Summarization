@@ -1,0 +1,242 @@
+Question (ID-1814400): Simple way to convert a string to a dictionary What is the simplest way to convert a string of keyword=values to a dictionary, for example the following string: 
+
+ name="John Smith", age=34, height=173.2, location="US", avatar=":,=)"
+ 
+
+ to the following python dictionary: 
+
+ {'name':'John Smith', 'age':34, 'height':173.2, 'location':'US', 'avatar':':,=)'}
+ 
+
+ The 'avatar' key is just to show that the strings can contain = and , so a simple 'split' won't do. Any ideas? Thanks! 
+ Answers (Total-9): #0 This works for me: 
+
+ # get all the items
+matches = re.findall(r'\w+=".+?"', s) + re.findall(r'\w+=[\d.]+',s)
+
+# partition each match at '='
+matches = [m.group().split('=', 1) for m in matches]
+
+# use results to make a dict
+d = dict(matches)
+ 
+ #1 Edit : since the csv module doesn't deal as desired with quotes inside fields, it takes a bit more work to implement this functionality: 
+
+ import re
+quoted = re.compile(r'"[^"]*"')
+
+class QuoteSaver(object):
+
+ def __init__(self):
+ self.saver = dict()
+ self.reverser = dict()
+
+ def preserve(self, mo):
+ s = mo.group()
+ if s not in self.saver:
+  self.saver[s] = '"%d"' % len(self.saver)
+  self.reverser[self.saver[s]] = s
+ return self.saver[s]
+
+ def expand(self, mo):
+ return self.reverser[mo.group()]
+
+x = 'name="John Smith", age=34, height=173.2, location="US", avatar=":,=)"'
+
+qs = QuoteSaver()
+y = quoted.sub(qs.preserve, x)
+kvs_strings = y.split(',')
+kvs_pairs = [kv.split('=') for kv in kvs_strings]
+kvs_restored = [(k, quoted.sub(qs.expand, v)) for k, v in kvs_pairs]
+
+def converter(v):
+ if v.startswith('"'): return v.strip('"')
+ try: return int(v)
+ except ValueError: return float(v)
+
+thedict = dict((k.strip(), converter(v)) for k, v in kvs_restored)
+for k in thedict:
+ print "%-8s %s" % (k, thedict[k])
+print thedict
+ 
+
+ I'm emitting thedict twice to show exactly how and why it differs from the required result; the output is: 
+
+ age  34
+location US
+name  John Smith
+avatar :,=)
+height 173.2
+{'age': 34, 'location': 'US', 'name': 'John Smith', 'avatar': ':,=)',
+ 'height': 173.19999999999999}
+ 
+
+ As you see, the output for the floating point value is as requested when directly emitted with print , but it isn't and cannot be (since there IS no floating point value that would display 173.2 in such a case!-) when the print is applied to the whole dict (because that inevitably uses repr on the keys and values -- and the repr of 173.2 has that form, given the usual issues about how floating point values are stored in binary, not in decimal, etc, etc). You might define a dict subclass which overrides __str__ to specialcase floating-point values, I guess, if that's indeed a requirement. 
+
+ But, I hope this distraction doesn't interfere with the core idea -- as long as the doublequotes are properly balanced (and there are no doublequotes-inside-doublequotes), this code does perform the required task of preserving "special characters" (commas and equal signs, in this case) from being taken in their normal sense when they're inside double quotes, even if the double quotes start inside a "field" rather than at the beginning of the field ( csv only deals with the latter condition). Insert a few intermediate prints if the way the code works is not obvious -- first it changes all "double quoted fields" into a specially simple form ( "0" , "1" and so on), while separately recording what the actual contents corresponding to those simple forms are; at the end, the simple forms are changed back into the original contents. Double-quote stripping (for strings) and transformation of the unquoted strings into integers or floats is finally handled by the simple converter function. 
+ #2 Here is a more verbose approach to the problem using pyparsing. Note the parse actions
+which do the automatic conversion of types from strings to ints or floats. Also, the
+QuotedString class implicitly strips the quotation marks from the quoted value. Finally,
+the Dict class takes each 'key = val' group in the comma-delimited list, and assigns 
+results names using the key and value tokens. 
+
+ from pyparsing import *
+
+key = Word(alphas)
+EQ = Suppress('=')
+real = Regex(r'[+-]?\d+\.\d+').setParseAction(lambda t:float(t[0]))
+integer = Regex(r'[+-]?\d+').setParseAction(lambda t:int(t[0]))
+qs = QuotedString('"')
+value = real | integer | qs
+
+dictstring = Dict(delimitedList(Group(key + EQ + value)))
+ 
+
+ Now to parse your original text string, storing the results in dd. Pyparsing returns an 
+object of type ParseResults, but this class has many dict-like features (support for keys(), 
+items(), in, etc.), or can emit a true Python dict by calling asDict(). Calling dump() 
+shows all of the tokens in the original parsed list, plus all of the named items. The last
+two examples show how to access named items within a ParseResults as if they were attributes of
+a Python object. 
+
+ text = 'name="John Smith", age=34, height=173.2, location="US", avatar=":,=)"'
+dd = dictstring.parseString(text)
+print dd.keys()
+print dd.items()
+print dd.dump()
+print dd.asDict()
+print dd.name
+print dd.avatar
+ 
+
+ Prints: 
+
+ ['age', 'location', 'name', 'avatar', 'height']
+[('age', 34), ('location', 'US'), ('name', 'John Smith'), ('avatar', ':,=)'), ('height', 173.19999999999999)]
+[['name', 'John Smith'], ['age', 34], ['height', 173.19999999999999], ['location', 'US'], ['avatar', ':,=)']]
+- age: 34
+- avatar: :,=)
+- height: 173.2
+- location: US
+- name: John Smith
+{'age': 34, 'height': 173.19999999999999, 'location': 'US', 'avatar': ':,=)', 'name': 'John Smith'}
+John Smith
+:,=)
+ 
+ #3 The following code produces the correct behavior, but is just a bit long! I've added a space in the avatar to show that it deals well with commas and spaces and equal signs inside the string. Any suggestions to shorten it? 
+
+ import hashlib
+
+string = 'name="John Smith", age=34, height=173.2, location="US", avatar=":, =)"'
+
+strings = {}
+
+def simplify(value):
+ try:
+  return int(value)
+ except:
+  return float(value)
+
+while True:
+ try:
+  p1 = string.index('"')
+  p2 = string.index('"',p1+1)
+  substring = string[p1+1:p2]
+  key = hashlib.md5(substring).hexdigest()
+  strings[key] = substring
+  string = string[:p1] + key + string[p2+1:]
+ except:
+  break
+
+d = {} 
+for pair in string.split(', '):
+ key, value = pair.split('=')
+ if value in strings:
+  d[key] = strings[value]
+ else:
+  d[key] = simplify(value)
+
+print d
+ 
+ #4 Here is a approach with eval , I considered it is as unreliable though, but its works for your example. 
+
+ &gt;&gt;&gt; import re
+&gt;&gt;&gt;
+&gt;&gt;&gt; s='name="John Smith", age=34, height=173.2, location="US", avatar=":,=)"'
+&gt;&gt;&gt;
+&gt;&gt;&gt; eval("{"+re.sub('(\w+)=("[^"]+"|[\d.]+)','"\\1":\\2',s)+"}")
+{'age': 34, 'location': 'US', 'name': 'John Smith', 'avatar': ':,=)', 'height': 173.19999999999999}
+&gt;&gt;&gt;
+ 
+
+ Update: 
+
+ Better use the one pointed by Chris Lutz in the comment, I believe Its more reliable, because even there is (single/double) quotes in dict values, it might works. 
+ #5 I think you just need to set maxsplit=1, for instance the following should work. 
+
+ string = 'name="John Smith", age=34, height=173.2, location="US", avatar=":, =)"'
+newDict = dict(map( lambda(z): z.split("=",1), string.split(", ") ))
+ 
+
+ Edit (see comment): 
+
+ I didn't notice that ", " was a value under avatar, the best approach would be to escape ", " wherever you are generating data. Even better would be something like JSON ;). However, as an alternative to regexp, you could try using shlex, which I think produces cleaner looking code. 
+
+ import shlex
+
+string = 'name="John Smith", age=34, height=173.2, location="US", avatar=":, =)"'
+lex = shlex.shlex ( string ) 
+lex.whitespace += "," # Default whitespace doesn't include commas
+lex.wordchars += "." # Word char should include . to catch decimal 
+words = [ x for x in iter( lex.get_token, '' ) ]
+newDict = dict ( zip( words[0::3], words[2::3]) )
+ 
+ #6 do it step by step 
+
+ d={}
+mystring='name="John Smith", age=34, height=173.2, location="US", avatar=":,=)"';
+s = mystring.split(", ")
+for item in s:
+ i=item.split("=",1)
+ d[i[0]]=i[-1]
+print d
+ 
+ #7 Here's a somewhat more robust version of the regexp solution: 
+
+ import re
+
+keyval_re = re.compile(r'''
+ \s*         # Leading whitespace is ok.
+ (?P&lt;key&gt;\w+)\s*=\s*(     # Search for a key followed by..
+  (?P&lt;str&gt;"[^"]*"|\'[^\']*\')|  # a quoted string; or
+  (?P&lt;float&gt;\d+\.\d+)|    # a float; or
+  (?P&lt;int&gt;\d+)      # an int.
+ )\s*,?\s*       # Handle comma &amp; trailing whitespace.
+ |(?P&lt;garbage&gt;.+)      # Complain if we get anything else!
+ ''', re.VERBOSE)
+
+def handle_keyval(match):
+ if match.group('garbage'):
+  raise ValueError("Parse error: unable to parse: %r" %
+       match.group('garbage'))
+ key = match.group('key')
+ if match.group('str') is not None:
+  return (key, match.group('str')[1:-1]) # strip quotes
+ elif match.group('float') is not None:
+  return (key, float(match.group('float')))
+ elif match.group('int') is not None:
+  return (key, int(match.group('int')))
+ 
+
+ It automatically converts floats &amp; ints to the right type; handles single and double quotes; handles extraneous whitespace in various locations; and complains if a badly formatted string is supplied 
+
+ &gt;&gt;&gt; s='name="John Smith", age=34, height=173.2, location="US", avatar=":,=)"'
+&gt;&gt;&gt; print dict(handle_keyval(m) for m in keyval_re.finditer(s))
+{'age': 34, 'location': 'US', 'name': 'John Smith', 'avatar': ':,=)', 'height': 173.19999999999999}
+ 
+ #8 Always comma separated? Use the CSV module to split the line into parts (not checked): 
+
+ import csv
+import cStringIO
+
+parts=csv.reader(cStringIO.StringIO(&lt;string to parse&gt;)).next()

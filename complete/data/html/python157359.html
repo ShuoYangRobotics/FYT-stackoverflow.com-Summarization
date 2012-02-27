@@ -1,0 +1,162 @@
+<h3>Question (ID-157359):</h3><h2>Accurate timestamping in Python</h2><p>I've been building an error logging app recently and was after a way of accurately timestamping the incoming data. When I say accurately I mean each timestamp should be accurate relative to each other (no need to sync to an atomic clock or anything like that).</p>
+
+<p>I've been using datetime.now() as a first stab, but this isn't perfect:</p>
+
+<pre><code>&gt;&gt;&gt; for i in range(0,1000):
+...     datetime.datetime.now()
+...
+datetime.datetime(2008, 10, 1, 13, 17, 27, 562000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 562000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 562000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 562000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 578000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 578000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 578000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 578000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 578000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 609000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 609000)
+datetime.datetime(2008, 10, 1, 13, 17, 27, 609000)
+etc.
+</code></pre>
+
+<p>The changes between clocks for the first second of samples looks like this:</p>
+
+<pre><code>uSecs    difference
+562000  
+578000  16000
+609000  31000
+625000  16000
+640000  15000
+656000  16000
+687000  31000
+703000  16000
+718000  15000
+750000  32000
+765000  15000
+781000  16000
+796000  15000
+828000  32000
+843000  15000
+859000  16000
+890000  31000
+906000  16000
+921000  15000
+937000  16000
+968000  31000
+984000  16000
+</code></pre>
+
+<p>So it looks like the timer data is only updated every ~15-32ms on my machine. The problem comes when we come to analyse the data because sorting by something other than the timestamp and then sorting by timestamp again can leave the data in the wrong order (chronologically). It would be nice to have the time stamps accurate to the point that any call to the time stamp generator gives a unique timestamp.</p>
+
+<p>I had been considering some methods involving using a time.clock() call added to a starting datetime, but would appreciate a solution that would work accurately across threads on the same machine. Any suggestions would be very gratefully received.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>time.clock() only measures wallclock time on Windows. On other systems, time.clock() actually measures CPU-time. On those systems time.time() is more suitable for wallclock time, and it has as high a resolution as Python can manage -- which is as high as the OS can manage; usually using gettimeofday(3) (microsecond resolution) or ftime(3) (millisecond resolution.) Other OS restrictions actually make the real resolution a lot higher than that. datetime.datetime.now() uses time.time(), so time.time() directly won't be better.</p>
+
+<p>For the record, if I use datetime.datetime.now() in a loop, I see about a 1/10000 second resolution. From looking at your data, you have much, much coarser resolution than that. I'm not sure if there's anything Python as such can do, although you may be able to convince the OS to do better through other means.</p>
+
+<p>I seem to recall that on Windows, time.clock() is actually (slightly) more accurate than time.time(), but it measures wallclock since the first call to time.clock(), so you have to remember to 'initialize' it first.</p>
+<br /><b>#1</b><br /><p>You're unlikely to get sufficiently fine-grained control that you can completely eliminate the possibility
+of duplicate timestamps - you'd need resolution smaller than the time it takes to generate a datetime object.  There are a couple of other approaches you might take to deal with it:</p>
+
+<ol>
+<li><p>Deal with it.  Leave your timestamps non-unique as they are, but rely on python's sort being stable to deal with reordering problems.  Sorting on timestamp <em>first</em>, then something else will retain the timestamp ordering - you just have to be careful to always start from the timestamp ordered list every time, rather than doing multiple sorts on the same list.</p></li>
+<li><p>Append your own value to enforce uniqueness.  Eg. include an incrementing integer value as part of the key, or append such a value only if timestamps are different.  Eg.</p></li>
+</ol>
+
+<p>The following will guarantee unique timestamp values:</p>
+
+<pre><code>    class TimeStamper(object):
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.prev = None
+            self.count = 0
+
+         def getTimestamp(self):
+             with self.lock:
+                 ts = str(datetime.now())
+                 if ts == self.prev:
+                     ts +='.%04d' % self.count
+                     self.count += 1
+                 else:
+                     self.prev = ts
+                     self.count = 1
+             return ts
+</code></pre>
+
+<p>For multiple processes (rather than threads), it gets a bit trickier though.</p>
+<br /><b>#2</b><br /><p>Thank you all for your contributions - they've all be very useful. Brian's answer seems closest to what I eventually went with (i.e. deal with it but use a sort of unique identifier - see below) so I've accepted his answer. I managed to consolidate all the various data receivers into a single thread which is where the timestamping is now done using my new <strong>AccurrateTimeStamp</strong> class. What I've done works as long as the time stamp is the first thing to use the clock.</p>
+
+<p>As S.Lott stipulates, without a realtime OS, they're never going to be absolutely perfect. I really only wanted something that would let me see relative to each incoming chunk of data, when things were being received so what I've got below will work well.</p>
+
+<p>Thanks again everyone!</p>
+
+<pre><code>import time
+
+class AccurateTimeStamp():
+    """
+    A simple class to provide a very accurate means of time stamping some data
+    """
+
+    # Do the class-wide initial time stamp to synchronise calls to 
+    # time.clock() to a single time stamp
+    initialTimeStamp = time.time()+ time.clock()
+
+    def __init__(self):
+        """
+        Constructor for the AccurateTimeStamp class.
+        This makes a stamp based on the current time which should be more 
+        accurate than anything you can get out of time.time().
+        NOTE: This time stamp will only work if nothing has called clock() in
+        this instance of the Python interpreter.
+        """
+        # Get the time since the first of call to time.clock()
+        offset = time.clock()
+
+        # Get the current (accurate) time
+        currentTime = AccurateTimeStamp.initialTimeStamp+offset
+
+        # Split the time into whole seconds and the portion after the fraction 
+        self.accurateSeconds = int(currentTime)
+        self.accuratePastSecond = currentTime - self.accurateSeconds
+
+
+def GetAccurateTimeStampString(timestamp):
+    """
+    Function to produce a timestamp of the form "13:48:01.87123" representing 
+    the time stamp 'timestamp'
+    """
+    # Get a struct_time representing the number of whole seconds since the 
+    # epoch that we can use to format the time stamp
+    wholeSecondsInTimeStamp = time.localtime(timestamp.accurateSeconds)
+
+    # Convert the whole seconds and whatever fraction of a second comes after
+    # into a couple of strings 
+    wholeSecondsString = time.strftime("%H:%M:%S", wholeSecondsInTimeStamp)
+    fractionAfterSecondString = str(int(timestamp.accuratePastSecond*1000000))
+
+    # Return our shiny new accurate time stamp   
+    return wholeSecondsString+"."+fractionAfterSecondString
+
+
+if __name__ == '__main__':
+    for i in range(0,500):
+        timestamp = AccurateTimeStamp()
+        print GetAccurateTimeStampString(timestamp)
+</code></pre>
+<br /><b>#3</b><br /><p>Here is a thread about Python timing accuracy:<br><br>
+<a href="http://stackoverflow.com/questions/85451/python-timeclock-vs-timetime-accuracy">http://stackoverflow.com/questions/85451/python-timeclock-vs-timetime-accuracy</a></p>
+<br /><b>#4</b><br /><p>"timestamp should be accurate relative to each other "</p>
+
+<p>Why time?  Why not a sequence number?  If it's any client of client-server application, network latency makes timestamps kind of random.</p>
+
+<p>Are you matching some external source of information?  Say a log on another application?  Again, if there's a network, those times won't be too close.</p>
+
+<p>If you must match things between separate apps, consider passing GUID's around so that both apps log the GUID value.  Then you could be absolutely sure they match, irrespective of timing differences.</p>
+
+<p>If you want the <em>relative</em> order to be exactly right, maybe it's enough for your logger to assign a sequence number to each message in the order they were received.</p>
+<br /><b>#5</b><br /><p>I wanted to thank J. Cage for this last post. </p>
+
+<p>For my work, "reasonable" timing of events across  processes and platforms is essential. There are obviously lots of places where things can go askew (clock drift, context switching, etc.), however this accurate timing solution will, I think, help to ensure that the time stamps recorded are sufficiently accurate to see the other sources of error. </p>
+
+<p>That said, there are a couple of details I wonder about that are explained in <a href="http://www.ibm.com/developerworks/library/i-seconds/" rel="nofollow" title="When Microseconds Matter">When MicroSeconds Matter</a>. For example, I think time.clock() will eventually wrap. I think for this to work for a long running process, you might have to handle that.</p>
+<br />

@@ -1,0 +1,88 @@
+Question (ID-620367): python: how to jump to a particular line in a huge text file? Are there any alternatives to the code below: 
+
+ startFromLine = 141978 # or whatever line I need to jump to
+
+urlsfile = open(filename, "rb", 0)
+
+linesCounter = 1
+
+for line in urlsfile:
+ if linesCounter &gt; startFromLine:
+  DoSomethingWithThisLine(line)
+
+ linesCounter += 1
+ 
+
+ if I'm processing a huge text file (~15MB) with lines of unknown but different length, and need to jump to a particular line which number I know in advance? I feel bad by processing them one by one when I know I could ignore at least first half of the file. Looking for more elegant solution if there is any. 
+ Answers (Total-11): #0 linecache 
+ #1 You don't really have that many options if the lines are of different length... you sadly need to process the line ending characters to know when you've progressed to the next line. 
+
+ You can, however, dramatically speed this up AND reduce memory usage by changing the last parameter to "open" to something not 0. 
+
+ 0 means the file reading operation is unbuffered, which is very slow and disk intensive. 1 means the file is line buffered, which would be an improvement. Anything above 1 (say 8k.. ie: 8096, or higher) reads chunks of the file into memory. You still access it through for line in open(etc): , but python only goes a bit at a time, discarding each buffered chunk after its processed. 
+ #2 You can't jump ahead without reading in the file at least once, since you don't know where the line breaks are. You could do something like: 
+
+ # Read in the file once and build a list of line offsets
+line_offset = []
+offset = 0
+for line in file:
+ line_offset.append(offset)
+ offset += len(line)
+file.seek(0)
+
+# Now, to skip to line n (with the first line being line 0), just do
+file.seek(line_offset[n])
+ 
+ #3 i'm probably spoiled by abundant ram, but 15 Mb is not huge. reading into memory with readlines() is what I usually do with files of this size. accessing a line after that is trivial. 
+ #4 If you know in advance the position in the file (rather the line number), you can use file.seek() to go to that position. 
+
+ Edit : you can use the linecache.getline(filename, lineno) function, which will return the contents of the line lineno, but only after reading the entire file into memory. Good if you're randomly accessing lines from within the file (as python itself might want to do to print a traceback) but not good for a 15MB file. 
+ #5 Since there is no way to determine the lenght of all lines without reading them, you have no choice but to iterate over all lines before your starting line. All you can do is to make it look nice. If the file is really huge then you might want to use a generator based approach: 
+
+ from itertools import dropwhile
+
+def iterate_from_line(f, start_from_line):
+ return (l for i, l in dropwhile(lambda x: x[0] &lt; start_from_line, enumerate(f)))
+
+for line in iterate_from_line(open(filename, "r", 0), 141978):
+ DoSomethingWithThisLine(line)
+ 
+
+ Note: the index is zero based in this approach. 
+ #6 Do the lines themselves contain any index information? If the content of each line was something like " &lt;line index&gt;:Data ", then the seek() approach could be used to do a binary search through the file, even if the amount of Data is variable. You'd seek to the midpoint of the file, read a line, check whether its index is higher or lower than the one you want, etc. 
+
+ Otherwise, the best you can do is just readlines() . If you don't want to read all 15MB, you can use the sizehint argument to at least replace a lot of readline() s with a smaller number of calls to readlines() . 
+ #7 What generates the file you want to process? If it is something under your control, you could generate an index (which line is at which position.) at the time the file is appended to. The index file can be of fixed line size (space padded or 0 padded numbers) and will definitely be smaller. And thus can be read and processed qucikly. 
+
+ 
+ Which line do you want?. 
+ Calculate byte offset of corresponding line number in index file(possible because line size of index file is constant). 
+ Use seek or whatever to directly jump to get the line from index file. 
+ Parse to get byte offset for corresponding line of actual file. 
+ 
+ #8 If you don't want to read the entire file in memory .. you may need to come up with some format other than plain text. 
+
+ of course it all depends on what you're trying to do, and how often you will jump across the file. 
+
+ For instance, if you're gonna be jumping to lines many times in the same file, and you know that the file does not change while working with it, you can do this: 
+First, pass through the whole file, and record the "seek-location" of some key-line-numbers (such as, ever 1000 lines), 
+Then if you want line 12005, jump to the position of 12000 (which you've recorded) then read 5 lines and you'll know you're in line 12005
+and so on 
+ #9 Here's an example using 'readlines(sizehint)' to read a chunk of lines at a time. DNS pointed out that solution. I wrote this example because the other examples here are single-line oriented. 
+
+ def getlineno(filename, lineno):
+ if lineno &lt; 1:
+  raise TypeError("First line is line 1")
+ f = open(filename)
+ lines_read = 0
+ while 1:
+  lines = f.readlines(100000)
+  if not lines:
+   return None
+  if lines_read + len(lines) &gt;= lineno:
+   return lines[lineno-lines_read-1]
+  lines_read += len(lines)
+
+print getlineno("nci_09425001_09450000.smi", 12000)
+ 
+ #10 awk 'NR==141978'

@@ -1,0 +1,142 @@
+Question (ID-1235618): Python: remove dictionary from list If I have a list of dictionaries, say: 
+
+ [{'id': 1, 'name': 'paul'},
+{'id': 2, 'name': 'john'}]
+ 
+
+ and I would like to remove the dictionary with id of 2 (or name john), what is the most efficient way to go about this programmatically (that is to say, I don't know the index of the entry in the list so it can't simply be popped). 
+ Answers (Total-7): #0 thelist[:] = [d for d in thelist if d.get('id') != 2]
+ 
+
+ Edit : as some doubts have been expressed in a comment about the performance of this code (some based on misunderstanding Python's performance characteristics, some on assuming beyond the given specs that there is exactly one dict in the list with a value of 2 for key 'id'), I wish to offer reassurance on this point. 
+
+ On an old Linux box, measuring this code: 
+
+ $ python -mtimeit -s"lod=[{'id':i, 'name':'nam%s'%i} for i in range(99)]; import random" "thelist=list(lod); random.shuffle(thelist); thelist[:] = [d for d in thelist if d.get('id') != 2]"
+10000 loops, best of 3: 82.3 usec per loop
+ 
+
+ of which about 57 microseconds for the random.shuffle (needed to ensure that the element to remove is not ALWAYS at the same spot;-) and 0.65 microseconds for the initial copy (whoever worries about performance impact of shallow copies of Python lists is most obviously out to lunch;-), needed to avoid altering the original list in the loop (so each leg of the loop does have something to delete;-). 
+
+ When it is known that there is exactly one item to remove, it's possible to locate and remove it even more expeditiously: 
+
+ $ python -mtimeit -s"lod=[{'id':i, 'name':'nam%s'%i} for i in range(99)]; import random" "thelist=list(lod); random.shuffle(thelist); where=(i for i,d in enumerate(thelist) if d.get('id')==2).next(); del thelist[where]"
+10000 loops, best of 3: 72.8 usec per loop
+ 
+
+ (use the next builtin rather than the .next method if you're on Python 2.6 or better, of course) -- but this code breaks down if the number of dicts that satisfy the removal condition is not exactly one. Generalizing this, we have: 
+
+ $ python -mtimeit -s"lod=[{'id':i, 'name':'nam%s'%i} for i in range(33)]*3; import random" "thelist=list(lod); where=[i for i,d in enumerate(thelist) if d.get('id')==2]; where.reverse()" "for i in where: del thelist[i]"
+10000 loops, best of 3: 23.7 usec per loop
+ 
+
+ where the shuffling can be removed because there are already three equispaced dicts to remove, as we know. And the listcomp, unchanged, fares well: 
+
+ $ python -mtimeit -s"lod=[{'id':i, 'name':'nam%s'%i} for i in range(33)]*3; import random" "thelist=list(lod); thelist[:] = [d for d in thelist if d.get('id') != 2]"
+10000 loops, best of 3: 23.8 usec per loop
+ 
+
+ totally neck and neck, with even just 3 elements of 99 to be removed. With longer lists and more repetitions, this holds even more of course: 
+
+ $ python -mtimeit -s"lod=[{'id':i, 'name':'nam%s'%i} for i in range(33)]*133; import random" "thelist=list(lod); where=[i for i,d in enumerate(thelist) if d.get('id')==2]; where.reverse()" "for i in where: del thelist[i]"
+1000 loops, best of 3: 1.11 msec per loop
+$ python -mtimeit -s"lod=[{'id':i, 'name':'nam%s'%i} for i in range(33)]*133; import random" "thelist=list(lod); thelist[:] = [d for d in thelist if d.get('id') != 2]"
+1000 loops, best of 3: 998 usec per loop
+ 
+
+ All in all, it's obviously not worth deploying the subtlety of making and reversing the list of indices to remove, vs the perfectly simple and obvious list comprehension, to possibly gain 100 nanoseconds in one small case -- and lose 113 microseconds in a larger one;-). Avoiding or criticizing simple, straightforward, and perfectly performance-adequate solutions (like list comprehensions for this general class of "remove some items from a list" problems) is a particularly nasty example of Knuth's and Hoare's well-known thesis that "premature optimization is the root of all evil in programming"!-) 
+ #1 This is not properly an anwser (as I think you already have some quite good of them), but... have you considered of having a dictionary of &lt;id&gt;:&lt;name&gt; instead of a list of dictionaries? 
+ #2 list.pop() is a good choice: 
+
+ &gt;&gt;&gt; a = [{'id': 1, 'name': 'paul'},
+... {'id': 2, 'name': 'john'}]
+&gt;&gt;&gt; a.pop(1)
+{'id': 2, 'name': 'john'}
+&gt;&gt;&gt; a
+[{'id': 1, 'name': 'paul'}]
+ 
+
+ You can develop other ways of tracking done which dictionary you want to eliminate, so long as it resolves to an integer. Here is one of those ways: 
+
+ &gt;&gt;&gt; a = [{'id': 1, 'name': 'paul'},
+... {'id': 2, 'name': 'john'}]
+&gt;&gt;&gt; for i in reversed(range(len(a))):
+...  if a[i].get('id') == 2:
+...    a.pop(i)
+...
+{'id': 2, 'name': 'john'}
+&gt;&gt;&gt; a
+[{'id': 1, 'name': 'paul'}]
+ 
+
+ Another possibility is to use del: 
+
+ [{'id': 1, 'name': 'paul'}]
+&gt;&gt;&gt; a = [{'id': 1, 'name': 'paul'},
+... {'id': 2, 'name': 'john'}]
+&gt;&gt;&gt; a
+[{'id': 1, 'name': 'paul'}, {'id': 2, 'name': 'john'}]
+&gt;&gt;&gt; del a[1]
+&gt;&gt;&gt; a
+[{'id': 1, 'name': 'paul'}]
+ 
+ #3 Here's a way to do it with a list comprehension (assuming you name your list 'foo'): 
+
+ [x for x in foo if not (2 == x.get('id'))]
+ 
+
+ Substitute 'john' == x.get('name') or whatever as appropriate. 
+
+ filter also works: 
+
+ foo.filter(lambda x: x.get('id')!=2, foo) 
+
+ And if you want a generator you can use itertools: 
+
+ itertools.ifilter(lambda x: x.get('id')!=2, foo) 
+
+ However, as of Python 3, filter will return an iterator anyway, so the list comprehension is really the best choice, as Alex suggested. 
+ #4 You can try the following: 
+
+ a = [{'id': 1, 'name': 'paul'},
+  {'id': 2, 'name': 'john'}]
+
+for e in range(len(a) - 1, -1, -1):
+ if a[e]['id'] == 2:
+  a.pop(e)
+ 
+
+ If You can't pop from the beginning - pop from the end, it won't ruin the for loop. 
+ #5 You could try something along the following lines: 
+
+ def destructively_remove_if(predicate, list):
+  for k in xrange(len(list)):
+   if predicate(list[k]):
+    del list[k]
+    break
+  return list
+
+ list = [
+  { 'id': 1, 'name': 'John' },
+  { 'id': 2, 'name': 'Karl' },
+  { 'id': 3, 'name': 'Desdemona' } 
+ ]
+
+ print "Before:", list
+ destructively_remove_if(lambda p: p["id"] == 2, list)
+ print "After:", list
+ 
+
+ Unless you build something akin to an index over your data, I
+don't think that you can do better than doing a brute-force "table
+scan" over the entire list. If your data is sorted by the key you
+are using, you might be able to employ the bisect module to
+find the object you are looking for somewhat faster. 
+ #6 # assume ls contains your list
+for i in range(len(ls)):
+ if ls[i]['id'] == 2:
+  del ls[i]
+  break
+ 
+
+ Will probably be faster than the list comprehension methods on average because it doesn't traverse the whole list if it finds the item in question early on.

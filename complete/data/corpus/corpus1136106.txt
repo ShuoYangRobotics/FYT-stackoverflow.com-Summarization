@@ -1,0 +1,87 @@
+Question (ID-1136106): Efficent way to insert thousands of records into a table (SQLite, Python, Django) I have to insert 8000+ records into a SQLite database using Django's ORM. This operation needs to be run as a cronjob about once per minute. At the moment I'm using a for loop to iterate through all the items and then insert them one by one. 
+Example: 
+
+ for item in items:
+ entry = Entry(a1=item.a1, a2=item.a2)
+ entry.save()
+ 
+
+ What is an efficent way of doing this? 
+ 
+ 
+ Edit: A little comparison between the two insertion methods. 
+
+ Without commit_manually decorator (11245 records): 
+
+ nox@noxdevel marinetraffic]$ time python manage.py insrec    
+
+real 1m50.288s
+user 0m6.710s
+sys  0m23.445s
+ 
+
+ Using commit_manually decorator (11245 records): 
+
+ [nox@noxdevel marinetraffic]$ time python manage.py insrec    
+
+real 0m18.464s
+user 0m5.433s
+sys  0m10.163s
+ 
+
+ Note: The test script also does some other operations besides inserting into the database (downloads a ZIP file, extracts an XML file from the ZIP archive, parses the XML file) so the time needed for execution does not necessarily represent the time needed to insert the records. 
+ Answers (Total-7): #0 You want to check out "django.db.transaction.commit_manually". 
+
+ http://docs.djangoproject.com/en/dev/topics/db/transactions/#django-db-transaction-commit-manually 
+
+ So it would be something like: 
+
+ from django.db import transaction
+
+@transaction.commit_manually
+def viewfunc(request):
+ ...
+ for item in items:
+  entry = Entry(a1=item.a1, a2=item.a2)
+  entry.save()
+ transaction.commit()
+ 
+
+ Which will only commit once, instead at each save(). 
+
+ In django 1.3 context managers were introduced.
+So now you can use transaction.commit_on_success() in a similar way: 
+
+ from django.db import transaction
+
+def viewfunc(request):
+ ...
+ with transaction.commit_on_success():
+  for item in items:
+   entry = Entry(a1=item.a1, a2=item.a2)
+   entry.save()
+ 
+ #1 Have a look at this . It's meant for use out-of-the-box with MySQL only, but there are pointers on what to do for other databases. 
+ #2 You might be better off bulk-loading the items - prepare a file and use a bulk load tool. This will be vastly more efficient than 8000 individual inserts. 
+ #3 You should check out DSE . I wrote DSE to solve these kinds of problems ( massive insert or updates ). Using the django orm is a dead-end, you got to do it in plain SQL and DSE takes care of much of that for you. 
+
+ Thomas 
+ #4 I recommend using plain SQL (not ORM) you can insert multiple rows with a single insert: 
+
+ insert into A select from B;
+ 
+
+ The select from B portion of your sql could be as complicated as you want it to get as long as the results match the columns in table A and there are no constraint conflicts. 
+ #5 Bulk creation will be available in Django 1.4: 
+
+ https://docs.djangoproject.com/en/dev/ref/models/querysets/#bulk-create 
+ #6 I've ran into the same problem and I can't figure out a way to do it without so many inserts. 
+I agree that using transactions is probably the right way to solve it, but here is my hack: 
+
+ def viewfunc(request):
+  ...
+  to_save = [];
+  for item in items:
+   entry = Entry(a1=item.a1, a2=item.a2)
+   to_save.append(entry);
+  map(lambda x: x.save(), to_save);

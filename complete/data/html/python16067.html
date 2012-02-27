@@ -1,0 +1,85 @@
+<h3>Question (ID-16067):</h3><h2>Prototyping with Python code before compiling</h2><p>I have been mulling over writing a peak fitting library for a while. I know Python fairly well and plan on implementing everything in Python to begin with but envisage that I may have to re-implement some core routines in a compiled language eventually.</p>
+
+<p>IIRC, one of Python's original remits was as a prototyping language, however Python is pretty liberal in allowing functions, functors, objects to be passed to functions and methods, whereas I suspect the same is not true of say C or Fortran.</p>
+
+<p>What should I know about designing functions/classes which I envisage will have to interface into the compiled language? And how much of these potential problems are dealt with by libraries such as cTypes, bgen, <a href="http://www.swig.org/" rel="nofollow">SWIG</a>, <a href="http://www.boost.org/doc/libs/1_35_0/libs/python/doc/index.html" rel="nofollow">Boost.Python</a>, <a href="http://cython.org/" rel="nofollow">Cython</a> or <a href="http://www.riverbankcomputing.co.uk/software/sip/intro" rel="nofollow">Python SIP</a>?</p>
+
+<p>For this particular use case, (a fitting library) I imagine allowing users to define mathematical functions (Guassian, Lorentzian etc.) as Python functions which can then to be passed an interpreted by the compiled code fitting library. Passing and returning arrays is also essential.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Finally a question that I can really put a value answer to :). </p>
+
+<p>I have investigated f2py, boost.python, swig, cython and pyrex for my work (PhD in optical measurement techniques). I used swig extensively, boost.python some and pyrex and cython a lot. I also used ctypes. This is my breakdown:</p>
+
+<p><strong>Disclaimer</strong>: This is my personal experience. I am not involved with any of these projects. </p>
+
+<p><strong>swig:</strong>
+does not play well with c++. It should, but name mangling problems in the linking step was a major headache for me on linux &amp; Mac OS X. If you have C code and want it interfaced to python, it is a good solution. I wrapped the GTS for my needs and needed to write basically a C shared library which I could connect to. I would not recommend it.</p>
+
+<p><strong>Ctypes:</strong>
+I wrote a libdc1394 (IEEE Camera library) wrapper using ctypes and it was a very straigtforward experience. You can find the code on <a href="https://launchpad.net/pydc1394" rel="nofollow">https://launchpad.net/pydc1394</a>. It is a lot of work to convert headers to python code, but then everything works reliably. This is a good way if you want to interface an external library. Ctypes is also in the stdlib of python, so everyone can use your code right away. This is also a good way to play around with a new lib in python quickly. I can recommend it to interface to external libs. </p>
+
+<p><strong>Boost.Python</strong>: Very enjoyable. If you already have C++ code of your own that you want to use in python, go for this. It is very easy to translate c++ class structures into python class structures this way. I recommend it if you have c++ code that you need in python. </p>
+
+<p><strong>Pyrex/Cython:</strong> Use Cython, not Pyrex. Period. Cython is more advanced and more enjoyable to use. Nowadays, I do everything with cython that i used to do with SWIG or Ctypes. It is also the best way if you have python code that runs too slow. The process is absolutely fantastic: you convert your python modules into cython modules, build them and keep profiling and optimizing like it still was python (no change of tools needed). You can then apply as much (or as little) C code mixed with your python code. This is by far faster then having to rewrite whole parts of your application in C; you only rewrite the inner loop. </p>
+
+<p><strong>Timings</strong>: ctypes has the highest call overhead (~700ns), followed by boost.python (322ns), then directly by swig (290ns). Cython has the lowest call overhead (124ns) and the best feedback where it spends time on (cProfile support!). The numbers are from my box calling a trivial function that returns an integer from an interactive shell; module import overhead is therefore not timed, only function call overhead is. It is therefore easiest and most productive to get python code fast by profiling and using cython.</p>
+
+<p><strong>Summary</strong>: For your problem, use Cython ;). I hope this rundown will be useful for some people. I'll gladly answer any remaining question.</p>
+
+<p><hr /></p>
+
+<p><strong>Edit</strong>: I forget to mention: for numerical purposes (that is, connection to NumPy) use Cython; they have support for it (because they basically develop cython for this purpose). So this should be another +1 for your decision. </p>
+<br /><b>#1</b><br /><p>I haven't used SWIG or SIP, but I find writing Python wrappers with <a href="http://www.boost.org/doc/libs/1_35_0/libs/python/doc/index.html" rel="nofollow">boost.python</a> to be very powerful and relatively easy to use.</p>
+
+<p>I'm not clear on what your requirements are for passing types between C/C++ and python, but you can do that easily by either exposing a C++ type to python, or by using a generic <a href="http://www.boost.org/doc/libs/1_35_0/libs/python/doc/v2/object.html" rel="nofollow">boost::python::object</a> argument to your C++ API. You can also register converters to automatically convert python types to C++ types and vice versa.</p>
+
+<p>If you plan use boost.python, the <a href="http://www.boost.org/doc/libs/1_35_0/libs/python/doc/tutorial/doc/html/index.html" rel="nofollow">tutorial</a> is a good place to start.</p>
+
+<p>I have implemented something somewhat similar to what you need. I have a C++ function that 
+accepts a python function and an image as arguments, and applies the python function to each pixel in the image.</p>
+
+<pre><code>Image* unary(boost::python::object op, Image&amp; im)
+{
+    Image* out = new Image(im.width(), im.height(), im.channels());
+    for(unsigned int i=0; i&lt;im.size(); i++)
+    {
+        (*out)[i] == extract&lt;float&gt;(op(im[i]));
+    }
+    return out;
+}
+</code></pre>
+
+<p>In this case, Image is a C++ object exposed to python (an image with float pixels), and op is a python defined function  (or really any python object with a &#95;&#95;call&#95;&#95; attribute). You can then use this function as follows (assuming unary is located in the called image that also contains Image and a load function):</p>
+
+<pre><code>import image
+im = image.load('somefile.tiff')
+double_im = image.unary(lambda x: 2.0*x, im)
+</code></pre>
+
+<p>As for using arrays with boost, I personally haven't done this, but I know the functionality to expose arrays to python using boost is available - <a href="http://www.boost.org/doc/libs/1_35_0/libs/python/doc/v2/faq.html#question2" rel="nofollow">this</a> might be helpful.</p>
+<br /><b>#2</b><br /><p>The best way to plan for an eventual transition to compiled code is to write the performance sensitive portions as a module of simple functions in a <a href="http://en.wikipedia.org/wiki/Functional_programming" rel="nofollow">functional style</a> (stateless and without side effects), which accept and return basic data types.</p>
+
+<p>This will provide a one-to-one mapping from your Python prototype code to the eventual compiled code, and will let you use <a href="http://www.python.org/doc/lib/module-ctypes.html" rel="nofollow">ctypes</a> easily and avoid a whole bunch of headaches.</p>
+
+<p>For peak fitting, you'll almost certainly need to use arrays, which will complicate things a little, but is still very doable with ctypes.</p>
+
+<p>If you really want to use more complicated data structures, or modify the passed arguments, <a href="http://www.swig.org/" rel="nofollow">SWIG</a> or <a href="http://docs.python.org/ext/ext.html" rel="nofollow">Python's standard C-extension interface</a> will let you do what you want, but with some amount of hassle.</p>
+
+<p>For what you're doing, you may also want to check out <a href="http://numpy.scipy.org/" rel="nofollow">NumPy</a>, which might do some of the work you would want to push to C, as well as offering <a href="http://projects.scipy.org/scipy/numpy/wiki/NumPyCAPI" rel="nofollow">some additional help in moving data back and forth between Python and C</a>.</p>
+<br /><b>#3</b><br /><p><a href="http://cens.ioc.ee/projects/f2py2e/usersguide/index.html#the-quick-and-smart-way" rel="nofollow">f2py</a> (part of <code>numpy</code>) is a simpler alternative to SWIG and boost.python for wrapping C/Fortran number-crunching code.</p>
+<br /><b>#4</b><br /><p>In my experience, there are two easy ways to call into C code from Python code.  There are other approaches, all of which are more annoying and/or verbose.</p>
+
+<p>The first and easiest is to compile a bunch of C code as a separate shared library and then call functions in that library using ctypes.  Unfortunately, passing anything other than basic data types is non-trivial.</p>
+
+<p>The second easiest way is to write a Python module in C and then call functions in that module.  You can pass anything you want to these C functions without having to jump through any hoops.  And it's easy to call Python functions or methods from these C functions, as described here: <a href="http://www.python.org/doc/ext/callingPython.html" rel="nofollow">http://www.python.org/doc/ext/callingPython.html</a></p>
+
+<p>I don't have enough experience with SWIG to offer intelligent commentary.  And while it is possible to do things like pass custom Python objects to C functions through ctypes, or to define new Python classes in C, these things are annoying and verbose and I recommend taking one of the two approaches described above.</p>
+<br /><b>#5</b><br /><blockquote>
+  <p>Python is pretty liberal in allowing functions, functors, objects to be passed to functions and methods, whereas I suspect the same is not true of say C or Fortran.</p>
+</blockquote>
+
+<p>In C you cannot pass a function as an argument to a function but you can pass a function pointer which is just as good a function.</p>
+
+<p>I don't know how much that would help when you are trying to integrate C and Python code but I just wanted to clear up one misconception.</p>
+<br /><b>#6</b><br /><p>In addition to the tools above, I can recommend using <a href="http://www.cosc.canterbury.ac.nz/greg.ewing/python/Pyrex/" rel="nofollow" title="Pyrex">Pyrex</a> 
+(for creating Python extension modules) or <a href="http://psyco.sourceforge.net/" rel="nofollow" title="Psyco">Psyco</a> (as JIT compiler for Python).</p>
+<br />

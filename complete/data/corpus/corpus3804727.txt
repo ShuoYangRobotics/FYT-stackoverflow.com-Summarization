@@ -1,0 +1,186 @@
+Question (ID-3804727): python, subprocess: reading output from subprocess I have following script: 
+
+ #!/usr/bin/python
+
+while True:
+ x = raw_input()
+ print x[::-1]
+ 
+
+ I am calling it from ipython : 
+
+ In [5]: p = Popen('./script.py', stdin=PIPE)
+
+In [6]: p.stdin.write('abc\n')
+cba
+ 
+
+ and it works fine. 
+
+ However, when I do this: 
+
+ In [7]: p = Popen('./script.py', stdin=PIPE, stdout=PIPE)
+
+In [8]: p.stdin.write('abc\n')
+
+In [9]: p.stdout.read()
+ 
+
+ the interpreter hangs. What am I doing wrong? I would like to be able to both write and read from another process multiple times, to pass some tasks to this process. What do I need to do differently? 
+
+ EDIT 1 
+
+ If I use communicate , I get this: 
+
+ In [7]: p = Popen('./script.py', stdin=PIPE, stdout=PIPE)
+
+In [8]: p.communicate('abc\n')
+Traceback (most recent call last):
+ File "./script.py", line 4, in &lt;module&gt;
+ x = raw_input()
+EOFError: EOF when reading a line
+Out[8]: ('cba\n', None)
+ 
+
+ EDIT 2 
+
+ I tried flushing: 
+
+ #!/usr/bin/python
+
+import sys
+
+while True:
+  x = raw_input()
+  print x[::-1]
+  sys.stdout.flush()
+ 
+
+ and here: 
+
+ In [5]: from subprocess import PIPE, Popen
+
+In [6]: p = Popen('./script.py', stdin=PIPE, stdout=PIPE)
+
+In [7]: p.stdin.write('abc')
+
+In [8]: p.stdin.flush()
+
+In [9]: p.stdout.read()
+ 
+
+ but it hangs again. 
+ Answers (Total-6): #0 I believe there are two problems at work here: 
+
+ 1) Your parent script calls p.stdout.read() , which will read all data until end-of-file. However, your child script runs in an infinite loop so end-of-file will never happen. Probably you want p.stdout.readline() ? 
+
+ 2) In interactive mode, most programs do buffer only one line at a time. When run from another program, they buffer much more. The buffering improves efficiency in many cases, but causes problems when two programs need to communicate interactively. 
+
+ After p.stdin.write('abc\n') add: 
+
+ p.stdin.flush()
+ 
+
+ In your subprocess script, after print x[::-1] add the following within the loop: 
+
+ sys.stdout.flush()
+ 
+
+ (and import sys at the top) 
+ #1 You're probably tripping over Python's output buffering. Here's what python --help has to say about it. 
+
+ -u  : unbuffered binary stdout and stderr; also PYTHONUNBUFFERED=x
+   see man page for details on internal buffering relating to '-u'
+ 
+ #2 When you are through writing to p.stdin, close it: p.stdin.close() 
+ #3 The subprocess method check_output can be useful for this: 
+
+ output = subprocess.check_output('./script.py') 
+
+ And output will be the stdout from the process. If you need stderr, too: 
+
+ output = subprocess.check_output('./script.py', stderr=subprocess.STDOUT) 
+
+ Because you avoid managing pipes directly, it may circumvent your issue. 
+ #4 If you'd like to pass several lines to script.py then you need to read/write simultaneously: 
+
+ #!/usr/bin/env python
+import sys
+from subprocess import PIPE, Popen
+from threading import Thread
+
+def print_output(out, ntrim=80):
+ for line in out:
+  print len(line)
+  if len(line) &gt; ntrim: # truncate long output
+   line = line[:ntrim-2]+'..'
+  print line.rstrip() 
+
+
+if __name__=="__main__":
+ p = Popen(['python', 'script.py'], stdin=PIPE, stdout=PIPE)
+ Thread(target=print_output, args=(p.stdout,)).start()
+ for s in ['abc', 'def', 'ab'*10**7, 'ghi']:
+  print &gt;&gt;p.stdin, s
+ p.stdin.close()
+ sys.exit(p.wait()) #NOTE: read http://docs.python.org/library/subprocess.html#subprocess.Popen.wait
+ 
+
+ Output: 
+
+ 4
+cba
+4
+fed
+20000001
+bababababababababababababababababababababababababababababababababababababababa..
+4
+ihg 
+
+ Where script.py : 
+
+ #!/usr/bin/env python
+"""Print reverse lines."""
+while True:
+ try: x = raw_input()
+ except EOFError:
+  break # no more input
+ else:
+  print x[::-1]
+ 
+
+ Or 
+
+ #!/usr/bin/env python
+"""Print reverse lines."""
+import sys
+
+for line in sys.stdin:
+ print line.rstrip()[::-1]
+ 
+
+ Or 
+
+ #!/usr/bin/env python
+"""Print reverse lines."""
+import fileinput
+
+for line in fileinput.input(): # accept files specified as command line arguments
+ print line.rstrip()[::-1]
+ 
+ #5 Use communicate() instead of .stdout.read() . 
+
+ Example: 
+
+ from subprocess import Popen, PIPE
+p = Popen('./script.py', stdin=PIPE, stdout=PIPE, stderr=PIPE)
+input = 'abc\n'
+stdout, stderr = p.communicate(input)
+ 
+
+ This recommendation comes from the Popen objects section in the subprocess documentation : 
+
+ 
+ Warning : Use communicate() rather than .stdin.write, .stdout.read or .stderr.read
+ to avoid deadlocks due to any of the other OS pipe buffers filling up and blocking the
+ child process.

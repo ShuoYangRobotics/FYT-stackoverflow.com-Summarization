@@ -1,0 +1,68 @@
+Question (ID-2563329): Regex matching very slow I am trying to parse a PDF to extract the text from it (please don't suggest any libraries to do this, as this is part of learning the format). 
+I have already handled deflating it to put it in the alphanumeric format. I now need to extract the text from the text blocks. 
+So, my current pattern is BT.*?\((.*?)\).*?ET (with DOTMATCHALL set) to match something like: 
+
+ BT
+ /F13 12 Tf
+ 288 720 Td
+ (ABC) Tj
+ET
+ 
+
+ The only bit I want is the text ABC in the brackets. 
+The above is only formatted like that to make it clear to see. In the deflated text it may be all in one line, it may not be. There is no gurantee that the BT/ET will be at the start of a line. There may be spaces and text before/after the bracketed section, there may not be. There will however, be only one bracketed section per BT/ET block. 
+
+ The above pattern works, but is really slow, I assume it is because the regex library is failing to match the pattern that matches the text between BT and the (ABC) many times. 
+The regex is pre-compiled in an attempt to speed it up, but it seems negligible. 
+
+ How may I speed this up? 
+ Answers (Total-6): #0 How many of these blocks might appear in a document? 
+
+ Often slow Regex execution is the result of catastrophic backtracking, as described here: http://www.regular-expressions.info/catastrophic.html 
+
+ I don't know what regex technology you're using, but you could try to use lookaround assertions, as described here:
+ http://www.regular-expressions.info/lookaround.html 
+
+ These allow you to first just match what you want, ABC inside parentheses, and then validate that it is preceded by some value and followed by some other value. 
+ #1 Are you sure the regex is correct and pulls out ABC as a match? What language's regex engine is this? Using my regular expression debugger shows that: 
+
+ "BT.*?((.*?)).*?ET" doesn't pull out ABC and in fact must find the string 'ET' then backtrack back to find everything else. 
+
+ "BT.*?\\((.*?)\\).*?ET" works as expected with a single pass left to right. 
+ #2 You can't just parse the PDF with a regex to extract the text. In most cases the text in inside compressed binary blobs or encoded. A PDF with the text shown like this is very much the exception. 
+ #3 There's not really enough info for a definite answer--or maybe you're assuming we know more about PDF than you do. Are there always parenthesized chunks inside these BT...ET sections? Is there always only one of them? Is the BT or ET always at the beginning of a line? If so, I would suggest 
+
+ (?m)^BT[^()]*\((.*?)\)[^()]*?^ET
+ 
+
+ If I knew how PDF represented literal parentheses, I could probably come up with something more efficient. 
+
+ EDIT: According to the PDF spec, literal parentheses have to be escaped with a backslash, and there are a bunch of other backslash-escape sequences. So try this: 
+
+ (?s)\bBT\b[^()]*\(((?:[^()\\]*(?:\\.[^()\\]*)*))\)
+ 
+
+ This part-- [^()\\]*(?:\\.[^()\\]*)* --matches a block of text which may contain escaped characters (including parens), but not unescaped parens. I know it looks ugly, but it's the most efficient way, since Python doesn't support atomic groups or possessive quantifiers. 
+
+ (?s) allows . to match newlines, and \bBT\b makes sure the BT isn't part of a longer "word". I'm reasonably confident that this is all I need to match all of the actual text content, so I don't bother matching the stuff after the closing paren. 
+ #4 here's one without regex. simple string parsing using Python internals. 
+
+ &gt;&gt;&gt; xtract="""
+... BT
+... /F13 12 Tf
+... 288 720 Td
+... (ABC) Tj
+... ET
+...
+... """
+&gt;&gt;&gt; for chunk in xtract.split("ET"):
+...  if "BT" in chunk:
+...   for brace in chunk.split(")"):
+...    if "(" in brace:
+...     print brace[brace.find("(")+1:]
+...
+ABC
+ 
+ #5 Since there will be only one bracketed expression between a BT and an ET , you could try the following regular expression for speed: 
+
+ r"(?s)\bBT\b[^(]*\(([^)]*)\).*?\bET\b"

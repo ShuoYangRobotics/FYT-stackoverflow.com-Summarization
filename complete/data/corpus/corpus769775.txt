@@ -1,0 +1,129 @@
+Question (ID-769775): The lines that stand out in a file, but aren't exact duplicates I'm combing a webapp's log file for statements that stand out. 
+
+ Most of the lines are similar and uninteresting. I'd pass them through Unix uniq , however that filters nothing, as all the lines are slightly different: they all have a different timestamp, similar statements might print a different user ID, etc. 
+
+ What's a way and/or tool to get just the lines that are notably different from any other? (But, again, not precise duplicates) 
+
+ I was thinking about playing with Python's difflib but that seems geared toward diffing two files, rather than all pairs of lines in the same file. 
+
+ [EDIT] 
+
+ I assumed the solution would give a uniqueness score for each line. So by "notably different" I meant, I choose a threshold that the uniqueness score must exceed for any line to be included in the output. 
+
+ Based on that, if there are other viable ways to define it, please discuss. Also, the method doesn't have to have 100% accuracy and recall. 
+
+ [/EDIT] 
+
+ Examples: 
+
+ I'd prefer answers that are as general purpose as possible. I know I can strip away the timestamp at the beginning. Stripping the end is more challenging, as its language may be absolutely unlike anything else in the file. These sorts of details are why I shied from concrete examples before, but because some people asked... 
+
+ Similar 1: 
+
+ 2009-04-20 00:03:57 INFO com.foo.Bar - URL:/graph?id=1234
+2009-04-20 00:04:02 INFO com.foo.Bar - URL:/graph?id=asdfghjk
+ 
+
+ Similar 2: 
+
+ 2009-04-20 00:05:59 INFO com.baz.abc.Accessor - Cache /path/to/some/dir hits: 3466 / 16534, 0.102818% misses
+2009-04-20 00:06:00 INFO com.baz.abc.Accessor - Cache /path/to/some/different/dir hits: 4352685 / 271315, 0.004423% misses
+ 
+
+ Different 1: 
+
+ 2009-04-20 00:03:57 INFO com.foo.Bar - URL:/graph?id=1234
+2009-04-20 00:05:59 INFO com.baz.abc.Accessor - Cache /path/to/some/dir hits: 3466 / 16534, 0.102818% misses
+ 
+
+ In the Different 1 case, I'd like both lines returned but not other lines like them. In other words, those 2 lines are distinct types (then I can later ask for only statistically rare line types). The edit distance is much bigger between those two, for one thing. 
+ Answers (Total-6): #0 Define "notably different". Then have a look at "edit distance" measures . 
+ #1 You could try a bit of code that counts words, and then sorts lines by those having the least common words. 
+
+ If that doesn't do the trick, you can add in some smarts to filter out time stamps and numbers. 
+
+ Your problem is similar to an earlier question on generating summaries of news stories . 
+ #2 I don't know a tool for you but if I were going to roll my own, I'd approach it like this: 
+
+ Presumably the log lines have a well defined structure, no? So 
+
+ 
+ parse the lines on that structure 
+ write a number of very basic relevance filters (functions that just return a simple number from the parsed structure) 
+ run the parsed lines through a set of filters, and cut on the basis of the total score 
+ possibly sort the remaining lines into various bins by the results of more filters 
+ generate reports, dump bins to files, or other output 
+ 
+
+ If you are familiar with the unix tool procmail , I'm suggesting a similar treatment customized for your data. 
+
+ 
+
+ As zacherates notes in the comments, your filters will typically ignore time stamps (and possibly IP address), and just concentrate on the content: for example really long http requests might represent an attack...or whatever applies to your domain. 
+
+ Your binning filters might be as simple as a hash on a few selected fields, or you might try to do something with Charlie Martin's suggestion and used edit distance measures. 
+ #3 Perhaps you could do a basic calculation of "words the same"/"all words"? 
+
+ e.g. (including an offset to allow you to ignore the timestamp and the word 'INFO', if that's always the same): 
+
+ def score(s1, s2, offset=26):
+ words1 = re.findall('\w+', s1[offset:])
+ words2 = re.findall('\w+', s2[offset:])
+ return float(len(set(words1) &amp; set(words2)))/max(len(set(words1)), len(set(words2)))
+ 
+
+ Given: 
+
+ &gt;&gt;&gt; s1
+'2009-04-20 00:03:57 INFO com.foo.Bar - URL:/graph?id=1234'
+&gt;&gt;&gt; s2
+'2009-04-20 00:04:02 INFO com.foo.Bar - URL:/graph?id=asdfghjk'
+&gt;&gt;&gt; s3
+'2009-04-20 00:05:59 INFO com.baz.abc.Accessor - Cache /path/to/some/dir hits: 3466 / 16534, 0.102818% misses'
+&gt;&gt;&gt; s4
+'2009-04-20 00:06:00 INFO com.baz.abc.Accessor - Cache /path/to/some/different/dir hits: 4352685 / 271315, 0.004423% misses'
+ 
+
+ This yields: 
+
+ &gt;&gt;&gt; score(s1,s2)
+0.8571428571428571
+&gt;&gt;&gt; score(s3,s4)
+0.75
+&gt;&gt;&gt; score(s1,s3)
+0.066666666666666666
+ 
+
+ You've still got to decide which lines to compare. Also the use of set() may distort the scores slightly – the price of a simple algorithm :-) 
+ #4 I wonder if you could just focus on the part that defines uniqueness for you. In this case, it seems that the part defining uniqueness is just the middle part: 
+
+ 
+2009-04-20 00:03:57 INFO com.foo.Bar - URL:/graph?id=1234
+     ^---------------------^ 
+
+2009-04-20 00:05:59 INFO com.baz.abc.Accessor - Cache /path/to/some/dir hits: 3466 / 16534, 0.102818% misses
+     ^--------------------------------^
+ 
+
+ I would then compare exactly this part, perhaps using a regular expression (just the parenthesized group; how to access sub-matches like this is language dependent): 
+
+ /^.{20}(\w+\s+[\w\.-]+\s+-\s+\w+)/
+ 
+ #5 I think you want to break this into fields, sort by the "severity level" field and the next field (looks like "class"). I'd use Haskell: 
+
+ 
+module Main where 
+import Data.List (nubBy, sortBy)
+
+sortAndNub s = nubBy fields2and3 
+  $ sortBy fields2and3comp
+  $ map words $ lines s
+
+fields2and3 a b = fieldEq 2 a b 
+     && fieldEq 3 a b
+fieldEq f a b = a!!f == (b!!f)
+fields2and3comp a b = case compare (a!!2) (b!!2) of
+ LT -> LT
+ GT -> GT
+ EQ -> compare (a!!3) (b!!3)
+main = interact $ unlines.(map unwords).sortAndNub

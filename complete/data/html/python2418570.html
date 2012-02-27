@@ -1,0 +1,176 @@
+<h3>Question (ID-2418570):</h3><h2>Testing warnings with doctest</h2><p>I'd like to use <a href="http://docs.python.org/library/doctest.html" rel="nofollow">doctests</a> to test the presence of certain warnings.  For example, suppose I have the following module:</p>
+
+<pre><code>from warnings import warn
+
+class Foo(object):
+    """
+    Instantiating Foo always gives a warning:
+
+    &gt;&gt;&gt; foo = Foo()
+    testdocs.py:14: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+    &gt;&gt;&gt; 
+    """
+
+    def __init__(self):
+        warn("Boo!", UserWarning)
+</code></pre>
+
+<p>If I run <code>python -m doctest testdocs.py</code> to run the doctest in my class and make sure that the warning is printed, I get:</p>
+
+<pre><code>testdocs.py:14: UserWarning: Boo!
+  warn("Boo!", UserWarning)
+**********************************************************************
+File "testdocs.py", line 7, in testdocs.Foo
+Failed example:
+    foo = Foo()
+Expected:
+    testdocs.py:14: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+Got nothing
+**********************************************************************
+1 items had failures:
+   1 of   1 in testdocs.Foo
+***Test Failed*** 1 failures.
+</code></pre>
+
+<p>It looks like the warning is getting printed but not captured or noticed by doctest.  I'm guessing that this is because warnings are printed to <code>sys.stderr</code> instead of <code>sys.stdout</code>.  But this happens even when I say <code>sys.stderr = sys.stdout</code> at the end of my module.</p>
+
+<p>So is there any way to use doctests to test for warnings?  I can find no mention of this one way or the other in the documentation or in my Google searching.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>The issue you're facing is that <code>warnings.warn()</code> calls <code>warnings.showwarning()</code>, which writes the result of <code>warnings.formatwarning()</code> to a file, defaulting to <code>sys.stderr</code>.</p>
+
+<p>(See: <a href="http://docs.python.org/library/warnings.html#warnings.showwarning" rel="nofollow">http://docs.python.org/library/warnings.html#warnings.showwarning</a>)</p>
+
+<p>If you're using Python 2.6, you can use the <code>warnings.catch_warnings()</code> context manager to easily modify how warnings are handled, including temporarily replacing the implementation of <code>warnings.showwarning()</code> to write to <code>sys.stdout</code> instead. That would be the Right Way to handle something like this.</p>
+
+<p>(See: <a href="http://docs.python.org/library/warnings.html#available-context-managers" rel="nofollow">http://docs.python.org/library/warnings.html#available-context-managers</a>)</p>
+
+<p>If you want a quick and dirty hack, throw together a decorator that redirects <code>sys.stderr</code> to <code>sys.stdout</code>:</p>
+
+<pre><code>def stderr_to_stdout(func):
+    def wrapper(*args):
+        stderr_bak = sys.stderr
+        sys.stderr = sys.stdout
+        try:
+            return func(*args)
+        finally:
+            sys.stderr = stderr_bak
+    return wrapper
+</code></pre>
+
+<p>Then you can call a decorated function in your doctest:</p>
+
+<pre><code>from warnings import warn
+from utils import stderr_to_stdout
+
+class Foo(object):
+    """
+    Instantiating Foo always gives a warning:
+
+    &gt;&gt;&gt; @stderr_to_stdout
+    ... def make_me_a_foo():
+    ...     Foo()
+    ...
+    &gt;&gt;&gt; make_me_a_foo()
+    testdocs.py:18: UserWarning: 
+      warn("Boo!", UserWarning)
+    &gt;&gt;&gt;
+    """ 
+    def __init__(self):
+        warn("Boo!", UserWarning)
+</code></pre>
+
+<p>Which passes:</p>
+
+<pre><code>$ python -m doctest testdocs.py -v
+Trying:
+    @stderr_to_stdout
+    def make_me_a_foo():
+        Foo()
+Expecting nothing
+ok
+Trying:
+    make_me_a_foo()
+Expecting:
+    testdocs.py:18: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+ok
+[...]
+2 passed and 0 failed.
+</code></pre>
+<br /><b>#1</b><br /><p>This isn't the most elegant way to do it, but it works for me:</p>
+
+<pre><code>from warnings import warn
+
+class Foo(object):
+    """
+    Instantiating Foo always gives a warning:
+
+    &gt;&gt;&gt; import sys; sys.stderr = sys.stdout
+    &gt;&gt;&gt; foo = Foo() # doctest:+ELLIPSIS
+    /.../testdocs.py:14: UserWarning: Boo!
+      warn("Boo!", UserWarning)
+    """
+
+    def __init__(self):
+        warn("Boo!", UserWarning)
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
+</code></pre>
+
+<p>This presumably won't work on Windows, though, since the path reported in the UserWarning output must start with a slash the way I've written this test.  You may be able to figure out some better incantation of the ELLIPSIS directive, but I could not.</p>
+<br /><b>#2</b><br /><p>The <a href="http://docs.python.org/library/warnings.html#testing-warnings" rel="nofollow">Testing Warnings</a> sections of the Python documentation is dedicated to this topic. However, to summarize, you have two options:</p>
+
+<h2>(A) Use the <code>catch_warnings</code> context manager</h2>
+
+<p>This is recommended course in the official documentation. However, the <code>catch_warnings</code> context manager only came into existence with Python 2.6.</p>
+
+<pre><code>import warnings
+
+def fxn():
+    warnings.warn("deprecated", DeprecationWarning)
+
+with warnings.catch_warnings(record=True) as w:
+    # Cause all warnings to always be triggered.
+    warnings.simplefilter("always")
+    # Trigger a warning.
+    fxn()
+    # Verify some things
+    assert len(w) == 1
+    assert issubclass(w[-1].category, DeprecationWarning)
+    assert "deprecated" in str(w[-1].message)
+</code></pre>
+
+<h2>(B) Upgrade Warnings to Errors</h2>
+
+<p>If the warning hasn't been seen before&mdash; and thus was registered in the warnings registry&mdash; then you can set warnings to raise exceptions and catch it.</p>
+
+<pre><code>import warnings
+
+
+def fxn():
+    warnings.warn("deprecated", DeprecationWarning)
+
+
+if __name__ == '__main__':
+    warnings.simplefilter("error", DeprecationWarning)
+
+    try:
+        fxn()
+    except DeprecationWarning:
+        print "Pass"
+    else:
+        print "Fail"
+    finally:
+        warnings.simplefilter("default", DeprecationWarning)
+</code></pre>
+<br /><b>#3</b><br /><p>docs suggest that you could <a href="http://docs.python.org/library/warnings.html#the-warnings-filter" rel="nofollow">pass <code>-Wd</code></a> when running doctest to always trigger warnings.</p>
+<br /><b>#4</b><br /><p>Perhaps you could try <a href="http://www.voidspace.org.uk/python/mock/" rel="nofollow">mocking</a> (patch print!) the troublesome bit. I admit this would add some clutter to the docstring but it might worth a go.</p>
+
+<p>If you wish to use that approach while retaining the current syntax, perhaps you could try implementing a custom wrapper for doctest that generates the missing code and then executes the fixed tests. If possible, that's probably best to be avoided though.</p>
+
+<p>Alternatively you could just whip up a totally custom doctest runner but I suppose you would prefer to avoid this. :)</p>
+<br /><b>#5</b><br /><p>This is one example of why doctests are not appropriate for all tests.  If you have inline examples in your docstrings and they need to be tested, that's one thing, but as you've discovered there are behaviors you want to test for that aren't best done with string matching.  And cases where you don't need to have the docstring cluttered up with all the test mechanics.</p>
+<br />

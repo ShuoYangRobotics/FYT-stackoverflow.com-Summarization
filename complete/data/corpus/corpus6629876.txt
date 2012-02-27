@@ -1,0 +1,268 @@
+Question (ID-6629876): How to make an anonymous function in Python without Christening it? Is it possible to put a function in a data structure, without first giving it a name with def ? 
+
+ # This is the behaviour I want. Prints "hi".
+def myprint(msg):
+ print msg
+f_list = [ myprint ]
+f_list[0]('hi')
+# The word "myprint" is never used again. Why litter the namespace with it?
+ 
+
+ The body of a lambda function is severely limited, so I can't use them. 
+
+ Edit: For reference, this is more like the real-life code where I encountered the problem. 
+
+ def handle_message( msg ):
+ print msg
+def handle_warning( msg ):
+ global num_warnings, num_fatals
+ num_warnings += 1
+ if ( is_fatal( msg ) ):
+  num_fatals += 1
+handlers = (
+ ( re.compile( '^&lt;\w+&gt; (.*)' ), handle_message ),
+ ( re.compile( '^\*{3} (.*)' ), handle_warning ),
+)
+# There are really 10 or so handlers, of similar length.
+# The regexps are uncomfortably separated from the handler bodies,
+# and the code is unnecessarily long.
+
+for line in open( "log" ):
+ for ( regex, handler ) in handlers:
+  m = regex.search( line )
+  if ( m ): handler( m.group(1) )
+ 
+ Answers (Total-14): #0 Nicer DRY way to solve your actual problem: 
+
+ def message(msg):
+ print msg
+message.re = '^&lt;\w+&gt; (.*)'
+
+def warning(msg):
+ global num_warnings, num_fatals
+ num_warnings += 1
+ if ( is_fatal( msg ) ):
+  num_fatals += 1
+warning.re = '^\*{3} (.*)'
+
+handlers = [(re.compile(x.re), x) for x in [
+  message,
+  warning,
+  foo,
+  bar,
+  baz,
+ ]]
+ 
+ #1 This is based on Udi's nice answer . 
+
+ I think that the difficulty of creating anonymous functions is a bit of a red herring. What you really want to do is to keep related code together, and make the code neat. So I think decorators may work for you. 
+
+ import re
+
+# List of pairs (regexp, handler)
+handlers = []
+
+def handler_for(regexp):
+ """Declare a function as handler for a regular expression."""
+ def gethandler(f):
+  handlers.append((re.compile(regexp), f))
+  return f
+ return gethandler
+
+@handler_for(r'^&lt;\w+&gt; (.*)')
+def handle_message(msg):
+ print msg
+
+@handler_for(r'^\*{3} (.*)')
+def handle_warning(msg):
+ global num_warnings, num_fatals
+ num_warnings += 1
+ if is_fatal(msg):
+  num_fatals += 1
+ 
+ #2 If you want to keep a clean namespace, use del: 
+
+ def myprint(msg):
+ print msg
+f_list = [ myprint ]
+del myprint
+f_list[0]('hi')
+ 
+ #3 Continuing Gareth's clean approach with a modular self contained solution: 
+
+ import re
+
+# in util.py
+class GenericLogProcessor(object):
+
+ def __init__(self):
+  self.handlers = [] # List of pairs (regexp, handler)
+
+ def register(self, regexp):
+  """Declare a function as handler for a regular expression."""
+  def gethandler(f):
+   self.handlers.append((re.compile(regexp), f))
+   return f
+  return gethandler
+
+ def process(self, file):
+  """Process a file line by line and execute all handlers by registered regular expressions"""
+  for line in file:
+   for regex, handler in self.handlers:
+    m = regex.search(line)
+    if (m):
+     handler(m.group(1))  
+
+# in log_processor.py
+log_processor = GenericLogProcessor()
+
+@log_processor.register(r'^&lt;\w+&gt; (.*)')
+def handle_message(msg):
+ print msg
+
+@log_processor.register(r'^\*{3} (.*)')
+def handle_warning(msg):
+ global num_warnings, num_fatals
+ num_warnings += 1
+ if is_fatal(msg):
+  num_fatals += 1
+
+# in your code
+with open("1.log") as f:
+ log_processor.process(f)
+ 
+ #4 As you stated, this can't be done. But you can approximate it. 
+
+ def create_printer():
+ def myprint(x):
+ print x
+ return myprint
+
+x = create_printer()
+ 
+
+ myprint is effectively anonymous here, since the variable scope in which it was created is no longer accessible to the caller. (See closures in Python .) 
+ #5 The only way to make an anonymous function is with lambda , and as you know, they can only contain a single expression. 
+
+ You can create a number of functions with the same name so at least you don't have to think of new names for each one. 
+
+ It would be great to have truly anonymous functions, but Python's syntax can't support them easily. 
+ #6 Personally I'd just name it something use it and not fret about it "hanging around". The only thing you'll gain by using suggestions such as as redefining it later or using del to drop the name out of the namespace is a potential for confusion or bugs if someone later comes along and moves some code around without groking what you're doing. 
+ #7 If you're concerned about polluting the namespace, create your functions inside of another function. Then you're only "polluting" the local namespace of the create_functions function and not the outer namespace. 
+
+ def create_functions():
+ def myprint(msg):
+  print msg
+ return [myprint]
+
+f_list = create_functions()
+f_list[0]('hi')
+ 
+ #8 The only option is to use a lambda expression, like you mention. Without that, it is not possible. That is the way python works. 
+ #9 As all said lambda is the only way, but you have to think not about lambda limitations but how to avoid them - for example you can use lists, dicts, comprehensions and so on in order to do what you want: 
+
+ funcs = [lambda x,y: x+y, lambda x,y: x-y, lambda x,y: x*y, lambda x: x]
+funcs[0](1,2)
+&gt;&gt;&gt; 3
+funcs[1](funcs[0](1,2),funcs[0](2,2))
+&gt;&gt;&gt; -1
+[func(x,y) for x,y in zip(xrange(10),xrange(10,20)) for func in funcs]
+ 
+
+ EDITED with print(try to look at the pprint module ) and control-flow: 
+
+ add = True
+(funcs[0] if add else funcs[1])(1,2)
+&gt;&gt;&gt; 3
+
+from pprint import pprint
+printMsg = lambda isWarning, msg: pprint('WARNING: ' + msg) if isWarning else pprint('MSG:' + msg)
+ 
+ #10 You should not do it cause eval is evil, but you can compile function code on run time using FunctionType and compile : 
+
+ &gt;&gt;&gt; def f(msg): print msg
+&gt;&gt;&gt; type(f)
+ &lt;type 'function'&gt;
+&gt;&gt;&gt; help(type(f))
+...
+class function(object)
+ | function(code, globals[, name[, argdefs[, closure]]])
+ |
+ | Create a function object from a code object and a dictionary.
+ | The optional name string overrides the name from the code object.
+ | The optional argdefs tuple specifies the default argument values.
+ | The optional closure tuple supplies the bindings for free variables. 
+...
+
+&gt;&gt;&gt; help(compile)
+Help on built-in function compile in module __builtin__:
+
+compile(...)
+ compile(source, filename, mode[, flags[, dont_inherit]]) -&gt; code object
+
+ Compile the source string (a Python module, statement or expression)
+ into a code object that can be executed by the exec statement or eval().
+ The filename will be used for run-time error messages.
+ The mode must be 'exec' to compile a module, 'single' to compile a
+ single (interactive) statement, or 'eval' to compile an expression.
+ The flags argument, if present, controls which future statements influence
+ the compilation of the code.
+ The dont_inherit argument, if non-zero, stops the compilation inheriting
+ the effects of any future statements in effect in the code calling
+ compile; if absent or zero these statements do influence the compilation,
+ in addition to any features explicitly specified.
+ 
+ #11 You could use exec : 
+
+ def define(arglist, body):
+ g = {}
+ exec("def anonfunc({0}):\n{1}".format(arglist,
+          "\n".join(" {0}".format(line)
+            for line in body.splitlines())), g)
+ return g["anonfunc"]
+
+f_list = [define("msg", "print(msg)")]
+f_list[0]('hi')
+ 
+ #12 Python really, really doesn't want to do this. Not only does it not have any way to define a multi-line anonymous function, but function definitions don't return the function, so even if this were syntactically valid... 
+
+ mylist.sort(key=def _(v):
+     try:
+      return -v
+     except:
+      return None)
+ 
+
+ ... it still wouldn't work. (Although I guess if it were syntactically valid, they'd make function definitions return the function, so it would work.) 
+
+ So you can write your own function to make a function from a string (using exec of course) and pass in a triply-quoted string. It's kinda ugly syntactically, but it works: 
+
+ def function(text, cache={}):
+
+ # strip everything before the first paren in case it's "def foo(...):"
+ if not text.startswith("("):
+  text = text[text.index("("):]
+
+ # keep a cache so we don't recompile the same func twice
+ if text in cache:
+  return cache[text]
+
+ exec "def func" + text
+ func.__name__ = "&lt;anonymous&gt;"
+
+ cache[text] = func
+ return func
+
+ # never executed; forces func to be local (a tiny bit more speed)
+ func = None
+ 
+
+ Usage: 
+
+ mylist.sort(key=function("""(v):
+        try:
+         return -v
+        except:
+         return None"""))
+ 
+ #13 If your function is complicated enough to not fit in a lambda function, then, for readability's sake, it would probably be best to define it in a normal block anyway.

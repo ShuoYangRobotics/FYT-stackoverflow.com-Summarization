@@ -1,0 +1,238 @@
+<h3>Question (ID-214881):</h3><h2>Can you add new statements to Python's syntax?</h2><p>Can you add new statements (like <code>print</code>, <code>raise</code>, <code>with</code>) to Python's syntax?</p>
+
+<p>Say, to allow..</p>
+
+<pre><code>mystatement "Something"
+</code></pre>
+
+<p>Or,</p>
+
+<pre><code>new_if True:
+    print "example"
+</code></pre>
+
+<p>Not so much if you <em>should</em>, but rather if it's possible (short of modifying the python interpreters code)</p>
+<br /><h3>Answers (Total-12):</h3><b>#0</b><br /><p>One way to do things like this is to preprocess the source and modify it, translating your added statement to python.  There are various problems this approach will bring, and I wouldn't recommend it for general usage, but for experimentation with language, or specific-purpose metaprogramming, it can occassionally be useful.</p>
+
+<p>For instance, lets say we want to introduce a "myprint" statement, that instead of printing to the screen instead logs to a specific file.  ie:</p>
+
+<pre><code>myprint "This gets logged to file"
+</code></pre>
+
+<p>would be equivalent to</p>
+
+<pre><code>print &gt;&gt;open('/tmp/logfile.txt','a'), "This gets logged to file"
+</code></pre>
+
+<p>There are various options as to how to do the replacing, from regex substitution to generating an AST, to writing your own parser depending on how close your syntax matches existing python.  A good intermediate approach is to use the tokenizer module.  This should allow you to add new keywords, control structures etc while interpreting the source similarly to the python interpreter, thus avoiding the breakage crude regex solutions would cause.  For the above "myprint", you could write the following transformation code:</p>
+
+<pre><code>import tokenize
+
+LOGFILE = '/tmp/log.txt'
+def translate(readline):
+    for type, name,_,_,_ in tokenize.generate_tokens(readline):
+        if type ==tokenize.NAME and name =='myprint':
+            yield tokenize.NAME, 'print'
+            yield tokenize.OP, '&gt;&gt;'
+            yield tokenize.NAME, "open"
+            yield tokenize.OP, "("
+            yield tokenize.STRING, repr(LOGFILE)
+            yield tokenize.OP, ","
+            yield tokenize.STRING, "'a'"
+            yield tokenize.OP, ")"
+            yield tokenize.OP, ","
+        else:
+            yield type,name
+</code></pre>
+
+<p>(This does make myprint effectively a keyword, so use as a variable elsewhere will likely cause problems)</p>
+
+<p>The problem then is how to use it so that your code is usable from python.  One way would just be to write your own import function, and use it to load code written in your custom language.  ie:</p>
+
+<pre><code>import new
+def myimport(filename):
+    mod = new.module(filename)
+    f=open(filename)
+    data = tokenize.untokenize(translate(f.readline))
+    exec data in mod.__dict__
+    return mod
+</code></pre>
+
+<p>This requires you handle your customised code differently from normal python modules however.  ie "<code>some_mod = myimport("some_mod.py")</code>" rather than "<code>import some_mod</code>"</p>
+
+<p>Another fairly neat (albeit hacky) solution is to create a custom encoding (See <a href="http://www.python.org/dev/peps/pep-0263/" rel="nofollow">PEP 263</a>) as <a href="http://code.activestate.com/recipes/546539/" rel="nofollow">this</a> recipe demonstrates.  You could implement this as:</p>
+
+<pre><code>import codecs, cStringIO, encodings
+from encodings import utf_8
+
+class StreamReader(utf_8.StreamReader):
+    def __init__(self, *args, **kwargs):
+        codecs.StreamReader.__init__(self, *args, **kwargs)
+        data = tokenize.untokenize(translate(self.stream.readline))
+        self.stream = cStringIO.StringIO(data)
+
+def search_function(s):
+    if s!='mylang': return None
+    utf8=encodings.search_function('utf8') # Assume utf8 encoding
+    return codecs.CodecInfo(
+        name='mylang',
+        encode = utf8.encode,
+        decode = utf8.decode,
+        incrementalencoder=utf8.incrementalencoder,
+        incrementaldecoder=utf8.incrementaldecoder,
+        streamreader=StreamReader,
+        streamwriter=utf8.streamwriter)
+
+codecs.register(search_function)
+</code></pre>
+
+<p>Now after this code gets run (eg. you could place it in your .pythonrc or site.py) any code starting with the comment "# coding: mylang" will automatically be translated through the above preprocessing step.  eg.</p>
+
+<pre><code># coding: mylang
+myprint "this gets logged to file"
+for i in range(10):
+    myprint "so does this : ", i, "times"
+myprint ("works fine" "with arbitrary" + " syntax" 
+  "and line continuations")
+</code></pre>
+
+<p>Caveats:</p>
+
+<p>There are problems to the preprocessor approach, as you'll probably be familiar with if you've worked with the C preprocessor.  The main one is debugging.  All python sees is the preprocessed file which means that text printed in the stack trace etc will refer to that.  If you've performed significant translation, this may be very different from your source text.  The example above doesn't change line numbers etc, so won't be too different, but the more you change it, the harder it will be to figure out.</p>
+<br /><b>#1</b><br /><p>Short of changing and recompiling the source code (which <em>is</em> possible with open source), changing the base language is not really possible.</p>
+
+<p>Even if you do recompile the source, it wouldn't be python, just your hacked-up changed version which you need to be very careful not to introduce bugs into.</p>
+
+<p>However, I'm not sure why you'd want to.  Python's object-oriented features makes it quite simple to achieve similar results with the language as it stands.</p>
+<br /><b>#2</b><br /><p>Yes, to some extent it is possible. There is a <a href="http://entrian.com/goto/" rel="nofollow">module</a> out there that uses <code>sys.settrace()</code> to implement <code>goto</code> and <code>comefrom</code> "keywords":</p>
+
+<pre><code>from goto import goto, label
+for i in range(1, 10):
+  for j in range(1, 20):
+    print i, j
+    if j == 3:
+      goto .end # breaking out from nested loop
+label .end
+print "Finished"
+</code></pre>
+<br /><b>#3</b><br /><p>I've found a guide on adding new statements, converted from PDF to HTML by Google:</p>
+
+<p><a href="http://209.85.173.104/search?q=cache:IjUb82taSq0J:www.troeger.eu/teaching/pythonvm08lab.pdf+python+add+statement&amp;hl=en&amp;ct=clnk&amp;cd=10" rel="nofollow">http://209.85.173.104/search?q=cache:IjUb82taSq0J:www.troeger.eu/teaching/pythonvm08lab.pdf+python+add+statement&amp;hl=en&amp;ct=clnk&amp;cd=10</a></p>
+
+<p>Basically, to add new statements, you must edit <code>Python/ast.c</code> (among other things) and recompile the python binary.</p>
+
+<p>While it's possible, don't. You can achieve almost everything via functions and classes (which wont require people to recompile python just to run your script..)</p>
+<br /><b>#4</b><br /><p>General answer: you need to preprocess your source files. </p>
+
+<p>More specific answer: install <a href="http://pypi.python.org/pypi/EasyExtend" rel="nofollow">EasyExtend</a>, and go through following steps</p>
+
+<p>i) Create a new langlet ( extension language )</p>
+
+<pre><code>import EasyExtend
+EasyExtend.new_langlet("mystmts", prompt = "my&gt; ", source_ext = "mypy")
+</code></pre>
+
+<p>Without additional specification a bunch of files shall be created under EasyExtend/langlets/mystmts/ .</p>
+
+<p>ii) Open mystmts/parsedef/Grammar.ext and add following lines</p>
+
+<pre><code>small_stmt: (expr_stmt | print_stmt  | del_stmt | pass_stmt | flow_stmt |
+             import_stmt | global_stmt | exec_stmt | assert_stmt | my_stmt )
+
+my_stmt: 'mystatement' expr
+</code></pre>
+
+<p>This is sufficient to define the syntax of your new statement. The small_stmt non-terminal is part of the Python grammar and it's the place where the new statement is hooked in. The parser will now recognize the new statement i.e. a source file containing it will be parsed. The compiler will reject it though because it still has to be transformed into valid Python.</p>
+
+<p>iii) Now one has to add semantics of the statement. For this one has to edit
+ msytmts/langlet.py and add a my_stmt node visitor.</p>
+
+<pre><code> def call_my_stmt(expression):
+     "defines behaviour for my_stmt"
+     print "my stmt called with", expression
+
+ class LangletTransformer(Transformer):
+       @transform
+       def my_stmt(self, node):
+           _expr = find_node(node, symbol.expr)
+           return any_stmt(CST_CallFunc("call_my_stmt", [_expr]))
+
+ __publish__ = ["call_my_stmt"]
+</code></pre>
+
+<p>iv) cd to langlets/mystmts and type</p>
+
+<pre><code>python run_mystmts.py
+</code></pre>
+
+<p>Now a session shall be started and the newly defined statement can be used:</p>
+
+<pre><code>__________________________________________________________________________________
+
+ mystmts
+
+ On Python 2.5.1 (r251:54863, Apr 18 2007, 08:51:08) [MSC v.1310 32 bit (Intel)]
+ __________________________________________________________________________________
+
+ my&gt; mystatement 40+2
+ my stmt called with 42
+</code></pre>
+
+<p>Quite a few steps to come to a trivial statement, right? There isn't an API yet that lets one define simple things without having to care about grammars. But EE is very reliable modulo some bugs. So it's just a matter of time that an API emerges that lets programmers define convenient stuff like infix operators or small statements using just convenient OO programming. For more complex things like embedding whole languages in Python by means of building a langlet there is no way of going around a full grammar approach.</p>
+<br /><b>#5</b><br /><p>Not without modifying the interpreter.  I know a lot of languages in the past several years have been described as "extensible", but not in the way you're describing.  You extend Python by adding functions and classes.</p>
+<br /><b>#6</b><br /><p>It's possible to do this using <a href="http://www.fiber-space.de/EasyExtend/doc/EE.html" rel="nofollow">EasyExtend</a>:</p>
+
+<blockquote>
+  <p>EasyExtend (EE) is a preprocessor
+  generator and metaprogramming
+  framework written in pure Python and
+  integrated with CPython. The main
+  purpose of EasyExtend is the creation
+  of extension languages i.e. adding
+  custom syntax and semantics to Python.</p>
+</blockquote>
+<br /><b>#7</b><br /><p>There is a language based on python called <a href="http://www.livelogix.net/logix/" rel="nofollow">Logix</a> with which you CAN do such things.  It hasn't been under development for a while, but the features that you asked for <b>do work</b> with the latest version. </p>
+<br /><b>#8</b><br /><p>Here's a very simple but crappy way to add new statements, <em>in interpretive mode only</em>. I'm using it for little 1-letter commands for editing gene annotations using only sys.displayhook, but just so I could answer this question I added sys.excepthook for the syntax errors as well. The latter is really ugly, fetching the raw code from the readline buffer. The benefit is, it's trivially easy to add new statements this way.</p>
+
+<pre><code>
+jcomeau@intrepid:~/$ cat demo.py; ./demo.py
+#!/usr/bin/python -i
+'load everything needed under "package", such as package.common.normalize()'
+import os, sys, readline, traceback
+if __name__ == '__main__':
+ class t:
+  @staticmethod
+  def localfunction(*args):
+   print 'this is a test'
+   if args:
+    print 'ignoring %s' % repr(args)
+ def displayhook(whatever):
+  if hasattr(whatever, 'localfunction'):
+   return whatever.localfunction()
+  else:
+   print whatever
+ def excepthook(exctype, value, tb):
+  if exctype is SyntaxError:
+   index = readline.get_current_history_length()
+   item = readline.get_history_item(index)
+   command = item.split()
+   print 'command:', command
+   if len(command[0]) == 1:
+    try: eval(command[0]).localfunction(*command[1:])
+    except: traceback.print_exception(exctype, value, tb)
+  else:
+   traceback.print_exception(exctype, value, tb)
+ sys.displayhook = displayhook
+ sys.excepthook = excepthook
+>>> t
+this is a test
+>>> t t
+command: ['t', 't']
+this is a test
+ignoring ('t',)
+>>> ^D
+</code></pre>
+<br /><b>#9</b><br /><p>You may find this useful - <a href="http://eli.thegreenplace.net/2010/06/30/python-internals-adding-a-new-statement-to-python/" rel="nofollow">Python Internals - Adding a new statement to Python</a></p>
+<br /><b>#10</b><br /><p>Ten years ago you couldn't, and I doubt that's changed.  However, it wasn't that hard to modify the syntax back then if you were prepared to recompile python, and I doubt that's changed, either.</p>
+<br /><b>#11</b><br /><p>Some languages are exquisitely extensible, e.g. Forth and Smalltalk, but their language paradigms are different than that used by Python as well. With both of those any new words (Forth) or methods (Smalltalk) become an integral, indistiguishable part of the language for that installation. So each Forth or Smalltalk installation becomes a unique creation over time. Also Forth is RPN based. But thinking along the lines of DSLs, something like this should be accomplishable in Python. Though, as others have said here, why? Part of a modern programmer's toolkit includes using different languages with their various approaches. IBM tried a one-size-fits-all approach with PL/I back in the days before OOP, it was universally hated for its bloat.</p>
+<br />

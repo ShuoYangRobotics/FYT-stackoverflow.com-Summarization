@@ -1,0 +1,214 @@
+Question (ID-2978138): Django Models / SQLAlchemy are bloated! Any truly Pythonic DB models out there? " Make things as simple as possible, but no simpler. " 
+
+ Can we find the solution/s that fix the Python database world? 
+
+ Update: A 'lustdb' prototype has been written by Alex Martelli - if you know any somewhat lightweight, high-level database libraries with multiple backends we could wrap in syntax sugar honey, please weigh in! 
+
+ from someAmazingDB import * 
+#we imported a smart model class and db object which talk to database adapter/s
+class Task (model): 
+ title = ''
+ done = False #native types not a custom object we have to think about!
+
+db.taskList = []
+#or
+db.taskList = expandableTypeCollection(Task) #not sure what this syntax would be
+
+db['taskList'].append(Task(title='Beat old sql interfaces',done=False))
+db.taskList.append(Task('Illustrate different syntax modes',True)) # ok maybe we should just use kwargs
+
+#at this point it should be autosaved to a default db option
+
+#by default we should be able to reload the console and access the default db:
+
+&gt;&gt; from someAmazingDB import *
+&gt;&gt; print 'Done tasks:'
+&gt;&gt; for task in db.taskList:
+&gt;&gt;  if task.done:
+&gt;&gt;   print task.title
+'Illustrate different syntax modes'
+ 
+
+ I'm a fan of Python , webPy and Cherry Py, and KISS in general. 
+
+ We're talking automatic Python to SQL type translation or NoSQL. 
+We don't have to totally be SQL compatible! Just a scalable subset or ignore it! 
+
+ Re:model changes, it's ok to ask the developer when they try to change it or have a set of sensible defaults. 
+
+ Here is the challenge: The above code should work with very little modification or thinking required. Why must we put up with compromise when we know better? 
+
+ It's 2010, we should be able to code scalable, simple databases in our sleep. 
+
+ If you think this is important, please upvote! 
+ Answers (Total-8): #0 What you request cannot be done in Python 2. whatever , for a very specific reason. You want to write: 
+
+ class Task(model): 
+ title = ''
+ isDone = False
+ 
+
+ In Python 2. anything , whatever model may possibly be, this cannot ever allow you to predict any "ordering" for the two fields, because the semantics of a class statement are: 
+
+ 
+ execute the body, thus preparing a dict 
+ locate the metaclass and run special methods thereof 
+ 
+
+ Whatever the metaclass may be, step 1 has destroyed any predictability of the fields' order. 
+
+ Therefore, your desired use of positional parameters, in the snippet: 
+
+ Task('Illustrate different syntax modes', True)
+ 
+
+ cannot associate the arguments' values with the model's various fields. (Trying to guess by type association -- hoping no two fields ever have the same type -- would be even more horribly unpythonic than your expressed desire to use db.tasklist and db['tasklist'] indifferently and interchangeably). 
+
+ One of the backwards-incompatible changes in Python 3 was introduced specifically to deal with situations of this ilk. In Python 3, a custom metaclass can define a __prepare__ function which runs before "step 1" in the above simplified list, and this lets it have more control about the class's body. Specifically, quoting PEP 3115 ...: 
+
+ 
+ __prepare__ returns a dictionary-like object which is used to store
+  the class member definitions during evaluation of the class body.
+  In other words, the class body is evaluated as a function block
+  (just like it is now), except that the local variables dictionary
+  is replaced by the dictionary returned from __prepare__ . This
+  dictionary object can be a regular dictionary or a custom mapping
+  type. 
+ 
+
+ ...
+ 
+
+ 
+ An example would be a metaclass that
+ uses information about the
+  ordering of member declarations to create a C struct. The metaclass
+  would provide a custom dictionary that simply keeps a record of the
+  order of insertions. 
+ 
+
+ You don't want to "create a C struct" as in this example, but the order of fields is crucial (to allow the use of positional parameters that you want) and so the custom metaclass (obtained through base model ) would have a __prepare__ classmethod returning an ordered dictionary. This removes the specific issue, but, of course, only if you're willing to switch all of your code using this "magic ORM" to Python 3. Would you be? 
+
+ Once that's settled, the issue is, what database operations do you want to perform, and how. Your example, of course, does not clarify this at all. Is the taskList attribute name special, or should any other attribute assigned to the db object be "autosaved" (by name and, what other characteristic[s]?) and "autoretrieved" upon use? Are there to be ways to remove entities, alter them, locate them (otherwise than by having once been listed in the same attribute of the db object)? How does your sample code know what DB service to use and how to authenticate to it (e.g. by userid and password) if it requires authentication? 
+
+ The specific tasks you list would not be hard to implement (e.g. on top of Google App Engine's storage service, which does not require authentication nor specification of "what DB service to use"). model 's metaclass would introspect the class's fields and generate a GAE Model for the class, the db object would use __setattr__ to set an atexit trigger for storing the final value of an attribute (as an entity in a different kind of Model of course), and __getattr__ to fetch that attribute's info back from storage. Of course without some extra database functionality this all would be pretty useless;-). 
+
+ Edit : so I did a little prototype (Python 2.6, and based on sqlite) and put it up on http://www.aleax.it/lustdb.zip -- it's a 3K zipfile including 225-lines lustdb.py (too long to post here) and two small test files roughly equivalent to the OP's originals: test0.py is...: 
+
+ from lustdb import * 
+
+class Task(Model): 
+ title = ''
+ done = False
+
+db.taskList = [] 
+db.taskList.append(Task(title='Beat old sql interfaces', done=False))
+db.taskList.append(Task(title='Illustrate different syntax modes', done=True))
+ 
+
+ and test1.p1 is...: 
+
+ from lustdb import *
+
+print 'Done tasks:'
+for task in db.taskList:
+ if task.done:
+  print task
+ 
+
+ Running test0.py (on a machine with a writable /tmp directory -- i.e., any Unix-y OS, or, on Windows, one on which a mkdir \tmp has been run at any previous time;-) has no output; after that, running test1.py outputs: 
+
+ Done tasks:
+Task(done=True, title=u'Illustrate different syntax modes')
+ 
+
+ Note that these are vastly less "crazily magical" than the OP's examples, in many ways, such as...: 
+
+ 1. no (expletive delete) redundancy whereby `db.taskList` is a synonym of `db['taskList']`, only the sensible former syntax (attribute-access) is supported
+2. no mysterious (and totally crazy) way whereby a `done` attribute magically becomes `isDone` instead midway through the code
+3. no mysterious (and utterly batty) way whereby a `print task` arbitrarily (or magically?) picks and prints just one of the attributes of the task
+4. no weird gyrations and incantations to allow positional-attributes in lieu of named ones (this one the OP agreed to)
+ 
+
+ The prototype of course (as prototypes will;-) leaves a lot to be desired in many respects (clarity, documentation, unit tests, optimization, error checking and diagnosis, portability among different back-ends, and especially DB features beyond those implied in the question). The missing DB features are legion (for example, the OP's original examples give no way to identify a "primary key" for a model, or any other kinds of uniqueness constraints, so duplicates can abound; and it only gets worse from there;-). Nevertheless, for 225 lines (190 net of empty lines, comments and docstrings;-), it's not too bad in my biased opinion. 
+
+ The proper way to continue playing with this project would of course be to initiate a new lustdb open source project on the hosting part of code.google.com (or any other good open source hosting site with issue tracker, wiki, code reviews support, online browsing, DVCS support, etc, etc) - I'd do it myself but I'm close to the limit in terms of number of open source projects I can initiate on code.google.com and don't want to "burn" the last one or two in this way;-). 
+
+ BTW, the lustdb name for the module is a play of word with the OP's initials (first two letters each of first and last names), in the tradition of awk and friends -- I think it sounds nicely (and most other obvious names such as simpledb and dumbdb are taken;-). 
+ #1 I think you should try ZODB . It is object oriented database designed for storing python objects. Its API is quite close to example you have provided in your question, just take a look at tutorial. 
+ #2 What about using Elixir ? 
+ #3 Forget ORM! I like vanilla SQL. The python wrappers like psycopg2 for postgreSQL do automatic type conversion, offer pretty good protection against SQL injection, and are nice and simple. 
+
+ sql = "SELECT * FROM table WHERE id=%s"
+data = (5,)
+cursor.execute(sql, data)
+ 
+ #4 The more I think on't the more the Smalltalk model of operation seems more relevant. Indeed the OP may not have reached far enough by using the term "database" to describe a thing which should have no need for naming. 
+
+ A running Python interpreter has a pile of objects that live in memory. Their inter-relationships can be arbitrarily complex, but namespaces and the "tags" that objects are bound to are very flexible. And as pickle can explicitly serialize arbitrary structures for persistence, it doesn't seem that much of a reach to consider each Python interpreter living in that object space. Why should that object space evaporate with the interpreter's close? Semantically, this could be viewed as an extension of the anydbm tied dictionaries. And since most every thing in Python is dictionary-like, the mechanism is almost already there. 
+
+ I think this may be the generic model that Alex Martelli was proposing above, it might be nice to say something like: 
+
+ class Book:
+ def __init__(self, attributes):
+  self.attributes = attributes
+ def __getattr__(....): pass
+
+$ python
+&gt;&gt;&gt; import book
+&gt;&gt;&gt; my_stuff.library = {'garp': 
+ Book({'author': 'John Irving', 'title': 'The World According to Garp', 
+  'isbn': '0-525-23770-4', 'location': 'kitchen table', 
+  'bookmark': 'page 127'}),
+ ...
+ }
+&gt;&gt;&gt; exit
+ 
+
+ [sometime next week] 
+
+ $ python
+&gt;&gt;&gt; import my_stuff
+&gt;&gt;&gt; print my_stuff.library['garp'].location
+'kitchen table'
+# or even
+&gt;&gt;&gt; for book in my_stuff.library where book.location.contains('kitchen'):
+ print book.title
+ 
+
+ I don't know that you'd call the resultant language Python, but it seems like it is not that hard to implement and makes backing store equivalent to active store. 
+
+ There is a natural tension between the inherent structure imposed - and sometimes desired - by RDBMs and the rather free-form navel-gazing put here, but NoSQLy databases are already approaching the content addressable memory model and probably better approximates how our minds keep track of things. Contrariwise, you wouldn't want to keep all the corporate purchase orders such a storage system, but perhaps you might. 
+ #5 I've been busy, here it is, released under LGPL:
+ http://github.com/lukestanley/lustdb 
+
+ It uses JSON as it's backend at the moment. 
+
+ This is not the same codebase Alex Martelli did.
+I wanted to make the code more readable and reusable with different
+backends and such. 
+
+ Elsewhere I have been working on object oriented HTML elements
+accessable in Python in similar ways, AND a library for making web.py
+more minimalist. 
+
+ I'm thinking of ways of using all 3 elements together with automatic
+MVC prototype construction or smart mapping. 
+
+ While old fashioned text based template web programming will be around
+for a while still because of legacy systems and because it doesn't
+require any particular library or implementation, I feel soon we'll
+have a lot more efficent ways of building robust, prototype friendly
+web apps. 
+
+ Please see the mailing list for those interested. 
+ #6 How about you give an example of how "simple" you want your "dealing with database" to be, and I then tell you all the stuff that is needed for that "simplicity" to get working ? 
+
+ (And of which it will still be YOU that will be required to give the information/config to the database interface engine, somewhere, somehow.) 
+
+ To name but one example : 
+
+ If your database management engine is some external machine with which you/your app interfaces over IP or some such, there is no way around the fact that the IP identity of where that database engine is running, will have to be provided by your app's database interface client, somewhere, somehow. Regardless of whether that gets explicitly exposed in the code or not. 
+ #7 If you like CherryPy, you might like the complementary ORMs I wrote: GeniuSQL (which follows a Table Data gateway model) and Dejavu (which is a complete Data Mapper). 
+
+ There's far too much in this question and all its subcomments to address completely, but one thing I wanted to point out was that GeniuSQL and Dejavu have a very robust system for mapping native Python types to the types that your particular backend is using. There are very sane defaults, which can be overridden as needed, and even extended if you make a new backend or use types from a backend that isn't yet supported. See http://www.aminus.net/geniusql/chrome/common/doc/trunk/advanced.html#custom for more discussion on that.

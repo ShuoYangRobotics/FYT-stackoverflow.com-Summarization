@@ -1,0 +1,175 @@
+Question (ID-2632520): What is the fastest way to send 100,000 HTTP requests in Python? I am opening a file which has 100,000 url's. I need to send an http request to each url and print the status code. I am using Python 2.6, and so far looked at the many confusing ways Python implements threading/concurrency. I have even looked at the python concurrence library, but cannot figure out how to write this program correctly. Has anyone come across a similar problem? I guess generally I need to know how to perform thousands of tasks in Python as fast as possible - I suppose that means 'concurrently'. 
+
+ Thank you,
+Igor 
+ Answers (Total-10): #0 Threads are absolutely not the answer here. They will provide both process and kernel bottlenecks, as well as throughput limits that are not acceptable if the overall goal is "the fastest way". 
+
+ A little bit of twisted and its asynchronous HTTP client would give you much better results. 
+ #1 Twistedless solution: 
+
+ from urlparse import urlparse
+from threading import Thread
+import httplib, sys
+from Queue import Queue
+
+concurrent = 200
+
+def doWork():
+ while True:
+  url=q.get()
+  status,url=getStatus(url)
+  doSomethingWithResult(status,url)
+  q.task_done()
+
+def getStatus(ourl):
+ try:
+  url = urlparse(ourl)
+  conn = httplib.HTTPConnection(url.netloc) 
+  conn.request("HEAD", url.path)
+  res = conn.getresponse()
+  return res.status, ourl
+ except:
+  return "error", ourl
+
+def doSomethingWithResult(status, url):
+ print status, url
+
+q=Queue(concurrent*2)
+for i in range(concurrent):
+ t=Thread(target=doWork)
+ t.daemon=True
+ t.start()
+try:
+ for url in open('urllist.txt'):
+  q.put(url.strip())
+ q.join()
+except KeyboardInterrupt:
+ sys.exit(1)
+ 
+
+ This one is slighty faster than the twisted solution and uses less cpu. 
+ #2 A good approach to solving this problem is to first write the code required to get one result, then incorporate threading code to parallelize the application. 
+
+ In a perfect world this would simply mean simultaneously starting 100,000 threads which output their results into a dictionary or list for later processing, but in practice you are limited in how many parallel HTTP requests you can issue in this fashion. Locally, you have limits in how many sockets you can open concurrently, how many threads of execution your Python interpreter will allow. Remotely, you may be limited in the number of simultaneous connections if all the requests are against one server, or many. These limitations will probably necessitate that you write the script in such a way as to only poll a small fraction of the URLs at any one time (100, as another poster mentioned, is probably a decent thread pool size, although you may find that you can successfully deploy many more). 
+
+ You can follow this design pattern to resolve the above issue: 
+
+ 
+ Start a thread which launches new request threads until the number of currently running threads (you can track them via threading.active_count() or by pushing the thread objects into a data structure) is >= your maximum number of simultaneous requests (say 100), then sleeps for a short timeout. This thread should terminate when there is are no more URLs to process. Thus, the thread will keep waking up, launching new threads, and sleeping until your are finished. 
+ Have the request threads store their results in some data structure for later retrieval and output. If the structure you are storing the results in is a list or dict in CPython, you can safely append or insert unique items from your threads without locks , but if you write to a file or require in more complex cross-thread data interaction you should use a mutual exclusion lock to protect this state from corruption . 
+ 
+
+ I would suggest you use the threading module. You can use it to launch and track running threads. Python's threading support is bare, but the description of your problem suggests that it is completely sufficient for your needs. 
+
+ Finally, if you'd like to see a pretty straightforward application of a parallel network application written in Python, check out ssh.py . It's a small library which uses Python threading to parallelize many SSH connections. The design is close enough to your requirements that you may find it to be a good resource. 
+ #3 Use the requests library: it has native support for sending multiple HTTP requests concurrently using gevent. Simple, easy, powerful! 
+ #4 The easiest way would be to use Python's built-in threading library. They're not "real" / kernel threads, but are good enough. You'd want a queue &amp; thread pool. One option is here , but it's trivial to write your own. You can't parallelize all 100,000 calls, but you can fire off 100 (or so) of them at the same time. 
+ #5 For your case, threading will probably do the trick as you'll probably be spending most time waiting for a response. There are helpful modules like Queue in the standard library that might help. 
+
+ I did a similar thing with parallel downloading of files before and it was good enough for me, but it wasn't on the scale you are talking about. 
+
+ If your task was more CPU-bound, you might want to look at the multiprocessing module, which will allow you to utilize more CPUs/cores/threads (more processes that won't block each other since the locking is per process) 
+ #6 If you're looking to get the best performance possible, you might want to consider using Asynchronous I/O rather than threads. The overhead associated with thousands of OS threads is non-trivial and the context switching within the Python interpreter adds even more on top of it. Threading will certainly get the job done but I suspect that an asynchronous route will provide better overall performance. 
+
+ Specifically, I'd suggest the async web client in the Twisted library (http://www.twistedmatrix.com). It has an admittedly steep learning curve but it quite easy to use once you get a good handle on Twisted's style of asynchronous programming. 
+
+ A HowTo on Twisted's asynchronous web client API is available at: 
+
+ http://twistedmatrix.com/documents/current/web/howto/client.html 
+ #7 A solution: 
+
+ from twisted.internet import reactor, threads
+from urlparse import urlparse
+import httplib
+import itertools
+
+
+concurrent = 200
+finished=itertools.count(1)
+reactor.suggestThreadPoolSize(concurrent)
+
+def getStatus(ourl):
+ url = urlparse(ourl)
+ conn = httplib.HTTPConnection(url.netloc) 
+ conn.request("HEAD", url.path)
+ res = conn.getresponse()
+ return res.status
+
+def processResponse(response,url):
+ print response, url
+ processedOne()
+
+def processError(error,url):
+ print "error", url#, error
+ processedOne()
+
+def processedOne():
+ if finished.next()==added:
+  reactor.stop()
+
+def addTask(url):
+ req = threads.deferToThread(getStatus, url)
+ req.addCallback(processResponse, url)
+ req.addErrback(processError, url) 
+
+added=0
+for url in open('urllist.txt'):
+ added+=1
+ addTask(url.strip())
+
+try:
+ reactor.run()
+except KeyboardInterrupt:
+ reactor.stop()
+ 
+
+ Testtime: 
+
+ [kalmi@ubi1:~] wc -l urllist.txt
+10000 urllist.txt
+[kalmi@ubi1:~] time python f.py &gt; /dev/null 
+
+real 1m10.682s
+user 0m16.020s
+sys 0m10.330s
+[kalmi@ubi1:~] head -n 6 urllist.txt
+http://www.google.com
+http://www.bix.hu
+http://www.godaddy.com
+http://www.google.com
+http://www.bix.hu
+http://www.godaddy.com
+[kalmi@ubi1:~] python f.py | head -n 6
+200 http://www.bix.hu
+200 http://www.bix.hu
+200 http://www.bix.hu
+200 http://www.bix.hu
+200 http://www.bix.hu
+200 http://www.bix.hu
+ 
+
+ Pingtime: 
+
+ bix.hu is ~10 ms away from me
+godaddy.com: ~170 ms
+google.com: ~30 ms
+ 
+ #8 Using a thread pool is a good option, and will make this fairly easy. Unfortunately, python doesn't have a standard library that makes thread pools ultra easy. But here is a decent library that should get you started:
+ http://www.chrisarndt.de/projects/threadpool/ 
+
+ Code example from their site: 
+
+ pool = ThreadPool(poolsize)
+requests = makeRequests(some_callable, list_of_args, callback)
+[pool.putRequest(req) for req in requests]
+pool.wait()
+ 
+
+ Hope this helps. 
+ #9 Consider using Windmill , although Windmill probably cant do that many threads. 
+
+ You could do it with a hand rolled Python script on 5 machines, each one connecting outbound using ports 40000-60000, opening 100,000 port connections. 
+
+ Also, it might help to do a sample test with a nicely threaded QA app such as OpenSTA in order to get an idea of how much each server can handle. 
+
+ Also, try looking into just using simple Perl with the LWP::ConnCache class. You'll probably get more performance (more connections) that way.

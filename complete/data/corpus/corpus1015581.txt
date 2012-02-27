@@ -1,0 +1,170 @@
+Question (ID-1015581): Continuous unit testing with Pydev (Python and Eclipse) Is there a way to integrate background unit tests with the Pydev Eclipse environment? 
+
+ My unit tests run well, but I would like to integrate them to run in the background based on source file changes (e.g. with nose) and to integrate the result back to Eclipse (I'm thinking big red X when tests fail with a console and trace log view). 
+
+ No, a command prompt running nose on the side does not count. 
+
+ I have had this Eclipse integration when developing RoR stuff. 
+
+ Thanks, 
+
+ Tal. 
+
+ EDIT: Check out the new Pydev (1.6.4) http://pydev.org/manual_adv_pyunit.html 
+ Answers (Total-6): #0 This feature has been added to PyDev 2.0.1 with an option to relaunch the tests in the last test run whenever a python file change, with an additional option to rerun only the errors -- although it'll run the full test suite if no errors were found, as the idea is that you work through your errors and when all pass a final launch for the whole suite is done (then you can move on to another task). 
+
+ The current nightly build has this feature incorporated. 
+
+ 
+ #1 Pydev does have some unit-test integration, but that's only as a run configuration...so... 
+
+ This is not a very elegant way, but if you: 
+
+ 
+ Enable Project->Build Automatically 
+ In your project properties, add a new builder of type Program 
+ Configure it to run your tests and select 'during auto builds' 
+ 
+
+ Then at least you will get something that outputs the test results to the console on resource saves. 
+ #2 I just realized that PyDev has rather powerful scripting support. Unfortunately I don't have the time to do it all for you (but if you complete this, please post it here :) 
+
+ If you create a file named pyedit_nose.py that looks like this in an otherwise empty folder : 
+
+ assert cmd is not None
+assert editor is not None
+
+if cmd == 'onSave':
+ from java.lang import Runtime
+ from java.io import BufferedReader
+ from java.io import InputStreamReader
+
+ from org.eclipse.core.resources import ResourcesPlugin
+ from org.eclipse.core.resources import IMarker
+ from org.eclipse.core.resources import IResource
+
+ proc = Runtime.getRuntime().exec('ls -al')
+ extra_message = BufferedReader(InputStreamReader(proc.inputStream)).readLine()
+
+ r = ResourcesPlugin.getWorkspace().getRoot()
+ for marker in r.findMarkers(IMarker.PROBLEM, False, IResource.DEPTH_INFINITE):
+  if marker.getAttribute(IMarker.MESSAGE).startsWith("Some test failed!"):
+   marker.delete()
+
+ for rr in r.getProjects():
+  marker = rr.createMarker(IMarker.PROBLEM)
+  marker.setAttribute(IMarker.MESSAGE, "Some test failed! " + extra_message)
+  marker.setAttribute(IMarker.PRIORITY, IMarker.PRIORITY_HIGH)
+  marker.setAttribute(IMarker.SEVERITY, IMarker.SEVERITY_ERROR)
+ 
+
+ and set up Preferences->PyDev->Scripting Pydev to point to this directory you will get all projects in your workspace marked with an error every time a file is saved. 
+
+ By executing a script that returns the test results in some easy to parse format rather than ls and parsing the output you should be able to put your markers in the right places. 
+
+ See this for some starting points: 
+
+ 
+ Jython Scripting in Pydev 
+ IMarker is what represents a marker. 
+ IResource is what you attach your markers to. Can be workspaces, projects, files, directories etc. resource.createMarker(IMarker.PROBLEM) creates a problem marker. 
+ IProject is a type of IResource that represents a project. Use the members() method to get the contents. 
+ 
+ #3 I am using Nosy which is handy. 
+ #4 I enhanced the "nosy" script to automatically build documentation and runs tests 
+continuously. Nothing stellar, but gets the job done. Posting it here because the original
+link went down. Unlike the original nosy script, this one scans the directory recursively
+and allows looking for multiple patterns. 
+
+ import os
+import os.path
+import sys
+import stat
+import time
+import subprocess
+from fnmatch import fnmatch
+
+
+def match_patterns(pathname, patterns):
+ """Returns True if the pathname matches any of the given patterns."""
+ for pattern in patterns:
+  if fnmatch(pathname, pattern):
+   return True
+ return False
+
+
+def filter_paths(pathnames, patterns=["*"], ignore_patterns=[]):
+ """Filters from a set of paths based on acceptable patterns and
+ ignorable patterns."""
+ result = []
+ if patterns is None:
+  patterns = []
+ if ignore_patterns is None:
+  ignore_patterns = []
+ for path in pathnames:
+  if match_patterns(path, patterns) and not match_patterns(path, ignore_patterns):
+   result.append(path)
+ return result
+
+
+def absolute_walker(path, recursive):
+ if recursive:
+  walk = os.walk
+ else:
+  def walk(path):
+   return os.walk(path).next()
+ for root, directories, filenames in walk(path):
+  yield root
+  for directory in directories:
+   yield os.path.abspath(os.path.join(root, directory))
+  for filename in filenames:
+   yield os.path.abspath(os.path.join(root, filename))
+
+
+def glob_recursive(path, patterns=["*"], ignore_patterns=[]):
+ full_paths = []
+ for root, directories, filenames in os.walk(path):
+  for filename in filenames:
+   full_path = os.path.abspath(os.path.join(root, filename))
+   full_paths.append(full_path)
+ filepaths = filter_paths(full_paths, patterns, ignore_patterns)
+ return filepaths
+
+
+def check_sum(path='.', patterns=["*"], ignore_patterns=[]):
+ sum = 0
+ for f in glob_recursive(path, patterns, ignore_patterns):
+  stats = os.stat(f)
+  sum += stats[stat.ST_SIZE] + stats[stat.ST_MTIME]
+ return sum
+
+
+if __name__ == "__main__":
+ if len(sys.argv) &gt; 1:
+  path = sys.argv[1]
+ else:
+  path = '.'
+
+ if len(sys.argv) &gt; 2:
+  command = sys.argv[2]
+ else:
+  command = "make -C docs html; bin/python tests/run_tests.py"
+
+ previous_checksum = 0
+ while True:
+  calculated_checksum = check_sum(path, patterns=['*.py', '*.rst', '*.rst.inc'])
+  if calculated_checksum != previous_checksum:
+   previous_checksum = calculated_checksum
+   subprocess.Popen(command, shell=True)
+   time.sleep(2)
+ 
+
+ Hope this helps. 
+
+ =) 
+ #5 I run the test by hand the first time ( Run > Run As > Python unit test ). After that, I use
+ Ctrl+Shift+F9 to have the files saved and the tests executed, instead of saving with Ctrl+S and expecting some magic to happen. 
+
+ The Ctrl+Shift+F9 key combination relaunches the last run configuration. 
+
+ Disclaimer : I'm new to Eclipse and to PyDev, so I may be suggesting something silly/obvious/wrong

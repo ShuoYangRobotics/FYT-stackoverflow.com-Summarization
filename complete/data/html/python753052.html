@@ -1,0 +1,127 @@
+<h3>Question (ID-753052):</h3><h2>Strip html from strings in python</h2><pre><code>from mechanize import Browser
+br = Browser()
+br.open('http://somewebpage')
+html = br.response().readlines()
+for line in html:
+  print line
+</code></pre>
+
+<p>When print a line in an html file, I'm trying to find a way to only show the contents of each HTML element and not the formatting itself. If it finds <code>'&lt;a href="whatever.com"&gt;some text&lt;/a&gt;'</code> it will only print 'some text', <code>'&lt;b&gt;hello&lt;/b&gt;'</code> prints 'hello', etc etc. How would one go about doing this?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>I think you will want to look into <a href="http://www.crummy.com/software/BeautifulSoup/" rel="nofollow">Beautiful Soup</a>.  Once you do, use the advice from <a href="http://www.ghastlyfop.com/blog/2008/12/strip-html-tags-from-string-python.html" rel="nofollow">this article</a> and strip the HTML elements very simply like this:</p>
+
+<pre><code>from BeautifulSoup import BeautifulSoup
+
+''.join(BeautifulSoup(page).findAll(text=True))
+</code></pre>
+<br /><b>#1</b><br /><p>I always used this function to strip html tags, as it requires only the python stdlib.</p>
+
+<pre><code>from HTMLParser import HTMLParser
+
+class MLStripper(HTMLParser):
+    def __init__(self):
+        self.reset()
+        self.fed = []
+    def handle_data(self, d):
+        self.fed.append(d)
+    def get_data(self):
+        return ''.join(self.fed)
+
+def strip_tags(html):
+    s = MLStripper()
+    s.feed(html)
+    return s.get_data()
+</code></pre>
+<br /><b>#2</b><br /><p>I haven't thought much about the cases it will miss, but you can do a simple regex:</p>
+
+<pre><code>re.sub('&lt;[^&lt;]+?&gt;', '', text)
+</code></pre>
+
+<p>For those that don't understand regex, this searches for a string '&lt;...>', where the inner content is made of one or more (+) characters that isn't a '&lt;'. The '?' means that it will match the smallest string it can find. eg. Given <em>&lt;'p>Hello&lt;'/p></em>, it will match <em>&lt;'p></em> and <em>&lt;'/p></em> separately with the '?'. Without it, it will match the entire string <em>&lt;..Hello..></em>.</p>
+
+<p>If non-tag '&lt;' appears in html (eg. 2 &lt; 3), it should be written as an escape sequence &amp;... anyway so the '^&lt;' may be unnecessary.</p>
+<br /><b>#3</b><br /><p>You can use either a different HTML parser (<a href="http://codespeak.net/lxml/" rel="nofollow">like lxml</a>, or <a href="http://www.crummy.com/software/BeautifulSoup/" rel="nofollow">Beautiful Soup</a>) -- one that offers functions to extract just text. Or, you can run a regex on your line string that strips out the tags. See <a href="http://www.amk.ca/python/howto/regex/" rel="nofollow">http://www.amk.ca/python/howto/regex/</a> for more.</p>
+<br /><b>#4</b><br /><p>you can write your own function</p>
+
+<pre><code>def StripTags(text): 
+     finished = 0 
+     while not finished: 
+         finished = 1 
+         start = text.find("&lt;") 
+         if start &gt;= 0: 
+             stop = text[start:].find("&gt;") 
+             if stop &gt;= 0: 
+                 text = text[:start] + text[start+stop+1:] 
+                 finished = 0 
+     return text 
+</code></pre>
+<br /><b>#5</b><br /><p>This method works flawlessly for me and requires no additional installations:</p>
+
+<pre><code>import re
+import htmlentitydefs
+
+def convertentity(m):
+    if m.group(1)=='#':
+        try:
+            return unichr(int(m.group(2)))
+        except ValueError:
+            return '&amp;#%s;' % m.group(2)
+        try:
+            return htmlentitydefs.entitydefs[m.group(2)]
+        except KeyError:
+            return '&amp;%s;' % m.group(2)
+
+def converthtml(s):
+    return re.sub(r'&amp;(#?)(.+?);',convertentity,s)
+
+html =  converthtml(html)
+html.replace("&amp;nbsp;", " ") ## Get rid of the remnants of certain formatting(subscript,superscript,etc).
+</code></pre>
+<br /><b>#6</b><br /><p>I needed a way to strip tags <em>and</em> decode HTML entities to plain text. The following solution is based on Eloff's answer (which I couldn't use because it strips entities).</p>
+
+<pre><code>from HTMLParser import HTMLParser
+import htmlentitydefs
+
+class HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        HTMLParser.__init__(self)
+        self.result = [ ]
+
+    def handle_data(self, d):
+        self.result.append(d)
+
+    def handle_charref(self, number):
+        codepoint = int(number[1:], 16) if number[0] in (u'x', u'X') else int(number)
+        self.result.append(unichr(codepoint))
+
+    def handle_entityref(self, name):
+        codepoint = htmlentitydefs.name2codepoint[name]
+        self.result.append(unichr(codepoint))
+
+    def get_text(self):
+        return u''.join(self.result)
+
+def html_to_text(html):
+    s = HTMLTextExtractor()
+    s.feed(html)
+    return s.get_text()
+</code></pre>
+
+<p>A quick test:</p>
+
+<pre><code>html = u'&lt;a href="#"&gt;Demo &lt;em&gt;(&amp;not; \u0394&amp;#x03b7;&amp;#956;&amp;#x03CE;)&lt;/em&gt;&lt;/a&gt;'
+print repr(html_to_text(html))
+</code></pre>
+
+<p>Result:</p>
+
+<pre><code>u'Demo (\xac \u0394\u03b7\u03bc\u03ce)'
+</code></pre>
+
+<p>Error handling:</p>
+
+<ul>
+<li>Invalid HTML structure may cause an <a href="http://docs.python.org/library/htmlparser.html#HTMLParser.HTMLParseError" rel="nofollow">HTMLParseError</a>.</li>
+<li>Invalid named HTML entities (such as <code>&amp;#apos;</code>, which is valid in XML and XHTML, but not plain HTML) will cause a <code>ValueError</code> exception.</li>
+<li>Numeric HTML entities specifying code points outside the Unicode range acceptable by Python (such as, on some systems, characters outside the <a href="http://en.wikipedia.org/wiki/Basic_Multilingual_Plane" rel="nofollow">Basic Multilingual Plane</a>) will cause a <code>ValueError</code> exception.</li>
+</ul>
+<br />

@@ -1,0 +1,171 @@
+Question (ID-1102465): python - Problem storing Unicode character to MySQL with Django I have the string 
+
+ u"Played Mirror's Edge\u2122"
+ 
+
+ Which should be shown as 
+
+ Played Mirror's Edge™
+ 
+
+ But that is another issue. My problem at hand is that I'm putting it in a model and then trying to save it to a database. AKA: 
+
+ a = models.Achievement(name=u"Played Mirror's Edge\u2122")
+a.save()
+ 
+
+ And I'm getting : 
+
+ 'ascii' codec can't encode character u'\u2122' in position 13: ordinal not in range(128)
+ 
+
+ full stack trace (as requested) : 
+
+ Traceback:
+File "/var/home/ptarjan/django/mysite/django/core/handlers/base.py" in get_response
+ 86.     response = callback(request, *callback_args, **callback_kwargs)
+File "/var/home/ptarjan/django/mysite/yourock/views/alias.py" in import_all
+ 161.  types.import_all(type, alias)
+File "/var/home/ptarjan/django/mysite/yourock/types/types.py" in import_all
+ 52.  return modules[type].import_all(siteAlias, alias)
+File "/var/home/ptarjan/django/mysite/yourock/types/xbox.py" in import_all
+ 117.    achiever = self.add_achievement(dict, siteAlias, alias)
+File "/var/home/ptarjan/django/mysite/yourock/types/base_profile.py" in add_achievement
+ 130.     owner  = siteAlias,
+File "/var/home/ptarjan/django/mysite/django/db/models/query.py" in get
+ 304.   num = len(clone)
+File "/var/home/ptarjan/django/mysite/django/db/models/query.py" in __len__
+ 160.     self._result_cache = list(self.iterator())
+File "/var/home/ptarjan/django/mysite/django/db/models/query.py" in iterator
+ 275.   for row in self.query.results_iter():
+File "/var/home/ptarjan/django/mysite/django/db/models/sql/query.py" in results_iter
+ 206.   for rows in self.execute_sql(MULTI):
+File "/var/home/ptarjan/django/mysite/django/db/models/sql/query.py" in execute_sql
+ 1734.   cursor.execute(sql, params)
+File "/var/home/ptarjan/django/mysite/django/db/backends/util.py" in execute
+ 19.    return self.cursor.execute(sql, params)
+File "/var/home/ptarjan/django/mysite/django/db/backends/mysql/base.py" in execute
+ 83.    return self.cursor.execute(query, args)
+File "/usr/lib/pymodules/python2.5/MySQLdb/cursors.py" in execute
+ 151.    query = query % db.literal(args)
+File "/usr/lib/pymodules/python2.5/MySQLdb/connections.py" in literal
+ 247.   return self.escape(o, self.encoders)
+File "/usr/lib/pymodules/python2.5/MySQLdb/connections.py" in string_literal
+ 180.     return db.string_literal(obj)
+
+Exception Type: UnicodeEncodeError at /import/xbox:bob
+Exception Value: 'ascii' codec can't encode character u'\u2122' in position 13: ordinal not in range(128)
+ 
+
+ And the pertinant part of the model : 
+
+ class Achievement(MyBaseModel):
+ name = models.CharField(max_length=100, help_text="A human readable achievement name")
+ 
+
+ I'm using a MySQL backend with this in my settings.py 
+
+ DEFAULT_CHARSET = 'utf-8'
+ 
+
+ So basically, how the heck should I deal with all this unicode stuff? I was hoping it would all "just work" if I stayed away from funny character sets and stuck to UTF8. Alas, it seems to not be just that easy. 
+ Answers (Total-7): #0 Thank you to everyone who was posting here. It really helps my unicode knowledge (and hoepfully other people learned something). 
+
+ We seemed to be all barking up the wrong tree since I tried to simplify my problem and didn't give ALL information. It seems that I wasn't using "REAL" unicode strings, but rather BeautifulSoup.NavigableString which repr themselves as unicode strings. So all the printouts looked like unicode, but they weren't. 
+
+ Somewhere deep in the MySQLDB library they couldn't deal with these strings. 
+
+ This worked : 
+
+ &gt;&gt;&gt; Achievement.objects.get(name = u"Mirror's Edge\u2122")
+&lt;Achievement: Mirror's Edge™&gt;
+ 
+
+ On the other hand : 
+
+ &gt;&gt;&gt; b = BeautifulSoup(u"&lt;span&gt;Mirror's Edge\u2122&lt;/span&gt;").span.string
+&gt;&gt;&gt; Achievement.objects.get(name = b)
+... Exceptoins ...
+UnicodeEncodeError: 'ascii' codec can't encode character u'\u2122' in position 13: ordinal not in range(128)
+ 
+
+ But this works : 
+
+ &gt;&gt;&gt; Achievement.objects.get(name = unicode(b))
+&lt;Achievement: Mirror's Edge™&gt;
+ 
+
+ So, thanks again for all the unicode help, I'm sure it will come in handy. But for now ... 
+
+ WARNING : BeautifulSoup doesn't return REAL unicode strings and should be coerced with unicode() before doing anything meaningful with them. 
+ #1 A few remarks: 
+
+ 
+ Python 2.x has two string types 
+
+ 
+ "str", which is basically a byte array (so you can store anything you like in it) 
+ "unicode" , which is UCS2/UCS4 encoded unicode internally 
+ 
+ Instances of these types are considered "decoded" data. The internal representation is the reference, so you "decode" external data into it, and "encode" into some external format. 
+ A good strategy is to decode as early as possible when data enters the system, and encode as late as possible. Try to use unicode for the strings in your system as much as possible. (I disagree with Nikolai in this regard). 
+ This encoding aspect applies to Nicolai's answer. He takes the original unicode string, and encodes it into utf-8. But this doesn't solve the problem (at least not generally), because the resulting byte buffer can still contain bytes outside the range(127) (I haven't checked for \u2122), which means you will hit the same exception again. 
+ Still Nicolai's analysis holds that you are passing a unicode string, but somewhere down in the system this is regarded a str instance. It suffices if somewhere the str() function is applied to your unicode argument. 
+ In that case Python uses the so called default encoding which is ascii if you don't change it. There is a function sys.setdefaultencoding which you can use to switch to e.g. utf-8, but the function is only available in a limited context, so you cannot easily use it in application code. 
+ My feeling is the problem is somewhere deeper in the layers you are calling. Unfortunately, I cannot comment on Django or MySQL/SQLalchemy, but I wonder if you could specify a unicode type when declaring the 'name' attribute in your model. It would be good DB practice to handle type information on the field level. Maybe there is an alternative to CharField?! 
+ And yes, you can safely embed a single quote (') in a double quoted (") string, and vice versa. 
+ 
+ #2 You are using strings of type 'unicode'. If your model or SQL backend does not support them or does not know how to convert to UTF-8, simply do the conversion yourself. Stick with simple strings (python type str) and convert like in 
+
+ a = models.Achievement(name=u"Played Mirror's Edge\u2122".encode("UTF-8"))
+ 
+ #3 I was working on this yesterday, and I found that adding "charset=utf8" and "use_unicode=1" to the connection string made it work (using SQLAlchemy, guess it's the same problem). 
+
+ So my string looks like:
+"mysql://user:pass@host:3306/database?use_unicode=1&amp;charset=utf8" 
+ #4 I agree with Nikolai. I already encountered problem to use UTF-8, even in pure Python (2.5). 
+
+ I finally used the unicode function(?): 
+
+ entry = unicode(sys.stdin, ENCODING)
+ 
+
+ ENCODING was depending on the locale, if I remember well: 
+
+ import sys, locale
+
+ENCODING = locale.getdefaultlocale()[1]
+DEFAULT_ENCODING = sys.getdefaultencoding()
+ 
+
+ Maybe take a look at the Python Unicode HOWTO ? 
+ #5 I was having similar problems with mysql and postgres but no problems with sqllite. 
+
+ This is how i solved the problem with postgres (didnt test this trick with mysql but id asume it would solve it as well) 
+
+ in the file where u are dealing with the unicode string do a 
+
+ from django.utils.safestring import SafeUnicode
+ 
+
+ and assume unistr is the variable containing the string, do a 
+
+ unistr = SafeUnicode(unistr)
+ 
+
+ in my case i was scraping from a website 
+
+ original code which was giving problems (ht is beautifulsoup object):- 
+
+ keyword = ht.a.string
+ 
+
+ the fix:- 
+
+ keyword = SafeUnicode(ht.a.string)
+ 
+
+ I dont know why or what SafeUnicode is doing, all i know is it solved my problems. 
+ #6 To me the apostrophe looks strange, should it not be escapded like so: 
+
+ u"Played Mirror\'s Edge\u2122"

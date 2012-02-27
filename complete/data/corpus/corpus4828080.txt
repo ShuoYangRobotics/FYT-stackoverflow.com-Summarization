@@ -1,0 +1,392 @@
+Question (ID-4828080): How to make an immutable object in Python? Although I have never needed this, it just struck me that making an immutable object in Python could be slightly tricky. You can't just override __setattr__ , because then you can't even set attributes in the __init__ . Subclassing a tuple is a trick that works: 
+
+ class Immutable(tuple):
+
+ def __new__(cls, a, b):
+  return tuple.__new__(cls, (a, b))
+
+ @property
+ def a(self):
+  return self[0]
+
+ @property
+ def b(self):
+  return self[1]
+
+ def __str__(self):
+  return "&lt;Immutable {0}, {1}&gt;".format(self.a, self.b)
+
+ def __setattr__(self, *ignored):
+  return NotImplemented
+
+ def __delattr__(self, *ignored):
+  return NotImplemented
+ 
+
+ But then you have access to the a and b variables through self[0] and self[1], which is annoying. 
+
+ Is this possible in Pure Python? If not, how would I do it with a C extension? 
+
+ (Answers that work only in Python 3 are acceptable). 
+
+ Update: 
+
+ So subclassing tuple is the way to do it in Pure Python, which works well except for the additional possibility of accessing the data by [0], [1] etc. So to complete this question all that is missing is howto do it "properly" in C, which I suspect would be quite simple, by just not implementing any geititem or setattribute, etc. But instead of doing it myself, I offer a bounty for that, because I'm lazy. :) 
+ Answers (Total-8): #0 Yet another solution I just thought of: The simplest way to get the same behaviour as your original code is 
+
+ Immutable = collections.namedtuple("Immutable", ["a", "b"])
+ 
+
+ It does not solve the problem that attributes can be accessed via [0] etc., but at least it's considerably shorter and provides the additional advantage of being compatible with pickle and copy . 
+
+ namedtuple creates a type similar to what I described in this answer , i.e. derived from tuple and using __slots__ . It is available in Python 2.6 or above. 
+ #1 The easiest way to do this is using __slots__ : 
+
+ class A(object):
+ __slots__ = []
+ 
+
+ Instances of A are immutable now, since you can't set any attributes on them. 
+
+ If you want the class instances to contain data, you can combine this with deriving from tuple : 
+
+ from operator import itemgetter
+class Point(tuple):
+ __slots__ = []
+ def __new__(cls, x, y):
+  return tuple.__new__(cls, (x, y))
+ x = property(itemgetter(0))
+ y = property(itemgetter(1))
+
+p = Point(2, 3)
+p.x
+# 2
+p.y
+# 3
+ 
+
+ Edit : If you want to get rid of indexing either, you can override __getitem__() : 
+
+ class Point(tuple):
+ __slots__ = []
+ def __new__(cls, x, y):
+  return tuple.__new__(cls, (x, y))
+ @property
+ def x(self):
+  return tuple.__getitem__(self, 0)
+ @property
+ def y(self):
+  return tuple.__getitem__(self, 1)
+ def __getitem__(self, item):
+  raise TypeError
+ 
+
+ Note that you can't use operator.itemgetter for the properties in thise case, since this would rely on Point.__getitem__() instead of tuple.__getitem__() . Fuerthermore this won't prevent the use of tuple.__getitem__(p, 0) , but I can hardly imagine how this should constitute a problem. 
+
+ I don't think the "right" way of creating an immutable object is writing a C extension. Python usually relies on library implementers and library users being consenting adults , and instead of really enforcing an interface, the interface should be clearly stated in the documentation. This is why I don't consider the possibility of circumventing an overridden __setattr__() by calling object.__setattr__() a problem. If someone does this, it's on her own risk. 
+ #2 Another idea would be to completely disallow __setattr__ and use object.__setattr__ in the constructor: 
+
+ class Point(object):
+ def __init__(self, x, y):
+  object.__setattr__(self, "x", x)
+  object.__setattr__(self, "y", y)
+ def __setattr__(self, *args):
+  raise TypeError
+ def __delattr__(self, *args):
+  raise TypeError
+ 
+
+ Of course you could use object.__setattr__(p, "x", 3) to modify a Point instance p , but your original implementation suffers from the same problem (try tuple.__setattr__(i, "x", 42) on an Immutable instance). 
+
+ You can apply the same trick in your original implementation: get rid of __getitem__() , and use tuple.__getitem__() in your property functions. 
+ #3 
+ ..howto do it "properly" in C.. 
+ 
+
+ You could use Cython to create an extension type for Python: 
+
+ cdef class Immutable:
+ cdef readonly object a, b
+ cdef object __weakref__ # enable weak referencing support
+
+ def __init__(self, a, b):
+  self.a, self.b = a, b
+ 
+
+ It works both Python 2.x and 3. 
+
+ Tests 
+
+ # compile on-the-fly
+import pyximport; pyximport.install() # $ pip install cython
+from immutable import Immutable
+
+o = Immutable(1, 2)
+assert o.a == 1, str(o.a)
+assert o.b == 2
+
+try: o.a = 3
+except AttributeError:
+ pass
+else:
+ assert 0, 'attribute must be readonly'
+
+try: o[1]
+except TypeError:
+ pass
+else:
+ assert 0, 'indexing must not be supported'
+
+try: o.c = 1
+except AttributeError:
+ pass
+else:
+ assert 0, 'no new attributes are allowed'
+
+o = Immutable('a', [])
+assert o.a == 'a'
+assert o.b == []
+
+o.b.append(3) # attribute may contain mutable object
+assert o.b == [3]
+
+try: o.c
+except AttributeError:
+ pass
+else:
+ assert 0, 'no c attribute'
+
+o = Immutable(b=3,a=1)
+assert o.a == 1 and o.b == 3
+
+try: del o.b
+except AttributeError:
+ pass
+else:
+ assert 0, "can't delete attribute"
+
+d = dict(b=3, a=1)
+o = Immutable(**d)
+assert o.a == d['a'] and o.b == d['b']
+
+o = Immutable(1,b=3)
+assert o.a == 1 and o.b == 3
+
+try: object.__setattr__(o, 'a', 1)
+except AttributeError:
+ pass
+else:
+ assert 0, 'attributes are readonly'
+
+try: object.__setattr__(o, 'c', 1)
+except AttributeError:
+ pass
+else:
+ assert 0, 'no new attributes'
+
+try: Immutable(1,c=3)
+except TypeError:
+ pass
+else:
+ assert 0, 'accept only a,b keywords'
+
+for kwd in [dict(a=1), dict(b=2)]:
+ try: Immutable(**kwd)
+ except TypeError:
+  pass
+ else:
+  assert 0, 'Immutable requires exactly 2 arguments'
+ 
+
+ If you don't mind indexing support then collections.namedtuple suggested by @Sven Marnach is preferrable: 
+
+ Immutable = collections.namedtuple("Immutable", "a b")
+ 
+ #4 You could create a @immutable decorator that either overrides the __setattr__ and change the __slots__ to an empty list, then decorate the __init__ method with it. 
+
+ Edit: As the OP noted, changing the __slots__ attribute only prevents the creation of new attributes , not the modification. 
+
+ Edit2: Here's an implementation: 
+
+ Edit3: Using __slots__ breaks this code, because if stops the creation of the object's __dict__ . I'm looking for an alternative. 
+
+ Edit4: Well, that's it. It's a but hackish, but works as an exercise :-) 
+
+ class immutable(object):
+ def __init__(self, immutable_params):
+  self.immutable_params = immutable_params
+
+ def __call__(self, new):
+  params = self.immutable_params
+
+  def __set_if_unset__(self, name, value):
+   if name in self.__dict__:
+    raise Exception("Attribute %s has already been set" % name)
+
+   if not name in params:
+    raise Exception("Cannot create atribute %s" % name)
+
+   self.__dict__[name] = value;
+
+  def __new__(cls, *args, **kws):
+   cls.__setattr__ = __set_if_unset__
+
+   return super(cls.__class__, cls).__new__(cls, *args, **kws)
+
+  return __new__
+
+class Point(object):
+ @immutable(['x', 'y'])
+ def __new__(): pass
+
+ def __init__(self, x, y):
+  self.x = x
+  self.y = y
+
+p = Point(1, 2) 
+p.x = 3 # Exception: Attribute x has already been set
+p.z = 4 # Exception: Cannot create atribute z
+ 
+ #5 I don't think it is entirely possible except by using either a tuple or a namedtuple. No matter what you if you override __setattr__() the user can always bypass it by calling object.__setattr__() directly, so any solution that depends on __setattr__ is guaranteed not to work. 
+
+ This is about the nearest you can get without using some sort of tuple: 
+
+ class Immutable:
+ __slots__ = ['a', 'b']
+ def __init__(self, a, b):
+  object.__setattr__(self, 'a', a)
+  object.__setattr__(self, 'b', b)
+ def __setattr__(self, *ignored):
+  raise NotImplementedError
+ __delattr__ = __setattr__
+ 
+
+ but it breaks if you try hard enough: 
+
+ &gt;&gt;&gt; t = Immutable(1, 2)
+&gt;&gt;&gt; t.a
+1
+&gt;&gt;&gt; object.__setattr__(t, 'a', 2)
+&gt;&gt;&gt; t.a
+2
+ 
+
+ but Sven's use of namedtuple is genuinely immutable. 
+
+ Update 
+
+ Since the question has been updated to ask how to do it properly in C, here's my answer on how to do it properly in Cython: 
+
+ First immutable.pyx : 
+
+ cdef class Immutable:
+ cdef object _a, _b
+
+ def __init__(self, a, b):
+  self._a = a
+  self._b = b
+
+ property a:
+  def __get__(self):
+   return self._a
+
+ property b:
+  def __get__(self):
+   return self._b
+
+ def __repr__(self):
+  return "&lt;Immutable {0}, {1}&gt;".format(self.a, self.b)
+ 
+
+ and a setup.py to compile it (using the command setup.py build_ext --inplace : 
+
+ from distutils.core import setup
+from distutils.extension import Extension
+from Cython.Distutils import build_ext
+
+ext_modules = [Extension("immutable", ["immutable.pyx"])]
+
+setup(
+ name = 'Immutable object',
+ cmdclass = {'build_ext': build_ext},
+ ext_modules = ext_modules
+)
+ 
+
+ Then to try it out: 
+
+ &gt;&gt;&gt; from immutable import Immutable
+&gt;&gt;&gt; p = Immutable(2, 3)
+&gt;&gt;&gt; p
+&lt;Immutable 2, 3&gt;
+&gt;&gt;&gt; p.a = 1
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: attribute 'a' of 'immutable.Immutable' objects is not writable
+&gt;&gt;&gt; object.__setattr__(p, 'a', 1)
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: attribute 'a' of 'immutable.Immutable' objects is not writable
+&gt;&gt;&gt; p.a, p.b
+(2, 3)
+&gt;&gt;&gt;
+ 
+ #6 I've made immutable classes by overriding __setattr__ , and allowing the set if the caller is __init__ : 
+
+ import inspect
+class Immutable(object):
+ def __setattr__(self, name, value):
+  if inspect.stack()[2][3] != "__init__":
+   raise Exception("Can't mutate an Immutable: self.%s = %r" % (name, value))
+  object.__setattr__(self, name, value)
+ 
+
+ This isn't quite enough yet, since it allows anyone's ___init__ to change the object, but you get the idea. 
+ #7 Class and decorator for create immutable objects: 
+
+ class Immutable(object):
+  _mutable = False
+  def __setattr__(self, name,value):
+  if self._mutable or name == '_mutable':
+    super(Immutable,self).__setattr__(name,value)
+  else:
+    raise TypeError("Can't modify")
+
+  def __delattr__(self,name):
+   if self._mutable:
+    super(Immutable,self).__delattr__(name)
+   else:
+    raise TypeError("Can't modify")
+
+
+def mutablemethod(f):
+ def func(self,*args, **kwargs):
+  if isinstance(self,Immutable):
+   old_mutable = self._mutable
+   self._mutable = True
+   res = f(self,*args, **kwargs)
+   self._mutable = old_mutable
+  else:
+   res = f(self,*args, **kwargs)
+  return res
+ return func
+
+
+
+if __name__ == '__main__':
+
+ class A(Immutable):
+  '''
+   Define __init__ can set attributes for instance
+  '''
+  @mutablemethod
+  def __init__(self,value):
+   super(A,self).__init__(self)
+   self.value = value
+
+  def try_change(self,value):
+   self.value = value
+
+ a = A("test")
+ a.try_change("TEST to change")
+ a.value = "TEST to change"

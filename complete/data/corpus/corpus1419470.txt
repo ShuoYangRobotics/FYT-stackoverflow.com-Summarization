@@ -1,0 +1,141 @@
+Question (ID-1419470): Python __init__ setattr on arguments? It seems that often __init__ methods are similar to this: 
+
+ def __init__(self, ivar1, ivar2, ivar3):
+ self.ivar1 = ivar1
+ self.ivar2 = ivar2
+ self.ivar3 = ivar3
+ 
+
+ Is there someway to turn the arguments into a list (without resorting to *args or **kwargs ) and then using setattr to set the instance variables, with the name of the parameter and the arugment passed? And maybe slice the list, e.g. you'd need to at least slice it to [1:] because you don't want self.self . 
+
+ (actually I guess it would need to be a dictionary to hold the name and value) 
+
+ like this: 
+
+ def __init__(self, ivar1, ivar2, ivar3, optional=False):
+ for k, v in makedict(self.__class__.__init__.__args__): # made up __args__
+  setattr(self, k, v)
+ 
+
+ Thanks! 
+
+ Responding to Unknown's answer, I found this to work: 
+
+ Class A(object):
+ def __init__(self, length, width, x):
+  self.__dict__.update(dict([(k, v) for k, v in locals().iteritems() if k != 'self']))
+ 
+
+ or 
+
+ Class A(object):
+ def __init__(self, length, width, x):
+  self.__dict__.update(locals())
+  del self.__dict__['self']
+ 
+
+ Not too bad.. 
+ Answers (Total-8): #0 There is no good way to get the arguments as a list if they are specified individually in the function signature. You can probably do something with inspect or frame hacks, but that will be uglier than simply spelling it out as you have done. 
+ #1 Here you go. Yes this is an ugly evil hack. Yes the object needs a __dict__ variable. But hey, its a neat little one liner! 
+
+ def __init__(self):
+ self.__dict__.update(locals())
+ 
+
+ The constructor can take any type of arguments. 
+
+ class test(object):
+ def __init__(self, a, b, foo, bar=5)...
+
+a = test(1,2,3)
+dir(a)
+
+['__class__', '__delattr__', '__dict__', '__doc__', '__format__', '__getattribute__', '__hash__', '__init__', '__module__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__', '__weakref__', 'a', 'b', 'foo', 'bar', 'self']
+ 
+
+ It will also include self, but you can easily delete that or make your own update function that ignores self. 
+ #2 You could use inspect.getargspec and encapsulate it as a decorator. The lookup of optional and keyword arguments is a bit tricky, but this should do it: 
+
+ def inits_args(func):
+ """Initializes object attributes by the initializer signature"""
+ argspec = inspect.getargspec(func)
+ argnames = argspec.args[1:]
+ defaults = dict(zip(argnames[-len(argspec.defaults):], argspec.defaults))
+ @functools.wraps(func)
+ def __init__(self, *args, **kwargs):
+  args_it = iter(args)
+  for key in argnames:
+   if key in kwargs:
+    value = kwargs[key]
+   else:
+    try:
+     value = args_it.next()
+    except StopIteration:
+     value = defaults[key]
+   setattr(self, key, value)
+  func(self, *args, **kwargs)
+ return __init__
+ 
+
+ You can then use it like this: 
+
+ class Foo(object):
+ @inits_args
+ def __init__(self, spam, eggs=4, ham=5):
+  print "Foo(%r, %r, %r)" % (self.spam, self.eggs, self.ham)
+ 
+ #3 Try inspect.getargspec : 
+
+ In [31]: inspect.getargspec(C.__init__)
+
+Out[31]: ArgSpec(args=['self', 'ivar1', 'ivar2', 'ivar3', 'optional'],
+
+     varargs=None, keywords=None, defaults=(False,))
+ 
+ #4 See if the new namedtuple (new in Python 2.6) from the collections module might work for you. 
+ #5 You can do it using introspection of the arguments, but the code is going to be longer than the code you try to replace. Especially if you are handling kw, which you may have to do. 
+
+ This short code works in most cases (improved from Unknowns example): 
+
+ &gt;&gt;&gt; class Foo:
+... def __init__(self, labamba, **kw):
+...  params = locals().copy()
+...  del params['self']
+...  if 'kw' in params:
+...   params.update(params['kw'])
+...   del params['kw']
+...  self.__dict__.update(params)
+ 
+
+ But it's an ugly hack, making code less readable for no particular reason except laziness, so don't do it. And also, how often do you really have classes that have more than 5-6 init parameters? 
+ #6 I like that form the most, not too long and both copy-pasteable and sub-classable: 
+
+ class DynamicInitClass(object):
+  __init_defargs=('x',)
+  def __init__(self,*args,**attrs):
+  for idx,val in enumerate(args): attrs[self.__init_defargs[idx]]=val
+  for key,val in attrs.iteritems(): setattr(self,key,val)
+ 
+ #7 How about deriving from a special class? I think it's more explicit and more flexible this way: 
+
+ class InitMe:
+ def __init__(self, data):
+  if 'self' in data:
+    data = data.copy()
+    del data['self']
+  self.__dict__.update(data)
+
+
+class MyClassA(InitMe):
+ def __init__(self, ivar1, ivar2, ivar3 = 'default value'):
+  super().__init__(locals())
+
+
+class MyClassB(InitMe):
+ def __init__(self, foo):
+  super().__init__({'xxx': foo, 'yyy': foo, 'zzz': None})
+# or super().__init__(dict(xxx=foo, yyy=foo, zzz=None))
+
+class MyClassC(InitMe):
+ def __init__(self, foo, **keywords):
+  super().__init__(keywords)

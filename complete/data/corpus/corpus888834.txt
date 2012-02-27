@@ -1,0 +1,132 @@
+Question (ID-888834): Daemonizing python's BaseHTTPServer I am working on a daemon where I need to embed a HTTP server. I am attempting to do it with BaseHTTPServer, which when I run it in the foreground, it works fine, but when I try and fork the daemon into the background, it stops working. My main application continues to work, but BaseHTTPServer does not. 
+
+ I believe this has something to do with the fact that BaseHTTPServer sends log data to STDOUT and STDERR. I am redirecting those to files. Here is the code snippet: 
+
+ # Start the HTTP Server
+server = HTTPServer((config['HTTPServer']['listen'],config['HTTPServer']['port']),HTTPHandler)
+
+# Fork our process to detach if not told to stay in foreground
+if options.foreground is False:
+ try:
+  pid = os.fork()
+  if pid &gt; 0:
+   logging.info('Parent process ending.')
+   sys.exit(0)   
+ except OSError, e:
+  sys.stderr.write("Could not fork: %d (%s)\n" % (e.errno, e.strerror))
+  sys.exit(1)
+
+ # Second fork to put into daemon mode
+ try: 
+  pid = os.fork() 
+  if pid &gt; 0:
+   # exit from second parent, print eventual PID before
+   print 'Daemon has started - PID # %d.' % pid
+   logging.info('Child forked as PID # %d' % pid)
+   sys.exit(0) 
+ except OSError, e: 
+  sys.stderr.write("Could not fork: %d (%s)\n" % (e.errno, e.strerror))
+  sys.exit(1)
+
+
+ logging.debug('After child fork')
+
+ # Detach from parent environment
+ os.chdir('/') 
+ os.setsid()
+ os.umask(0) 
+
+ # Close stdin  
+ sys.stdin.close()
+
+ # Redirect stdout, stderr
+ sys.stdout = open('http_access.log', 'w')
+ sys.stderr = open('http_errors.log', 'w') 
+
+# Main Thread Object for Stats
+threads = []
+
+logging.debug('Kicking off threads')
+
+while ...
+ lots of code here
+...
+
+server.serve_forever()
+ 
+
+ Am I doing something wrong here or is BaseHTTPServer somehow prevented from becoming daemonized? 
+
+ Edit: Updated code to demonstrate the additional, previously missing code flow and that log.debug shows in my forked, background daemon I am hitting code after fork. 
+ Answers (Total-6): #0 You start by instantiating a HTTPServer. But you don't actually tell it to start serving in any of the supplied code. In your child process try calling server.serve_forever() . 
+
+ See this for reference 
+ #1 Just use daemontools or some other similar script instead of rolling your own daemonizing process. It is much better to keep this off your script. 
+
+ Also, your best option: Don't use BaseHTTPServer. It is really bad. There are many good HTTP servers for python, i.e. cherrypy or paste . Both includes ready-to-use daemonizing scripts. 
+ #2 After a bit of googling I finally stumbled upon: 
+
+ http://blog.doughellmann.com/2007/12/pymotw-basehttpserver.html 
+
+ And after that I ended up with: 
+
+ from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+from SocketServer import ThreadingMixIn
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+ """Handle requests in a separate thread."""
+
+server = ThreadedHTTPServer((config['HTTPServer']['listen'],config['HTTPServer']['port']), HTTPHandler)
+server.serve_forever()
+ 
+
+ Which for the most part comes after I fork and ended up resolving my problem. 
+ #3 Here's how to do this with the python-daemon library: 
+
+ from BaseHTTPServer import (HTTPServer, BaseHTTPRequestHandler)
+import contextlib
+
+import daemon
+
+from my_app_config import config
+
+# Make the HTTP Server instance.
+server = HTTPServer(
+ (config['HTTPServer']['listen'], config['HTTPServer']['port']),
+ BaseHTTPRequestHandler)
+
+# Make the context manager for becoming a daemon process.
+daemon_context = daemon.DaemonContext()
+daemon_context.files_preserve = [server.fileno()]
+
+# Become a daemon process.
+with daemon_context:
+ server.serve_forever()
+ 
+ #4 Since this has solicited answers since I originally posted, I thought that I'd share a little info. 
+
+ The issue with the output has to do with the fact that the default handler for the logging module uses the StreamHandler. The best way to handle this is to create your own handlers. In the case where you want to use the default logging module, you can do something like this: 
+
+ # Get the default logger
+default_logger = logging.getLogger('')
+
+# Add the handler
+default_logger.addHandler(myotherhandler)
+
+# Remove the default stream handler
+for handler in default_logger.handlers:
+ if isinstance(handler, logging.StreamHandler):
+  default_logger.removeHandler(handler)
+ 
+
+ Also at this point I have moved to using the very nice Tornado project for my embedded http servers. 
+ #5 A simple solution that worked for me was to override the BaseHTTPRequestHandler method log_message() , so we prevent any kind of writing in stdout and avoid problems when demonizing. 
+
+ class CustomRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+
+ def log_message(self, format, *args):
+   pass
+
+...
+rest of custom class code
+...

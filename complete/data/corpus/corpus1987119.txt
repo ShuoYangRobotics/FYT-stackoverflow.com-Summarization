@@ -1,0 +1,104 @@
+Question (ID-1987119): fast folder size calculation in Python on Windows I am looking for a fast way to calculate the size of a folder in Python on Windows. This is what I have so far: 
+
+ def get_dir_size(path):
+ total_size = 0
+ if platform.system() == 'Windows':
+ try:
+  items = win32file.FindFilesW(path + '\\*')
+ except Exception, err:
+  return 0
+
+ # Add the size or perform recursion on folders.
+ for item in items:
+  attr = item[0]
+  name = item[-2]
+  size = item[5]
+
+  if (attr &amp; win32con.FILE_ATTRIBUTE_DIRECTORY) and \
+   not (attr &amp; win32con.FILE_ATTRIBUTE_SYSTEM): # skip system dirs
+  if name not in DIR_EXCLUDES:
+   total_size += get_dir_size("%s\\%s" % (path, name))
+
+  total_size += size
+
+ return total_size
+ 
+
+ This is not good enough when size of folder is over 100G. Any ideas how to improve it? 
+
+ On a fast machine (2Ghz+ - 5G of RAM), it took 72 seconds to go over 422GB in 226,001 files and 12,043 folders. It takes 40 seconds using the explorer properties option. 
+
+ I know I am being a bit greedy but I am hoping for a better solution. 
+
+ Laurent Luce 
+ Answers (Total-6): #0 A quick profiling of your code suggests that over 90% of the time is consumed in the FindFilesW() call alone. This means any improvements by tweaking the Python code would be minor. 
+
+ Tiny tweaks (if you were to stick with FindFilesW) could include ensuring DIR_EXCLUDES is a set instead of a list, avoiding the repeated lookups on other modules, and indexing into item[] lazily, as well as moving the sys.platform check outside. This incorporates these changes and others, but it won't give more than a 1-2% speedup . 
+
+ DIR_EXCLUDES = set(['.', '..'])
+MASK = win32con.FILE_ATTRIBUTE_DIRECTORY | win32con.FILE_ATTRIBUTE_SYSTEM
+REQUIRED = win32con.FILE_ATTRIBUTE_DIRECTORY
+FindFilesW = win32file.FindFilesW
+
+def get_dir_size(path):
+ total_size = 0
+ try:
+  items = FindFilesW(path + r'\*')
+ except pywintypes.error, ex:
+  return total_size
+
+ for item in items:
+  total_size += item[5]
+  if (item[0] &amp; MASK == REQUIRED):
+   name = item[8]
+   if name not in DIR_EXCLUDES:
+    total_size += get_dir_size(path + '\\' + name)
+
+ return total_size
+ 
+
+ The only significant speedup would come from using a different API, or a different technique. You mentioned in a comment doing this in the background, so you could structure it to do an incremental update using one of the packages for monitoring changes in folders. Possibly the FindFirstChangeNotification API or something like it. You could set up to monitor the entire tree, or depending on how that routine works (I haven't used it) you might be better off registering multiple requests on various subsets of the full tree, if that reduces the amount of searching you have to do (when notified) to figure out what actually changed and what size it is now. 
+
+ Edit: I asked in a comment whether you were taking into account the heavy filesystem metadata caching that Windows XP and later do. I just checked performance of your code (and mine) against Windows itself, selecting all items in my C:\ folder and hitting Alt-Enter to bring up the properties window. After doing this once (using your code) and getting a 40s elapsed time, I now get 20s elapsed from both methods . In other words, your code is actually just as fast as Windows itself , at least on my machine. 
+ #1 You don't need to use a recursive algorithm if you use os.walk. Please check this question . 
+
+ You should time both approaches, but this is supposed to be much faster: 
+
+ import os
+
+def get_dir_size(root):
+ size = 0
+ for path, dirs, files in os.walk(root):
+  for f in files:
+   size += os.path.getsize( os.path.join( path, f ) )
+ return size
+ 
+ #2 I don't have a Windows box to test on at the moment, but the documentation states that
+ win32file.FindFilesIterator is "similar to win32file.FindFiles , but avoid the creation of the list for huge directories". Does that help? 
+ #3 It's a whopper of a directory tree. As others have said, I'm not sure you can speed it up... not like that, cold w/o data. And that means... 
+
+ If you can cache data, somehow (not sure what the actual implication is), then you could speed things up (I think... as always, measure, measure, measure). 
+
+ I don't think I have to tell you how to do caching, I guess, you seem like a knowledgeable person. And I wouldn't know off the cuff for Windows anyway. ;-) 
+ #4 This jumps out at me: 
+
+ try:
+ items = win32file.FindFilesW(path + '\\*')
+except Exception, err:
+ return 0
+ 
+
+ Exception handling can add significant time to your algorithm. If you can specify the path differently, in a way that you always know is safe, and thus prevent the need to capture exceptions (eg, checking first to see if the given path is a folder before finding files in that folder), you may find a significant speedup. 
+ #5 # Size of File Folder/Directory in MBytes
+
+import os
+
+# pick a folder you have ...
+folder = 'D:\\zz1'
+folder_size = 0
+for (path, dirs, files) in os.walk(folder):
+ for file in files:
+ filename = os.path.join(path, file)
+ folder_size += os.path.getsize(filename)
+
+print "Folder = %0.1f MB" % (folder_size/(1024*1024.0))

@@ -1,0 +1,225 @@
+Question (ID-4397859): Smart filter with python Hi 
+I need filter out all rows that don't contain symbols from huge "necessary" list, example code: 
+
+ def any_it(iterable):
+  for element in iterable:
+   if element: return True
+  return False
+
+regexp = re.compile(r'fruit=([A-Z]+)')
+necessary = ['YELLOW', 'GREEN', 'RED', ...] # huge list of 10 000 members
+f = open("huge_file", "r") ## file with &gt; 100 000 lines
+lines = f.readlines()
+f.close()
+
+## File rows like, let's say:
+# 1 djhds fruit=REDSOMETHING sdkjld
+# 2 sdhfkjk fruit=GREENORANGE lkjfldk
+# 3 dskjldsj fruit=YELLOWDOG sldkfjsdl
+# 4 gfhfg fruit=REDSOMETHINGELSE fgdgdfg
+
+filtered = (line for line in lines if any_it(regexp.findall(line)[0].startswith(x) for x in necessary))
+ 
+
+ I have python 2.4, so I can't use built-in any() . 
+I wait a long time for this filtering, but is there some way to optimize it? For example row 1 and 4 contains "RED.." pattern, if we found that "RED.." pattern is ok, can we skip search in 10000-members list for row 4 the same pattern?? 
+Is there some another way to optimize filtering? 
+Thank you. 
+... edited ... 
+ UPD: See real example data in comments to this post. I'm also interested in sorting by "fruits" the result. Thanks! 
+... end edited ... 
+ Answers (Total-8): #0 If you organized the necessary list as a trie , then you could look in that trie to check if the fruit starts with a valid prefix. That should be faster than comparing the fruit against every prefix. 
+
+ For example (only mildly tested): 
+
+ import bisect
+import re
+
+class Node(object):
+ def __init__(self):
+  self.children = []
+  self.children_values = []
+  self.exists = False
+
+ # Based on code at http://docs.python.org/library/bisect.html    
+ def _index_of(self, ch):
+  i = bisect.bisect_left(self.children_values, ch)
+  if i != len(self.children_values) and self.children_values[i] == ch:
+   return (i, self.children[i])
+  return (i, None)
+
+ def add(self, value):
+  if len(value) == 0:
+   self.exists = True
+   return
+  i, child = self._index_of(value[0])
+  if not child:
+   child = Node()
+   self.children.insert(i, child)
+   self.children_values.insert(i, value[0])
+  child.add(value[1:])
+
+ def contains_prefix_of(self, value):
+  if self.exists:
+   return True
+  i, child = self._index_of(value[0])
+  if not child:
+   return False
+  return child.contains_prefix_of(value[1:])
+
+necessary = ['RED', 'GREEN', 'BLUE', 'ORANGE', 'BLACK',
+    'LIGHTRED', 'LIGHTGREEN', 'GRAY']
+
+trie = Node()
+for value in necessary:
+ trie.add(value)
+
+# Find lines that match values in the trie
+filtered = []
+regexp = re.compile(r'fruit=([A-Z]+)')
+for line in open('whatever-file'):
+ fruit = regexp.findall(line)[0]
+ if trie.contains_prefix_of(fruit):
+  filtered.append(line)
+ 
+
+ This changes your algorithm from O(N * k) , where N is the number of elements of necessary and k is the length of fruit , to just O(k) (more or less). It does take more memory though, but that might be a worthwhile trade-off for your case. 
+ #1 Tested (but unbenchmarked) code: 
+
+ import re
+import fileinput
+
+regexp = re.compile(r'^.*?fruit=([A-Z]+)')
+necessary = ['YELLOW', 'GREEN', 'RED', ]
+
+filtered = []
+for line in fileinput.input(["test.txt"]):
+ try:
+  key = regexp.match(line).group(1)
+ except AttributeError:
+  continue # no match
+ for p in necessary:
+  if key.startswith(p):
+   filtered.append(line)
+   break
+
+# "filtered" now holds your results
+print "".join(filtered)
+ 
+
+ Diff to code in question: 
+
+ 
+ We do not first load the whole file into memory (as is done when you use file.readlines() ). Instead, we process each line as the file is read in. I use the fileinput module here for brevity, but one can also use line = file.readline() and a while line: loop. 
+ We stop iterating through the necessary list once a match is found. 
+ We modified the regex pattern and use re.match instead of re.findall . That's assuming that each line would only contain one "fruit=..." entry. 
+ 
+
+ update 
+
+ If the format of the input file is consistent, you can squeeze out a little more performance by getting rid of regex altogether. 
+
+ try:
+ # with line = "2 asdasd fruit=SOMETHING asdasd...."
+ key = line.split(" ", 3)[2].split("=")[1]
+except:
+ continue # no match
+ 
+ #2 I'd make a simple list of ['fruit=RED','fruit=GREEN'... etc. with ['fruit='+n for n in necessary] , then use in rather than a regex to test them. I don't think there's any way to do it really quickly, though. 
+
+ filtered = (line for line in f if any(a in line for a in necessary_simple))
+ 
+
+ (The any() function is doing the same thing as your any_it() function) 
+
+ Oh, and get rid of file.readlines(), just iterate over the file. 
+ #3 filtered=[]
+for line in open('huge_file'):
+ found=regexp.findall(line)
+ if found:
+  fruit=found[0]
+  for x in necessary:
+   if fruit.startswith(x):
+    filtered.append(line)
+    break
+ 
+
+ or maybe : 
+
+ necessary=['fruit=%s'%x for x in necessary]
+filtered=[]
+for line in open('huge_file'):
+ for x in necessary:
+  if x in line:
+   filtered.append(line)
+   break
+ 
+ #4 I personally like your code as is since you consider "fruit=COLOR" as a pattern which others does not. I think you want to find some solution like memoization which enables you to skip test for already solved problem but this is not the case I guess. 
+
+ def any_it(iterable):
+  for element in iterable:
+   if element: return True
+  return False 
+
+ necessary = ['YELLOW', 'GREEN', 'RED', ...] 
+
+ predicate = lambda line: any_it("fruit=" + color in line for color in necessary) 
+
+ filtered = ifilter(predicate, open("testest")) 
+ #5 I'm convinced Zach's answer is on the right track. Out of curiosity, I've implemented another version (incorporating Zach's comments about using a dict instead of bisect ) and folded it into a solution that matches your example. 
+
+ #!/usr/bin/env python
+import re
+from trieMatch import PrefixMatch # https://gist.github.com/736416
+
+pm = PrefixMatch(['YELLOW', 'GREEN', 'RED', ]) # huge list of 10 000 members
+# if list is static, it might be worth picking "pm" to avoid rebuilding each time
+
+f = open("huge_file.txt", "r") ## file with &gt; 100 000 lines
+lines = f.readlines()
+f.close()
+
+regexp = re.compile(r'^.*?fruit=([A-Z]+)')
+filtered = (line for line in lines if pm.match(regexp.match(line).group(1)))
+ 
+
+ For brevity, implementation of PrefixMatch is published here . 
+
+ If your list of necessary prefixes is static or changes infrequently, you can speed up subsequent runs by pickling and reusing the PickleMatch object instead of rebuilding it each time. 
+
+ update (on sorted results) 
+
+ According to the changelog for Python 2.4 : 
+
+ 
+ key should be a single-parameter function that takes a list element and
+ returns a comparison key for the
+ element. The list is then sorted using
+ the comparison keys. 
+ 
+
+ also, in the source code, line 1792 : 
+
+ /* Special wrapper to support stable sorting using the decorate-sort-undecorate
+ pattern. Holds a key which is used for comparisons and the original record
+ which is returned during the undecorate phase. By exposing only the key
+ .... */
+ 
+
+ This means that your regex pattern is only evaluated once for each entry (not once for each compare), hence it should not be too expensive to do: 
+
+ sorted_generator = sorted(filtered, key=regexp.match(line).group(1))
+ 
+ #6 Untested code: 
+
+ filtered = []
+for line in lines:
+ value = line.split('=', 1)[1].split(' ',1)[0]
+ if value not in necessary:
+  filtered.append(line)
+ 
+
+ That should be faster than pattern matching 10 000 patterns onto a line.
+Possibly there are even faster ways. :) 
+ #7 It shouldn't take too long to iterate through 100,000 strings, but I see you have a 10,000 strings list, which means you iterate 10,000 * 100,000 = 1,000,000,000 times the strings, so I don't know what did you expect...
+As for your question, if you encounter a word from the list and you only need 1 or more (if you want exacly 1 you need to iterate through the whole list) you can skip the rest, it should optimize the search operation.

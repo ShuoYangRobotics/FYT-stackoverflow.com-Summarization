@@ -1,0 +1,149 @@
+<h3>Question (ID-6391645):</h3><h2>Nested Python class needs to access variable in parent/owner class</h2><p>I've seen a few "solutions" to this, but the solution every time seems to be "Don't use nested classes, define the classes outside and then use them normally". I don't like that answer, because it ignores the primary reason I chose nested classes, which is, to have a pool of constants (associated with the base class) accessible to all sub-class instances which are created.</p>
+
+<p>Here is example code:</p>
+
+<pre><code>class ParentClass:
+
+    constant_pool = []
+    children = []
+
+    def __init__(self, stream):
+        self.constant_pool = ConstantPool(stream)
+        child_count = stream.read_ui16()
+        for i in range(0, child_count):
+            children.append(ChildClass(stream))
+
+    class ChildClass:
+
+        name = None
+
+        def __init__(self, stream):
+            idx = stream.read_ui16()
+            self.name = constant_pool[idx]
+</code></pre>
+
+<p>All classes are passed a single param, which is a custom bitstream class. My intention is to have a solution that does not require me to read the idx value for ChildClass while still in the ParentClass. All child-class stream reading should be done in the child class.</p>
+
+<p>This example is over simplified. The constant pool is not the only variable i need available to all subclasses. The idx variable is not the only thing read from the stream reader.</p>
+
+<p>Is this even possible in python? Is there no way to access the parent's information?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You don't need two classes here.  Here's your example code written in a more concise fashion.</p>
+
+<pre><code>class ChildClass:
+    def __init__(self, stream):
+        idx = stream.read_ui16()
+        self.name = self.constant_pool[idx]
+
+def makeChildren(stream):
+    ChildClass.constant_pool = ConstantPool(stream)
+    return [ChildClass(stream) for i in range(stream.read_ui16())]
+</code></pre>
+
+<p>Welcome to Python.  Classes are mutable at runtime.  Enjoy.</p>
+<br /><b>#1</b><br /><p>Despite my "bit patronizing" comment (fair play to call it that!), there are actually ways to achieve what you want: a different avenue of inheritance.  A couple:</p>
+
+<ol>
+<li><p>Write a decorator that introspects a class just after it's declared, finds inner classes, and copies attributes from the outer class into them.</p></li>
+<li><p>Do the same thing with a metaclass.</p></li>
+</ol>
+
+<p>Here's the decorator approach, since it's the most straightforward:</p>
+
+<pre><code>def matryoshka(cls):
+
+    # get types of classes
+    class classtypes:
+        pass
+    classtypes = (type, type(classtypes))
+
+    # get names of all public names in outer class
+    directory = [n for n in dir(cls) if not n.startswith("_")]
+
+    # get names of all non-callable attributes of outer class
+    attributes = [n for n in directory if not callable(getattr(cls, n))]
+
+    # get names of all inner classes
+    innerclasses = [n for n in directory if isinstance(getattr(cls, n), classtypes)]
+
+    # copy attributes from outer to inner classes (don't overwrite)
+    for c in innerclasses:
+        c = getattr(cls, c)
+        for a in attributes:
+            if not hasattr(c, a):
+                setattr(c, a, getattr(cls, a))
+
+    return cls
+</code></pre>
+
+<p>Here is a simple example of its use:</p>
+
+<pre><code>@matryoshka
+class outer(object):
+
+    answer = 42
+
+    class inner(object):
+
+        def __call__(self):
+            print self.answer
+
+outer.inner()()   # 42
+</code></pre>
+
+<p>However, I can't help but think some of the ideas suggested in other answers would serve you better.</p>
+<br /><b>#2</b><br /><p>Well, the following works (further simplified from your example). Note that you don't have to "declare" member variables at class level like C++/C#/Java etc, just set them on <code>self</code> within <code>__init__</code>:</p>
+
+<pre><code>class ParentClass:
+    def __init__(self):
+        self.constant_pool = ["test"]
+        self.ChildClass.constant_pool = self.constant_pool
+        self.children = [self.ChildClass()]
+
+    class ChildClass:
+        def __init__(self):
+            self.name = self.constant_pool[0]
+            print "child name is", self.name
+
+p = ParentClass() # Prints "child name is test"
+</code></pre>
+
+<p>Note that you could still do the same sort of thing without the child classes being nested.</p>
+<br /><b>#3</b><br /><p>You can access the parent class through its name:</p>
+
+<pre><code>class ChildClass:
+
+    name = None
+
+    def __init__(self, stream):
+        idx = stream.read_ui16()
+        self.name = ParentClass.constant_pool[idx]
+</code></pre>
+
+<p>Then again, I'm not sure I understand what you are trying to achieve.</p>
+<br /><b>#4</b><br /><p>Your question uses the word subclass, so I'm keying from that to interpret your question.  As with the others who have answered, I am not certain I understand what you are looking for.</p>
+
+<pre><code>class ParentClass(object):
+  constant_pool = [c1, c2, c3]
+  def __init__(self):
+    # anything not included in your question
+
+class ChildClass(ParentClass):
+  def __init__(self, stream):
+    ParentClass.__init__(self)
+    self.name = ParentClass.constant_pool[stream.read_ui16()]
+
+stream = get_new_stream()
+children = []
+for count in range(stream.read_ui16()):
+  children.append(ChildClass(stream))
+</code></pre>
+
+<p>This code uses inheritance to derive ChildClass from ParentClass (and all methods, etc).  The constant_pool is an attribute of ParentClass itself, though it is OK to treat as an attribute of any instance of ParentClass or ChildClass (saying <code>self.constant_pool</code> within <code>ChildClass.__init__</code> would be equivalent to the above but, in my view, misleading).</p>
+
+<p>Nesting the class definitions is not necessary.  Nesting the definition of ChildClass within ParentClass just means that ChildClass is an attribute of ParentClass, nothing more.  It does not make instances of ChildClass inherit anything from ParentClass.</p>
+<br /><b>#5</b><br /><p>Another alternative design to consider:</p>
+
+<p>When you find yourself trying to use classes as namespaces, it might make more sense to put the inner classes into a module of their own and make what were the attributes of the outer class global variables.  In other words, if you never intend to instantiate your <code>ParentClass</code>, then it's just serving as a glorified module.</p>
+
+<p>Global variables get a bad rap in most programming languages, but they are not truly global in Python, and are nicely encapsulated to the module.</p>
+<br />

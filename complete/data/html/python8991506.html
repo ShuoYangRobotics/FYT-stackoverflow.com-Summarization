@@ -1,0 +1,217 @@
+<h3>Question (ID-8991506):</h3><h2>Iterate an iterator by chunks (of n) in Python?</h2><p>Can you think of a nice way (maybe with itertools) to split an iterator into chunks of given size?</p>
+
+<p>Therefore <code>l=[1,2,3,4,5,6,7]</code> with <code>chunks(l,3)</code> becomes an iterator <code>[1,2,3], [4,5,6], [7]</code></p>
+
+<p>I can think of a small program to do that but not a nice way with maybe itertools.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>The <code>grouper()</code>  recipe from the <code>itertools</code> documentation's <a href="http://docs.python.org/library/itertools.html#recipes">recipes</a> comes close to what you want:</p>
+
+<pre><code>def grouper(n, iterable, fillvalue=None):
+    "grouper(3, 'ABCDEFG', 'x') --&gt; ABC DEF Gxx"
+    args = [iter(iterable)] * n
+    return izip_longest(fillvalue=fillvalue, *args)
+</code></pre>
+
+<p>It will fill up the last chunk with a fill value, though.</p>
+
+<p>A less general solution that only works on sequences but does handle the last chunk as desired is</p>
+
+<pre><code>[my_list[i:i + chunk_size] for i in range(0, len(my_list), chunk_size)]
+</code></pre>
+
+<p>Finally, a solution that works on general iterators an behaves as desired is</p>
+
+<pre><code>def grouper(n, iterable):
+    it = iter(iterable)
+    while True:
+       chunk = tuple(itertools.islice(it, n))
+       if not chunk:
+           return
+       yield chunk
+</code></pre>
+<br /><b>#1</b><br /><p>Here's one that returns lazy chunks; use <code>map(list, chunks(...))</code> if you want lists.</p>
+
+<pre><code>from itertools import islice, chain
+from collections import deque
+
+def chunks(items, n):
+    items = iter(items)
+    for first in items:
+        chunk = chain((first,), islice(items, n-1))
+        yield chunk
+        deque(chunk, 0)
+
+if __name__ == "__main__":
+    for chunk in map(list, chunks(range(10), 3)):
+        print chunk
+
+    for i, chunk in enumerate(chunks(range(10), 3)):
+        if i % 2 == 1:
+            print "chunk #%d: %s" % (i, list(chunk))
+        else:
+            print "skipping #%d" % i
+</code></pre>
+<br /><b>#2</b><br /><p>A succinct implementation is:</p>
+
+<pre><code>chunker = lambda iterable, n: (ifilterfalse(lambda x: x == (), chunk) for chunk in (izip_longest(*[iter(iterable)]*n, fillvalue=())))
+</code></pre>
+
+<p>This works because <code>[iter(iterable)]*n</code> is a list containing the same iterator n times; zipping over that takes one item from each iterator in the list, <em>which is the same iterator</em>, with the result that each zip-element contains a group of <code>n</code> items. </p>
+
+<p><code>izip_longest</code> is needed to fully consume the underlying iterable, rather than iteration stopping when the first exhausted iterator is reached, which chops off any remainder from <code>iterable</code>. This results in the need to filter out the fill-value. A slightly more robust implementation would therefore be:</p>
+
+<pre><code>def chunker(iterable, n):
+    class Filler(object): pass
+    return (ifilterfalse(lambda x: x is Filler, chunk) for chunk in (izip_longest(*[iter(iterable)]*n, fillvalue=Filler)))
+</code></pre>
+
+<p>This guarantees that the fill value is never an item in the underlying iterable. Using the definition above:</p>
+
+<pre><code>iterable = range(1,11)
+
+map(tuple,chunker(iterable, 3))
+[(1, 2, 3), (4, 5, 6), (7, 8, 9), (10,)]
+
+map(tuple,chunker(iterable, 2))
+[(1, 2), (3, 4), (5, 6), (7, 8), (9, 10)]
+
+map(tuple,chunker(iterable, 4))
+[(1, 2, 3, 4), (5, 6, 7, 8), (9, 10)]
+</code></pre>
+
+<hr>
+
+<p>This implementation almost does what you want, but it has issues:</p>
+
+<pre><code>def chunks(it, step):
+  start = 0
+  while True:
+    end = start+step
+    yield islice(it, start, end)
+    start = end
+</code></pre>
+
+<p>(The difference is that because <code>islice</code> does not raise StopIteration or anything else on calls that go beyond the end of <code>it</code> this will yield forever; there is also the slightly tricky issue that the <code>islice</code> results must be consumed before this generator is iterated).</p>
+
+<p>To generate the moving window functionally:</p>
+
+<pre><code>izip(count(0, step), count(step, step))
+</code></pre>
+
+<p>So this becomes:</p>
+
+<pre><code>(it[start:end] for (start,end) in izip(count(0, step), count(step, step)))
+</code></pre>
+
+<p>But, that still creates an infinite iterator. So, you need takewhile (or perhaps something else might be better) to limit it:</p>
+
+<pre><code>chunk = lambda it, step: takewhile((lambda x: len(x) &gt; 0), (it[start:end] for (start,end) in izip(count(0, step), count(step, step))))
+
+g = chunk(range(1,11), 3)
+
+tuple(g)
+([1, 2, 3], [4, 5, 6], [7, 8, 9], [10])
+</code></pre>
+
+<hr>
+<br /><b>#3</b><br /><p>Although OP asks function to return chunks as list or tuple, in case you need to return iterators, then <a href="http://stackoverflow.com/users/279627/sven-marnach">Sven Marnach's</a> solution can be modified:</p>
+
+<pre><code>def grouper_it(n, iterable):
+    it = iter(iterable)
+    while True:
+        chunk_it = itertools.islice(it, n)
+        try:
+            first_el = next(chunk_it)
+        except StopIteration:
+            return
+        yield itertools.chain((first_el,), chunk_it)
+</code></pre>
+
+<p>Some benchmarks: <a href="http://pastebin.com/YkKFvm8b" rel="nofollow">http://pastebin.com/YkKFvm8b</a></p>
+
+<p>It will be slightly more efficient only if your function iterates through elements in every chunk. </p>
+<br /><b>#4</b><br /><p>"Simpler is better than complex" -
+a starigtforward generator a few lines long can do the job. Just place it in some utilities module or so:</p>
+
+<pre><code>def grouper (iterable, n):
+    iterable = iter(iterable)
+    count = 0
+    group = []
+    while True:
+        try:
+            group.append(iterable.next())
+            count += 1
+            if count % n == 0:
+                yield group
+                group = []
+        except StopIteration:
+            yield group
+            break
+</code></pre>
+<br /><b>#5</b><br /><p>I forget where I found the inspiration for this.  I've modified it a little to work with MSI GUID's in the Windows Registry:</p>
+
+<pre><code>def nslice(s, n, truncate=False, reverse=False):
+    """Splits s into n-sized chunks, optionally reversing the chunks."""
+    assert n &gt; 0
+    while len(s) &gt;= n:
+        if reverse: yield s[:n][::-1]
+        else: yield s[:n]
+        s = s[n:]
+    if len(s) and not truncate:
+        yield s
+</code></pre>
+
+<p><code>reverse</code> doesn't apply to your question, but it's something I use extensively with this function.</p>
+
+<pre><code>&gt;&gt;&gt; [i for i in nslice([1,2,3,4,5,6,7], 3)]
+[[1, 2, 3], [4, 5, 6], [7]]
+&gt;&gt;&gt; [i for i in nslice([1,2,3,4,5,6,7], 3, truncate=True)]
+[[1, 2, 3], [4, 5, 6]]
+&gt;&gt;&gt; [i for i in nslice([1,2,3,4,5,6,7], 3, truncate=True, reverse=True)]
+[[3, 2, 1], [6, 5, 4]]
+</code></pre>
+<br /><b>#6</b><br /><p>Here you go.</p>
+
+<pre><code>def chunksiter(l, chunks):
+    i,j,n = 0,0,0
+    rl = []
+    while n &lt; len(l)/chunks:        
+        rl.append(l[i:j+chunks])        
+        i+=chunks
+        j+=j+chunks        
+        n+=1
+    return iter(rl)
+
+
+def chunksiter2(l, chunks):
+    i,j,n = 0,0,0
+    while n &lt; len(l)/chunks:        
+        yield l[i:j+chunks]
+        i+=chunks
+        j+=j+chunks        
+        n+=1
+</code></pre>
+
+<h1>Examples:</h1>
+
+<pre><code>for l in chunksiter([1,2,3,4,5,6,7,8],3):
+    print(l)
+
+[1, 2, 3]
+[4, 5, 6]
+[7, 8]
+
+for l in chunksiter2([1,2,3,4,5,6,7,8],3):
+    print(l)
+
+[1, 2, 3]
+[4, 5, 6]
+[7, 8]
+
+
+for l in chunksiter2([1,2,3,4,5,6,7,8],5):
+    print(l)
+
+[1, 2, 3, 4, 5]
+[6, 7, 8]
+</code></pre>
+<br />

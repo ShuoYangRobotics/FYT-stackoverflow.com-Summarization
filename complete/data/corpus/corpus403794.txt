@@ -1,0 +1,120 @@
+Question (ID-403794): Optimization in Python - do's, don'ts and rules of thumb Well I was reading this post and then I came across a code which was: 
+
+ jokes=range(1000000)
+domain=[(0,(len(jokes)*2)-i-1) for i in range(0,len(jokes)*2)]
+ 
+
+ I thought wouldn't it be better to calculate the value of len(jokes) once outside the list comprehension? 
+
+ Well I tried it and timed three codes 
+
+ jv@Pioneer:~$ python -m timeit -s 'jokes=range(1000000);domain=[(0,(len(jokes)*2)-i-1) for i in range(0,len(jokes)*2)]'
+10000000 loops, best of 3: 0.0352 usec per loop
+jv@Pioneer:~$ python -m timeit -s 'jokes=range(1000000);l=len(jokes);domain=[(0,(l*2)-i-1) for i in range(0,l*2)]'
+10000000 loops, best of 3: 0.0343 usec per loop
+jv@Pioneer:~$ python -m timeit -s 'jokes=range(1000000);l=len(jokes)*2;domain=[(0,l-i-1) for i in range(0,l)]'
+10000000 loops, best of 3: 0.0333 usec per loop
+ 
+
+ Observing the marginal difference 2.55% between the first and the second made me think - is the first list comprehension 
+
+ domain=[(0,(len(jokes)*2)-i-1) for i in range(0,len(jokes)*2)]
+ 
+
+ optimized internally by python? or is 2.55% a big enough optimization (given that the len(jokes)=1000000)? 
+
+ If this is - What are the other implicit/internal optimizations in Python ? 
+
+ What are the developer's rules of thumb for optimization in Python ? 
+
+ Edit1 : Since most of the answers are "don't optimize, do it later if its slow" and I got some tips and links from Triptych and Ali A for the do's .
+I will change the question a bit and request for don'ts . 
+
+ Can we have some experiences from people who faced the ' slowness ', what was the problem and how it was corrected? 
+
+ Edit2 : For those who haven't here is an interesting read 
+
+ Edit3: Incorrect usage of timeit in question please see dF's answer for correct usage and hence timings for the three codes. 
+ Answers (Total-8): #0 You're not using timeit correctly: the argument to -s (setup) is a statement to be executed once initially, so you're really just testing an empty statement. You want to do 
+
+ $ python -m timeit -s "jokes=range(1000000)" "domain=[(0,(len(jokes)*2)-i-1) for i in range(0, len(jokes)*2)]"
+10 loops, best of 3: 1.08 sec per loop
+$ python -m timeit -s "jokes=range(1000000)" "l=len(jokes);domain=[(0,(l*2)-i-1) for i in range(0, l*2)]"
+10 loops, best of 3: 908 msec per loop
+$ python -m timeit -s "jokes=range(1000000)" "l=len(jokes*2);domain=[(0,l-i-1) for i in range(0, l)]"
+10 loops, best of 3: 813 msec per loop
+ 
+
+ While the speedup is still not dramatic, it's more significant (16% and 25% respectively). So since it doesn't make the code any more complicated, this simple optimization is probably worth it. 
+
+ To address the actual question... the usual rule of thumb in Python is to 
+
+ 
+ Favor straightforward and readable code over optimization when coding. 
+ Profile your code ( profile / cProfile and pstats are your friends) to figure out what you need to optimize (usually things like tight loops). 
+ As a last resort, re-implement these as C extensions, which is made much easier with tools like pyrex and cython . 
+ 
+
+ One thing to watch out for: compared to many other languages, function calls are relatively expensive in Python which is why the optimization in your example made a difference even though len is O(1) for lists. 
+ #1 Read this: Python Speed / Performance Tips 
+
+ Also, in your example, the total time is so short that the margin of error will outweigh any actual difference in speed. 
+ #2 This applies to all programming, not just Python: 
+
+ 
+ Profile 
+ Identify bottlenecks 
+ Optimize 
+ 
+
+ And I would even add not to bother doing any of that unless you have a slowness issue that is causing you pain. 
+
+ And perhaps most important is that Unit tests will help you during the actual process. 
+ #3 On a tangentially related note, chaining together generators is much more efficient than chaining together list comprehensions, and often more intuitive. 
+
+ As for the developer's rules of thumb for optimization in Python, they're the same as they are in all languages. 
+
+ 
+ Don't optimize. 
+ (advanced) Optimize later. 
+ 
+ #4 len for lists is O(1). It doesn't need to scan the whole list to find the length, because the size of the list is stored for lookup. But apparently, it is still slightly faster to extract it into a local variable. 
+
+ To answer your question though, I would never care about performance variations on the order of 5%, unless I was doing some crazy tight inner loop optimizations in some simulation or something. And in that case, you could speed this up much more by not using range at all. 
+ #5 The most important thing to do is to write idiomatic, clear, and beautiful Python code. Many common tasks are already found in the stdlib, so you don't have to rewrite a slower version. (I'm thinking of string methods and itertools specifically here.) Make liberal use of Python's builtin containers, too. dict for example has had "the snot optimized" out of it, and it's said that Python code using dicts will be faster than plain C! 
+
+ If that's not already fast enough, there are some hacks you can use, but it's also signal that you probably should be offloading some work to C extension modules. 
+
+ Regarding list comprehensions: CPython is able to do a few optimizations over regular accumulator loops. Namely the LIST_APPEND opcode makes appending to a list native operation. 
+ #6 I have a program that parses log files and generates a data warehouse. A typical run involves around 200M log file lines, and runs for the better part of a day. Well worth optimizing! 
+
+ Since it's a parser, and parsing some rather variable and idiosyncratic and untrustworthy text at that, there are around 100 regular expressions, dutifully re.compiled() in advance, and applied to each of the 200M log file lines. I was pretty sure they were my bottleneck, and had been pondering how to improve that situation. Had some ideas: on the one hand, make fewer, fancier REs; on the other, more and simpler; stuff like that. 
+
+ I profiled with CProfile, and looked at the result in "runsnake". 
+
+ RE processing was only about 10% of code execution time. That's not it! 
+
+ In fact, a large square blob in the runsnake display instantly told me that about 60% of my time was spent in one of those infamous "one line changes" I'd added one day, eliminating non-printing characters (which appear occasionally, but always represent something so bogus I really don't care about it). These were confusing my parse and throwing exceptions, which I did care about because it halted my day of log file analysis. 
+
+ 
+ line = ''.join([c for c in line if curses.ascii.isprint(c) ]) 
+ 
+
+ There you go: that line touches every byte of every one of those 200M lines (and the lines average a couple hundred bytes long). No wonder it's 60% of my execution time! 
+
+ There are better ways to handle this, I now know, such as str.translate(). But such lines are rare, and I don't care about them anyway, and they end up throwing an exception: now I just catch the exception at the right spot and skip the line. Voila! the program's around 3X faster, instantly! 
+
+ So the profiling 
+
+ 
+ highlighted, in around one second, where the problem actually was 
+ drew my attention away from a mistaken assumption about where the problem was (which might be the even greater pay-off) 
+ 
+ #7 
+ Can we have some experiences from
+ people who faced the 'slowness', what
+ was the problem and how it was
+ corrected? 
+ 
+
+ The problem was slow data retrieval in a GUI app. I gained a 50x speedup by adding an index to the table, and was widely hailed as a hero and savior.

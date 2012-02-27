@@ -1,0 +1,75 @@
+Question (ID-874815): How do I get 'real-time' information back from a subprocess.Popen in python (2.5) I'd like to use the subprocess module in the following way: 
+
+ 
+ create a new process that potentially takes a long time to execute. 
+ capture stdout (or stderr, or potentially both, either together or separately) 
+ Process data from the subprocess as it comes in, perhaps firing events on every line recieved (in wxPython say) or simply printing them out for now. 
+ 
+
+ I've created processes with Popen, but if I use communicate() the data comes at me all at once, once the process has terminated. 
+
+ If I create a separate thread that does a blocking readline() of myprocess.stdout (using stdout = subprocess.PIPE) I don't get any lines with this method either, until the process terminates. (no matter what I set as bufsize) 
+
+ Is there a way to deal with this that isn't horrendous, and works well on multiple platforms? 
+ Answers (Total-8): #0 Update with code that appears not to work (on windows anyway) 
+
+ class ThreadWorker(threading.Thread):
+ def __init__(self, callable, *args, **kwargs):
+  super(ThreadWorker, self).__init__()
+  self.callable = callable
+  self.args = args
+  self.kwargs = kwargs
+  self.setDaemon(True)
+
+ def run(self):
+  try:
+   self.callable(*self.args, **self.kwargs)
+  except wx.PyDeadObjectError:
+   pass
+  except Exception, e:
+   print e
+
+
+
+if __name__ == "__main__":
+ import os
+ from subprocess import Popen, PIPE
+
+ def worker(pipe):
+  while True:
+   line = pipe.readline()
+   if line == '': break
+   else: print line
+
+ proc = Popen("python subprocess_test.py", shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+
+ stdout_worker = ThreadWorker(worker, proc.stdout)
+ stderr_worker = ThreadWorker(worker, proc.stderr)
+ stdout_worker.start()
+ stderr_worker.start()
+ while True: pass
+ 
+ #1 stdout will be buffered - so you won't get anything till that buffer is filled, or the subprocess exits. 
+
+ You can try flushing stdout from the sub-process, or using stderr, or changing stdout on non-buffered mode. 
+ #2 It sounds like the issue might be the use of buffered output by the subprocess - if a relatively small amount of output is created, it could be buffered until the subprocess exits. Some background can be found here : 
+ #3 Here's what worked for me: 
+
+ cmd = ["./tester_script.bash"]
+p = subprocess.Popen( cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE )
+while p.poll() is None:
+ out = p.stdout.readline()
+ do_something_with( out, err )
+ 
+
+ In your case you could try to pass a reference to the sub-process to your Worker Thread, and do the polling inside the thread. I don't know how it will behave when two threads poll (and interact with) the same subprocess, but it may work. 
+
+ Also note thate the while p.poll() is None: is intended as is. Do not replace it with while not p.poll() as in python 0 (the returncode for successful termination) is also considered False . 
+ #4 You might try this StackOverflow thread . If that's not it, then try this StackOverflow search . 
+ #5 I've been running into this problem as well. The problem occurs because you are trying to read stderr as well. If there are no errors, then trying to read from stderr would block. 
+
+ On Windows, there is no easy way to poll() file descriptors (only Winsock sockets). 
+
+ So a solution is not to try and read from stderr. 
+ #6 I've used the pexpect module for this, it seems to work ok. http://sourceforge.net/projects/pexpect/ 
+ #7 Using pexpect [http://www.noah.org/wiki/Pexpect] with non-blocking readlines will resolve this problem. It stems from the fact that pipes are buffered, and so your app's output is getting buffered by the pipe, therefore you can't get to that output until the buffer fills or the process dies.

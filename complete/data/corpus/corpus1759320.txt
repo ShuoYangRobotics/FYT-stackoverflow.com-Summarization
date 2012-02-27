@@ -1,0 +1,285 @@
+Question (ID-1759320): Python: Issue reading data lines multiple times from a file I am trying to make a Python2.6 script on a Win32 that will read all the text files stored in a directory and print only the lines containing actual data. A sample file - 
+
+ Set : 1 
+Date: 10212009 
+12 34 56 
+25 67 90
+End Set 
++++++++++
+Set: 2 
+Date: 10222009 
+34 56 89 
+25 67 89 
+End Set
+ 
+
+ In the above example file, I want to print only the lines 3, 4 and 9, 10 (the actual data values). The program does this iteratively on all txt files.
+I wrote the script as below and am testing it on a single txt file as I go.
+My logic is to read the input files one by one and search for a start string. As soon as the match is found, start searching for end string. when both are found, print the lines from start string to end string.Repeat on the rest of the file before opening another file.
+The problem I am having is that it successfully reads the Set 1 of data, but then screws up on subsequent sets in the file. For set 2, it identifies the no. of lines to read, but prints them starting at incorrect line number. 
+A little digging leads to following explanations -
+1. Using seek and tell to reposition the 2nd iteration of the loop, which did not work since the file is read from buffer and that screws up "tell" value.
+2. Opening the file in binary mode helped someone, but it is not working for me.
+3. Open the file with 0 buffer mode, but it did not work. 
+
+ Second problem I am having is when it prints data from Set 1, it inserts a blank line between 2 lines of data values. How can I get rid of it? 
+
+ Note: Ignore all references to next_run in the code below. I was trying it out for repositioning line read. Subsequent searches for start string should begin from the last position of end string 
+
+ #!C:/Python26 python 
+
+# Import necessary modules 
+import os, glob, string, sys, fileinput, linecache 
+from goto import goto, label 
+
+# Set working path 
+path = 'C:\\System_Data' 
+
+
+# -------------------- 
+# PARSE DATA MODULE 
+# -------------------- 
+
+# Define the search strings for data 
+start_search = "Set :" 
+end_search ="End Set" 
+# For Loop to read the input txt files one by one 
+for inputfile in glob.glob( os.path.join( path, '*.txt' ) ): 
+ inputfile_fileHandle = open ( inputfile, 'rb', 0 ) 
+ print( "Current file being read: " +inputfile ) 
+ # start_line initializes to first line 
+ start_line = 0 
+ # After first set of data is extracted, next_run will store the position to read the rest of the file 
+ # next_run = 0 
+ # start reading the input files, one line by one line 
+ for line in inputfile: 
+ line = inputfile_fileHandle.readline() 
+ start_line += 1 
+ # next_run+=1 
+ # If a line matched with the start_search string 
+ has_match = line.find( start_search ) 
+ if has_match &gt;= 0: 
+  print ( "Start String found at line number: %d" %( start_line ) ) 
+  # Store the location where the search will be restarted 
+  # next_run = inputfile_fileHandle.tell() #inputfile_fileHandle.lineno() 
+  print ("Current Position: %d" % next_run) 
+  end_line = start_line 
+  print ( "Start_Line: %d" %start_line ) 
+  print ( "End_Line: %d" %end_line ) 
+  #print(line) 
+  for line in inputfile: 
+  line = inputfile_fileHandle.readline() 
+  #print (line) 
+  end_line += 1 
+  has_match = line.find(end_search) 
+  if has_match &gt;= 0: 
+   print 'End String found at line number: %d' % (end_line) 
+   # total lines to print: 
+   k=0 
+   # for loop to print all the lines from start string to end string 
+   for j in range(0,end_line-start_line-1): 
+   print linecache.getline(inputfile, start_line +1+ j ) 
+   k+=1 
+   print ( "Number of lines Printed: %d " %k ) 
+   # Using goto to get out of 2 loops at once 
+   goto .re_search_start_string 
+ label .re_search_start_string 
+ #inputfile_fileHandle.seek(next_run,0) 
+
+ inputfile_fileHandle.close ()
+ 
+ Answers (Total-8): #0 in_data = False
+for line in open( 'data.txt' ):
+ if line.startswith( 'Date:' ):
+  in_data = True
+ elif line.startswith( 'End Set' ):
+  in_data = False
+ elif in_data:
+  print line.rstrip()
+ 
+
+ Just put something like that inside a loop over your files (i.e. os.walk) and you should be good to go 
+ #1 I'd probably do something much simpler, like this: 
+
+ import glob, os
+
+start_search = "Set :" 
+end_search = "End Set" 
+path = '.'
+
+for filename in glob.glob(os.path.join(path, '*.txt')): 
+ inputfile = open(filename, 'rb', 0)
+ print("Current file being read: " + filename)
+ is_in_set = False
+ while True:
+ line = inputfile.readline()
+ if not line: break
+ if line.startswith(start_search):
+ is_in_set = True
+ inputfile.readline() # Discard the next line.
+ elif line.startswith(end_search):
+ is_in_set = False
+ print('---')
+ elif is_in_set:
+ print(line.rstrip()) # The rstrip removes the extra blank lines.
+ 
+
+ If you also want the line numbers, wrap the file object so that every time you call readline() it counts the line numbers. 
+ #2 Follow the presentation slides from David M. Beazley at (if you are certain you want to skip the intro, start at page 18):
+ http://www.dabeaz.com/generators/ 
+
+ That is undisputably (in my opinion :) the very best way to solve what you are trying to achieve. 
+
+ Basically, the thing you want is generators , and os.walk. A snip from Beazleys code: 
+
+ import os
+import fnmatch
+import re
+import gzip, bz2
+
+def gen_find(filepat,top):
+ for path, dirlist, filelist in os.walk(top):
+  for name in fnmatch.filter(filelist,filepat):
+   yield os.path.join(path,name)
+
+def gen_open(filenames):
+ for name in filenames:
+  if name.endswith(".gz"):
+   yield gzip.open(name)
+  elif name.endswith(".bz2"):
+   yield bz2.BZ2File(name)
+  else:
+   yield open(name)
+
+def gen_cat(sources):
+ for s in sources:
+  for item in s:
+   yield item
+
+def gen_grep(pat, lines):
+ patc = re.compile(pat)
+  for line in lines:
+   if patc.search(line): yield line
+
+lognames = gen_find("access-log*", "/usr/www")
+logfiles = gen_open(lognames)
+loglines = gen_cat(logfiles)
+patlines = gen_grep(pat, loglines)
+# in your example you could set pat as "^[\d ]+$"
+ 
+ #3 You have many issues here. 
+
+ for line in inputfile: 
+ line = inputfile_fileHandle.readline()
+ 
+
+ inputfile is the name of your file, so this loop is going to be executed once for each character in the name of the file, definitely not what you want. You do this twice (nested), so for sure too many lines are being read. 
+
+ The goto module was a joke. Get rid of it. 
+
+ When you open the file, don't add 'b' to the mode. These are text files, open them as text, not binary. 
+ #4 The first thing I'd do is build a generator that uses a simple state machine to extract the data from a sequence: 
+
+ def extract_data(seq):
+ state = "Waiting"
+ for item in seq:
+  if state == "Waiting":
+   if item.startswith("Set"):
+    state = "SkippingDateLine"
+    continue
+   if state == "SkippingDateLine":
+    state = "EmittingData"
+    continue
+   if state == "EmittingData":
+    if item.startswith("End Set"):
+     state = "Waiting"
+     continue
+    yield item.rstrip()
+ 
+
+ Now I can test that generator to see if it really does what I think it's doing: 
+
+ &gt;&gt;&gt; data = """Set : 1 
+Date: 10212009 
+12 34 56 
+25 67 90
+End Set 
++++++++++
+Set: 2 
+Date: 10222009 
+34 56 89 
+25 67 89 
+End Set""".split("\n")
+
+&gt;&gt;&gt; print list(extract_data(data))
+['12 34 56', '25 67 90', '34 56 89', '25 67 89']
+ 
+
+ From here it's simple to make a generator that yields the data from a file given its name: 
+
+ def extract_data_from_file(filename):
+ with open(filename, 'rb') as f:
+  for item in extract_data(f):
+   yield item
+ 
+
+ ...and to test it: 
+
+ &gt;&gt;&gt; list(extract_data_from_file(r'c:\temp\test\test1.txt'))
+['12 34 56', '25 67 90', '34 56 89', '25 67 89']
+ 
+
+ Now build a generator that goes through all the text files in a directory: 
+
+ def extract_data_from_directory(path):
+ for filename in os.listdir(path):
+  if filename.endswith('.txt'):
+   fullname = os.path.join(path, filename)
+    for item in extract_data_from_file(fullname):
+    yield item
+ 
+
+ ...and then, after making a copy of test1.txt , test it: 
+
+ &gt;&gt;&gt; list(extract_data_from_directory(r'c:\temp\test'))
+['12 34 56', '25 67 90', '34 56 89', '25 67 89', '12 34 56', '25 67 90', '34 56 89', '25 67 89']
+ 
+ #5 I'd probably do something even easier: 
+
+ grep -E '[0-9][0-9] [0-9][0-9] [0-9][0-9]' *.txt
+ 
+
+ grep is available on Win32 
+ #6 Several errors: 
+
+ for line in inputfile:
+ 
+
+ inputfile is your filename. So the for loop will iterate over each character of the filename. 
+
+ You need to do 
+
+ for line in inputfile_fileHandle:
+ 
+
+ Then, line already contains your current line. Also, you probably don't need to open the file using 'rb' since it's a text file. 
+
+ Then you nest an identical for loop inside the first loop (which is currently also completely wrong, iterating over the filename once again). 
+
+ Not to mention the goto/label nonsense :) 
+
+ kurosch has written a good version. 
+ #7 f=0
+for line in open("file"): 
+ if "End Set" in line: f=0
+ if "Date" in line: f=1
+ elif f: print line.strip()
+ 
+
+ output 
+
+ $ ./python.py
+12 34 56
+25 67 90
+34 56 89
+25 67 89

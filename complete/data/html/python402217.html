@@ -1,0 +1,82 @@
+<h3>Question (ID-402217):</h3><h2>How to store a dictionary on a Django Model?</h2><p>I need to store some data on a Django model. These data are not equal to all instances of the model.</p>
+
+<p>At first I thought on subclassing the model, but I'm trying to keep the application flexible; if I use subclasses, I'll need to create a whole class each time i need a new kind of object, and that's no good. I'll also end up with a lot of subclasses only to store a pair of extra fields.</p>
+
+<p>I really feel that a dictionary would be the best approach, but there's nothing on the Djando documentation (or I can't find it).</p>
+
+<p>Any clues?</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>If it's really dictionary like arbitrary data you're looking for you can probably use a two-level setup with one model that's a container and another model that's key-value pairs. You'd create an instance of the container, create each of the key-value instances, and associate the set of key-value instances with the container instance. Something like:</p>
+
+<pre><code>class Dicty(models.Model):
+    name      = models.CharField(max_length=50)
+
+class KeyVal(models.Model):
+    container = models.ForeignKey(Dicty, db_index=True)
+    key       = models.CharField(max_length=240, db_index=True)
+    value     = models.CharField(max_length=240, db_index=True)
+</code></pre>
+
+<p>It's not pretty, but it'll let you access/search the innards of the dictionary using the DB whereas a pickle/serialize solution will not.</p>
+<br /><b>#1</b><br /><p>As Ned answered, you won't be able to query "some data" if you use the dictionary approach.</p>
+
+<p>If you still need to store dictionaries then the best approach, by far, is the PickleField class documented in Marty Alchin's new book <strong>Pro Django</strong>.  This method uses Python class properties to pickle/unpickle a python object, only on demand, that is stored in a model field.</p>
+
+<p>The basics of this approach is to use django's <a href="http://code.djangoproject.com/browser/django/trunk/django/db/models/fields/__init__.py" rel="nofollow"><code>contibute_to_class</code></a> method to dynamically add a new field to your model and uses getattr/setattr to do the serializing on demand.</p>
+
+<p>One of the few online examples I could find that is similar is this definition of a <a href="http://svn.navi.cx/misc/trunk/djblets/djblets/util/fields.py" rel="nofollow">JSONField</a>.</p>
+<br /><b>#2</b><br /><p>I'm not sure exactly sure of the nature of the problem you're trying to solve, but it sounds curiously similar to <a href="http://code.google.com/appengine/docs/datastore/expandoclass.html" rel="nofollow">Google App Engine's BigTable Expando</a>.</p>
+
+<p>Expandos allow you to specify and store additional fields on an database-backed object instance at runtime. To quote from the docs:</p>
+
+<pre><code>import datetime
+from google.appengine.ext import db
+
+class Song(db.Expando):
+  title = db.StringProperty()
+
+crazy = Song(title='Crazy like a diamond',
+             author='Lucy Sky',
+             publish_date='yesterday',
+             rating=5.0)
+
+crazy.last_minute_note=db.Text('Get a train to the station.')
+</code></pre>
+
+<p>Google App Engine currently supports both Python and the Django framework. Might be worth looking into if this is the best way to express your models.</p>
+
+<p>Traditional relational database models don't have this kind of column-addition flexibility. If your datatypes are simple enough you could break from traditional RDBMS philosophy and hack values into a single column via serialization as <a href="http://stackoverflow.com/questions/402217/how-to-store-a-dictionary-on-a-django-model#402248">@Ned Batchelder</a> proposes; however, if you <em>have</em> to use an RDBMS, Django model inheritance is probably the way to go. Notably, it will create <a href="http://docs.djangoproject.com/en/dev/ref/models/fields/#django.db.models.OneToOneField" rel="nofollow">a one-to-one foreign key</a> relation for each level of derivation.</p>
+<br /><b>#3</b><br /><p>Think it over, and find the commonalities of each data set... then define your model.  It may require the use of subclasses or not.  Foreign keys representing commonalities aren't to be avoided, but encouraged when they make sense.</p>
+
+<p>Stuffing random data into a SQL table is not smart, unless it's truly non-relational data.  If that's the case, define your problem and we may be able to help.</p>
+<br /><b>#4</b><br /><p>Django-Geo includes a "DictionaryField" you might find helpful:</p>
+
+<p><a href="http://code.google.com/p/django-geo/source/browse/trunk/fields.py?r=13#49" rel="nofollow">http://code.google.com/p/django-geo/source/browse/trunk/fields.py?r=13#49</a></p>
+
+<p>In general, if you don't need to query across the data use a denormalized approach to avoid extra queries. User settings are a pretty good example!</p>
+<br /><b>#5</b><br /><p>If you don't need to query by any of this extra data, then you can store it as a serialized dictionary.   Use <code>repr</code> to turn the dictionary into a string, and <code>eval</code> to turn the string back into a dictionary.  Take care with eval that there's no user data in the dictionary, or use a safe_eval implementation.</p>
+<br /><b>#6</b><br /><p>Beeing "not equal to all instances of the model" sounds to me like a good match for a "Schema-free database". <a href="http://couchdb.apache.org/" rel="nofollow">CouchDB</a> is the poster child for that approach and you might consider that. </p>
+
+<p>In a project I moved several tables which never played very nice with the Django ORM over to CouchDB and I'm quite happy with that. I use <a href="http://code.google.com/p/couchdb-python/" rel="nofollow">couchdb-python</a> without any of the Django-specific CouchDB modules. A description of the data model can be found <a href="http://blogs.23.nu/c0re/2008/12/building-a-track-and-trace-application-with-couchdb/" rel="nofollow">here</a>. The movement from five "models" in Django to 3 "models" in Django and one CouchDB "database" actually slightly reduced the total lines of code in my application.</p>
+<br /><b>#7</b><br /><p>I agree that you need to refrain stuffing otherwise structured data into a single column. But if you must do that, Django has an <a href="http://docs.djangoproject.com/en/dev/ref/models/fields/#xmlfield" rel="nofollow">XMLField</a> build-in.</p>
+
+<p>There's also <a href="http://www.djangosnippets.org/snippets/377/" rel="nofollow">JSONField</a> at Django snipplets.</p>
+<br /><b>#8</b><br /><p>I came to this post by google's 4rth result to "django store object"</p>
+
+<p>A little bit late, but <a href="http://pypi.python.org/pypi/django-picklefield" rel="nofollow">django-picklefield</a> looks like good solution to me.</p>
+
+<p>Example from doc:</p>
+
+<p>To use, just define a field in your model:</p>
+
+<pre><code>&gt;&gt;&gt; from picklefield.fields import PickledObjectField
+&gt;&gt;&gt; class SomeObject(models.Model):
+&gt;&gt;&gt;     args = PickledObjectField()
+</code></pre>
+
+<p>and assign whatever you like (as long as it's picklable) to the field:</p>
+
+<pre><code>&gt;&gt;&gt; obj = SomeObject()
+&gt;&gt;&gt; obj.args = ['fancy', {'objects': 'inside'}]
+&gt;&gt;&gt; obj.save()
+</code></pre>
+<br />

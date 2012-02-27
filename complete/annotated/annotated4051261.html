@@ -1,0 +1,182 @@
+<h3>Question ( ID-4051261 ) : </h3><h2>Handle a blocking <span style="background-color:yellow;">function</span> call in Python </h2><p>I 'm <span style="background-color:yellow;">working</span> <span style="background-color:yellow;">with</span> the Gnuradio <span style="background-color:yellow;">framework</span> . I handle <span style="background-color:yellow;">flowgraphs</span> I generate to send/receive <span style="background-color:yellow;">signals.</span> These <span style="background-color:yellow;">flowgraphs</span> initialize and start , but they do n't <span style="background-color:yellow;">return</span> the control <span style="background-color:yellow;">flow</span> to my application : </p>
+<p>I imported <span style="background-color:yellow;">time</span> </p>
+<pre><code>while time.time() < endtime:
+        # invoke GRC flowgraph for 1st sequence
+        if not seq1_sent:
+            tb = send_seq_2.top_block()
+            tb.Run(True)
+            seq1_sent = True
+            if time.time() < endtime:
+                break
+
+        # invoke GRC flowgraph for 2nd sequence
+        if not seq2_sent:
+            tb = send_seq_2.top_block()
+            tb.Run(True)
+            seq2_sent = True
+            if time.time() < endtime:
+                break
+</code></pre>
+<p>The problem is : only the <span style="background-color:yellow;">first</span> if statement invokes the <span style="background-color:yellow;">flow-graph</span> ( that interacts <span style="background-color:yellow;">with</span> the hardware ) . I 'm stuck in this. I could use a Thread , but I 'm unexperienced how to <span style="background-color:yellow;">timeout</span> threads in Python. I doubt that this is possible , because it seems killing threads is n't <span style="background-color:yellow;">within</span> the APIs. This script only has to <span style="background-color:yellow;">work</span> on Linux.. . </p>
+<p>How do you handle blocking <span style="background-color:yellow;">functions</span> <span style="background-color:yellow;">with</span> Python properly - <span style="background-color:yellow;">without</span> killing the <span style="background-color:yellow;">whole</span> program . Another more concrete <span style="background-color:yellow;">example</span> <span style="background-color:yellow;">for</span> this problem is : </p>
+<pre><code>import signal, os
+
+def handler(signum, frame):
+        # print 'Signal handler called with signal', signum
+        #raise IOError("Couldn't open device!")
+        import time
+        print "wait"
+        time.sleep(3)
+
+
+def foo():
+    # Set the signal handler and a 5-second alarm
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(3)
+
+    # This open() may hang indefinitely
+    fd = os.open('/dev/ttys0', os.O_RDWR)
+    signal.alarm(0)          # Disable the alarm
+
+
+foo()
+print "hallo"
+</code></pre>
+<p>How do I still get print " hallo " . ; ) </p>
+<p>Thanks , Marius </p>
+<br /><h3>Answers ( Total-8 ) : </h3><b># <span style="background-color:yellow;">0</span> </b><br /><p>IIUC , <span style="background-color:yellow;">each</span> top_block has a stop method. So you actually can <span style="background-color:yellow;">run</span> the top_block in a thread , and issue a stop if the <span style="background-color:yellow;">timeout</span> has arrived. It <span style="background-color:yellow;">would</span> be better if the top_block 's <span style="background-color:yellow;">wait</span> ( ) also had a <span style="background-color:yellow;">timeout</span> , but alas , it does n't . </p>
+<p>In the main thread , you then need to <span style="background-color:yellow;">wait</span> <span style="background-color:yellow;">for</span> two cases : a ) the top_block completes , and b ) the <span style="background-color:yellow;">timeout</span> <span style="background-color:yellow;">expires.</span> Busy-waits are <span style="background-color:yellow;">evil</span> : - ) , so you should use the thread 's <span style="background-color:yellow;">join-with-timeout</span> to <span style="background-color:yellow;">wait</span> <span style="background-color:yellow;">for</span> the thread. If the thread is still alive after the <span style="background-color:yellow;">join</span> , you need to stop the top_run . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>You can set a <span style="background-color:yellow;">signal</span> <span style="background-color:yellow;">alarm</span> that <span style="background-color:yellow;">will</span> interrupt your call <span style="background-color:yellow;">with</span> a <span style="background-color:yellow;">timeout</span> : </p>
+<p>http : //docs.python.org/library/signal.html </p>
+<pre><code>signal.alarm(1) # 1 second
+
+my_blocking_call()
+signal.alarm(0)
+</code></pre>
+<p>You can also set a <span style="background-color:yellow;">signal</span> <span style="background-color:yellow;">handler</span> if you <span style="background-color:yellow;">want</span> to make sure it <span style="background-color:yellow;">wo</span> n't destroy your application : </p>
+<pre><code>def my_handler(signum, frame):
+    pass
+
+signal.signal(signal.SIGALRM, my_handler)
+</code></pre>
+<p>EDIT : What 's <span style="background-color:yellow;">wrong</span> <span style="background-color:yellow;">with</span> this piece of code ? This should not abort your application : </p>
+<pre><code>import signal, time
+
+def handler(signum, frame):
+    print "Timed-out"
+
+def foo():
+    # Set the signal handler and a 5-second alarm
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(3)
+
+    # This open() may hang indefinitely
+    time.sleep(5)
+    signal.alarm(0)          # Disable the alarm
+
+
+foo()
+print "hallo"
+</code></pre>
+<p>The thing is : </p>
+<ol>The default <span style="background-color:yellow;">handler</span> <span style="background-color:yellow;">for</span> SIGALRM is to abort the application , if you set your <span style="background-color:yellow;">handler</span> then it should no longer stop the application . Receiving a <span style="background-color:yellow;">signal</span> usually interrupts <span style="background-color:yellow;">system</span> calls ( then unblocks your application ) </ol>
+<br /><b># 2 </b><br /><p>First of all - the use of <span style="background-color:yellow;">signals</span> should be avoided at all cost : </p>
+<p><span style="background-color:yellow;">1</span> ) It may lead to a deadlock. SIGALRM may <span style="background-color:yellow;">reach</span> the process BEFORE the blocking <span style="background-color:yellow;">syscall</span> ( imagine super-high load in the <span style="background-color:yellow;">system</span> ! ) and the <span style="background-color:yellow;">syscall</span> <span style="background-color:yellow;">will</span> not be interrupted. Deadlock . </p>
+<p>2 ) Playing <span style="background-color:yellow;">with</span> <span style="background-color:yellow;">signals</span> may have some nasty non-local consequences. For <span style="background-color:yellow;">example</span> , <span style="background-color:yellow;">syscalls</span> in other threads may be interrupted <span style="background-color:yellow;">which</span> usually is not <span style="background-color:yellow;">what</span> you <span style="background-color:yellow;">want.</span> Normally <span style="background-color:yellow;">syscalls</span> are <span style="background-color:yellow;">restarted</span> <span style="background-color:yellow;">when</span> ( not a deadly ) <span style="background-color:yellow;">signal</span> is <span style="background-color:yellow;">received.</span> When you set up a <span style="background-color:yellow;">signal</span> <span style="background-color:yellow;">handler</span> it automatically turns off this behavior <span style="background-color:yellow;">for</span> the <span style="background-color:yellow;">whole</span> process , or thread group so to say. Check 'man siginterrupt ' on that . </p>
+<p>Believe me - I met two problems before and they are not <span style="background-color:yellow;">fun</span> at all . </p>
+<p>In some cases the blocking can be avoided <span style="background-color:yellow;">explicitely</span> - I strongly <span style="background-color:yellow;">recommend</span> using <span style="background-color:yellow;">select</span> ( ) and <span style="background-color:yellow;">friends</span> ( check <span style="background-color:yellow;">select</span> module in Python ) to handle blocking <span style="background-color:yellow;">writes</span> and <span style="background-color:yellow;">reads.</span> This <span style="background-color:yellow;">will</span> not solve blocking open ( ) call , though . </p>
+<p>For that I 've tested this solution and it <span style="background-color:yellow;">works</span> <span style="background-color:yellow;">well</span> <span style="background-color:yellow;">for</span> named pipes. It opens in a non-blocking <span style="background-color:yellow;">way</span> , then turns it off and uses <span style="background-color:yellow;">select</span> ( ) call to <span style="background-color:yellow;">eventually</span> <span style="background-color:yellow;">timeout</span> if nothing is available . </p>
+<pre><code>import sys, os, select, fcntl
+
+f = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK)
+
+flags = fcntl.fcntl(f, fcntl.F_GETFL, 0)
+fcntl.fcntl(f, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+
+r, w, e = select.select([f], [], [], 2.0)
+
+if r == [f]:
+    print 'ready'
+    print os.read(f, 100)
+else:
+    print 'unready'
+
+os.close(f)
+</code></pre>
+<p>Test this <span style="background-color:yellow;">with</span> : </p>
+<pre><code>mkfifo /tmp/fifo
+python <code_above.py> /tmp/fifo (1st terminal)
+echo abcd > /tmp/fifo (2nd terminal)
+</code></pre>
+<p>With some additional <span style="background-color:yellow;">effort</span> <span style="background-color:yellow;">select</span> ( ) call can be used as a main loop of the <span style="background-color:yellow;">whole</span> program , aggregating all <span style="background-color:yellow;">events</span> - you can use libev or libevent , or some Python <span style="background-color:yellow;">wrappers</span> around them . </p>
+<p>When you ca n't <span style="background-color:yellow;">explicitely</span> <span style="background-color:yellow;">force</span> non-blocking behavior , say you just use an <span style="background-color:yellow;">external</span> library , then it 's going to be much harder. Threads may do , but obviously it is not a state-of-the-art solution , usually being just <span style="background-color:yellow;">wrong</span> . </p>
+<p>I 'm afraid that in general you ca n't solve this in a <span style="background-color:yellow;">robust</span> <span style="background-color:yellow;">way</span> - it <span style="background-color:yellow;">really</span> depends on WHAT you block . </p>
+<br /><b># <span style="background-color:yellow;">3</span> </b><br /><p>you could try using Deferred <span style="background-color:yellow;">execution...</span> Twisted <span style="background-color:yellow;">framework</span> uses them alot </p>
+<p>http : //www6.uniovi.es/python/pycon/papers/deferex/ </p>
+<br /><b># 4 </b><br /><p>You mention killing threads in Python - this is partialy possible although you can kill/interrupt another thread only <span style="background-color:yellow;">when</span> Python code <span style="background-color:yellow;">runs</span> , not in C code , so this may not help you as you <span style="background-color:yellow;">want</span> . </p>
+<p>see this answer to another question : http : //stackoverflow.com/questions/605013/python-how-to-send-packets-in-multi-thread-and-then-the-thread-kill-itself/605865 # 605865 </p>
+<p>or google <span style="background-color:yellow;">for</span> killable python threads <span style="background-color:yellow;">for</span> more details like this : http : //code.activestate.com/recipes/496960-thread2-killable-threads/ </p>
+<br /><b># <span style="background-color:yellow;">5</span> </b><br /><pre><code>if not seq1_sent:
+        tb = send_seq_2.top_block()
+        tb.Run(True)
+        seq1_sent = True
+        if time.time() < endtime:
+            break
+</code></pre>
+<p>If the 'if <span style="background-color:yellow;">time.time</span> ( ) &lt ; <span style="background-color:yellow;">endtime</span> : ' then you <span style="background-color:yellow;">will</span> break out of the loop and the seq2_sent stuff <span style="background-color:yellow;">will</span> never be hit , maybe you mean 'time.time ( ) &gt ; <span style="background-color:yellow;">endtime</span> ' in that test ? </p>
+<br /><b># 6 </b><br /><p>The <span style="background-color:yellow;">easy</span> part of your question <span style="background-color:yellow;">related</span> to the <span style="background-color:yellow;">signal</span> handling. From the perspective of the Python <span style="background-color:yellow;">runtime</span> a <span style="background-color:yellow;">signal</span> <span style="background-color:yellow;">which</span> has been <span style="background-color:yellow;">received</span> <span style="background-color:yellow;">while</span> the interpreter <span style="background-color:yellow;">was</span> making a <span style="background-color:yellow;">system</span> call is presented to your Python code as an OSError <span style="background-color:yellow;">exception</span> <span style="background-color:yellow;">with</span> an <span style="background-color:yellow;">errno</span> attributed corresponding to <span style="background-color:yellow;">errno.EINTR</span> </p>
+<p>So this probably <span style="background-color:yellow;">works</span> <span style="background-color:yellow;">roughly</span> as you intended : </p>
+<pre><code>    #!/usr/bin/env python
+    import signal, os, errno, time
+
+    def handler(signum, frame):
+            # print 'Signal handler called with signal', signum
+            #raise IOError("Couldn't open device!")
+            print "timed out"
+            time.sleep(3)
+
+
+    def foo():
+        # Set the signal handler and a 5-second alarm
+        signal.signal(signal.SIGALRM, handler)
+
+        try:
+            signal.alarm(3)
+            # This open() may hang indefinitely
+            fd = os.open('/dev/ttys0', os.O_RDWR)
+        except OSError, e:
+            if e.errno != errno.EINTR:
+                raise e
+        signal.alarm(0)          # Disable the alarm
+
+    foo()
+    print "hallo"
+</code></pre>
+<p>Note I 've moved the import of <span style="background-color:yellow;">time</span> out of the <span style="background-color:yellow;">function</span> definition as it seems to be poor <span style="background-color:yellow;">form</span> to hide imports in that <span style="background-color:yellow;">way.</span> It 's not at all clear to me <span style="background-color:yellow;">why</span> you 're sleeping in your <span style="background-color:yellow;">signal</span> <span style="background-color:yellow;">handler</span> and , in <span style="background-color:yellow;">fact</span> , it seems like a <span style="background-color:yellow;">rather</span> bad idea . </p>
+<p>The key point I 'm trying to make is that any ( non-ignored ) <span style="background-color:yellow;">signal</span> <span style="background-color:yellow;">will</span> interrupt your main line of Python code <span style="background-color:yellow;">execution.</span> Your <span style="background-color:yellow;">handler</span> <span style="background-color:yellow;">will</span> be invoked <span style="background-color:yellow;">with</span> arguments indicating <span style="background-color:yellow;">which</span> <span style="background-color:yellow;">signal</span> number triggered the <span style="background-color:yellow;">execution</span> ( allowing <span style="background-color:yellow;">for</span> one Python <span style="background-color:yellow;">function</span> to be used <span style="background-color:yellow;">for</span> handling many different <span style="background-color:yellow;">signals</span> ) and a <span style="background-color:yellow;">frame</span> object ( <span style="background-color:yellow;">which</span> could be used <span style="background-color:yellow;">for</span> debugging or instrumentation of some sort ) . </p>
+<p>Because the main <span style="background-color:yellow;">flow</span> through the code is interrupted it 's necessary <span style="background-color:yellow;">for</span> you to <span style="background-color:yellow;">wrap</span> that code in your <span style="background-color:yellow;">exception</span> handling in order to <span style="background-color:yellow;">regain</span> control after such <span style="background-color:yellow;">events</span> have occurred. ( Incidentally if you 're <span style="background-color:yellow;">writing</span> code in C you 'd have the same concern ; you have to be prepared <span style="background-color:yellow;">for</span> any of your library <span style="background-color:yellow;">functions</span> <span style="background-color:yellow;">with</span> underlying <span style="background-color:yellow;">system</span> calls to <span style="background-color:yellow;">return</span> <span style="background-color:yellow;">errors</span> and handle EINTR in the <span style="background-color:yellow;">system</span> <span style="background-color:yellow;">errno</span> by looping back to <span style="background-color:yellow;">retry</span> or branching to some alternative in your main line ( such as proceeding to some other <span style="background-color:yellow;">file</span> , or <span style="background-color:yellow;">without</span> any <span style="background-color:yellow;">file/input</span> , <span style="background-color:yellow;">etc</span> ) . </p>
+<p>As others have indicated in their <span style="background-color:yellow;">responses</span> to your question , basing your approach in SIGALARM is likely to be <span style="background-color:yellow;">fraught</span> <span style="background-color:yellow;">with</span> portability and <span style="background-color:yellow;">reliability</span> issues. Worse , some of these issues may be <span style="background-color:yellow;">race</span> conditions that you 'll never <span style="background-color:yellow;">encounter</span> in your testing <span style="background-color:yellow;">environment</span> and may only occur under conditions that are <span style="background-color:yellow;">extremely</span> hard to <span style="background-color:yellow;">reproduce.</span> The ugly details tend to be in cases of <span style="background-color:yellow;">re-entrancy</span> --- <span style="background-color:yellow;">what</span> happens if <span style="background-color:yellow;">signals</span> are dispatched during <span style="background-color:yellow;">execution</span> of your <span style="background-color:yellow;">signal</span> <span style="background-color:yellow;">handler</span> ? </p>
+<p>I 've used SIGALARM in some scripts and it has n't been an issue <span style="background-color:yellow;">for</span> me , under Linux. The code I <span style="background-color:yellow;">was</span> <span style="background-color:yellow;">working</span> on <span style="background-color:yellow;">was</span> suitable to the task. It might be adequate <span style="background-color:yellow;">for</span> your needs . </p>
+<p>Your primary question is difficult to answer <span style="background-color:yellow;">without</span> knowing more about how this Gnuradio code behaves , <span style="background-color:yellow;">what</span> sorts of objects you instantiate <span style="background-color:yellow;">from</span> it , and <span style="background-color:yellow;">what</span> sorts of objects they <span style="background-color:yellow;">return</span> . </p>
+<p>Glancing at the docs to <span style="background-color:yellow;">which</span> you 've linked , I see that they do n't seem to offer any sort of " <span style="background-color:yellow;">timeout</span> " argument or setting that could be used to limit blocking behavior directly. In the table under " Controlling Flow Graphs " I see that they specifically say that .run ( ) can <span style="background-color:yellow;">execute</span> indefinitely or until SIGINT is <span style="background-color:yellow;">received.</span> I also note that .start ( ) can start threads in your application and , it seems , <span style="background-color:yellow;">returns</span> control to your Python code line <span style="background-color:yellow;">while</span> those are <span style="background-color:yellow;">running.</span> ( That seems to depend on the nature of your <span style="background-color:yellow;">flow</span> graphs , <span style="background-color:yellow;">which</span> I do n't understand sufficiently ) . </p>
+<p>It sounds like you could create your <span style="background-color:yellow;">flow</span> graphs , .start ( ) them , and then ( after some <span style="background-color:yellow;">time</span> processing or sleeping in your main line of Python code ) call the .lock ( ) method on your controlling object ( tb ? ) . This , I 'm guessing , puts the Python <span style="background-color:yellow;">representation</span> of the state ... the Python object ... into a quiescent mode to allow you to query the state or , as they say , <span style="background-color:yellow;">reconfigure</span> your <span style="background-color:yellow;">flow</span> graph. If you call .run ( ) it <span style="background-color:yellow;">will</span> call .wait ( ) after it calls .start ( ) ; and .wait ( ) <span style="background-color:yellow;">will</span> apparently <span style="background-color:yellow;">run</span> until <span style="background-color:yellow;">either</span> all blocks " indicate they are done " or until you call the object 's .stop ( ) method . </p>
+<p>So it sounds like you <span style="background-color:yellow;">want</span> to use .start ( ) and neither .run ( ) nor .wait ( ) ; then call .stop ( ) after doing any other processing ( including <span style="background-color:yellow;">time.sleep</span> ( ) ) . </p>
+<p>Perhaps something as simple as : </p>
+<pre><code>    tb = send_seq_2.top_block()
+    tb.start()
+    time.sleep(endtime - time.time())
+    tb.stop()
+    seq1_sent = True
+    tb = send_seq_2.top_block()
+    tb.start()
+    seq2_sent = True
+</code></pre>
+<p>.. though I 'm suspicious of my <span style="background-color:yellow;">time.sleep</span> ( ) there. Perhaps you <span style="background-color:yellow;">want</span> to do something <span style="background-color:yellow;">else</span> <span style="background-color:yellow;">where</span> you query the tb object 's state ( perhaps <span style="background-color:yellow;">entailing</span> sleeping <span style="background-color:yellow;">for</span> smaller intervals , calling its .lock ( ) method , and accessing attributes that I know nothing about and then calling its .unlock ( ) before sleeping again . </p>
+<br /><b># 7 </b><br /><p>If you <span style="background-color:yellow;">want</span> to set a <span style="background-color:yellow;">timeout</span> on a blocking <span style="background-color:yellow;">function</span> , <span style="background-color:yellow;">threading.Thread</span> as the method <span style="background-color:yellow;">join</span> ( <span style="background-color:yellow;">timeout</span> ) <span style="background-color:yellow;">which</span> blocks until the <span style="background-color:yellow;">timeout</span> . </p>
+<p>Basically , something like that should do <span style="background-color:yellow;">what</span> you <span style="background-color:yellow;">want</span> : </p>
+<pre><code>import threading
+my_thread = threading.Thread(target=send_seq_2.top_block)
+my_thread.start()
+my_thread.join(TIMEOUT)
+</code></pre>
+<br />

@@ -1,0 +1,83 @@
+Question (ID-639792): Setting object owner with generic create_object view in django Is it possible to use create_object view to create a new object and automatically asign request.user as foreign key? 
+
+ P.E: 
+
+ class Post(models.Model):
+ text = models.TextField()
+ author = models.ForeignKey(User)
+ 
+
+ What I want is to use create_object and fill author with request.user. 
+ Answers (Total-6): #0 You may want to consider a closure. 
+
+ from django.forms import ModelForm
+from django.views.generic.create_update import create_object, update_object
+
+def make_foo_form(request):
+ class FooForm(ModelForm):
+  class Meta:
+   model = Foo
+   fields = ['foo', 'bar']
+
+  def save(self, commit=True):
+   f = super(FooForm, self).save(commit=False)
+   if not f.pk: f.user = request.user
+   if commit: f.save()
+   return f
+
+ return FooForm
+
+def create_foo(request):
+ FooForm = make_foo_form(request)
+ return create_object(form_class=FooForm)
+ 
+
+ There is some inefficiency here, since you need to create the ModelForm object on each request, but it does allow you to inject functionality into the generic view. 
+
+ You need to decide whether the added complexity for the form creation is worth maintaining simplicity on the view side. 
+
+ A benefit here, though, is that this also works with the update case with practically no extra effort: 
+
+ def update_foo(request, object_id):
+ FooForm = make_foo_form(request)
+ return update_object(form_class=FooForm, object_id=object_id)
+ 
+
+ Obviously, you can use this approach for more complex cases as well. 
+ #1 In many ways, all the solutions to this will be more trouble than they are worth. This one qualifies as a hack. It is possible for a django update to leave you high and dry if they change the way create_update is implemented. For simplicity sake, I'll assume that you are trying to set a default user, not silently force the user to be the logged in user. 
+
+ Write a context processor: 
+
+ from django.views.generic.create_update import get_model_and_form_class
+def form_user_default(request):
+ if request.method == 'GET':
+  model, custom_form = get_model_and_form_class(Post,None)
+  custom_form.author = request.user
+  return {'form':custom_form}
+ else: return {}
+ 
+
+ What this will do is override the form object that create_update passes to the template. What it's technically doing is re-creating the form after the default view has done it. 
+
+ Then in your url conf: 
+
+ url(r'pattern_to_match', 'django.views.generic.create_update.create_object', kwargs={'context_processors':form_user_default})
+ 
+
+ Again, I had to delve into the source code to figure out how to do this. It might really be best to try writing your own view (but incorporate as many Django custom objects as possible). There's no "simple default" way to do this, because in the django paradigm forms are more closely tied to the model layer than to views, and only views have knowledge of the request object. 
+ #2 If a user is authenticated, their user object is the request.user object. 
+
+ I'm not familiar with create_object... I'm still a beginner to django and have only just started my first real project with it. 
+
+ Note that you should check to make sure a user is logged in before using this. This can be done with request.user.is_authenticated() . 
+ #3 There is no good way to hook into the saving of an object when using the current Django generic views. Once they are rewritten as classes , you'll be able to subclass the view and hook in at the proper place without having to rewrite the whole view. 
+
+ I already use my own class-based generic views for this reason. 
+ #4 I would suggest to make a wrapper for the create_object, as this author suggest
+ http://www.b-list.org/weblog/2006/nov/16/django-tips-get-most-out-generic-views/ 
+in the view you'll have access to the user info.
+Afterwards, you will need to use the extra_context to pass the user to the template. Finally at the template you can add a hidden field with the user info. I haven't tried it, but I have been thinking of it for quite some time. Hope this solution suits you!
+;) cheers! 
+ #5 I have exact the same requirement, this snippets solved this problem nicely: 
+
+ http://www.djangosnippets.org/snippets/99/

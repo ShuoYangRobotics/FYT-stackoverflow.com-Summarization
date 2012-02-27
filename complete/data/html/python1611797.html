@@ -1,0 +1,126 @@
+<h3>Question (ID-1611797):</h3><h2>Using non-hashable Python objects as keys in dictionaries</h2><p>Python doesn't allow non-hashable objects to be used as keys in other dictionaries. As pointed out by Andrey Vlasovskikh, there is a nice workaround for the special case of using non-nested dictionaries as keys:</p>
+
+<pre><code>frozenset(a.items())#Can be put in the dictionary instead
+</code></pre>
+
+<p>Is there a method of using arbitrary objects as keys in dictionaries?</p>
+
+<p><strong>Example</strong>:</p>
+
+<p>How would this be used as a key?</p>
+
+<pre><code>{"a":1, "b":{"c":10}}
+</code></pre>
+
+<p><strong>It is extremely rare that you will actually have to use something like this in your code. If you think this is the case, consider changing your data model first.</strong></p>
+
+<p><strong>Exact use case</strong></p>
+
+<p>The use case is caching calls to an arbitrary keyword only function. Each key in the dictionary is a string (the name of the argument) and the objects can be quite complicated, consisting of layered dictionaries, lists, tuples, ect.</p>
+
+<p><strong>Related problems</strong></p>
+
+<p>This sub-problem has been split off from <a href="http://stackoverflow.com/questions/1600591/using-a-python-dictionary-as-a-key">the problem here</a>. Solutions here deal with the case where the dictionaries is not layered.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Don't. I agree with Andreys comment on the previous question that is doesn't make sense to have dictionaries as keys, and especially not nested ones. Your data-model is obviously quite complex, and dictionaries are probably not the right answer. You should try some OO instead.</p>
+<br /><b>#1</b><br /><p>With <a href="http://stackoverflow.com/questions/1611797/using-nested-python-dictionaries-as-keys/1611814#1611814">recursion</a>!</p>
+
+<pre><code>def make_hashable(h):
+    items = h.items()
+    for item in items:
+        if type(items) == dict:
+            item = make_hashable(item)
+    return frozenset(items)
+</code></pre>
+
+<p>You can add other type tests for any other mutable types you want to make hashable. It shouldn't be hard.</p>
+<br /><b>#2</b><br /><p>Based off solution by Chris Lutz. Note that this doesn't handle objects that are changed by iteration, such as streams, nor does it handle cycles.</p>
+
+<pre><code>import collections
+
+def make_hashable(obj):
+    """WARNING: This function only works on a limited subset of objects
+    Make a range of objects hashable. 
+    Accepts embedded dictionaries, lists or tuples (including namedtuples)"""
+    if isinstance(obj, collections.Hashable):
+        #Fine to be hashed without any changes
+        return obj
+    elif isinstance(obj, collections.Mapping):
+        #Convert into a frozenset instead
+        items=list(obj.items())
+        for i, item in enumerate(items):
+                items[i]=make_hashable(item)
+        return frozenset(items)
+    elif isinstance(obj, collections.Iterable):
+        #Convert into a tuple instead
+        ret=[type(obj)]
+        for i, item in enumerate(obj):
+                ret.append(make_hashable(item))
+        return tuple(ret)
+    #Use the id of the object
+    return id(obj)
+</code></pre>
+<br /><b>#3</b><br /><p>If you really must, make your objects hashable. Subclass whatever you want to put in as a key, and provide a __hash__ function which returns an unique key to this object. </p>
+
+<p>To illustrate:</p>
+
+<pre><code>&gt;&gt;&gt; ("a",).__hash__()
+986073539
+&gt;&gt;&gt; {'a': 'b'}.__hash__()
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: 'NoneType' object is not callable
+</code></pre>
+
+<p>If your hash is not unique enough you will get collisions. May be slow as well.</p>
+<br /><b>#4</b><br /><p>I totally disagree with comments &amp; answers saying that this shouldn't be done for data model purity reason.</p>
+
+<p>A dictionary associates an object with another object using the former one as a key. Dictionaries can't be used as keys because they're not hashable. This doesn't make any less meaningful/practical/necessary to map dictionaries to other objects.</p>
+
+<p>As I understand the Python binding system, you can bind any dictionary to a number of variables (or the reverse, depends on your terminology) which means that these variables all know the same unique 'pointer' to that dictionary. Wouldn't it be possible to use that identifier as the hashing key ?
+If your data model ensures/enforces that you can't have two dictionaries with the same content used as keys then that seems to be a safe technique to me.</p>
+
+<p>I should add that I have no idea whatsoever of how that can/should be done though.</p>
+
+<p>I'm not entirely whether this should be an answer or a comment. Please correct me if needed.</p>
+<br /><b>#5</b><br /><p>I encountered this issue when using a decorator that caches the results of previous calls based on call signature.  I do not agree with the comments/answers here to the effect of "you should not do this", but I think it is important to recognize the potential for surprising and unexpected behavior when going down this path.  My thought is that since instances are both mutable and hashable, and it does not seem practical to change that, there is nothing inherently wrong with creating hashable equivalents of non-hashable types or objects.  But of course that is only my opinion.</p>
+
+<p>For anyone who requires Python 2.5 compatibility, the below may be useful.  I based it on the earlier answer.</p>
+
+<pre><code>from itertools import imap
+tuplemap = lambda f, data: tuple(imap(f, data))
+def make_hashable(obj):
+  u"Returns a deep, non-destructive conversion of given object to an equivalent hashable object"
+  if isinstance(obj, list):
+    return tuplemap(make_hashable, iter(obj))
+  elif isinstance(obj, dict):
+    return frozenset(tuplemap(make_hashable, obj.iteritems()))
+  elif hasattr(obj, '__hash__') and callable(obj.__hash__):
+    try:
+      obj.__hash__()
+    except:
+      if hasattr(obj, '__iter__') and callable(obj.__iter__):
+        return tuplemap(make_hashable, iter(obj))
+      else:
+        raise NotImplementedError, 'object of type %s cannot be made hashable' % (type(obj),)
+    else:
+      return obj
+  elif hasattr(obj, '__iter__') and callable(obj.__iter__):
+    return tuplemap(make_hashable, iter(obj))
+  else:
+    raise NotImplementedError, 'object of type %s cannot be made hashable' % (type, obj)
+</code></pre>
+<br /><b>#6</b><br /><p>Based off solution by Chris Lutz again. </p>
+
+<pre><code>import collections
+
+def hashable(obj):
+    if isinstance(obj, collections.Hashable):
+        return obj
+    if isinstance(obj, collections.Mapping):
+        items = [(k,hashable(v)) for (k,v) in obj.items()]
+        return frozenset(items)
+    if isinstance(obj, collections.Iterable):
+        return tuple([hashable(item) for item in obj])
+    return TypeError(type(obj))
+</code></pre>
+<br />

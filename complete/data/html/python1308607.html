@@ -1,0 +1,121 @@
+<h3>Question (ID-1308607):</h3><h2>Python assert -- improved introspection of failure?</h2><p>This is a rather useless assertion error; it does not tell the values of the expression involved (assume constants used are actually variable names): </p>
+
+<pre><code>$ python -c "assert 6-(3*2)"
+[...]
+AssertionError
+</code></pre>
+
+<p>Is there a better <code>assert</code> implementation in Python that is more fancy? It must not introduce additional overhead over execution (except when assert fails) .. and must turn off if <code>-O</code> flag is used.</p>
+
+<p><strong>Edit</strong>: I know about assert's second argument as a string. I don't want to write one .. as that is encoded in the expression that is being asserted. DRY (Don't Repeat Yourself).</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Install your of function as <code>sys.excepthook</code> -- see <a href="http://docs.python.org/library/sys.html#sys.excepthook" rel="nofollow">the docs</a>. Your function, if the second argument is <code>AssertionError</code>, can introspect to your heart's contents; in particular, through the third argument, the traceback, it can get the frame and exact spot in which the assert failed, getting the failing exception through the source or bytecode, the value of all relevant variables, etc. Module <a href="http://docs.python.org/library/inspect.htmlt#module-inspect" rel="nofollow">inspect</a> helps.</p>
+
+<p>Doing it in full generality is quite a piece of work, but depending on what constraints you're willing to accept in how you write your <code>assert</code>s it can be lightened substantially (e.g. restricting them to only local or global variables makes introspection easier than if nonlocal variables of a closure could be involved, and so forth).</p>
+<br /><b>#1</b><br /><p>You can attach a message to an <code>assert</code>:</p>
+
+<pre><code>assert 6-(3*2), "always fails"
+</code></pre>
+
+<p>The message can also be built dynamically:</p>
+
+<pre><code>assert x != 0, "x is not equal to zero (%d)" % x
+</code></pre>
+
+<p>See <a href="http://docs.python.org/reference/simple%5Fstmts.html#the-assert-statement" rel="nofollow">The <code>assert</code> statement</a> in the Python documentation for more information.</p>
+<br /><b>#2</b><br /><p><a href="http://somethingaboutorange.com/mrl/projects/nose/0.11.1/plugins/failuredetail.html" rel="nofollow">The nose testing suite applies introspection to asserts</a>. </p>
+
+<p>However, AFAICT, you have to call <em>their</em> asserts to get the introspection:</p>
+
+<pre><code>import nose
+def test1():
+    nose.tools.assert_equal(6, 5+2)
+</code></pre>
+
+<p>results in</p>
+
+<pre>
+C:\temp\py>C:\Python26\Scripts\nosetests.exe -d test.py
+F
+======================================================================
+FAIL: test.test1
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Python26\lib\site-packages\nose-0.11.1-py2.6.egg\nose\case.py", line
+183, in runTest
+    self.test(*self.arg)
+  File "C:\temp\py\test.py", line 3, in test1
+    nose.tools.assert_equal(6, 5+2)
+AssertionError: 6 != 7
+>>  raise self.failureException, \
+          (None or '%r != %r' % (6, 7))
+</pre>
+
+<p>Notice the AssertionError there. When my line was just <code>assert 6 == 5+2</code>, I would get:</p>
+
+<pre>
+C:\temp\py>C:\Python26\Scripts\nosetests.exe -d test.py
+F
+======================================================================
+FAIL: test.test1
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Python26\lib\site-packages\nose-0.11.1-py2.6.egg\nose\case.py", line
+183, in runTest
+    self.test(*self.arg)
+  File "C:\temp\py\test.py", line 2, in test1
+    assert 6 == 5 + 2
+AssertionError:
+>>  assert 6 == 5 + 2
+
+</pre>
+
+<p>Also, I'm not sure offhand if their asserts are skipped with <code>-O</code>, but that would be a very quick check.</p>
+<br /><b>#3</b><br /><p>As <a href="http://stackoverflow.com/questions/1308607/python-assert-improved-introspection-of-failure/1308835#1308835">@Mark Rushakoff said</a> <code>nose</code> can evaluate failed asserts. It works on the standard <code>assert</code> too.</p>
+
+<pre><code># test_error_reporting.py
+def test():
+    a,b,c = 6, 2, 3
+    assert a - b*c
+</code></pre>
+
+<p><code>nosetests</code>' help:</p>
+
+<pre><code>$ nosetests --help|grep -B2 assert
+  -d, --detailed-errors, --failure-detail
+                        Add detail to error output by attempting to evaluate
+                        failed asserts [NOSE_DETAILED_ERRORS]
+</code></pre>
+
+<p>Example:</p>
+
+<pre><code>$ nosetests -d
+F
+======================================================================
+FAIL: test_error_reporting.test
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "..snip../site-packages/nose/case.py", line 183, in runTest
+    self.test(*self.arg)
+  File "..snip../test_error_reporting.py", line 3, in test
+    assert a - b*c
+AssertionError:
+    6,2,3 = 6, 2, 3
+&gt;&gt;  assert 6 - 2*3
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.089s
+
+FAILED (failures=1)
+</code></pre>
+<br /><b>#4</b><br /><p>Add a message to your assertion, which will be displayed if the assertion fails:</p>
+
+<pre><code>$ python -c "assert 6-(3*2), '6-(3*2)'"
+Traceback (most recent call last):
+  File "&lt;string&gt;", line 1, in &lt;module&gt;
+AssertionError: 6-(3*2)
+</code></pre>
+
+<p>The only way I can think of to provide this automatically would be to contain the assertion in a procedure call, and then inspect the stack to get the source code for that line. The additional call would, unfortunately, introduce overhead into the test and would not be disabled with <code>-O</code>.</p>
+<br /><b>#5</b><br /><p>It sounds like what you really want to do is to set up a debugger breakpoint just before the <code>assert</code> and inspect from your favorite debugger as much as you like.</p>
+<br />

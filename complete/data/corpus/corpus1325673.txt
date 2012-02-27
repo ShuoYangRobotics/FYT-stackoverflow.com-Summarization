@@ -1,0 +1,206 @@
+Question (ID-1325673): python: How to add property to a class dynamically? The goal is to create a mock class which behaves like a db resultset. 
+
+ So for example, if a database query returns, using a dict expression, {'ab':100, 'cd':200}, then I would to see 
+
+ &gt;&gt;&gt; dummy.ab
+100
+ 
+
+ So, at the beginning I thought I maybe able to do it this way 
+
+ ks = ['ab', 'cd']
+vs = [12, 34]
+class C(dict):
+ def __init__(self, ks, vs):
+  for i, k in enumerate(ks):
+    self[k] = vs[i]
+    setattr(self, k, property(lambda x: vs[i], self.fn_readyonly))
+
+ def fn_readonly(self, v)
+  raise "It is ready only"
+
+if __name__ == "__main__":
+ c = C(ks, vs)
+ print c.ab
+ 
+
+ but "c.ab" returns a property object instead. 
+
+ Replace the setattr line with 
+
+ k = property(lambda x: vs[i])
+ 
+
+ It is of no use at all. 
+
+ So what is the right way to create an instance property in runtime? 
+
+ P.S. I am aware of an alternative here 
+ Answers (Total-10): #0 A bit late, but I've discovered that it is in fact possible to add a property to a class dynamically. You just have to add it to the CLASS, not the object. 
+
+ &gt;&gt;&gt; class Foo(object):
+...  def add_property(self, name, func):
+...   setattr(self.__class__, name, property(func))
+... 
+&gt;&gt;&gt; foo = Foo()
+&gt;&gt;&gt; foo.a = 3
+&gt;&gt;&gt; foo.add_property('b', lambda self: self.a + 1)
+&gt;&gt;&gt; foo.b
+4
+ 
+ #1 It seems you could solve this problem much more simply with a namedtuple , since you know the entire list of fields ahead of time. 
+
+ from collections import namedtuple
+
+Foo = namedtuple('Foo', ['bar', 'quux'])
+
+foo = Foo(bar=13, quux=74)
+print foo.bar, foo.quux
+
+foo2 = Foo() # error
+ 
+
+ If you absolutely need to write your own setter, you'll have to do the metaprogramming at the class level; property() doesn't work on instances. 
+ #2 You don't need to use a property for that. Just override __setattr__ to make them read only. 
+
+ class C(object):
+ def __init__(self, keys, values):
+  for (key, value) in zip(keys, values):
+   self.__dict__[key] = value
+
+ def __setattr__(self, name, value):
+  raise "It's read only!"
+ 
+
+ Tada. 
+
+ &gt;&gt;&gt; c = C('abc', [1,2,3])
+&gt;&gt;&gt; c.a
+1
+&gt;&gt;&gt; c.b
+2
+&gt;&gt;&gt; c.c
+3
+&gt;&gt;&gt; c.d
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: 'C' object has no attribute 'd'
+&gt;&gt;&gt; c.d = 42
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "&lt;stdin&gt;", line 6, in __setattr__
+Exception: It's read only!
+&gt;&gt;&gt; c.a = 'blah'
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "&lt;stdin&gt;", line 6, in __setattr__
+Exception: It's read only!
+ 
+ #3 Not sure if I completely understand the question, but you can modify instance properties at runtime with the built-in __dict__ of your class: 
+
+ class C(object):
+ def __init__(self, ks, vs):
+  self.__dict__ = dict(zip(ks, vs))
+
+
+if __name__ == "__main__":
+ ks = ['ab', 'cd']
+ vs = [12, 34]
+ c = C(ks, vs)
+ print(c.ab) # 12
+ 
+ #4 You cannot add a new property() to an instance at runtime, because properties are data descriptors. Instead you must dynamically create a new class, or over getattribute in order to process data descriptors on instances. 
+ #5 Only way to dynamically attach a property is to create a new class and its instance with your new property. 
+
+ class Holder: p = property(lambda x: vs[i], self.fn_readonly)
+setattr(self, k, Holder().p)
+ 
+ #6 The best way to achieve is by defining __slots__ . That way your instances can't have new attributes. 
+
+ ks = ['ab', 'cd']
+vs = [12, 34]
+
+class C(dict):
+ __slots__ = []
+ def __init__(self, ks, vs): self.update(zip(ks, vs))
+ def __getattr__(self, key): return self[key]
+
+if __name__ == "__main__":
+ c = C(ks, vs)
+ print c.ab
+ 
+
+ That prints 12 
+
+  c.ab = 33
+ 
+
+ That gives: AttributeError: 'C' object has no attribute 'ab' 
+ #7 
+ The goal is to create a mock class which behaves like a db resultset. 
+ 
+
+ So what you want is a dictionary where you can spell a['b'] as a.b? 
+
+ That's easy: 
+
+ class atdict(dict):
+ __getattr__= dict.__getitem__
+ __setattr__= dict.__setitem__
+ __delattr__= dict.__delitem__
+ 
+ #8 This seems to work(but see below): 
+
+ class data(dict,object):
+ def __init__(self,*args,**argd):
+  dict.__init__(self,*args,**argd)
+  self.__dict__.update(self)
+ def __setattr__(self,name,value):
+  raise AttributeError,"Attribute '%s' of '%s' object cannot be set"%(name,self.__class__.__name__)
+ def __delattr__(self,name):
+  raise AttributeError,"Attribute '%s' of '%s' object cannot be deleted"%(name,self.__class__.__name__)
+ 
+
+ If you need more complex behavior, feel free to edit your answer. 
+
+ edit 
+
+ The following would probably be more memory-efficient for large datasets: 
+
+ class data(dict,object):
+ def __init__(self,*args,**argd):
+  dict.__init__(self,*args,**argd)
+ def __getattr__(self,name):
+  return self[name]
+ def __setattr__(self,name,value):
+  raise AttributeError,"Attribute '%s' of '%s' object cannot be set"%(name,self.__class__.__name__)
+ def __delattr__(self,name):
+  raise AttributeError,"Attribute '%s' of '%s' object cannot be deleted"%(name,self.__class__.__name__)
+ 
+ #9 I asked a similary question on this Stack Overflow post to create a class factory which created simple types. The outcome was this answer which had a working version of the class factory.
+Here is a snippet of the answer: 
+
+ def Struct(*args, **kwargs):
+ def init(self, *iargs, **ikwargs):
+  for k,v in kwargs.items():
+   setattr(self, k, v)
+  for i in range(len(iargs)):
+   setattr(self, args[i], iargs[i])
+  for k,v in ikwargs.items():
+   setattr(self, k, v)
+
+ name = kwargs.pop("name", "MyStruct")
+ kwargs.update(dict((k, None) for k in args))
+ return type(name, (object,), {'__init__': init, '__slots__': kwargs.keys()})
+
+&gt;&gt;&gt; Person = Struct('fname', 'age')
+&gt;&gt;&gt; person1 = Person('Kevin', 25)
+&gt;&gt;&gt; person2 = Person(age=42, fname='Terry')
+&gt;&gt;&gt; person1.age += 10
+&gt;&gt;&gt; person2.age -= 10
+&gt;&gt;&gt; person1.fname, person1.age, person2.fname, person2.age
+('Kevin', 35, 'Terry', 32)
+&gt;&gt;&gt;
+ 
+
+ You could use some variation of this to create default values which is your goal (there is also an answer in that question which deals with this).

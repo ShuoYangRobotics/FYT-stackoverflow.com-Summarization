@@ -1,0 +1,225 @@
+Question (ID-2009402): Read/Write Python Closures Closures are an incredibly useful language feature. They let us do clever things that would otherwise take a lot of code, and often enable us to write code that is more elegant and more clear. In Python 2.x, closures variable names cannot be rebound; that is, a function defined inside another lexical scope cannot do something like some_var = 'changed!' for variables outside of its local scope. Can someone explain why that is? There have been situations in which I would like to create a closure that rebinds variables in the outer scope, but it wasn't possible. I realize that in almost all cases (if not all of them), this behavior can be achieved with classes, but it is often not as clean or as elegant. Why can't I do it with a closure? 
+
+ Here is an example of a rebinding closure: 
+
+ def counter():
+ count = 0
+ def c():
+  count += 1
+  return count
+ return c
+ 
+
+ This is the current behavior when you call it: 
+
+ &gt;&gt;&gt; c()
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "&lt;stdin&gt;", line 4, in c
+UnboundLocalError: local variable 'count' referenced before assignment
+ 
+
+ What I'd like it to do instead is this: 
+
+ &gt;&gt;&gt; c()
+1
+&gt;&gt;&gt; c()
+2
+&gt;&gt;&gt; c()
+3
+ 
+ Answers (Total-7): #0 To expand on Ignacio's answer: 
+
+ def counter():
+ count = 0
+ def c():
+  nonlocal count
+  count += 1
+  return count
+ return c
+
+x = counter()
+print([x(),x(),x()])
+ 
+
+ gives [1,2,3] in Python 3; invocations of counter() give independent counters. Other solutions - especially using itertools / yield are more idiomatic. 
+ #1 You could do this and it would work more or less the same way: 
+
+ class counter(object):
+ def __init__(self, count=0):
+  self.count = count
+ def __call__(self):
+  self.count += 1
+  return self.count 
+ 
+
+ Or, a bit of a hack: 
+
+ def counter():
+ count = [0]
+ def incr(n):
+  n[0] += 1
+  return n[0]
+ return lambda: incr(count)
+ 
+
+ I'd go with the first solution. 
+
+ EDIT: That's what I get for not reading the big blog of text. 
+
+ Anyway, the reason Python closures are rather limited is "because Guido felt like it." Python was designed in the early 90s, in the heyday of OO. Closures were rather low on the list of language features people wanted. As functional ideas like first class functions, closures, and other things make their way into mainstream popularity, languages like Python have had to tack them on, so their use may a bit awkward, because that's not what the language was designed for. 
+
+ &lt;rant on="Python scoping"&gt; 
+
+ Also, Python (2.x) has rather odd (in my opinion) ideas about scoping that interferes with a sane implementation of closures, among other things. It always bothers me that this: 
+
+ new = [x for x in old]
+ 
+
+ Leaves us with the name x defined in the scope we used it in, as it is (in my opinion) a conceptually smaller scope. (Though Python gets points for consistency, as doing the same thing with a for loop has the same behavior. The only way to avoid this is to use map .) 
+
+ Anyway, &lt;/rant&gt; 
+ #2 nonlocal in 3.x should remedy this. 
+ #3 I would use a generator: 
+
+ &gt;&gt;&gt; def counter():
+ count = 0
+ while True:
+  count += 1
+  yield(count)
+
+&gt;&gt;&gt; c = counter()
+&gt;&gt;&gt; c.next()
+1
+&gt;&gt;&gt; c.next()
+2
+&gt;&gt;&gt; c.next()
+3
+ 
+
+ EDIT : I believe the ultimate answer to your question is PEP-3104 : 
+
+ 
+ In most languages that support nested
+ scopes, code can refer to or rebind
+ (assign to) any name in the nearest
+ enclosing scope. Currently, Python
+ code can refer to a name in any
+ enclosing scope, but it can only
+ rebind names in two scopes: the local
+ scope (by simple assignment) or the
+ module-global scope (using a global
+ declaration). 
+ 
+ This limitation has been raised many
+ times on the Python-Dev mailing list
+ and elsewhere, and has led to extended
+ discussion and many proposals for ways
+ to remove this limitation. This PEP
+ summarizes the various alternatives
+ that have been suggested, together
+ with advantages and disadvantages that
+ have been mentioned for each. 
+ 
+ Before version 2.1, Python's treatment
+ of scopes resembled that of standard
+ C: within a file there were only two
+ levels of scope, global and local. In
+ C, this is a natural consequence of
+ the fact that function definitions
+ cannot be nested. But in Python,
+ though functions are usually defined
+ at the top level, a function
+ definition can be executed anywhere.
+ This gave Python the syntactic
+ appearance of nested scoping without
+ the semantics, and yielded
+ inconsistencies that were surprising
+ to some programmers -- for example, a
+ recursive function that worked at the
+ top level would cease to work when
+ moved inside another function, because
+ the recursive function's own name
+ would no longer be visible in its
+ body's scope. This violates the
+ intuition that a function should
+ behave consistently when placed in
+ different contexts. 
+ 
+ #4 Functions can also have attributes, so this would work, too: 
+
+ def counter():
+ def c():
+  while True:
+   yield c.count
+   c.count += 1
+ c.count = 0
+ return c
+ 
+
+ However, in this specific example, I'd use a generator as suggested by jbochi. 
+
+ As for why , I can't say for sure, but I imagine it's not an explicit design choice, but rather a remnant of Python's sometimes-odd scoping rules (and especially the somewhat-odd evolution of its scoping rules). 
+ #5 This behavior is quite thoroughly explained the official Python tutorial as well as in the Python execution model . In particular, from the tutorial: 
+
+ 
+ A special quirk of Python is that – if
+ no global statement is in effect –
+ assignments to names always go into
+ the innermost scope. 
+ 
+
+ However, this does not say anything about why it behaves in this way. 
+
+ Some more information comes from PEP 3104 , that tries to tackle this situation for Python 3.0. 
+There, you can see that it is this way because at a certain point in time, it was seen as the best solution instead of introducing classic static nested scopes (see Re: Scoping (was Re: Lambda binding solved?) ). 
+
+ That said, I have also my own interpretation. 
+Python implements namespaces as dictionaries; when a lookup for a variable fails in the inner, then it tries in the outer and so on, until it reaches the builtins. 
+However, binding a variable is a completely different stuff, because you need to specify a particular namespace - that it is always the innermost one (unless you set the "global" flag, that means it is always the global namespace). 
+Eventually, the different algorithms used for looking up and binding variables are the reason for closures to be read-only in Python. 
+But, again, this is just my speculation :-) 
+ #6 It is not that they are read-only, as much as the scope is more strict that you realize. If you can't nonlocal in Python 3+, then you can at least use explicit scoping. Python 2.6.1, with explicit scoping at the module level: 
+
+ &gt;&gt;&gt; def counter():
+...  sys.modules[__name__].count = 0
+...  def c():
+...   sys.modules[__name__].count += 1
+...   return sys.modules[__name__].count
+...  sys.modules[__name__].c = c
+...  
+&gt;&gt;&gt; counter()
+&gt;&gt;&gt; c()
+1
+&gt;&gt;&gt; c()
+2
+&gt;&gt;&gt; c()
+3
+ 
+
+ A little more work is required to have a more restricted scope for the count variable, instead of using a pseudo-global module variable (still Python 2.6.1): 
+
+ &gt;&gt;&gt; def counter():
+...  class c():
+...   def __init__(self):
+...    self.count = 0
+...  cinstance = c()
+...  def iter():
+...   cinstance.count += 1
+...   return cinstance.count
+...  return iter
+... 
+&gt;&gt;&gt; c = counter()
+&gt;&gt;&gt; c()
+1
+&gt;&gt;&gt; c()
+2
+&gt;&gt;&gt; c()
+3
+&gt;&gt;&gt; d = counter()
+&gt;&gt;&gt; d()
+1
+&gt;&gt;&gt; c()
+4
+&gt;&gt;&gt; d()
+2

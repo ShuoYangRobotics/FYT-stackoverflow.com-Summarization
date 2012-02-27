@@ -1,0 +1,83 @@
+Question (ID-1303021): Shortest hash in python to name cache files What is the shortest hash (in filename-usable form, like a hexdigest) available in python? My application wants to save cache files for some objects. The objects must have unique repr() so they are used to 'seed' the filename. I want to produce a possibly unique filename for each object (not that many). They should not collide, but if they do my app will simply lack cache for that object (and will have to reindex that object's data, a minor cost for the application). 
+
+ So, if there is one collision we lose one cache file, but it is the collected savings of caching all objects makes the application startup much faster, so it does not matter much. 
+
+ Right now I'm actually using abs(hash(repr(obj))); that's right, the string hash! Haven't found any collisions yet, but I would like to have a better hash function. hashlib.md5 is available in the python library, but the hexdigest is really long if put in a filename. Alternatives, with reasonable collision resistance? 
+
+ Edit:
+Use case is like this:
+The data loader gets a new instance of a data-carrying object. Unique types have unique repr. so if a cache file for hash(repr(obj)) exists, I unpickle that cache file and replace obj with the unpickled object. If there was a collision and the cache was a false match I notice. So if we don't have cache or have a false match, I instead init obj (reloading its data). 
+
+ Conclusions (?) 
+
+ The str hash in python may be good enough, I was only worried about its collision resistance. But if I can hash 2**16 objects with it, it's going to be more than good enough. 
+
+ I found out how to take a hex hash (from any hash source) and store it compactly with base64: 
+
+ # 'h' is a string of hex digits 
+bytes = "".join(chr(int(h[i:i+2], 16)) for i in xrange(0, len(h), 2))
+hashstr = base64.urlsafe_b64encode(bytes).rstrip("=")
+ 
+ Answers (Total-9): #0 The builtin hash function of strings is fairly collision free, and also fairly short. It has 2**32 values, so it is fairly unlikely that you encounter collisions (if you use its abs value, it will have only 2**31 values). 
+
+ You have been asking for the shortest hash function. That would certainly be 
+
+ def hash(s):
+ return 0
+ 
+
+ but I guess you didn't really mean it that way... 
+ #1 The birthday paradox applies: given a good hash function, the expected number of hashes before a collision occurs is about sqrt(N), where N is the number of different values that the hash function can take. (The wikipedia entry I've pointed to gives the exact formula). So, for example, if you want to use no more than 32 bits, your collision worries are serious for around 64K objects (i.e., 2**16 objects -- the square root of the 2**32 different values your hash function can take). How many objects do you expect to have, as an order of magnitude? 
+
+ Since you mention that a collision is a minor annoyance, I recommend you aim for a hash length that's roughly the square of the number of objects you'll have, or a bit less but not MUCH less than that. 
+
+ You want to make a filename - is that on a case-sensitive filesystem, as typical on Unix, or do you have to cater for case-insensitive systems too? This matters because you aim for short filenames, but the number of bits per character you can use to represent your hash as a filename changes dramatically on case-sensive vs insensitive systems. 
+
+ On a case-sensitive system, you can use the standard library's base64 module (I recommend the "urlsafe" version of the encoding, i.e. this function, as avoiding '/' characters that could be present in plain base64 is important in Unix filenames). This gives you 6 usable bits per character, much better than the 4 bits/char in hex. 
+
+ Even on a case-insensitive system, you can still do better than hex -- use base64.b32encode and get 5 bits per character. 
+
+ These functions take and return strings; use the struct module to turn numbers into strings if your chosen hash function generates numbers. 
+
+ If you do have a few tens of thousands of objects I think you'll be fine with builtin hash (32 bits, so 6-7 characters depending on your chosen encoding). For a million objects you'd want 40 bits or so (7 or 8 characters) -- you can fold (xor, don't truncate;-) a sha256 down to a long with a reasonable number of bits, say 128 or so, and use the % operator to cut it further to your desired length before encoding. 
+ #2 You can make any hash you like shorter by simply truncating it. md5 is always 32 hex digits, but an arbitrary substring of it (or any other hash) has the proper qualities of a hash: equal values produce equal hashes, and the values are spread around a bunch. 
+ #3 I'm sure that there's a CRC32 implementation in Python, but that may be too short (8 hex digits). On the upside, it's very quick. 
+
+ Found it, binascii.crc32 
+ #4 If you do have a collision, how are you going to tell that it actually happened? 
+
+ If I were you, I would use hashlib to sha1() the repr() , and then just get a limited substring of it (first 16 characters, for example). 
+
+ Unless you are talking about huge numbers of these objects, I would suggest that you just use the full hash. Then the opportunity for collision is so, so, so, so small, that you will never live to see it happen (likely). 
+
+ Also, if you are dealing with that many files, I'm guessing that your caching technique should be adjusted to accommodate it. 
+ #5 We use hashlib.sha1.hexdigest(), which produces even longer strings, for cache objects with good success. Nobody is actually looking at cache files anyway. 
+ #6 Condsidering your use case, if you don't have your heart set on using separate cache files and you are not too far down that development path, you might consider using the shelve module. 
+
+ This will give you a persistent dictionary (stored in a single dbm file) in which you store your objects. Pickling/unpickling is performed transparently, and you don't have to concern yourself with hashing, collisions, file I/O, etc. 
+
+ For the shelve dictionary keys, you would just use repr(obj) and let shelve deal with stashing your objects for you. A simple example: 
+
+ import shelve
+cache = shelve.open('cache')
+t = (1,2,3)
+i = 10
+cache[repr(t)] = t
+cache[repr(i)] = i
+print cache
+# {'(1, 2, 3)': (1, 2, 3), '10': 10}
+cache.close()
+
+cache = shelve.open('cache')
+print cache
+#&gt;&gt;&gt; {'(1, 2, 3)': (1, 2, 3), '10': 10}
+print cache[repr(10)]
+#&gt;&gt;&gt; 10
+ 
+ #7 Short hashes mean you may have same hash for two different files. Same may happen for big hashes too, but its way more rare.
+Maybe these file names should vary based on other references, like microtime (unless these files may be created too quickly). 
+ #8 You might also want to look at Ascii85 for even shorter filenames. 
+
+ http://en.wikipedia.org/wiki/Ascii85 
+
+ Hash with whatever, then encode the hash to a valid filename.

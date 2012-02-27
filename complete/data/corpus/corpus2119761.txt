@@ -1,0 +1,455 @@
+Question (ID-2119761): Simple Python Challenge: Fastest Bitwise XOR on Data Buffers Challenge: 
+
+ Perform a bitwise XOR on two equal sized buffers. The buffers will be required to be the python str type since this is traditionally the type for data buffers in python. Return the resultant value as a str . Do this as fast as possible. 
+
+ The inputs are two 1 megabyte (2**20 byte) strings. 
+
+ The challenge is to substantially beat my inefficient algorithm using python or existing third party python modules (relaxed rules: or create your own module.) Marginal increases are useless. 
+
+ from os import urandom
+from numpy import frombuffer,bitwise_xor,byte
+
+def slow_xor(aa,bb):
+ a=frombuffer(aa,dtype=byte)
+ b=frombuffer(bb,dtype=byte)
+ c=bitwise_xor(a,b)
+ r=c.tostring()
+ return r
+
+aa=urandom(2**20)
+bb=urandom(2**20)
+
+def test_it():
+ for x in xrange(1000):
+  slow_xor(aa,bb)
+ 
+ Answers (Total-11): #0 First Try 
+
+ Using scipy.weave and SSE2 intrinsics gives a marginal improvement. The first invocation is a bit slower since the code needs to be loaded from the disk and cached, subsequent invocations are faster: 
+
+ import numpy
+import time
+from os import urandom
+from scipy import weave
+
+SIZE = 2**20
+
+def faster_slow_xor(aa,bb):
+ b = numpy.fromstring(bb, dtype=numpy.uint64)
+ numpy.bitwise_xor(numpy.frombuffer(aa,dtype=numpy.uint64), b, b)
+ return b.tostring()
+
+code = """
+const __m128i* pa = (__m128i*)a;
+const __m128i* pend = (__m128i*)(a + arr_size);
+__m128i* pb = (__m128i*)b;
+__m128i xmm1, xmm2;
+while (pa &lt; pend) {
+ xmm1 = _mm_loadu_si128(pa); // must use unaligned access 
+ xmm2 = _mm_load_si128(pb); // numpy will align at 16 byte boundaries
+ _mm_store_si128(pb, _mm_xor_si128(xmm1, xmm2));
+ ++pa;
+ ++pb;
+}
+"""
+
+def inline_xor(aa, bb):
+ a = numpy.frombuffer(aa, dtype=numpy.uint64)
+ b = numpy.fromstring(bb, dtype=numpy.uint64)
+ arr_size = a.shape[0]
+ weave.inline(code, ["a", "b", "arr_size"], headers = ['"emmintrin.h"'])
+ return b.tostring()
+ 
+
+ Second Try 
+
+ Taking into account the comments, I revisited the code to find out if the copying could be avoided. Turns out I read the documentation of the string object wrong, so here goes my second try: 
+
+ support = """
+#define ALIGNMENT 16
+static void memxor(const char* in1, const char* in2, char* out, ssize_t n) {
+ const char* end = in1 + n;
+ while (in1 &lt; end) {
+  *out = *in1 ^ *in2;
+  ++in1; 
+  ++in2;
+  ++out;
+ }
+}
+"""
+
+code2 = """
+PyObject* res = PyString_FromStringAndSize(NULL, real_size);
+
+const ssize_t tail = (ssize_t)PyString_AS_STRING(res) % ALIGNMENT;
+const ssize_t head = (ALIGNMENT - tail) % ALIGNMENT;
+
+memxor((const char*)a, (const char*)b, PyString_AS_STRING(res), head);
+
+const __m128i* pa = (__m128i*)((char*)a + head);
+const __m128i* pend = (__m128i*)((char*)a + real_size - tail);
+const __m128i* pb = (__m128i*)((char*)b + head);
+__m128i xmm1, xmm2;
+__m128i* pc = (__m128i*)(PyString_AS_STRING(res) + head);
+while (pa &lt; pend) {
+ xmm1 = _mm_loadu_si128(pa);
+ xmm2 = _mm_loadu_si128(pb);
+ _mm_stream_si128(pc, _mm_xor_si128(xmm1, xmm2));
+ ++pa;
+ ++pb;
+ ++pc;
+}
+memxor((const char*)pa, (const char*)pb, (char*)pc, tail);
+return_val = res;
+Py_DECREF(res);
+"""
+
+def inline_xor_nocopy(aa, bb):
+ real_size = len(aa)
+ a = numpy.frombuffer(aa, dtype=numpy.uint64)
+ b = numpy.frombuffer(bb, dtype=numpy.uint64)
+ return weave.inline(code2, ["a", "b", "real_size"], 
+      headers = ['"emmintrin.h"'], 
+      support_code = support)
+ 
+
+ The difference is that the string is allocated inside the C code. It's impossible to have it aligned at a 16-byte-boundary as required by the SSE2 instructions, therefore the unaligned memory regions at the beginning and the end are copied using byte-wise access. 
+
+ The input data is handed in using numpy arrays anyway, because weave insists on copying Python str objects to std::string s. frombuffer doesn't copy, so this is fine, but the memory is not aligned at 16 byte, so we need to use _mm_loadu_si128 instead of the faster _mm_load_si128 . 
+
+ Instead of using _mm_store_si128 , we use _mm_stream_si128 , which will make sure that any writes are streamed to main memory as soon as possible---this way, the output array does not use up valuable cache lines. 
+
+ Timings 
+
+ As for the timings, the slow_xor entry in the first edit referred to my improved version (inline bitwise xor, uint64 ), I removed that confusion. slow_xor refers to the code from the original questions. All timings are done for 1000 runs. 
+
+ 
+ slow_xor : 1.85s (1x) 
+ faster_slow_xor : 1.25s (1.48x) 
+ inline_xor : 0.95s (1.95x) 
+ inline_xor_nocopy : 0.32s (5.78x) 
+ 
+
+ The code was compiled using gcc 4.4.3 and I've verified that the compiler actually uses the SSE instructions. 
+ #1 Performance comparison: numpy vs. Cython vs. C vs. Fortran vs. Boost.Python (pyublas) 
+
+ | function    | time, usec | ratio | type   |
+|------------------------+------------+-------+--------------|
+| slow_xor    |  2020 | 1.0 | numpy  |
+| xorf_int16    |  1570 | 1.3 | fortran  |
+| xorf_int32    |  1530 | 1.3 | fortran  |
+| xorf_int64    |  1420 | 1.4 | fortran  |
+| faster_slow_xor  |  1360 | 1.5 | numpy  |
+| inline_xor    |  1280 | 1.6 | C   |
+| cython_xor    |  1290 | 1.6 | cython  |
+| xorcpp_inplace (int32) |  440 | 4.6 | pyublas  |
+| cython_xor_vectorised |  325 | 6.2 | cython  |
+| inline_xor_nocopy  |  172 | 11.7 | C   |
+| xorcpp     |  144 | 14.0 | boost.python |
+| xorcpp_inplace   |  122 | 16.6 | boost.python |
+#+TBLFM: $3=@2$2/$2;%.1f
+ 
+
+ To reproduce results, download http://gist.github.com/353005 and type make (to install dependencies, type: sudo apt-get install build-essential python-numpy python-scipy cython gfortran , dependencies for Boost.Python , pyublas are not included due to they require manual intervention to work) 
+
+ Where: 
+
+ 
+ slow_xor() is from the OP's question 
+ faster_slow_xor() , inline_xor() , inline_xor_nocopy() are from @Torsten Marek's answer 
+ cython_xor() and cython_vectorised() are from @gnibbler's answer 
+ 
+
+ And xor_$type_sig() are: 
+
+ ! xorf.f90.template
+subroutine xor_$type_sig(a, b, n, out)
+ implicit none
+ integer, intent(in)    :: n
+ $type, intent(in), dimension(n) :: a
+ $type, intent(in), dimension(n) :: b
+ $type, intent(out), dimension(n) :: out
+
+ integer i
+ forall(i=1:n) out(i) = ieor(a(i), b(i))
+
+end subroutine xor_$type_sig
+ 
+
+ It is used from Python as follows: 
+
+ import xorf # extension module generated from xorf.f90.template
+import numpy as np
+
+def xor_strings(a, b, type_sig='int64'):
+ assert len(a) == len(b)
+ a = np.frombuffer(a, dtype=np.dtype(type_sig))
+ b = np.frombuffer(b, dtype=np.dtype(type_sig))
+ return getattr(xorf, 'xor_'+type_sig)(a, b).tostring()
+ 
+
+ xorcpp_inplace() (Boost.Python, pyublas): 
+
+ xor.cpp : 
+
+ #include &lt;inttypes.h&gt;
+#include &lt;algorithm&gt;
+#include &lt;boost/lambda/lambda.hpp&gt;
+#include &lt;boost/python.hpp&gt;
+#include &lt;pyublas/numpy.hpp&gt;
+
+namespace { 
+ namespace py = boost::python;
+
+ template&lt;class InputIterator, class InputIterator2, class OutputIterator&gt;
+ void
+ xor_(InputIterator first, InputIterator last, 
+  InputIterator2 first2, OutputIterator result) {
+ // `result` migth `first` but not any of the input iterators
+ namespace ll = boost::lambda;
+ (void)std::transform(first, last, first2, result, ll::_1 ^ ll::_2);
+ }
+
+ template&lt;class T&gt;
+ py::str 
+ xorcpp_str_inplace(const py::str&amp; a, py::str&amp; b) {
+ const size_t alignment = std::max(sizeof(T), 16ul);
+ const size_t n   = py::len(b);
+ const char* ai   = py::extract&lt;const char*&gt;(a);
+ char* bi   = py::extract&lt;char*&gt;(b);
+ char* end  = bi + n;
+
+ if (n &lt; 2*alignment) 
+  xor_(bi, end, ai, bi);
+ else {
+  assert(n &gt;= 2*alignment);
+
+  // applying Marek's algorithm to align
+  const ptrdiff_t head = (alignment - ((size_t)bi % alignment))% alignment;
+  const ptrdiff_t tail = (size_t) end % alignment;
+  xor_(bi, bi + head, ai, bi);
+  xor_((const T*)(bi + head), (const T*)(end - tail), 
+   (const T*)(ai + head),
+   (T*)(bi + head));
+  if (tail &gt; 0) xor_(end - tail, end, ai + (n - tail), end - tail);
+ }
+ return b;
+ }
+
+ template&lt;class Int&gt;
+ pyublas::numpy_vector&lt;Int&gt; 
+ xorcpp_pyublas_inplace(pyublas::numpy_vector&lt;Int&gt; a, 
+       pyublas::numpy_vector&lt;Int&gt; b) {
+ xor_(b.begin(), b.end(), a.begin(), b.begin());
+ return b;
+ }
+}
+
+BOOST_PYTHON_MODULE(xorcpp)
+{
+ py::def("xorcpp_inplace", xorcpp_str_inplace&lt;int64_t&gt;);  // for strings
+ py::def("xorcpp_inplace", xorcpp_pyublas_inplace&lt;int32_t&gt;); // for numpy
+}
+ 
+
+ It is used from Python as follows: 
+
+ import os
+import xorcpp
+
+a = os.urandom(2**20)
+b = os.urandom(2**20)
+c = xorcpp.xorcpp_inplace(a, b) # it calls xorcpp_str_inplace()
+ 
+ #2 Here are my results for cython 
+
+ slow_xor 0.456888198853
+faster_xor 0.400228977203
+cython_xor 0.232881069183
+cython_xor_vectorised 0.171468019485
+ 
+
+ Vectorising in cython shaves about 25% off the for loop on my computer, However more than half the time is spent building the python string (the return statement) - I don't think the extra copy can be avoided (legally) as the array may contain null bytes. 
+
+ The illegal way would be to pass in a Python string and mutate it in place and would double the speed of the function. 
+
+ xor.py 
+
+ from time import time
+from os import urandom
+from numpy import frombuffer,bitwise_xor,byte,uint64
+import pyximport; pyximport.install()
+import xor_
+
+def slow_xor(aa,bb):
+ a=frombuffer(aa,dtype=byte)
+ b=frombuffer(bb,dtype=byte)
+ c=bitwise_xor(a,b)
+ r=c.tostring()
+ return r
+
+def faster_xor(aa,bb):
+ a=frombuffer(aa,dtype=uint64)
+ b=frombuffer(bb,dtype=uint64)
+ c=bitwise_xor(a,b)
+ r=c.tostring()
+ return r
+
+aa=urandom(2**20)
+bb=urandom(2**20)
+
+def test_it():
+ t=time()
+ for x in xrange(100):
+  slow_xor(aa,bb)
+ print "slow_xor ",time()-t
+ t=time()
+ for x in xrange(100):
+  faster_xor(aa,bb)
+ print "faster_xor",time()-t
+ t=time()
+ for x in xrange(100):
+  xor_.cython_xor(aa,bb)
+ print "cython_xor",time()-t
+ t=time()
+ for x in xrange(100):
+  xor_.cython_xor_vectorised(aa,bb)
+ print "cython_xor_vectorised",time()-t
+
+if __name__=="__main__":
+ test_it()
+ 
+
+ xor_.pyx 
+
+ cdef char c[1048576]
+def cython_xor(char *a,char *b):
+ cdef int i
+ for i in range(1048576):
+  c[i]=a[i]^b[i]
+ return c[:1048576]
+
+def cython_xor_vectorised(char *a,char *b):
+ cdef int i
+ for i in range(131094):
+  (&lt;unsigned long long *&gt;c)[i]=(&lt;unsigned long long *&gt;a)[i]^(&lt;unsigned long long *&gt;b)[i]
+ return c[:1048576]
+ 
+ #3 An easy speedup is to use a larger 'chunk': 
+
+ def faster_xor(aa,bb):
+ a=frombuffer(aa,dtype=uint64)
+ b=frombuffer(bb,dtype=uint64)
+ c=bitwise_xor(a,b)
+ r=c.tostring()
+ return r
+ 
+
+ with uint64 also imported from numpy of course. I timeit this at 4 milliseconds, vs 6 milliseconds for the byte version. 
+ #4 Your problem isn't the speed of NumPy's xOr method, but rather with all of the buffering/data type conversions. Personally I suspect that the point of this post may have really been to brag about Python, because what you are doing here is processing THREE GIGABYTES of data in timeframes on par with non-interpreted languages, which are inherently faster. 
+
+ The below code shows that even on my humble computer Python can xOr "aa" (1MB) and "bb" (1MB) into "c" (1MB) one thousand times (total 3GB) in under two seconds . Seriously, how much more improvement do you want? Especially from an interpreted language! 80% of the time was spent calling "frombuffer" and "tostring". The actual xOr-ing is completed in the other 20% of the time. At 3GB in 2 seconds, you would be hard-pressed to improve upon that substantially even just using memcpy in c. 
+
+ In case this was a real question, and not just covert bragging about Python, the answer is to code so as to minimize the number, amount and frequency of your type conversions such as "frombuffer" and "tostring". The actual xOr'ing is lightning fast already. 
+
+ from os import urandom
+from numpy import frombuffer,bitwise_xor,byte,uint64
+
+def slow_xor(aa,bb):
+ a=frombuffer(aa,dtype=byte)
+ b=frombuffer(bb,dtype=byte)
+ c=bitwise_xor(a,b)
+ r=c.tostring()
+ return r
+
+bb=urandom(2**20)
+aa=urandom(2**20)
+
+def test_it():
+ for x in xrange(1000):
+ slow_xor(aa,bb)
+
+def test_it2():
+ a=frombuffer(aa,dtype=uint64)
+ b=frombuffer(bb,dtype=uint64)
+ for x in xrange(1000):
+  c=bitwise_xor(a,b);
+ r=c.tostring() 
+
+test_it()
+print 'Slow Complete.'
+#6 seconds
+test_it2()
+print 'Fast Complete.'
+#under 2 seconds
+ 
+
+ Anyway, the "test_it2" above accomplishes exactly the same amount of xOr-ing as "test_it" does, but in 1/5 the time. 5x speed improvement should qualify as "substantial", no? 
+ #5 The fastest bitwise XOR is "^". I can type that much quicker than "bitwise_xor" ;-) 
+ #6 If you want to do fast operations on array data types, then you should try Cython (cython.org). If you give it the right declarations it should be able to compile down to pure c code. 
+ #7 How badly do you need the answer as a string? Note that the c.tostring() method has to copy the data in c to a new string, as Python strings are immutable (and c is mutable). Python 2.6 and 3.1 have a bytearray type, which acts like str ( bytes in Python 3.x) except for being mutable. 
+
+ Another optimization is using the out parameter to bitwise_xor to specify where to store the result. 
+
+ On my machine I get 
+
+ slow_xor (int8): 5.293521 (100.0%)
+outparam_xor (int8): 4.378633 (82.7%)
+slow_xor (uint64): 2.192234 (41.4%)
+outparam_xor (uint64): 1.087392 (20.5%)
+ 
+
+ with the code at the end of this post. Notice in particular that the method using a preallocated buffer is twice as fast as creating a new object (when operating on 4-byte ( uint64 ) chunks). This is consistent with the slower method doing two operations per chunk (xor + copy) to the faster's 1 (just xor). 
+
+ Also, FWIW, a ^ b is equivalent to bitwise_xor(a,b) , and a ^= b is equivalent to bitwise_xor(a, b, a) . 
+
+ So, 5x speedup without writing any external modules :) 
+
+ from time import time
+from os import urandom
+from numpy import frombuffer,bitwise_xor,byte,uint64
+
+def slow_xor(aa, bb, ignore, dtype=byte):
+ a=frombuffer(aa, dtype=dtype)
+ b=frombuffer(bb, dtype=dtype)
+ c=bitwise_xor(a, b)
+ r=c.tostring()
+ return r
+
+def outparam_xor(aa, bb, out, dtype=byte):
+ a=frombuffer(aa, dtype=dtype)
+ b=frombuffer(bb, dtype=dtype)
+ c=frombuffer(out, dtype=dtype)
+ assert c.flags.writeable
+ return bitwise_xor(a, b, c)
+
+aa=urandom(2**20)
+bb=urandom(2**20)
+cc=bytearray(2**20)
+
+def time_routine(routine, dtype, base=None, ntimes = 1000):
+ t = time()
+ for x in xrange(ntimes):
+  routine(aa, bb, cc, dtype=dtype)
+ et = time() - t
+ if base is None:
+  base = et
+ print "%s (%s): %f (%.1f%%)" % (routine.__name__, dtype.__name__, et,
+  (et/base)*100)
+ return et
+
+def test_it(ntimes = 1000):
+ base = time_routine(slow_xor, byte, ntimes=ntimes)
+ time_routine(outparam_xor, byte, base, ntimes=ntimes)
+ time_routine(slow_xor, uint64, base, ntimes=ntimes)
+ time_routine(outparam_xor, uint64, base, ntimes=ntimes)
+ 
+ #8 You could try the symmetric difference of the bitsets of sage. 
+
+ http://www.sagemath.org/doc/reference/sage/misc/bitset.html 
+ #9 The fastest way (speedwise) will be doing what Max. S recommended. Implement it in C. 
+
+ The supporting code for this task should be rather simple to write. It is just one function in a module creating a new string and doing the xor. That's all. When you have implemented one module like that, it is simple to take the code as template. Or you even take a module implemented from somebody else that implements a simple enhancement module for Python and just throw out everything not needed for your task. 
+
+ The real complicated part is just, doing the RefCounter-Stuff right. But once realized how it works, it is manageable -- also since the task at hand is really simple (allocate some memory, and return it -- params are not to be touched (Ref-wise)). 
+ #10 Get rid of the function call, and do the xor operation inline.

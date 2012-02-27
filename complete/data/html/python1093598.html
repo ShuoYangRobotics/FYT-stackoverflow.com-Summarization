@@ -1,0 +1,132 @@
+<h3>Question (ID-1093598):</h3><h2>pyserial - How to Read Last Line Sent from Serial Device</h2><p>So I have an Arduino connected to my Windows XP computer.  It's just running a loop, sending a value over the serial port back to the computer every 100ms.  </p>
+
+<p>I want to make a Python script that will read from the serial port only every few seconds, so I want it to just see the last thing sent from the Arduino.</p>
+
+<p>How do you do this in Pyserial?</p>
+
+<p>Here's the code I tried which does't work.  It reads the lines sequentially.</p>
+
+<pre><code>import serial
+import time
+
+ser = serial.Serial('com4',9600,timeout=1)
+while 1:
+    time.sleep(10)
+    print ser.readline() #how to get most recent line sent from device?
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Perhaps I'm misunderstanding your question, but as it's a serial line, you'll have to read everything sent from the Arduino sequentially - it'll be buffered up in the Arduino until you read it.</p>
+
+<p>If you want to have a status display which shows the latest thing sent - use a thread which incorporates the code in your question (minus the sleep), and keep the last complete line read as the latest line from the Arduino.</p>
+
+<p><strong>Update:</strong> <code>mtasic</code>'s example code is quite good, but if the Arduino has sent a partial line when <code>inWaiting()</code> is called, you'll get a truncated line. Instead, what you want to do is to put the last <em>complete</em> line into <code>last_received</code>, and keep the partial line in <code>buffer</code> so that it can be appended to the next time round the loop. Something like this:</p>
+
+<pre><code>def receiving(ser):
+    global last_received
+
+    buffer = ''
+    while True:
+        buffer = buffer + ser.read(ser.inWaiting())
+        if '\n' in buffer:
+            lines = buffer.split('\n') # Guaranteed to have at least 2 entries
+            last_received = lines[-2]
+            #If the Arduino sends lots of empty lines, you'll lose the
+            #last filled line, so you could make the above statement conditional
+            #like so: if lines[-2]: last_received = lines[-2]
+            buffer = lines[-1]
+</code></pre>
+
+<p>Regarding use of <code>readline()</code>: Here's what the Pyserial documentation has to say (slightly edited for clarity):</p>
+
+<blockquote>
+  <p>Be careful when using "readline". Do
+  specify a timeout when opening the
+  serial port, otherwise it could block
+  forever if no newline character is
+  received. Also note that "readline"
+  only works with a timeout. It
+  depends on having a timeout and
+  interprets that as EOF (end of file).</p>
+</blockquote>
+
+<p>which seems quite reasonable to me!</p>
+<br /><b>#1</b><br /><p>These solutions will hog the CPU while waiting for characters.</p>
+
+<p>You should do at least one blocking call to read(1)</p>
+
+<pre><code>while True:
+    if '\n' in buffer: 
+        pass # skip if a line already in buffer
+    else:
+        buffer += ser.read(1)  # this will block until one more char or timeout
+    buffer += ser.read(ser.inWaiting()) # get remaining buffered chars
+</code></pre>
+
+<p>...and do the split thing as before.</p>
+<br /><b>#2</b><br /><pre><code>from serial import *
+from threading import Thread
+
+last_received = ''
+
+def receiving(ser):
+    global last_received
+    buffer = ''
+
+    while True:
+        # last_received = ser.readline()
+        buffer += ser.read(ser.inWaiting())
+        if '\n' in buffer:
+            last_received, buffer = buffer.split('\n')[-2:]
+
+if __name__ ==  '__main__':
+    ser = Serial(
+        port=None,
+        baudrate=9600,
+        bytesize=EIGHTBITS,
+        parity=PARITY_NONE,
+        stopbits=STOPBITS_ONE,
+        timeout=0.1,
+        xonxoff=0,
+        rtscts=0,
+        interCharTimeout=None
+    )
+
+    Thread(target=receiving, args=(ser,)).start()
+</code></pre>
+<br /><b>#3</b><br /><p>You will need a loop to read everything sent, with the last call to readline() blocking until the timeout.  So:</p>
+
+<pre><code>def readLastLine(ser):
+    last_data=''
+    while True:
+        data=ser.readline()
+        if data!='':
+            last_data=data
+        else:
+            return last_data
+</code></pre>
+<br /><b>#4</b><br /><p>Slight modification to mtasic &amp; Vinay Sajip's code:</p>
+
+<p>While I found this code quite helpful to me for a similar application, I needed <em>all</em> the lines coming back from a serial device that would send information periodically.</p>
+
+<p>I opted to pop the first element off the top, record it, and then rejoin the remaining elements as the new buffer and continue from there.</p>
+
+<p>I realize that this is <strong>not</strong> what Greg was asking for, but I thought it was worth sharing as a side note.</p>
+
+<pre><code>def receiving(ser):
+    global last_received
+
+    buffer = ''
+    while True:
+        buffer = buffer + ser.read(ser.inWaiting())
+        if '\n' in buffer:
+            lines = buffer.split('\n')
+            last_received = lines.pop(0)
+
+            buffer = '\n'.join(lines)
+</code></pre>
+<br /><b>#5</b><br /><p>For the benefit of people looking for answers to this: </p>
+
+<p>Using .inWaiting() inside an infinite loop may be problematic. Its may hog up the entire cpu depending on the implementation. Instead I would recommend using a specific size of data to be read. So in this case the following should be done for example: </p>
+
+<pre><code>ser.read(1024)
+</code></pre>
+<br />

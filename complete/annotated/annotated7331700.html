@@ -1,0 +1,91 @@
+<h3>Question ( ID-7331700 ) : </h3><h2>How can I find <span style="background-color:yellow;">intersection</span> of two large file efficiently using python ? </h2><p>I have two large files. Their contents looks like this : </p>
+<blockquote>134430513 125296589 151963957 125296589 </blockquote>
+<p>The file contains an unsorted list of ids. Some ids may appear more than one time in a single file . </p>
+<p>Now I want to find the <span style="background-color:yellow;">intersection</span> part of two files. That is the ids appear in both files . </p>
+<p>I just read the two files <span style="background-color:yellow;">into</span> 2 sets , s1 and s2 . And get the <span style="background-color:yellow;">intersection</span> by s1.intersection ( s2 ) . But it consumes a lot of memory and seems slow . </p>
+<p>So is there any better or pythonic way to do this ? If the file contains so many ids that can not be read <span style="background-color:yellow;">into</span> a set with limited memory , what can I do ? </p>
+<p>EDIT : I read the file <span style="background-color:yellow;">into</span> 2 sets using a generator : </p>
+<pre><code>def id_gen(path):
+    for line in open(path):
+        tmp = line.split()
+        yield int(tmp[0])
+
+c1 = id_gen(path)
+s1 = set(c1)
+</code></pre>
+<p>All of the ids are numeric. And the max id may be <span style="background-color:yellow;">5000000000.</span> If use <span style="background-color:yellow;">bitarray</span> , it will consume more memory . </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><pre><code>set(open(file1)) & set(open(file2))
+</code></pre>
+<p>which is equivalent to using <span style="background-color:yellow;">intersection</span> , is the most Pythonic way. You might be able to speed it up by doing </p>
+<pre><code>set(int(x) for x in open(file1)) & set(int(x) for x in open(file2))
+</code></pre>
+<p>since then you 'll be storing and comparing <span style="background-color:yellow;">integers</span> rather than strings. This only works if all ids are numeric , of course . </p>
+<p>If it 's still not fast enough , you can turn to a slightly more imperative style : </p>
+<pre><code># heuristic: set smaller_file and larger_file by checking the file size
+a = set(int(x) for x in open(smaller_file))
+# note: we're storing strings in r
+r = set(x for x in open(larger_file) if int(x) in a)
+</code></pre>
+<p>If both files are guaranteed not to contain duplicates , you can also use a list to speed things up : </p>
+<pre><code>a = set(int(x) for x in open(smaller_file))
+r = [x for x in open(larger_file) if int(x) in a]
+</code></pre>
+<p>Be sure to measure various solutions , and check whether you 're not actually waiting for disk or network input . </p>
+<br /><b># 1 </b><br /><p>So the algorithm is not necessarily tied to python , but rather generic if you can not represent all ids in a set in memory. If the range of the <span style="background-color:yellow;">integers</span> is limited , an approach would be to use a large <span style="background-color:yellow;">bitarray</span> . Now you read the first file and set the <span style="background-color:yellow;">integer</span> in the <span style="background-color:yellow;">bitarray</span> to be present . Now you read the second file , and output all numbers that are also present in the <span style="background-color:yellow;">bitarray</span> . </p>
+<p>If even this is not sufficient , you can split the range using multiple sweeps. I.e. in the first pass , you only consider <span style="background-color:yellow;">integers</span> smaller than 0x200000000 ( 1GB <span style="background-color:yellow;">bitarray</span> ) . Then you reset the <span style="background-color:yellow;">bitarray</span> and read the files again only considering <span style="background-color:yellow;">integers</span> from 0x200000000 to 0x400000000 ( and substract 0x200000000 before handling the <span style="background-color:yellow;">integer</span> ) . </p>
+<p>This way you can handle LARGE amounts of data , with reasonable runtime . </p>
+<p>A sample for single sweep would be : </p>
+<pre><code>import bitarray
+r = bitarray.bitarray(5000000000)
+
+for line in open(file1):
+    r[int(line)] = True
+
+for line in open(file2):
+    if r[int(line)]:
+        print line
+</code></pre>
+<br /><b># 2 </b><br /><p>You need not create both s1 and s2 . First read in the <span style="background-color:yellow;">lines</span> from the first file , convert each <span style="background-color:yellow;">line</span> to <span style="background-color:yellow;">integer</span> ( saves memory ) , put it in s1 . Then for each <span style="background-color:yellow;">line</span> in the second file , convert it to <span style="background-color:yellow;">integer</span> , and check if this value is in s1 . </p>
+<p>That way , you 'll save memory from storing strings , and from having two sets . </p>
+<br /><b># 3 </b><br /><p>AFAIK there is no efficient way to do this with Python , especially if you are dealing with massive amounts of data . </p>
+<p>I like rumpel 's solution. But please note that <span style="background-color:yellow;">bitarray</span> is a C extension . </p>
+<p>I would use shell commands to handle this. You can pre-process files to save time &amp ; space : </p>
+<pre><code>sort -u file1 file1.sorted
+sort -u file2 file2.sorted
+</code></pre>
+<p>Then you can use diff to find out the similarities : </p>
+<pre><code>diff --changed-group-format='' --unchanged-group-format='%=' file1.sorted file2.sorted
+</code></pre>
+<p>Of course it is possible to combine everything <span style="background-color:yellow;">into</span> a single command , without creating <span style="background-color:yellow;">intermediary</span> files . </p>
+<p>UPDATE </p>
+<p>According to Can 's recommendation , comm is the more appropriate command : </p>
+<pre><code>sort -u file1 file1.sorted
+sort -u file2 file2.sorted
+comm -12 file1.sorted file2.sorted
+</code></pre>
+<br /><b># 4 </b><br /><p>Others have shown the more idiomatic ways of doing this in Python , but if the size of the data really is too big , you can use the <span style="background-color:yellow;">system</span> utilities to sort and eliminate duplicates , then use the fact that a File is an iterator which returns one <span style="background-color:yellow;">line</span> at a time , doing something like : </p>
+<pre><code>import os
+os.system('sort -u -n s1.num > s1.ns')
+os.system('sort -u -n s2.num > s2.ns')
+i1 = open('s1.ns', 'r')
+i2 = open('s2.ns', 'r')
+try:
+    d1 = i1.next()
+    d2 = i2.next()
+    while True:
+        if (d1 < d2):
+            d1 = i1.next()
+        elif (d2 < d1):
+            d2 = i2.next()
+        else:
+            print d1,
+            d1 = i1.next()
+            d2 = i2.next()
+except StopIteration:
+    pass
+</code></pre>
+<p>This avoids having more than one <span style="background-color:yellow;">line</span> at a time ( for each file ) in memory ( and the <span style="background-color:yellow;">system</span> sort should be faster than anything Python can do , as it is optimized for this one task ) . </p>
+<br /><b># 5 </b><br /><p>for data larger then memory , you can split your data file <span style="background-color:yellow;">into</span> 10 files , which contain the same lowest digital . </p>
+<p>so all ids in s1.txt that ends with 0 will be saved in s1_0.txt . </p>
+<p>Then use set ( ) to find the <span style="background-color:yellow;">intersection</span> of s1_0.txt and s2_0.txt , s1_1.txt and s2_1.txt , .. . </p>
+<br />

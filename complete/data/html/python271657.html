@@ -1,0 +1,132 @@
+<h3>Question (ID-271657):</h3><h2>how to tell if a string is base64 or not</h2><p>I have many emails coming in from different sources.
+they all have attachments, many of them have attachment names in chinese, so these
+names are converted to base64 by their email clients.</p>
+
+<p>When I receive these emails, I wish to decode the name. but there are other names which are
+not base64. How can I differentiate whether a string is base64 or not, using the <strong>jython</strong> programming language?</p>
+
+<p>Ie.  </p>
+
+<p>First attachment:  </p>
+
+<pre><code>------=_NextPart_000_0091_01C940CC.EF5AC860
+Content-Type: application/vnd.ms-excel;
+ name="Copy of Book1.xls"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment;
+ filename="Copy of Book1.xls"
+</code></pre>
+
+<p>second attachment:</p>
+
+<pre><code>------=_NextPart_000_0091_01C940CC.EF5AC860
+Content-Type: application/vnd.ms-excel;
+ name="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment;
+ filename="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+</code></pre>
+
+<p>Please note both "<strong>Content-Transfer-Encoding</strong>" have base64</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>The header value tells you this:</p>
+
+<pre>
+=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?=
+
+"=?"     introduces an encoded value
+"gb2312" denotes the character encoding of the original value
+"B"      denotes that B-encoding (equal to Base64) was used (the alternative 
+         is "Q", which refers to something close to quoted-printable)
+"?"      functions as a separator
+"uLG..." is the actual value, encoded using the encoding specified before
+"?="     ends the encoded value
+</pre>
+
+<p>So splitting on "?" actually gets you this (JSON notation)</p>
+
+<pre>
+["=", "gb2312", "B", "uLGxvmhlbrixsb5nLnhscw==", "="]
+</pre>
+
+<p>In the resulting array, if "B" is on position 2, you face a base-64 encoded string on position 3. Once you decoded it, be sure to pay attention to the encoding on position 1, probably it would be best to convert the whole thing to UTF-8 using that info.</p>
+<br /><b>#1</b><br /><blockquote>
+  <p>Please note both <code>Content-Transfer-Encoding</code> have base64</p>
+</blockquote>
+
+<p>Not relevant in this case, the <code>Content-Transfer-Encoding</code> only applies to the body payload, not to the headers.</p>
+
+<pre><code>=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?=
+</code></pre>
+
+<p>That's an <strong>RFC2047</strong>-encoded header atom. The stdlib function to decode it is <code>email.header.decode_header</code>. It still needs a little post-processing to interpret the outcome of that function though:</p>
+
+<pre><code>import email.header
+x= '=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?='
+try:
+    name= u''.join([
+        unicode(b, e or 'ascii') for b, e in email.header.decode_header(x)
+    ])
+except email.Errors.HeaderParseError:
+    pass # leave name as it was
+</code></pre>
+
+<p>However...</p>
+
+<pre><code>Content-Type: application/vnd.ms-excel;
+ name="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+</code></pre>
+
+<p>This is simply wrong. What mailer created it? RFC2047 encoding can only happen in atoms, and a quoted-string is not an atom. RFC2047 §5 explicitly denies this:</p>
+
+<blockquote>
+  <ul>
+  <li>An 'encoded-word' MUST NOT appear within a 'quoted-string'.</li>
+  </ul>
+</blockquote>
+
+<p>The accepted way to encode parameter headers when long string or Unicode characters are present is <strong>RFC2231</strong>, which is a whole new bag of hurt. But you should be using a standard mail-parsing library which will cope with that for you.</p>
+
+<p>So, you could detect the <code>'=?'</code> in filename parameters if you want, and try to decode it via RFC2047. However, the strictly-speaking-correct thing to do is to take the mailer at its word and really call the file <code>=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?=</code>!</p>
+<br /><b>#2</b><br /><p>@gnud, @edg - Unless I misunderstand, he's asking about the filename, not the file content
+@setori - the Content-Trasfer-Encoding is telling you how the CONTENT of the file is encoded, not the "filename".</p>
+
+<p>I'm not an expert, but this part here in the filename is telling him about the characters that follow:</p>
+
+<p>=?gb2312?B?</p>
+
+<p>I'm looking for the documentation in the RFCs... Ah! here it is: <a href="http://tools.ietf.org/html/rfc2047" rel="nofollow">http://tools.ietf.org/html/rfc2047</a></p>
+
+<p>The RFC says:</p>
+
+<p><strong><em>Generally, an "encoded-word" is a sequence of printable ASCII characters that begins with "=?", ends with "?=", and has two "?"s in between.</em></strong> </p>
+
+<p>Something else to look at is the code in SharpMimeTools, a MIME parser (in C#) that I use in my <a href="http://ifdefined.com/bugtrackernet.html" rel="nofollow">bug tracking</a> app, <a href="http://ifdefined.com/bugtrackernet.html" rel="nofollow">BugTracker.NET</a></p>
+<br /><b>#3</b><br /><p>There is a better way than bobince’s method to handle the output of <code>decode_header</code>. I found it here: <a href="http://mail.python.org/pipermail/email-sig/2007-March/000332.html" rel="nofollow">http://mail.python.org/pipermail/email-sig/2007-March/000332.html</a></p>
+
+<pre><code>name = unicode(email.header.make_header(email.header.decode_header(x)))
+</code></pre>
+<br /><b>#4</b><br /><p>Well, you parse the email header into a dictionary. And then you check if Content-Transfer-Encoding is set, and if it = "base64" or "base-64".</p>
+<br /><b>#5</b><br /><p>Question: """Also I actually need to know what type of file it is ie .xls or .doc so I do need to decode the filename in order to correctly process the attachment, but as above, seems gb2312 is not supported in jython, know any roundabouts?"""</p>
+
+<p>Data:</p>
+
+<pre><code>Content-Type: application/vnd.ms-excel;
+ name="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+</code></pre>
+
+<p>Observations:</p>
+
+<p>(1) The first line indicates Microsoft Excel, so <code>.xls</code> is looking better than <code>.doc</code></p>
+
+<p>(2) </p>
+
+<pre><code>&gt;&gt;&gt; import base64
+&gt;&gt;&gt; base64.b64decode("uLGxvmhlbrixsb5nLnhscw==")
+'\xb8\xb1\xb1\xbehen\xb8\xb1\xb1\xbeg.xls'
+&gt;&gt;&gt;
+</code></pre>
+
+<p>(a) The extension appears to be <code>.xls</code> -- no need for a <code>gb2312</code> codec<br>
+(b) If you want a file-system-safe file name, you could use the "-_" variant of base64 OR you could percent-encode it<br>
+(c) For what it's worth, the file name is <code>XYhenXYg.xls</code> where X and Y are 2 Chinese characters that together mean "copy" and the remainder are literal ASCII characters.</p>
+<br />

@@ -1,0 +1,179 @@
+Question (ID-1339293): Python: Memory leak debugging I have a small multithreaded script running in django and over time its starts using more and more memory. Leaving it for a full day eats about 6GB of RAM and I start to swap. 
+
+ Following http://www.lshift.net/blog/2008/11/14/tracing-python-memory-leaks I see this as the most common types (with only 800M of memory used): 
+
+ (Pdb) objgraph.show_most_common_types(limit=20)
+dict      43065
+tuple      28274
+function     7335
+list      6157
+NavigableString   3479
+instance     2454
+cell      1256
+weakref     974
+wrapper_descriptor   836
+builtin_function_or_method 766
+type      742
+getset_descriptor   562
+module      423
+method_descriptor   373
+classobj     256
+instancemethod    255
+member_descriptor   218
+property     185
+Comment     183
+__proxy__     155
+ 
+
+ which doesn't show anything weird. What should I do now to help debug the memory problems? 
+
+ Update: Trying some things people are recommending. I ran the program overnight, and when I work up, 50% * 8G == 4G of RAM used. 
+
+ (Pdb) from pympler import muppy
+(Pdb) muppy.print_summary()
+          types | # objects | total size
+========================================== | =========== | ============
+         unicode |  210997 |  97.64 MB
+          list |  1547 |  88.29 MB
+          dict |  41630 |  13.21 MB
+          set |   50 |  8.02 MB
+          str |  109360 |  7.11 MB
+          tuple |  27898 |  2.29 MB
+          code |  6907 |  1.16 MB
+          type |   760 | 653.12 KB
+         weakref |  1014 |  87.14 KB
+          int |  3552 |  83.25 KB
+     function (__wrapper__) |   702 |  82.27 KB
+      wrapper_descriptor |   998 |  77.97 KB
+          cell |  1357 |  74.21 KB
+ &lt;class 'pympler.asizeof.asizeof._Claskey |  1113 |  69.56 KB
+      function (__init__) |   574 |  67.27 KB
+ 
+
+ That doesn't sum to 4G, nor really give me any big data structured to go fix. The unicode is from a set() of "done" nodes, and the list's look like just random weakref s. 
+
+ I didn't use guppy since it required a C extension and I didn't have root so it was going to be a pain to build. 
+
+ None of the objectI was using have a __del__ method, and looking through the libraries, it doesn't look like django nor the python-mysqldb do either. Any other ideas? 
+ Answers (Total-7): #0 Is DEBUG=False in settings.py? 
+
+ If not Django will happily store all the SQL queries you make which adds up. 
+ #1 See http://blog.mfabrik.com/2008/03/07/debugging-django-memory-leak-with-trackrefs-and-guppy/ . Short answer: if you're running django but not in a web-request-based format, you need to manually run db.reset_queries() (and of course have DEBUG=False, as others have mentioned). Django automatically does reset_queries() after a web request, but in your format, that never happens. 
+ #2 Have you tried gc.set_debug() ? 
+
+ You need to ask yourself simple questions: 
+
+ 
+ Am I using objects with __del__ methods? Do I absolutely, unequivocally, need them? 
+ Can I get reference cycles in my code? Can't we break these circles before getting rid of the objects? 
+ 
+
+ See, the main issue would be a cycle of objects containing __del__ methods: 
+
+ import gc
+
+class A(object):
+ def __del__(self):
+  print 'a deleted'
+  if hasattr(self, 'b'):
+   delattr(self, 'b')
+
+class B(object):
+ def __init__(self, a):
+  self.a = a
+ def __del__(self):
+  print 'b deleted'
+  del self.a
+
+
+def createcycle():
+ a = A()
+ b = B(a)
+ a.b = b
+ return a, b
+
+gc.set_debug(gc.DEBUG_LEAK)
+
+a, b = createcycle()
+
+# remove references
+del a, b
+
+# prints:
+## gc: uncollectable &lt;A 0x...&gt;
+## gc: uncollectable &lt;B 0x...&gt;
+## gc: uncollectable &lt;dict 0x...&gt;
+## gc: uncollectable &lt;dict 0x...&gt;
+gc.collect()
+
+# to solve this we break explicitely the cycles:
+a, b = createcycle()
+del a.b
+
+del a, b
+
+# objects are removed correctly:
+## a deleted
+## b deleted
+gc.collect()
+ 
+
+ I would really encourage you to flag objects / concepts that are cycling in your application and focus on their lifetime: when you don't need them anymore, do we have anything referencing it? 
+
+ Even for cycles without __del__ methods, we can have an issue: 
+
+ import gc
+
+# class without destructor
+class A(object): pass
+
+def createcycle():
+ # a -&gt; b -&gt; c 
+ # ^   |
+ # ^&lt;--&lt;--&lt;--|
+ a = A()
+ b = A()
+ a.next = b
+ c = A()
+ b.next = c
+ c.next = a
+ return a, b, b
+
+gc.set_debug(gc.DEBUG_LEAK)
+
+a, b, c = createcycle()
+# since we have no __del__ methods, gc is able to collect the cycle:
+
+del a, b, c
+# no panic message, everything is collectable:
+##gc: collectable &lt;A 0x...&gt;
+##gc: collectable &lt;A 0x...&gt;
+##gc: collectable &lt;dict 0x...&gt;
+##gc: collectable &lt;A 0x...&gt;
+##gc: collectable &lt;dict 0x...&gt;
+##gc: collectable &lt;dict 0x...&gt;
+gc.collect()
+
+a, b, c = createcycle()
+
+# but as long as we keep an exterior ref to the cycle...:
+seen = dict()
+seen[a] = True
+
+# delete the cycle
+del a, b, c
+# nothing is collected
+gc.collect()
+ 
+
+ If you have to use "seen"-like dictionaries, or history, be careful that you keep only the actual data you need, and no external references to it. 
+
+ I'm a bit disappointed now by set_debug , I wish it could be configured to output data somewhere else than to stderr, but hopefully that should change soon . 
+ #3 See this excellent blog post from Ned Batchelder on how they traced down real memory leak in HP's Tabblo. A classic and worth reading. 
+ #4 I think you should use different tools. Apparently, the statistics you got is only about GC objects (i.e. objects which may participate in cycles); most notably, it lacks strings. 
+
+ I recommend to use Pympler ; this should provide you with more detailed statistics. 
+ #5 Try Guppy . 
+
+ Basicly, you need more information or be able to extract some. Guppy even provides graphical representation of data. 
+ #6 Do you use any extension? They are a wonderful place for memory leaks, and will not be tracked by python tools.

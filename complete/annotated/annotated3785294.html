@@ -1,0 +1,85 @@
+<h3>Question ( ID-3785294 ) : </h3><h2>Best way to iterate through all rows in a DB-table </h2><p>I often write little Python scripts to iterate through all rows of a DB-table . For example sending all to all subscribers a email . </p>
+<p>I do it like this </p>
+<pre><code>conn = MySQLdb.connect(host = hst, user = usr, passwd = pw, db = db)
+cursor = conn.cursor()
+subscribers = cursor.execute("SELECT * FROM tbl_subscriber;")
+
+for subscriber in subscribers:
+ ...
+
+conn.close()
+</code></pre>
+<p>I wonder if there is a better way to do this <span style="background-color:yellow;">cause</span> it is possible that my <span style="background-color:yellow;">code</span> loads thousands of rows into the memory . </p>
+<p>I thought about that it <span style="background-color:yellow;">could</span> be done better with LIMIT . Maybe <span style="background-color:yellow;">something</span> like that : </p>
+<pre><code>"SELECT * FROM tbl_subscriber LIMIT %d,%d;" % (actualLimit,steps)    
+</code></pre>
+<p>Whats the best way to do it ? How would you do it ? </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>unless you have BLOBs in there , thousands of rows should n't be a problem. Do you know that it is ? </p>
+<p>Also , why bring shame on yourself and your entire family by doing <span style="background-color:yellow;">something</span> like </p>
+<pre><code>"SELECT * FROM tbl_subscriber LIMIT %d,%d;" % (actualLimit,steps)
+</code></pre>
+<p>when the <span style="background-color:yellow;">cursor</span> will make the substitution for you in a manner that avoids SQL injection ? </p>
+<pre><code>c.execute("SELECT * FROM tbl_subscriber LIMIT %i,%i;", (actualLimit,steps))
+</code></pre>
+<br /><b># 1 </b><br /><p>First of all maybe you do n't need Select * from.. . </p>
+<p>maybe it 's enough for you just to get <span style="background-color:yellow;">some</span> stuff like : " SELECT email from... " </p>
+<p>that would decrease the amount of memory usage anyway : ) </p>
+<br /><b># 2 </b><br /><p>Do you have actual memory problems ? When iterating over a <span style="background-color:yellow;">cursor</span> , results are fetched one at a time ( your DB-API implementation might decide to prefetch results , but then it might offer a function to set the number of prefetched results ) . </p>
+<br /><b># 3 </b><br /><p>Most MySQL <span style="background-color:yellow;">connectors</span> based on libmysqlclient will buffer all the results in <span style="background-color:yellow;">client</span> memory by default for performance reasons ( with the assumption you wo n't be reading large resultsets ) . </p>
+<p>When you do need to read a large result in <span style="background-color:yellow;">MySQLdb</span> you <span style="background-color:yellow;">can</span> use a SSCursor to avoid buffering entire large resultsets . </p>
+<p>http : //mysql-python.sourceforge.net/MySQLdb.html # using-and-extending </p>
+<blockquote>SSCursor - A " server-side " <span style="background-color:yellow;">cursor.</span> Like Cursor but uses CursorUseResultMixIn. Use only if you are dealing with potentially large result sets . </blockquote>
+<p>This does introduce <span style="background-color:yellow;">complications</span> that you must be <span style="background-color:yellow;">careful</span> of. If you do n't read all the results from the <span style="background-color:yellow;">cursor</span> , a second query will raise an ProgrammingError : </p>
+<pre><code>>>> import MySQLdb
+>>> import MySQLdb.cursors
+>>> conn = MySQLdb.connect(read_default_file='~/.my.cnf')
+>>> curs = conn.cursor(MySQLdb.cursors.SSCursor)
+>>> curs.execute('SELECT * FROM big_table')
+18446744073709551615L
+>>> curs.fetchone()
+(1L, '2c57b425f0de896fcf5b2e2f28c93f66')
+>>> curs.execute('SELECT NOW()')
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/usr/lib64/python2.6/site-packages/MySQLdb/cursors.py", line 173, in execute
+    self.errorhandler(self, exc, value)
+  File "/usr/lib64/python2.6/site-packages/MySQLdb/connections.py", line 36, in defaulterrorhandler
+    raise errorclass, errorvalue
+_mysql_exceptions.ProgrammingError: (2014, "Commands out of sync; you can't run this command now")
+</code></pre>
+<p>This means you have to always read everything from the <span style="background-color:yellow;">cursor</span> ( and potentially multiple resultsets ) before issuing another - <span style="background-color:yellow;">MySQLdb</span> wo n't do this for you . </p>
+<br /><b># 4 </b><br /><p>You do n't have to modify the query , you <span style="background-color:yellow;">can</span> use the fetchmany method of <span style="background-color:yellow;">cursors.</span> Here is how I do it : </p>
+<pre><code>def fetchsome(cursor, some=1000):
+    fetch=cursor.fetchmany
+    while True:
+        rows=fetch(some)
+        if not rows: break
+        for row in rows:
+            yield row  
+</code></pre>
+<p>This way you <span style="background-color:yellow;">can</span> " SELECT * FROM tbl_subscriber ; " but you will only fetch <span style="background-color:yellow;">some</span> at a time . </p>
+<br /><b># 5 </b><br /><p>Would n't it be good , if you fetched one row at a time like this : </p>
+<pre><code>class Table:
+   def __init__(self, db, name):
+      self.db = db
+      self.name = name
+      self.dbc = self.db.cursor()
+
+   def __getitem__(self, item):
+      self.dbc.execute("select * from %s limit %s, 1" % 
+         (self.name, item))
+      return self.dbc.fetchone()
+
+   def __len__(self):
+      self.dbc.execute("select count(*) from %s" % (self.name))
+      r = int(self.dbc.fetchone()[0])
+      return r
+
+
+import MySQLdb
+db = MySQLdb.connect(user="user", passwd="passwd", db=db)
+subscribers = Table(db, "name")
+for i in xrange(len(subscribers)):
+   print subscribers[i] 
+</code></pre>
+<br />

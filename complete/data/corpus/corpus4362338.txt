@@ -1,0 +1,140 @@
+Question (ID-4362338): Python: Is there a way to keep an automatic conversion from int to long int from happening? Python is more strongly typed than other scripting languages. For example, in Perl: 
+
+ perl -E '$c=5; $d="6"; say $c+$d' #prints 11
+ 
+
+ But in Python: 
+
+ &gt;&gt;&gt; c="6"
+&gt;&gt;&gt; d=5
+&gt;&gt;&gt; print c+d
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: cannot concatenate 'str' and 'int' objects
+ 
+
+ Perl will inspect a string and convert to a number, and the + - / * ** operators work as you expect with a number. PHP is similar. 
+
+ Python uses + to concatenate strings so the the attempted operation of c+d fails because c is a string, d an int. Python has stronger sense of numeric types than does Perl. OK -- I can deal with that. 
+
+ But consider: 
+
+ &gt;&gt;&gt; from sys import maxint
+&gt;&gt;&gt; type(maxint)
+&lt;type 'int'&gt;
+&gt;&gt;&gt; print maxint
+9223372036854775807
+&gt;&gt;&gt; type(maxint+2)
+&lt;type 'long'&gt;
+&gt;&gt;&gt; print maxint+2
+9223372036854775809
+&gt;&gt;&gt; type((maxint+2)+maxint)
+&lt;type 'long'&gt;
+&gt;&gt;&gt; print ((maxint+2)+maxint)
+18446744073709551616
+ 
+
+ Now Python will autopromote from an int, which in this case is a 64 bit long (OS X, python 2.6.1) to a python long int which is of arbitrary precision. Even though the types are not the same, they are similar and Python allows the usual numeric operators to be used. Usually this is helpful. It is helpful with smoothing the differences between 32 bit and 64 bit for example. 
+
+ The conversion from int to long is one way: 
+
+ &gt;&gt;&gt; type((maxint+2)-2)
+&lt;type 'long'&gt;
+ 
+
+ Once the conversion is made, all operations on that variable are now done in arbitrary precision. The arbitrary precision operations are orders of magnitude slower than the native int operations. On a script I am working on, I would have some execution be snappy and other that extended into hours because of this. Consider: 
+
+ &gt;&gt;&gt; print maxint**maxint  # execution so long it is essentially a crash
+ 
+
+ So my question: Is there a way to defeat or not allow the auto-promotion of a Python int to a Python long ? 
+
+ Edit, follow-up: 
+
+ I received several comments in the form of 'why on earth would you want to have C style overflow behavior?' The issue was that this particular piece of code worked OK on 32 bits in C and Perl (with use int ) with C's overflow behavior. There was a failed attempt to port this code to Python. Python's different overflow behavior turn out to be (part) of the problem. The code has many of those different idioms (C, Perl, some python) mixed in (and those comments mixed in), so it was challenging. 
+
+ Essentially, the image analysis being done is a disc based high-pass filter to perform similar image comparison. Part of the high-pass filter has an integer-based multiplication of two large polynomials. The overflow was essentially a "don't - care, it's big..." kind of logic so the result was as intended with a C-based overflow. So the use of Horner's rule with O(n 2 ) time was a waste since the larger polynomials would just be "big" -- a rough-justice form of carot-top's saturation arithmetic. 
+
+ Changing the loop-based polynomial multiplication to a form of FFT is probably significantly faster. FFT runs in close to linear time vs O(n 2 ) for Horner's rule polynomial multiply. Going from disc based to in-memory will also speed this up. The images are not terribly big, but the original code was written at a time when they were considered "huge!!!" The code owner is not quite ready to trash his beloved code, so we'll see. The 'right answer' for him probably is just keep Perl or C if he wants that code. 
+
+ Thanks for the answers. I did not know about Python's decimal module, and that seemed to be closest to what I was asking -- even though there are other issues to be solved in this case! 
+ Answers (Total-6): #0 If you want arithmetic overflows to overflow within e.g. 32 bits, you could use e.g. numpy.uint32 . 
+
+ That gives you a warning when an overflow occurs. 
+
+ &gt;&gt;&gt; import numpy
+&gt;&gt;&gt; numpy.uint32(2**32-3) + numpy.uint32(5)
+Warning: overflow encountered in ulong_scalars
+2
+ 
+
+ I tested its speed though: 
+
+ &gt;\python26\python.exe -m timeit "2**16 + 2**2"
+1000000 loops, best of 3: 0.118 usec per loop
+
+&gt;\python26\python.exe -m timeit "2**67 + 2**65"
+1000000 loops, best of 3: 0.234 usec per loop
+
+&gt;\python26\python.exe -m timeit -s "import numpy; numpy.seterr('ignore')" "numpy.uint32(2)**numpy.uint32(67) + numpy.uint32(2)**numpy.uint32(65)"
+10000 loops, best of 3: 34.7 usec per loop
+ 
+
+ It's not looking good for speed. 
+ #1 Int vs long is an historical legacy - in python 3, every int is a "long". If your script speed is limited by int computation, it is likely that you are doing it wrong. 
+
+ To give you a proper answer, we need more information on what are you trying to do. 
+ #2 You can force your values to return to normal int s if you include an num = int(num) occasionally in your algorithm. If the value is long but fits in a native int, it will demote down to int. If the value doesn't fit in a native int, it will remain a long. 
+ #3 So you want to throw out the One True Way and go retro on overflows. Silly you. 
+
+ There is no good upside to the C / C++ / C# / Java style of overflow. It does not reliably raise an error condition . For C and C99 it is "undefined behavior" in ANSI and POSIX (C++ mandates modulo return) and it is a known security risk. Why do you want this? 
+
+ The Python method of seamlessly overflowing to a long is the better way. I believe this is the same behavior being adapted by Perl 6. 
+
+ You can use the Decimal module to get more finite overflows: 
+
+ &gt;&gt;&gt; from decimal import *
+&gt;&gt;&gt; from sys import maxint
+&gt;&gt;&gt; getcontext()
+Context(prec=28, rounding=ROUND_HALF_EVEN, Emin=-999999999, Emax=999999999, capitals=1,
+flags=[], traps=[DivisionByZero, Overflow, InvalidOperation])
+
+&gt;&gt;&gt; d=Decimal(maxint)
+&gt;&gt;&gt; d
+Decimal('9223372036854775807')
+&gt;&gt;&gt; e=Decimal(maxint)
+&gt;&gt;&gt; f=d**e
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/decimal.py", line 2225, in __pow__
+ ans = ans._fix(context)
+ File "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/decimal.py", line 1589, in _fix
+ return context._raise_error(Overflow, 'above Emax', self._sign)
+ File "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/decimal.py", line 3680, in _raise_error
+ raise error(explanation)
+decimal.Overflow: above Emax
+ 
+
+ You can set your precision and boundary conditions with Decimal classes and the overflow is nearly immediate. You can set what you trap for. You can set your max and min. Really -- How does it get better than this? (I don't know about relative speed to be honest, but I suspect it is faster than numby but slower than native ints obviously...) 
+
+ For your specific issue of image processing, this sounds like a natural application to consider some form of saturation arithmetic . You also might consider, if you are having overflows on 32 arithmetic, check operands along the way on obvious cases: pow, **, *. You might consider overloaded operators and check for the conditions you don't want. 
+
+ If Decimal, saturation, or overloaded operators don't work -- you can write an extension . Heaven help you if you want to throw out the Python way of overflow to go retro... 
+ #4 I don't know if it would be faster, neccesarily, but you could use numpy arrays of one element instead of ints. 
+
+ If the specific calculation you are concerned about is integer exponentiation, then there are some inferences we can draw: 
+
+ def smart_pow(mantissa, exponent, limit=int(math.ceil(math.log(sys.maxint)/math.log(2)))):
+ if mantissa in (0, 1):
+  return mantissa
+ if exponent &gt; limit:
+  if mantissa == -1: 
+   return -1 if exponent&amp;1 else 1
+  if mantissa &gt; 1:
+   return sys.maxint
+  else: 
+   return (-1-sys.maxint) if exponent&amp;1 else sys.maxint
+ else: # this *might* overflow, but at least it won't take long
+  return mantissa ** exponent
+ 
+ #5 Well, if you don't care about accuracy you could all of your math ops modulo maxint.

@@ -1,0 +1,212 @@
+Question (ID-189943): How can I quantify difference between two images? Here's what I would like to do: 
+
+ I'm taking pictures with a webcam at regular intervals. Sort of like a time lapse thing. However, if nothing has really changed, that is, the picture pretty much looks the same, I don't want to store the latest snapshot. 
+
+ I imagine there's some way of quantifying the difference, and I would have to empirically determine a threshold. 
+
+ I'm looking for simplicity rather than perfection.
+I'm using python. 
+ Answers (Total-15): #0 General idea 
+
+ Load both images as arrays ( scipy.misc.imread ) and calculate an element-wise difference. Calculate the norm of the difference. 
+
+ However, there are some decisions to make. 
+
+ Questions 
+
+ You should answer these questions first: 
+
+ 
+ Are images of the same shape and dimension? 
+
+ If not, you may need to resize or crop them. PIL library will help to do it in Python. 
+
+ If they are taken with the same settings and the same device, they are probably the same. 
+ Are images well-aligned? 
+
+ If not, you may want to run cross-correlation first, to find the best alignment first. SciPy has functions to do it. 
+
+ If the camera and the scene are still, the images are likely to be well-aligned. 
+ Is exposure of the images always the same? (Is lightness/contrast the same?) 
+
+ If not, you may want to normalize images. 
+
+ But be careful, in some situations this may do more wrong than good. For example, a single bright pixel on a dark background will make the normalized image very different. 
+ Is color information important? 
+
+ If you want to notice color changes, you will have a vector of color values per point, rather than a scalar value as in grayscale image. You need more attention when writing such code. 
+ Are there distinct edges in the image? Are they likely to move? 
+
+ If yes, you can apply edge detection algorithm first (e.g. calculate gradient with Sobel or Prewitt transform, apply some threshold), then compare edges on the first image to edges on the second. 
+ Is there noise in the image? 
+
+ All sensors pollute the image with some amount of noise. Low-cost sensors have more noise. You may wish to apply some noise reduction before you compare images. Blur is the most simple (but not the best) approach here. 
+ What kind of changes do you want to notice? 
+
+ This may affect the choice of norm to use for the difference between images. 
+
+ Consider using Manhattan norm (the sum of the absolute values) or zero norm (the number of elements not equal to zero) to measure how much the image has changed. The former will tell you how much the image is off, the latter will tell only how many pixels differ. 
+ 
+
+ Example 
+
+ I assume your images are well-aligned, the same size and shape, possibly with different exposure. For simplicity, I convert them to grayscale even if they are color (RGB) images. 
+
+ You will need these imports: 
+
+ import sys
+
+from scipy.misc import imread
+from scipy.linalg import norm
+from scipy import sum, average
+ 
+
+ Main function, read two images, convert to grayscale, compare and print results: 
+
+ def main():
+ file1, file2 = sys.argv[1:1+2]
+ # read images as 2D arrays (convert to grayscale for simplicity)
+ img1 = to_grayscale(imread(file1).astype(float))
+ img2 = to_grayscale(imread(file2).astype(float))
+ # compare
+ n_m, n_0 = compare_images(img1, img2)
+ print "Manhattan norm:", n_m, "/ per pixel:", n_m/img1.size
+ print "Zero norm:", n_0, "/ per pixel:", n_0*1.0/img1.size
+ 
+
+ How to compare. img1 and img2 are 2D SciPy arrays here: 
+
+ def compare_images(img1, img2):
+ # normalize to compensate for exposure difference, this may be unnecessary
+ # consider disabling it
+ img1 = normalize(img1)
+ img2 = normalize(img2)
+ # calculate the difference and its norms
+ diff = img1 - img2 # elementwise for scipy arrays
+ m_norm = sum(abs(diff)) # Manhattan norm
+ z_norm = norm(diff.ravel(), 0) # Zero norm
+ return (m_norm, z_norm)
+ 
+
+ If the file is a color image, imread returns a 3D array, average RGB channels (the last array axis) to obtain intensity. No need to do it for grayscale images (e.g. .pgm ): 
+
+ def to_grayscale(arr):
+ "If arr is a color image (3D array), convert it to grayscale (2D array)."
+ if len(arr.shape) == 3:
+  return average(arr, -1) # average over the last axis (color channels)
+ else:
+  return arr
+ 
+
+ Normalization is trivial, you may choose to normalize to [0,1] instead of [0,255]. arr is a SciPy array here, so all operations are element-wise: 
+
+ def normalize(arr):
+ rng = arr.max()-arr.min()
+ amin = arr.min()
+ return (arr-amin)*255/rng
+ 
+
+ Run the main function: 
+
+ if __name__ == "__main__":
+ main()
+ 
+
+ Now you can put this all in a script and run against two images. If we compare image to itself, there is no difference: 
+
+ $ python compare.py one.jpg one.jpg
+Manhattan norm: 0.0 / per pixel: 0.0
+Zero norm: 0 / per pixel: 0.0
+ 
+
+ If we blur the image and compare to the original, there is some difference: 
+
+ $ python compare.py one.jpg one-blurred.jpg 
+Manhattan norm: 92605183.67 / per pixel: 13.4210411116
+Zero norm: 6900000 / per pixel: 1.0
+ 
+
+ P.S. Entire compare.py script. 
+ #1 You can compare two images using functions from PIL . 
+
+ import Image
+import ImageChops
+
+im1 = Image.open("splash.png")
+im2 = Image.open("splash2.png")
+
+diff = ImageChops.difference(im2, im1)
+ 
+
+ The diff object is an image in which every pixel is the result of the subtraction of the color values of that pixel in the second image from the first image. Using the diff image you can do several things. The simplest one is the diff.getbbox() function. It will tell you the minimal rectangle that contains all the changes between your two images. 
+
+ You can probably implement approximations of the other stuff mentioned here using functions from PIL as well. 
+ #2 A simple solution: 
+
+ Encode the image as a jpeg and look for a substantial change in filesize . 
+
+ I've implemented something similar with video thumbnails, and had a lot of success and scalability. 
+ #3 Two popular and relatively simple methods are: (a) the Euclidean distance already suggested, or (b) normalized cross-correlation. Normalized cross-correlation tends to be noticeably more robust to lighting changes than simple cross-correlation. Wikipedia gives a formula for the normalized cross-correlation . More sophisticated methods exist too, but they require quite a bit more work. 
+
+ Using numpy-like syntax, 
+
+ 
+dist_euclidean = sqrt(sum((i1 - i2)^2)) / i1.size
+
+dist_manhattan = sum(abs(i1 - i2)) / i1.size
+
+dist_ncc = sum( (i1 - mean(i1)) * (i2 - mean(i2)) ) / (
+ (i1.size - 1) * stdev(i1) * stdev(i2) )
+ 
+
+ assuming that i1 and i2 are 2D grayscale image arrays. 
+ #4 A trivial thing to try: 
+
+ Resample both images to small thumbnails (e.g. 64 x 64) and compare the thumbnails pixel-by-pixel with a certain threshold. If the original images are almost the same, the resampled thumbnails will be very similar or even exactly the same. This method takes care of noise that can occur especially in low-light scenes. It may even be better if you go grayscale. 
+ #5 Most of the answers given won't deal with lighting levels. 
+
+ I would first normalize the image to a standard light level before doing the comparison. 
+ #6 I am addressing specifically the question of how to compute if they are "different enough". I assume you can figure out how to subtract the pixels one by one. 
+
+ First, I would take a bunch of images with nothing changing, and find out the maximum amount that any pixel changes just because of variations in the capture, noise in the imaging system, JPEG compression artifacts, and moment-to-moment changes in lighting. Perhaps you'll find that 1 or 2 bit differences are to be expected even when nothing moves. 
+
+ Then for the "real" test, you want a criterion like this: 
+
+ 
+ same if up to P pixels differ by no more than E. 
+ 
+
+ So, perhaps, if E = 0.02, P = 1000, that would mean (approximately) that it would be "different" if any single pixel changes by more than ~5 units (assuming 8-bit images), or if more than 1000 pixels had any errors at all. 
+
+ This is intended mainly as a good "triage" technique to quickly identify images that are close enough to not need further examination. The images that "fail" may then more to a more elaborate/expensive technique that wouldn't have false positives if the camera shook bit, for example, or was more robust to lighting changes. 
+
+ I run an open source project, OpenImageIO , that contains a utility called "idiff" that compares differences with thresholds like this (even more elaborate, actually). Even if you don't want to use this software, you may want to look at the source to see how we did it. It's used commercially quite a bit and this thresholding technique was developed so that we could have a test suite for rendering and image processing software, with "reference images" that might have small differences from platform-to-platform or as we made minor tweaks to tha algorithms, so we wanted a "match within tolerance" operation. 
+ #7 Have you seen the Algorithm for finding similar images question? Check it out to see suggestions. 
+
+ I would suggest a wavelet transformation of your frames (I've written a C extension for that using Haar transformation); then, comparing the indexes of the largest (proportionally) wavelet factors between the two pictures, you should get a numerical similarity approximation. 
+ #8 I was reading about this on Processing.org recently and found it stashed in my favorites. Maybe it helps you... 
+
+ http://processing.org/discourse/yabb_beta/YaBB.cgi?board=Video;action=display;num=1159141301 
+ #9 I think you could simply compute the euclidean distance (i.e. sqrt(sum of squares of differences, pixel by pixel)) between the luminance of the two images, and consider them equal if this falls under some empirical threshold. And you would better do it wrapping a C function. 
+ #10 Earth movers distance might be exactly what you need.
+It might be abit heavy to implement in real time though. 
+ #11 What about calculating the Manhattan Distance of the two images. That gives you n*n values. Then you could do something like an row average to reduce to n values and a function over that to get one single value. 
+ #12 I have been having a lot of luck with jpg images taken with the same camera on a tripod by
+(1) simplifying greatly (like going from 3000 pixels wide to 100 pixels wide or even fewer)
+(2) flattening each jpg array into a single vector
+(3) pairwise correlating sequential images with a simple correlate algorithm to get correlation coefficient
+(4) squaring correlation coefficient to get r-square (i.e fraction of variability in one image explained by variation in the next)
+(5) generally in my application if r-square &lt; 0.9, I say the two images are different and something happened in between. 
+
+ This is robust and fast in my implementation (Mathematica 7) 
+
+ It's worth playing around with the part of the image you are interested in and focussing on that by cropping all images to that little area, otherwise a distant-from-the-camera but important change will be missed. 
+
+ I don't know how to use Python, but am sure it does correlations, too, no? 
+ #13 you can compute the histogram of both the images and then calculate the Bhattacharyya Coefficient , this is a very fast algorithm and I have used it to detect shot changes in a cricket video (in C using openCV) 
+ #14 Check out how Haar Wavelets are implemented by isk-daemon . You could use it's imgdb C++ code to calculate the difference between images on-the-fly: 
+
+ 
+ isk-daemon is an open source database server capable of adding content-based (visual) image searching to any image related website or software. 
+ 
+ This technology allows users of any image-related website or software to sketch on a widget which image they want to find and have the website reply to them the most similar images or simply request for more similar photos at each image detail page.

@@ -1,0 +1,169 @@
+Question (ID-973106): What is the clojure equivalent of the Python idiom "if __name__ == '__main__'"? I'm dabbling in clojure and am having a little trouble trying to determine the clojure (and / or Lisp) equivalent of this common python idiom. 
+
+ The idiom is that at the bottom of a python module there is often a bit of test code, and then a statement which runs the code, for example: 
+
+ # mymodule.py
+class MyClass(object):
+ """Main logic / code for the library lives here"""
+ pass
+
+def _runTests():
+ # Code which tests various aspects of MyClass...
+ mc = MyClass() # etc...
+ assert 2 + 2 == 4
+
+if __name__ == '__main__': _runTests()
+ 
+
+ This is useful for simple, ad-hoc testing. One would normally use this module by writing from mymodule import MyClass , in which case _runTests() is never called, but with the snippet at the end, one can also run it by typing python mymodule.py directly from the command line. 
+
+ Is there an equivalent idiom in Clojure (and/or common lisp)? I'm not after a full-blown unit testing library (well, I am, but not in this question), I'd just like to include some code in a module which will only be run under some circumstances, so I can have a quick way to run code I've been working on but still allow my file to be imported like a normal module / namespace. 
+ Answers (Total-7): #0 It's not idiomatic to run Clojure scripts over and over from the command line. The REPL is a better command line. Clojure being a Lisp, it's common to fire up Clojure and leave the same instance running forever, and interact with it rather than restart it. You can change functions in the running instance one at a time, run them and poke them as needed. Escaping the tedious and slow traditional edit/compile/debug cycle is a great feature of Lisps. 
+
+ You can easily write functions to do things like run unit tests, and just call those functions from the REPL whenever you want to run them and ignore them otherwise. It's common in Clojure to use clojure.contrib.test-is , add your test functions to your namespace, then use clojure.contrib.test-is/run-tests to run them all. 
+
+ Another good reason not to run Clojure from the commandline is that the startup time of the JVM can be prohibitive. 
+
+ If you really want to run a Clojure script from the command line, there are a bunch of ways you can do it. See the Clojure mailing list for some discussion. 
+
+ One way is to test for the presence of command line arguments. Given this foo.clj in the current directory: 
+
+ (ns foo)
+
+(defn hello [x] (println "Hello," x))
+
+(if *command-line-args*
+ (hello "command line")
+ (hello "REPL"))
+ 
+
+ You'll get different behavior depending how you start Clojure. 
+
+ $ java -cp ~/path/to/clojure.jar:. clojure.main foo.clj --
+Hello, command line
+$ java -cp ~/path/to/clojure.jar:. clojure.main
+Clojure 1.1.0-alpha-SNAPSHOT
+user=&gt; (use 'foo)
+Hello, REPL
+nil
+user=&gt;
+ 
+
+ See src/clj/clojure/main.clj in the Clojure source if you want to see how this is working. 
+
+ Another way is to compile your code into .class files and invoke them from the Java command line. Given a source file foo.clj : 
+
+ (ns foo
+ (:gen-class))
+
+(defn hello [x] (println "Hello," x))
+
+(defn -main [] (hello "command line"))
+ 
+
+ Make a directory to store the compiled .class files; this defaults to ./classes . You must make this folder yourself, Clojure won't create it. Also make sure you set $CLASSPATH to include ./classes and the directory with your source code; I'll assume foo.clj is in the current directory. So from the command line: 
+
+ $ mkdir classes
+$ java -cp ~/path/to/clojure.jar:./classes:. clojure.main
+Clojure 1.1.0-alpha-SNAPSHOT
+user=&gt; (compile 'foo)
+foo
+ 
+
+ In the classes directory you will now have a bunch of .class files. To invoke your code from the command line (running the -main function by default): 
+
+ $ java -cp ~/path/to/clojure.jar:./classes foo
+Hello, command line.
+ 
+
+ There's a lot of information about compiling Clojure code on clojure.org . 
+ #1 I'm very new to Clojure but I think this discussion on the Clojure groups may be a solution and/or workaround, specifically the post by Stuart Sierra on April 17th at 10:40 PM. 
+ #2 In Common Lisp you can use conditional reading with features . 
+
+ #+testing (run-test 'is-answer-equal-42)
+ 
+
+ Above will only be read and thus execute during load if the list of features bound to cl:*features* will contain the symbol :testing . 
+
+ For example 
+
+ (let ((*features* (cons :testing *features*)))
+ (load "/foo/bar/my-answerlib.lisp"))
+ 
+
+ will temporarily add :testing to the list of features. 
+
+ You can define your own features and control which expressions the Common Lisp system reads and which it skips. 
+
+ Additionally you can also do: 
+
+ #-testing (print '|we are in production mode|)
+ 
+ #3 There's also a list of different possibilities at http://rosettacode.org/wiki/Scripted_Main#Clojure . (If you find a new one - please add it. ;-)) 
+ #4 You might want to have a look at the test-is library from clojure-contrib. It's not the same idiom, but it should support a pretty similar workflow. 
+ #5 Common Lisp and Clojure (as well as other lisps) provide interactive environment with REPL, and you do not need tricks like « if __name__ == '__main__' ». There are REPL-like environments for python: the python from command-line, ipython, python mode for Emacs, etc. 
+
+ You should just create the library, add a testsuite to it (there are many testing frameworks for Common Lisp; I prefer the 5am framework, there is a survey of frameworks available here ). And then you load the library, and in the REPL you can do anything with the library: run tests, call functions, experiment, etc. 
+
+ When you find a failing test, you make a fix to it, recompile the changed code, and continue experimenting, running tests without restarting the whole application. This saves a lot of time, because the running application might have accumulated a lot of state (it might have created gui windows, connected to databases, reached some critical moment that is not easily reproduceable), and you don't have to restart it after every change. 
+
+ Here's an example for Common Lisp (from my cl-sqlite library): 
+
+ The code: 
+
+ (def-suite sqlite-suite)
+
+(defun run-all-tests ()
+ (run! 'sqlite-suite));'
+
+(in-suite sqlite-suite)
+
+(test test-connect
+ (with-open-database (db ":memory:")))
+
+(test test-disconnect-with-statements
+ (finishes
+ (with-open-database (db ":memory:")
+  (prepare-statement db "create table users (id integer primary key, user_name text not null, age integer null)"))))
+...
+ 
+
+ and the interactive session: 
+
+ CL-USER&gt; (sqlite-tests:run-all-tests)
+.......
+ Did 7 checks.
+ Pass: 7 (100%)
+ Skip: 0 ( 0%)
+ Fail: 0 ( 0%)
+
+NIL
+CL-USER&gt; (defvar *db* (sqlite:connect ":memory:"))
+*DB*
+CL-USER&gt; (sqlite:execute-non-query *db* "create table t1 (field text not null)")
+; No value
+CL-USER&gt; (sqlite:execute-non-query *db* "insert into t1 (field) values (?)" "hello")
+; No value
+CL-USER&gt; (sqlite:execute-to-list *db* "select * from t1")
+(("hello"))
+CL-USER&gt;
+ 
+
+ Now suppose that I found bug in sqlite:execute-to-list. I go to the code of this function, fix the bug and recompile this function. Then I call the fixed function and ensure that it works. The in-memory database is not gone, it has the same state as it had before recompile. 
+ #6 If you are talking about having an "entry point" you can certainly do that: 
+
+ (ns foo)
+
+(defn foo [n]
+ (inc n))
+
+(defn main []
+ (println "working")
+ (println "Foo has ran:" (foo 1)))
+
+(main)
+ 
+
+ what will happen now is that any time this code is (load-file "foo.clj")'d or (use 'foo) or (require 'foo), then (main) will be called, that's usually not done. 
+
+ Much more common is that a file of code can be loaded at the REPL and then the main function would be called by the user.

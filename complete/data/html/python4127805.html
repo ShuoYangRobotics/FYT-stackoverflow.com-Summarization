@@ -1,0 +1,165 @@
+<h3>Question (ID-4127805):</h3><h2>Override operator + to make date + time = datetime in Python</h2><p>I have a couple classes extending builtin datetime.*</p>
+
+<p>Is there any good reason to not overload + (<code>MyTime.__radd___</code>) so MyDate + MyTime returns a MyDateTime?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>This is already implemented as a class method, <a href="http://docs.python.org/library/datetime#datetime.datetime.combine" rel="nofollow"><code>datetime.datetime.combine</code></a>:</p>
+
+<pre><code>import datetime
+d = datetime.date(2010, 12, 5)
+t = datetime.time(10, 22, 15)
+dt = datetime.datetime.combine(d, t)
+print dt
+</code></pre>
+
+<p>prints</p>
+
+<pre><code>2010-12-05 10:22:15
+</code></pre>
+<br /><b>#1</b><br /><p>This would generally be frowned upon because you're really combining rather than adding; this is why the actual datetime library has a <a href="http://docs.python.org/library/datetime.html#datetime.datetime.combine" rel="nofollow">combine</a> method rather than using addition in this way.</p>
+
+<p>I'm not aware of any other cases in Python where <code>&lt;instance of TypeA&gt; + &lt;instance of TypeB&gt;</code> produces <code>&lt;instance of TypeC&gt;</code>.  Thus, the <a href="http://en.wikipedia.org/wiki/Principle_of_least_astonishment" rel="nofollow">Principle of least astonishment</a> suggests that you should simply provide a <code>combine</code> method rather than overload addition.</p>
+<br /><b>#2</b><br /><p>Yes, there is at least one good reason not to:  the resulting instance is completely different from the two input instances.  Is this important?  I don't think so -- consider that <code>date - date</code> yields <code>timedelta</code>.</p>
+
+<p>The way I see it:</p>
+
+<ul>
+<li>Does adding two dates together make sense?  No.</li>
+<li>Does adding two times together make sense?  No.</li>
+<li>Does adding a date and a time together make sense?  Yup!</li>
+<li>Does adding a date and a timedelta togethor make sense?  Maybe.</li>
+<li>Does adding a time and a timedelta together make sense?  Maybe.</li>
+</ul>
+
+<p>and for subtraction</p>
+
+<ul>
+<li>Does subtracting two dates make sense?  Yes.</li>
+<li>Does subtracting two times make sense?  Yes.</li>
+<li>Does subtracting a time from a date make sense?  Nope.</li>
+<li>Does subtracting a timedelta from a date make sense?  Maybe.</li>
+<li>Does subtracting a timedelta from a time make sense?  Maybe.</li>
+</ul>
+
+<p>Developing along the lines of what makes sense:</p>
+
+<pre><code>date + time      =&gt; datetime
+date + timedelta =&gt; date | datetime or exception or silently drop time portion
+
+time + date =&gt; datetime
+time + timedelta =&gt; time | wrap-around or exception
+
+date - date      =&gt; timedelta
+date - timedelta =&gt; date | datetime or exception or silently drop time portion
+
+time - time      =&gt; timedelta
+time - timedelta =&gt; time | wrap-around or exception
+
+datetime + timedelta =&gt; datetime
+datetime - timedelta =&gt; datetime
+</code></pre>
+
+<p>So, if it were me and I were designing a Date, Time, DateTime, TimeDelta framework, I would allow:</p>
+
+<pre><code>date + time
+date - date
+time - time
+datetime + timedelta
+datetime - timedelta
+</code></pre>
+
+<p>and for these:</p>
+
+<pre><code>date +/- timedelta
+time +/- timedelta
+</code></pre>
+
+<p>I would default to returning the same type if the timedelta had none of the other type, and raising an exception if the timedelta did have some of the other type, but there would be a setting that would control that.  The other possible behavior would be to drop the unneeded portion -- so a date combined with a timedelta that had hours would drop the hours and return a date.</p>
+<br /><b>#3</b><br /><p>Due to the existence of the date, time, and datetime cross-type addition and subtraction operators, I would think that this is fine, so long as it is well defined.</p>
+
+<p>Currently (2.7.2):</p>
+
+<pre><code>date = date + timedelta
+date = date - timedelta
+timedelta = date - date
+
+datetime = datetime + timedelta
+datetime = datetime - timedelta
+timedelta = datetime - datetime
+</code></pre>
+
+<p>I believe the following is also reasonable for an extension:</p>
+
+<pre><code>timedelta = time - time
+datetime = date + time
+</code></pre>
+
+<p>I was going to suggest the following as well, but <code>time</code> has very specific min and max values for <code>hour</code>, <code>minute</code>, <code>second</code>, and <code>microsecond</code>, thus requiring a silent wraparound of values or returning of a different type:</p>
+
+<pre><code>time = time + timedelta
+time = time - timedelta
+</code></pre>
+
+<p>Similarly, <code>date</code> cannot handle a <code>timedelta</code> of less than a day being added to it. Often I have been told to simply <strong>use Duck Typing with Python</strong>, because that's the intent. <strong>If that is true</strong>, then I would propose the following completed interface:</p>
+
+<pre><code>[date|datetime] = date + timedelta
+[date|datetime] = date - timedelta
+timedelta = date - date
+
+[time|timedelta] = time + timedelta
+[time|timedelta] = time - timedelta
+timedelta = time - time
+
+datetime = datetime + timedelta
+datetime = datetime - timedelta
+datetime = date + time
+datetime = date - time
+timedelta = datetime - datetime
+timedelta = datetime - date
+
+timedelta = timedelta + timedelta
+timedelta = timedelta - timedelta
+</code></pre>
+
+<p>In which, given the case that <code>date</code> has precision loss (for <code>timedelta</code>'s with partial days), it is promoted to <code>datetime</code>. Similarly, given the case that <code>time</code> has precision loss (for <code>timedelta</code>'s that yield a result of more than one day, or negative time), it is promoted to <code>timedelta</code>. <strong>However</strong>, I'm not fully comfortable with <code>[time|timedelta]</code>. It makes sense given the rest of the interface from parallelism and precision views, but I do think it might be more elegant to just wraparound the time to the proper hour, thus changing all the <code>[time|timedelta]</code>'s to simply <code>time</code>, but unfortunately that leaves us with lost precision. </p>
+<br /><b>#4</b><br /><p>In my opinion, the most valuable uses of operator overloading are situations where many input values can be combined.  You'd never want to deal with:</p>
+
+<pre><code>concat(concat(concat("Hello", ", "), concat("World", "!")), '\n');
+</code></pre>
+
+<p>or</p>
+
+<pre><code>distance = sqrt(add(add(x*x, y*y), z*z));
+</code></pre>
+
+<p>So we overload math symbols to create a more intuitive syntax.  Another way to deal with this problem is variadic functions, like <code>+</code> in Scheme.</p>
+
+<p>With your <code>date + time = datetime</code>, it doesn't make sense to add <code>datetime + datetime</code>, <code>datetime + time</code>, or <code>datetime + date</code>, so you could never encounter a situation like those above.</p>
+
+<p>In my opinion, once again, the right thing is to use a constructor method.  In a language with strong typing like C++, you'd have <code>DateTime(const Date &amp;d, const Time &amp;t)</code>.  With Python's dynamic typing, I guess they gave the function a name, <code>datetime.combine(date, time)</code>, to make the code clearer when the types of the input variables are not visible in the code.</p>
+<br /><b>#5</b><br /><p>I guess most important things are functionality and efficiency. Of course using a simple <code>+</code> operator will be easier to use, but i am not sure about functionality.</p>
+
+<p>If we compare it to <code>datetime.combine</code>, What <code>combine</code> do is:</p>
+
+<pre><code>dt = date(2011,01,01)
+tm = time(20,00)
+dtm = datetime.combine(dt, tm)
+</code></pre>
+
+<p>For <strong>dtm</strong></p>
+
+<ul>
+<li>If <code>dt</code> is a date object and <code>tm</code> is a time object, than <em>date</em> info is taken from <code>dt</code>, <em>time</em> info and <strong><em>tzinfo</em></strong> is taken from <code>tm</code> object</li>
+<li>if <code>dt</code> is a <em>datetime</em> object, than its <em>time</em> and <em>tzinfo</em> attributes will be ignored.</li>
+</ul>
+
+<p>From that point of view, working with <code>datetime</code> objects do not seem to be simple objects, but more compex structures with diffrent attributes, like <strong>timezone info</strong>.</p>
+
+<p>Probably thats why <code>datetime</code> objects have some additional functions that is used for formatting object type and data structure of the object.</p>
+
+<p>Python have a motto (something like that):</p>
+
+<blockquote>
+  <p>In python, nothing is unchangable, <strong>if</strong> you know what you are doing. If not, it is better to leave library functions as they are...</p>
+</blockquote>
+
+<p>So, in my opinion, it is better you use <code>combine</code> that overloading <code>+</code> operator </p>
+<br />

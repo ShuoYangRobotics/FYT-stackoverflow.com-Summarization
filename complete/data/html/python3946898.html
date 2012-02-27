@@ -1,0 +1,189 @@
+<h3>Question (ID-3946898):</h3><h2>Sorting csv columns in bash, reading bash output into python variables</h2><p>Hi I have a ton of data in multiple csv files and filter out a data set using grep:</p>
+
+<pre><code>user@machine:~/$ cat data.csv | grep -a "63[789]\...;"
+637.05;1450.2
+637.32;1448.7
+637.60;1447.7
+637.87;1451.5
+638.14;1454.2
+638.41;1448.6
+638.69;1445.8
+638.96;1440.0
+639.23;1431.9
+639.50;1428.8
+639.77;1427.3
+</code></pre>
+
+<p>I want to figure out the data set which has the highest count, the column right of the ; and then know the corresponding value (left of the ;). In this case the set I'm looking for would be 638.14;1454.2</p>
+
+<p>I tried different things and ended up using a combination of bash and python, which works, but isn't very pretty:</p>
+
+<pre><code>os.system('ls | grep csv &gt; filelist')
+files = open("filelist")
+files = files.read()
+files = files.split("\n")
+
+for filename in files[0:-1]:
+  os.system('cat ' + filename + ' | grep -a "63[6789]\...;" &gt; filtered.csv')
+  filtered = csv.reader(open('filtered.csv'), delimiter=';')
+  sortedlist = sorted(filtered_file, key=operator.itemgetter(1), reverse=True)
+  dataset = sortedlist[0][0] + ';' + sortedlist[0][1] + '\n'
+</code></pre>
+
+<p>I would love to have a bash only solution (cut, awk, arrays?!?) but couldn't figure it out. Also I don't like the work around writing the bash commands into files and then reading them into python variables. Can I read them into variables directly or are there better solutions to this problem? (probably perl etc... but I am really interested in a bash solution..)</p>
+
+<p>Thank you very much!! </p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>A quick one-liner would be:</p>
+
+<pre><code>grep -a "63[789]\...;" data.csv | sort -n -r -t ';' -k 2 | head --lines=1
+</code></pre>
+
+<p>This simply sorts the file numerically based on the second column and then prints out the first row. Hope that helps.</p>
+<br /><b>#1</b><br /><p>If you are going to use Python, then use Python. Why are you intermixing bash commands together? It makes your code not portable/dependent on a bash environment.</p>
+
+<pre><code>import os
+import glob
+import operator
+os.chdir("/mypath")
+for file in glob.glob("*.csv"):
+    data=open(file).readlines()
+    data=[i.strip().split(";") for i in data if i[:3] in ["637","638","639"]]
+    # data=[i.strip().split(";") for i in data if i[:3] in ["637","638","639"] and isinstance(float(i[:6]),float) ]
+    sortedlist = sorted(data, key=operator.itemgetter(1), reverse=True)
+    print "Highest for file %s: %s" % (file,sortedlist[0])
+</code></pre>
+
+<p>OR, if you are more interested in a bash+tools solution</p>
+
+<pre><code>find . -type f -name '*.csv' |while read -r FILE
+do
+ grep -a "63[789]\...;" "$FILE" | sort -n -r -t ';' -k 2 | head -1  &gt;&gt; output.txt
+done
+</code></pre>
+<br /><b>#2</b><br /><pre><code>$ cat data.csv | grep -a "63[789]\...;" | awk 'BEGIN {FS=";"} $2&gt;max{max=$2; val=$1} END {print "max " max " at " val}' 
+
+max 1454.2 at 638.14
+</code></pre>
+<br /><b>#3</b><br /><p>If you have <em>a ton of data</em> then you don't want to <strong>store</strong> all that data into memory and then <strong>sort</strong> it to get the max value. This approach is <strong>inefficient</strong> regarding both computing time complexity and memory.</p>
+
+<p>You can simply parse the files and compute the desired values on-the-fly instead. A <strong>fast</strong> pure Python approach to deal with your problem:</p>
+
+<pre><code>import os, re
+os.chdir('/path/to/csvdir')
+for f in os.listdir('.'):
+    dataset, count = 0.0, 0.0
+    for line in open(f):
+        if re.search(r'63[6789]\...', line):
+            d, c = map(float, line.strip().split(';'))
+            if count &lt; c:
+                dataset, count = d, c
+    print f, dataset
+</code></pre>
+
+<p>This approach can also be used to show a list of max values (if there can be more than one dataset with highest counts) by modifying the appropriate lines:</p>
+
+<pre><code>dataset, count = [], 0.0
+...
+        if count &lt; c:
+            dataset, count = [d], c
+        elif count == c:
+            dataset.append(d)
+</code></pre>
+
+<p><strong>Edit:</strong> the script assumes that your csvdir is populated only with files containing the parsing format. If you want to filter them by name, you can use either glob (with limited regexp capabilities in name filtering):</p>
+
+<pre><code>for f in glob.glob('*.csv'):
+</code></pre>
+
+<p>or apply a filter to <code>os.listdir</code>:</p>
+
+<pre><code>for f in filter(lambda f: re.match('.*\.csv', f), os.listdir('.')):
+</code></pre>
+<br /><b>#4</b><br /><p>Here is code I wrote to sort csv files using python. It allows you to specify multiple columns and to sort in reverse order by using a minus sign.</p>
+
+<pre><code>#!/usr/bin/env python
+# Usage:
+# (1) sort ctb_consolidated_test_id.csv by Academic Year, Test ID, Period, and Test Name, with Test ID in descending order
+#   sort_csv.py -c "Academic Year" -c "-Test ID" -c "Period" -c "Test Name" ctb_consolidated_test_id.csv
+from __future__ import with_statement
+from __future__ import print_function
+
+import sys
+
+def multikeysort(items, columns):
+    from operator import itemgetter
+    import re
+    num_re = re.compile(r'^\d+$')
+    comparers = [
+        ((itemgetter(col[1:].strip()), -1) if col.startswith('-') else (itemgetter(col.strip()), 1))
+        for col in columns
+    ]
+    def number_comparable(val1, val2):
+        return len(val1) != len(val2) and num_re.match(val1) and num_re.match(val2)
+    def column_comparer(left, right):
+        for fn, mult in comparers:
+            val1, val2 = fn(left), fn(right)
+            if number_comparable(val1, val2):
+                val1, val2 = int(val1), int(val2)
+            result = cmp(val1, val2)
+            if result:
+                return mult * result
+        return 0
+    return sorted(items, cmp=column_comparer)
+
+def sort_csv(filename, columns):
+    import csv
+    with open(filename, "r") as f:
+        reader = csv.DictReader(f)
+        writer = csv.DictWriter(sys.stdout, reader.fieldnames)
+        writer.writerow(dict(zip(reader.fieldnames, reader.fieldnames)))
+        writer.writerows(multikeysort(reader, columns))
+
+if __name__ == '__main__':
+    from glob import glob
+    from optparse import OptionParser, make_option
+    option_list = [
+        make_option('-c', '--column', dest='columns', action='append', metavar='COLUMN NAME'),
+    ]
+    parser = OptionParser(option_list=option_list)
+    (options, args) = parser.parse_args()
+    filenames = (filename for arg in args for filename in glob(arg))
+    for filename in filenames:
+        sort_csv(filename, options.columns)
+</code></pre>
+<br /><b>#5</b><br /><p>nice, thanks a lot, Hakop Palyan !!</p>
+
+<p>Now is there a trick on how to get this data set out of all the csv files and collect it somewhere as a new file? something like</p>
+
+<pre><code> find . -name '*.csv' -print0 | xargs -0 grep -a "63[789]\...;" | sort -n -r -t ';' -k 2 | head --lines=1
+</code></pre>
+
+<p>this one prints only the first line, I would need to iterate over the individual files and collect the datasets ...</p>
+<br /><b>#6</b><br /><p>I know you are looking for a bash based solution but I could not help offering something using the <a href="http://docs.python.org/library/csv.html#examples" rel="nofollow">csv</a> module.</p>
+
+<pre><code>import os
+import csv
+import re
+
+target_re = re.compile(r'^63[789]\.\d\d$')
+csv_filenames = [f for f in os.listdir('.') if f.endwith('.csv')]
+largest_in_each_file = []
+
+for f in csv_filenames:
+    largest = (None, 0)
+    for a,b in csv.reader(open(f, 'rb'), delimiter=';'):
+        if target_re.match(a) and b &gt; largest[1]:
+            largest = (a, b)
+    largest_in_each_file.append(largest)
+
+
+largest_overall = largest_in_each_file[0]
+for largest in largest_in_each_file:
+    print "%s;%s in %s" % largest
+    if largest[1] &gt; largest_overall[1]:
+        largest_overall = largest
+
+print "-" * 10
+print "%s;%s in %s is the largest record in all files" % largest_overall
+</code></pre>
+<br />

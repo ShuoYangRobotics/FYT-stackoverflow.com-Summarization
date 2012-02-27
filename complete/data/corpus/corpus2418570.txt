@@ -1,0 +1,175 @@
+Question (ID-2418570): Testing warnings with doctest I'd like to use doctests to test the presence of certain warnings. For example, suppose I have the following module: 
+
+ from warnings import warn
+
+class Foo(object):
+ """
+ Instantiating Foo always gives a warning:
+
+ &gt;&gt;&gt; foo = Foo()
+ testdocs.py:14: UserWarning: Boo!
+  warn("Boo!", UserWarning)
+ &gt;&gt;&gt; 
+ """
+
+ def __init__(self):
+  warn("Boo!", UserWarning)
+ 
+
+ If I run python -m doctest testdocs.py to run the doctest in my class and make sure that the warning is printed, I get: 
+
+ testdocs.py:14: UserWarning: Boo!
+ warn("Boo!", UserWarning)
+**********************************************************************
+File "testdocs.py", line 7, in testdocs.Foo
+Failed example:
+ foo = Foo()
+Expected:
+ testdocs.py:14: UserWarning: Boo!
+  warn("Boo!", UserWarning)
+Got nothing
+**********************************************************************
+1 items had failures:
+ 1 of 1 in testdocs.Foo
+***Test Failed*** 1 failures.
+ 
+
+ It looks like the warning is getting printed but not captured or noticed by doctest. I'm guessing that this is because warnings are printed to sys.stderr instead of sys.stdout . But this happens even when I say sys.stderr = sys.stdout at the end of my module. 
+
+ So is there any way to use doctests to test for warnings? I can find no mention of this one way or the other in the documentation or in my Google searching. 
+ Answers (Total-6): #0 The issue you're facing is that warnings.warn() calls warnings.showwarning() , which writes the result of warnings.formatwarning() to a file, defaulting to sys.stderr . 
+
+ (See: http://docs.python.org/library/warnings.html#warnings.showwarning ) 
+
+ If you're using Python 2.6, you can use the warnings.catch_warnings() context manager to easily modify how warnings are handled, including temporarily replacing the implementation of warnings.showwarning() to write to sys.stdout instead. That would be the Right Way to handle something like this. 
+
+ (See: http://docs.python.org/library/warnings.html#available-context-managers ) 
+
+ If you want a quick and dirty hack, throw together a decorator that redirects sys.stderr to sys.stdout : 
+
+ def stderr_to_stdout(func):
+ def wrapper(*args):
+  stderr_bak = sys.stderr
+  sys.stderr = sys.stdout
+  try:
+   return func(*args)
+  finally:
+   sys.stderr = stderr_bak
+ return wrapper
+ 
+
+ Then you can call a decorated function in your doctest: 
+
+ from warnings import warn
+from utils import stderr_to_stdout
+
+class Foo(object):
+ """
+ Instantiating Foo always gives a warning:
+
+ &gt;&gt;&gt; @stderr_to_stdout
+ ... def make_me_a_foo():
+ ...  Foo()
+ ...
+ &gt;&gt;&gt; make_me_a_foo()
+ testdocs.py:18: UserWarning: 
+  warn("Boo!", UserWarning)
+ &gt;&gt;&gt;
+ """ 
+ def __init__(self):
+  warn("Boo!", UserWarning)
+ 
+
+ Which passes: 
+
+ $ python -m doctest testdocs.py -v
+Trying:
+ @stderr_to_stdout
+ def make_me_a_foo():
+  Foo()
+Expecting nothing
+ok
+Trying:
+ make_me_a_foo()
+Expecting:
+ testdocs.py:18: UserWarning: Boo!
+  warn("Boo!", UserWarning)
+ok
+[...]
+2 passed and 0 failed.
+ 
+ #1 This isn't the most elegant way to do it, but it works for me: 
+
+ from warnings import warn
+
+class Foo(object):
+ """
+ Instantiating Foo always gives a warning:
+
+ &gt;&gt;&gt; import sys; sys.stderr = sys.stdout
+ &gt;&gt;&gt; foo = Foo() # doctest:+ELLIPSIS
+ /.../testdocs.py:14: UserWarning: Boo!
+  warn("Boo!", UserWarning)
+ """
+
+ def __init__(self):
+  warn("Boo!", UserWarning)
+
+if __name__ == '__main__':
+ import doctest
+ doctest.testmod()
+ 
+
+ This presumably won't work on Windows, though, since the path reported in the UserWarning output must start with a slash the way I've written this test. You may be able to figure out some better incantation of the ELLIPSIS directive, but I could not. 
+ #2 The Testing Warnings sections of the Python documentation is dedicated to this topic. However, to summarize, you have two options: 
+
+ (A) Use the catch_warnings context manager 
+
+ This is recommended course in the official documentation. However, the catch_warnings context manager only came into existence with Python 2.6. 
+
+ import warnings
+
+def fxn():
+ warnings.warn("deprecated", DeprecationWarning)
+
+with warnings.catch_warnings(record=True) as w:
+ # Cause all warnings to always be triggered.
+ warnings.simplefilter("always")
+ # Trigger a warning.
+ fxn()
+ # Verify some things
+ assert len(w) == 1
+ assert issubclass(w[-1].category, DeprecationWarning)
+ assert "deprecated" in str(w[-1].message)
+ 
+
+ (B) Upgrade Warnings to Errors 
+
+ If the warning hasn't been seen before&mdash; and thus was registered in the warnings registry&mdash; then you can set warnings to raise exceptions and catch it. 
+
+ import warnings
+
+
+def fxn():
+ warnings.warn("deprecated", DeprecationWarning)
+
+
+if __name__ == '__main__':
+ warnings.simplefilter("error", DeprecationWarning)
+
+ try:
+  fxn()
+ except DeprecationWarning:
+  print "Pass"
+ else:
+  print "Fail"
+ finally:
+  warnings.simplefilter("default", DeprecationWarning)
+ 
+ #3 docs suggest that you could pass -Wd when running doctest to always trigger warnings. 
+ #4 Perhaps you could try mocking (patch print!) the troublesome bit. I admit this would add some clutter to the docstring but it might worth a go. 
+
+ If you wish to use that approach while retaining the current syntax, perhaps you could try implementing a custom wrapper for doctest that generates the missing code and then executes the fixed tests. If possible, that's probably best to be avoided though. 
+
+ Alternatively you could just whip up a totally custom doctest runner but I suppose you would prefer to avoid this. :) 
+ #5 This is one example of why doctests are not appropriate for all tests. If you have inline examples in your docstrings and they need to be tested, that's one thing, but as you've discovered there are behaviors you want to test for that aren't best done with string matching. And cases where you don't need to have the docstring cluttered up with all the test mechanics.

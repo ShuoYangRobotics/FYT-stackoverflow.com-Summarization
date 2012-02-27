@@ -1,0 +1,169 @@
+<h3>Question (ID-1846833):</h3><h2>matching stored keywords/phrases in text</h2><p>I have a database table with around 1000 keywords/phrases (one to four words long) - This table changes rarely, so I could extract the data into something more useful (like a regular expression?) - So this is not finding / guessing at keywords based on natural language processing..</p>
+
+<p>I then have a user inputting some text into a form that I'd like to match against my keywords and phrases.</p>
+
+<p>The program would then store a link to each phrase matched next to the text.</p>
+
+<p>So if we ran the algorithm on this question text against a few phrases that are in here, we'd get a result like so:</p>
+
+<pre><code>{"inputting some text" : 1,
+ "extract the data" : 1,
+ "a phrase not here" : 0}
+</code></pre>
+
+<p>What are my options?</p>
+
+<ol>
+<li>Compile a regular expression</li>
+<li>Some sort of SQL query</li>
+<li>A third way?</li>
+</ol>
+
+<p>Bearing in mind that there's a 1000 possible phrases..</p>
+
+<p>I'm running Django / Python with MySQL.</p>
+
+<p>edit: I'm currently doing this:</p>
+
+<pre><code>&gt;&gt;&gt; text_input = "This is something with first phrase in and third phrase" 
+&gt;&gt;&gt; regex = "first phrase|second phrase|third phrase" 
+&gt;&gt;&gt; p = re.compile(regex, re.I) 
+&gt;&gt;&gt; p.findall(text_input)
+['first phrase','third phrase']
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>If I understand you correctly, you have a unique set of strings, that you want to compare an input strings against. In this case you could use <code>set</code> to store both processing results and db values. Comparison then could be done as follows:</p>
+
+<pre><code>&gt;&gt;&gt; db = {'abc', 'def', 'jhi', 'asdf'}
+&gt;&gt;&gt; inpt = {'abc', 'tmp'}
+&gt;&gt;&gt; db &amp; inpt
+{'abc'}
+</code></pre>
+
+<p>The further conversion to the dictionary is trivial.</p>
+<br /><b>#1</b><br /><p>Just a heads up... you may be interested in <a href="http://docs.djangoproject.com/en/dev/ref/models/querysets/#regex" rel="nofollow">django's support for regex in queries</a></p>
+
+<p>Example from the linked django docs:</p>
+
+<pre><code>Entry.objects.get(title__regex=r'^(An?|The) +')
+</code></pre>
+<br /><b>#2</b><br /><p>Here is a slight variation on SilentGhost's answer. You load in the keywords line by line. store them in a set. for each keyword that you find in the user input increase the corresponding entry in the results. </p>
+
+<pre><code>keyword_file = StringIO("""inputting some text
+    extract the data
+    a phrase not here""")
+
+keywords = set(line.strip() for line in keyword_file)
+
+results = defaultdict(int)
+for phrase in keywords:
+    if userinput.find(phrase) != -1:
+        results[phrase] += 1
+
+print results
+</code></pre>
+
+<p>Hope this points you in the right direction. Not entirely sure this is what you were asking but it's my best guess. </p>
+
+<p>Do you care about speed? Why don't you like the method you use now? Does your method work? </p>
+<br /><b>#3</b><br /><p>Once you've formed your pattern such as <code>(first phrase)|(the second)|(and another)</code> (<em>with</em> the parentheses I indicate) and compiled it into a regular expression object <code>r</code>, a good way to loop on matches and identify which match it was is:</p>
+
+<pre><code>class GroupCounter(object):
+  def __init__(self, phrases):
+    self.phrases = phrases
+    self.counts = [0] * len(phrases)
+  def __call__(self, mo):
+    self.counts[mo.lastindex - 1] += 1
+    return ''
+  def asdict(self):
+    return dict(zip(self.phrases, self.counts))
+
+g = GroupCounter(['first phrase', 'the second', 'and another'])
+r.sub(g, thetext)
+print g.asdict()
+</code></pre>
+
+<p>It would also be reasonable to have the GroupCounter instance also build the regex object, since it does need the list of phrases in the same order as it appears in the regex itself.</p>
+<br /><b>#4</b><br /><p>If you have 1000 phrases, and you're searching an input string to find which of those phrases are substrings, you're probably not going to be happy with the performance you get from using a big regular expression.  A <a href="http://en.wikipedia.org/wiki/Trie" rel="nofollow">trie</a> is a bit more work to implement, but it's a lot more efficient:  the regular expression <code>a|b|c|d|e</code> does five tests on each character in a given input string, while a trie only does one.  You could conceivably also use a lexer, like <a href="http://www.cosc.canterbury.ac.nz/greg.ewing/python/Plex/version/doc/index.html" rel="nofollow">Plex</a>, that produces a DFA.</p>
+
+<p><strong>Edit:</strong></p>
+
+<p>I appear to be procrastinating this morning.  Try this:</p>
+
+<pre><code>	class Trie(object):
+		def __init__(self):
+			self.children = {}
+			self.item = None
+		def add(self, item, remainder=None):
+			"""Add an item to the trie."""
+			if remainder == None:
+				remainder = item
+			if remainder == "":
+				self.item = item
+			else:
+				ch = remainder[0]
+				if not self.children.has_key(ch):
+					self.children[ch] = Trie()
+				self.children[ch].add(item, remainder[1:])
+		def find(self, word):
+			"""Return True if word is an item in the trie."""
+			if not word:
+				return True
+			ch = word[0]
+			if not self.children.has_key(ch):
+				return False
+			return self.children[ch].find(word[1:])
+		def find_words(self, word, results=None):
+			"""Find all items in the trie that word begins with."""
+			if results == None:
+				results = []
+			if self.item:
+				results.append(self.item)
+			if not word:
+				return results
+			ch = word[0]
+			if not self.children.has_key(ch):
+				return results
+			return self.children[ch].find_words(word[1:], results)
+</code></pre>
+
+<p>A quick test (<code>words.txt</code> is the BSD words file, a very handy thing to have around - it contains about 240,000 words):</p>
+
+<pre><code>&gt;&gt;&gt; t = Trie()
+&gt;&gt;&gt; with open(r'c:\temp\words.txt', 'r') as f:
+        for word in f:
+            t.add(word.strip())
+</code></pre>
+
+<p>That takes about 15 seconds on my machine.  This, however, is almost instantaneous:</p>
+
+<pre><code>&gt;&gt;&gt; s = "I played video games in a drunken haze."
+&gt;&gt;&gt; r = []
+&gt;&gt;&gt; for i in range(len(s)):
+        r.extend(t.find_words(s[i:]))
+&gt;&gt;&gt; r
+['I', 'p', 'play', 'l', 'la', 'lay', 'a', 'ay', 'aye', 'y', 'ye', 'yed', 'e', 'd', 'v', 'video', 'i', 'id', 'ide', 'd', 'de', 'e', 'o', 'g', 'ga', 'gam', 'game', 'a', 'am', 'ame', 'm', 'me', 'e', 'es', 's', 'i', 'in', 'n', 'a', 'd', 'drunk', 'drunken', 'r', 'run', 'u', 'un', 'unken', 'n', 'k', 'ken', 'e', 'en', 'n', 'h', 'ha', 'haze', 'a', 'z', 'e']
+</code></pre>
+
+<p>Yes, <code>unken</code> is in words.txt.  I have no idea why.</p>
+
+<p>Oh, and I did try to compare with regular expressions:</p>
+
+<pre><code> &gt;&gt;&gt; import re
+ &gt;&gt;&gt; with open(r'c:\temp\words.txt', 'r') as f:
+         p = "|".join([l.strip() for l in f])
+
+ &gt;&gt;&gt; p = re.compile(p)
+
+ Traceback (most recent call last):
+  File "&lt;pyshell#250&gt;", line 1, in &lt;module&gt;
+    p = re.compile(p)
+  File "C:\Python26\lib\re.py", line 188, in compile
+    return _compile(pattern, flags)
+  File "C:\Python26\lib\re.py", line 241, in _compile
+    p = sre_compile.compile(pattern, flags)
+  File "C:\Python26\lib\sre_compile.py", line 529, in compile
+    groupindex, indexgroup
+OverflowError: regular expression code size limit exceeded
+</code></pre>
+<br /><b>#5</b><br /><p>The algorithm for this job is <a href="http://en.wikipedia.org/wiki/Aho-Corasick%5Falgorithm" rel="nofollow">Aho-Corasick</a> ... see the link at the bottom whch points to a C-extension for Python.</p>
+<br />

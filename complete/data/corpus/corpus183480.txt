@@ -1,0 +1,89 @@
+Question (ID-183480): Is this the best way to get unique version of filename w/ Python? Still 'diving in' to Python, and want to make sure I'm not overlooking something. I wrote a script that extracts files from several zip files, and saves the extracted files together in one directory. To prevent duplicate filenames from being over-written, I wrote this little function - and I'm just wondering if there is a better way to do this?
+Thanks! 
+
+ def unique_filename(file_name):
+counter = 1
+file_name_parts = os.path.splitext(file_name) # returns ('/path/file', '.ext')
+while os.path.isfile(file_name): 
+ file_name = file_name_parts[0] + '_' + str(counter) + file_name_parts[1]
+ counter += 1
+return file_name
+ 
+
+ I really do require the files to be in a single directory, and numbering duplicates is definitely acceptable in my case, so I'm not looking for a more robust method (tho' I suppose any pointers are welcome), but just to make sure that what this accomplishes is getting done the right way. 
+ Answers (Total-6): #0 One issue is that there is a race condition in your above code, since there is a gap between testing for existance, and creating the file. There may be security implications to this (think about someone maliciously inserting a symlink to a sensitive file which they wouldn't be able to overwrite, but your program running with a higher privilege could) Attacks like these are why things like os.tempnam() are deprecated. 
+
+ To get around it, the best approach is to actually try create the file in such a way that you'll get an exception if it fails, and on success, return the actually opened file object. This can be done with the lower level os.open functions, by passing both the os.O_CREAT and os.O_EXCL flags. Once opened, return the actual file (and optionally filename) you create. Eg, here's your code modified to use this approach (returning a (file, filename) tuple): 
+
+ def unique_file(file_name):
+ counter = 1
+ file_name_parts = os.path.splitext(file_name) # returns ('/path/file', '.ext')
+ while 1:
+  try:
+   fd = os.open(file_name, os.O_CREAT | os.O_EXCL | os.O_RDRW)
+   return os.fdopen(fd), file_name
+  except OSError:
+   pass
+  file_name = file_name_parts[0] + '_' + str(counter) + file_name_parts[1]
+  counter += 1
+ 
+
+ [Edit] Actually, a better way, which will handle the above issues for you, is probably to use the tempfile module, though you may lose some control over the naming. Here's an example of using it (keeping a similar interface): 
+
+ def unique_file(file_name):
+ dirname, filename = os.path.split(file_name)
+ prefix, suffix = os.path.splitext(filename)
+
+ fd, filename = tempfile.mkstemp(suffix, prefix+"_", dirname)
+ return os.fdopen(fd), filename
+
+&gt;&gt;&gt; f, filename=unique_file('/home/some_dir/foo.txt')
+&gt;&gt;&gt; print filename
+/home/some_dir/foo_z8f_2Z.txt
+ 
+
+ The only downside with this approach is that you will always get a filename with some random characters in it, as there's no attempt to create an unmodified file (/home/some_dir/foo.txt) first.
+You may also want to look at tempfile.TemporaryFile and NamedTemporaryFile, which will do the above and also automatically delete from disk when closed. 
+ #1 Yes, this is a good strategy for readable but unique filenames. 
+
+ One important change : You should replace os.path.isfile with os.path.lexists ! As it is written right now, if there is a directory named /foo/bar.baz, your program will try to overwrite that with the new file (which won't work)... since isfile only checks for files and not directories. lexists checks for directories, symlinks, etc... basically if there's any reason that filename could not be created. 
+
+ EDIT: @Brian gave a better answer, which is more secure and robust in terms of race conditions. 
+ #2 Two small changes... 
+
+ base_name, ext = os.path.splitext(file_name)
+ 
+
+ You get two results with distinct meaning, give them distinct names. 
+
+ file_name = "%s_%d%s" % (base_name, str(counter), ext)
+ 
+
+ It isn't faster or significantly shorter. But, when you want to change your file name pattern, the pattern is on one place, and slightly easier to work with. 
+ #3 If you want readable names this looks like a good solution. 
+There are routines to return unique file names for eg. temp files but they produce long random looking names. 
+ #4 if you don't care about readability, uuid.uuid4() is your friend. 
+
+ import uuid
+
+def unique_filename(prefix=None, suffix=None):
+ fn = []
+ if prefix: fn.extend([prefix, '-'])
+ fn.append(str(uuid.uuid4()))
+ if suffix: fn.extend(['.', suffix.lstrip('.')])
+ return ''.join(fn)
+ 
+ #5 How about 
+
+ def ensure_unique_filename(orig_file_path): 
+ from time import time
+ import os
+
+ if os.path.lexists(orig_file_path):
+  name, ext = os.path.splitext(orig_file_path)
+  orig_file_path = name + str(time()).replace('.', '') + ext
+
+ return orig_file_path
+ 
+
+ time() returns current time in milliseconds. combined with original filename, it's fairly unique even in complex multithreaded cases.

@@ -1,0 +1,128 @@
+<h3>Question (ID-1897623):</h3><h2>"unpacking" a passed dictionary into the function's name space in Python?</h2><p>In the work I do, I often have parameters that I need to group into subsets for convenience:</p>
+
+<pre><code>d1 = {'x':1,'y':2}
+d2 = {'a':3,'b':4}
+</code></pre>
+
+<p>I do this by passing in multiple dictionaries.  Most of the time I use the passed dictionary directly, i.e.:</p>
+
+<pre><code>def f(d1,d2):
+    for k in d1:
+        blah( d1[k] )
+</code></pre>
+
+<p>In some functions I need to access the variables directly, and things become cumbersome; I really want those variables in the local name space.  I want to be able to do something like:</p>
+
+<pre><code>def f(d1,d2)
+    locals().update(d1)
+    blah(x)
+    blah(y)
+</code></pre>
+
+<p>but the updates to the dictionary that locals() returns aren't guaranteed to actually update the namespace.</p>
+
+<p>Here's the obvious manual way:</p>
+
+<pre><code>def f(d1,d2):
+    x,y,a,b = d1['x'],d1['y'],d2['a'],d2['b']
+    blah(x)
+    return {'x':x,'y':y}, {'a':a,'b':b}
+</code></pre>
+
+<p>This results in three repetitions of the parameter list per function.  This can be automated with a decorator:</p>
+
+<pre><code>def unpack_and_repack(f):
+    def f_new(d1, d2):
+        x,y,a,b = f(d1['x'],d1['y'],d2['a'],d3['b'])
+        return {'x':x,'y':y}, {'a':a,'b':b}
+    return f_new
+@unpack
+def f(x,y,a,b):
+    blah(x)
+    blah(y)
+    return x,y,a,b
+</code></pre>
+
+<p>This results in three repetitions for the decorator, plus two per function, so it's better if you have a lot of functions.</p>
+
+<p>Is there a better way?  Maybe something using eval?  Thanks!</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>This is similar to your decorator idea, but it is a bit more general, as it allows you to pass an arbitrary number of dicts to <code>foo</code>, and the decorator does not have to know anything about the keys in the dicts or the order of the arguments when calling the underlying <code>foo</code> function.</p>
+
+<pre><code>#!/usr/bin/env python
+d1 = {'x':1,'y':2}
+d2 = {'a':3,'b':4}
+
+def unpack_dicts(f):
+    def f_new(*dicts):
+        new_dict={}
+        for d in dicts:
+            new_dict.update(d)
+        return f(**new_dict)
+    return f_new
+
+@unpack_dicts
+def foo(x,y,a,b):
+    print x,y,a,b
+
+foo(d1,d2)
+# 1 2 3 4
+</code></pre>
+<br /><b>#1</b><br /><p>If you like <code>d.variable</code> syntax better than <code>d['variable']</code>, you can wrap the dictionary in <a href="http://code.activestate.com/recipes/52308/" rel="nofollow">an almost trivial "bunch" object</a> such as this:</p>
+
+<pre><code>class Bunch:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+</code></pre>
+
+<p>It doesn't exactly bring dictionary contents into the local namespace, but comes close if you use short names for the objects. </p>
+<br /><b>#2</b><br /><p>I do not think you can get any more convenience for dict unpacking in Python. So, here comes the obligatory "if that hurts, don't do that" answer.</p>
+
+<p>Mapping item access IS more cumbersome than attribute access in Python, so maybe you should pass instances of user-defined classes instead of dicts.</p>
+<br /><b>#3</b><br /><p>I think the common wisdom is "don't use the <code>inspect</code> module in production code", and I mostly agree with that. As such, I think it is a bad idea to do the following in production code. But, if you're working on a python that supports frames (like CPython), this <em>should</em> work:</p>
+
+<pre><code>&gt;&gt;&gt; def framelocals():
+...    return inspect.currentframe(1).f_locals
+... 
+&gt;&gt;&gt; def foo(ns):
+...    framelocals().update(ns)
+...    print locals()
+... 
+&gt;&gt;&gt; foo({'bar': 17})
+{'ns': {'bar': 17}, 'bar': 17}
+</code></pre>
+
+<p>It just grabs the actual <code>dict</code> out of the caller's frame, which when called inside a function body, should be the function's name space. I don't know if there is or isn't a situation when using CPython when <code>locals()</code> doesn't just do this anyway; the warning in the documentation might be to say "the effects of modifying the <code>dict</code> returned by <code>locals()</code> are python implementation dependent". Thus, while it works to modify that <code>dict</code> in CPython, it may not in another implementation.  </p>
+
+<p><strong>UPDATE:</strong> This method doesn't actually work. </p>
+
+<pre><code>&gt;&gt;&gt; def flup(ns):
+...    framelocals().update(ns)
+...    print locals()
+...    print bar
+... 
+&gt;&gt;&gt; flup({'bar': 17})
+{'ns': {'bar': 17}, 'bar': 17}
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "&lt;stdin&gt;", line 4, in flup
+NameError: global name 'bar' is not defined
+</code></pre>
+
+<p>As <a href="http://stackoverflow.com/users/11549/ddaa">ddaa</a> suggested, there's some deeper magic in the function compilation which makes note of the local variables.  Thus you can update the <code>dict</code>, but you can't see the update with normal local namespace lookup.</p>
+<br /><b>#4</b><br /><p>You can always pass a dictionary as an argument to a function. For instance, </p>
+
+<pre><code>dict = {'a':1, 'b':2}
+def myFunc( a=0,b=0,c=0 ):
+  print a,b,c
+myFunc(**dict)
+</code></pre>
+<br /><b>#5</b><br /><p>Assuming all keys in your dictionary qualify to be identifiers,
+You can simply do this:</p>
+
+<pre><code>adict = { 'x' : 'I am x', 'y' : ' I am y' }
+for key in  adict.keys():
+  exec(key + " = adict['" + key + "']")
+blah(x)
+blah(y)
+</code></pre>
+<br />

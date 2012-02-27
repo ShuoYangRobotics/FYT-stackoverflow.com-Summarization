@@ -1,0 +1,164 @@
+<h3>Question (ID-5450055):</h3><h2>How can I improve my INSERT statement performance?</h2><p><a href="http://stackoverflow.com/questions/3738269/how-to-insert-arrays-into-a-database/3738402#3738402">While Josh's answer here</a> gave me a good head start on how to insert a 256x64x250 value array into a MySQL database. When I actually tried his INSERT statement on my data it turned out horribly slow (as in 6 minutes for a 16Mb file).</p>
+
+<pre><code>ny, nx, nz = np.shape(data)
+query = """INSERT INTO `data` (frame, sensor_row, sensor_col, value) VALUES (%s, %s, %s, %s)"""
+for frames in range(nz):
+    for rows in range(ny):
+        for cols in range(nx):
+            cursor.execute(query, (frames, rows, cols, data[rows,cols,frames]))
+</code></pre>
+
+<p>I was reading <a href="http://rads.stackoverflow.com/amzn/click/1849510180" rel="nofollow">MySQL for Python</a>, which explained that this wasn't the right approach because executing 4 million separate inserts is very inefficient.</p>
+
+<p>Now my data consist out of a lot of zeros (more than 90% actually), so I threw in an IF statement so I only insert values greater than zero and I used <strong>executemany()</strong> instead:</p>
+
+<pre><code>query = """INSERT INTO `data` (frame, sensor_row, sensor_col, value) VALUES (%s, %s, %s, %s ) """
+values = []
+for frames in range(nz):
+    for rows in range(ny):
+        for cols in range(nx):
+            if data[rows,cols,frames] &gt; 0.0:
+                values.append((frames, rows, cols, data[rows,cols,frames]))           
+cur.executemany(query, values)
+</code></pre>
+
+<p>This miraculously brought my processing time down to about 20 seconds, of which 14 seconds spend on creating the list of <strong>values</strong> (37k rows) and 4 seconds on the actual inserting into the database.</p>
+
+<p><strong>So now I'm wondering, how can I speed up this process any further?</strong> Because I have a feeling my loop is horribly inefficient and there has to be a better way. If I need to insert 30 measurements per dog, this would still take 10 minutes, which seems far too long for this amount of data.</p>
+
+<p>Here are two versions of my raw files: <a href="http://dl.dropbox.com/u/5207386/rolloff" rel="nofollow">with headers</a> or <a href="http://dl.dropbox.com/u/5207386/sel_1" rel="nofollow">without headers</a>. I'd love to try the LOAD DATA INFILE, but I can't figure out how to parse the data correctly.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>If the data is a numpy array, you can try this:</p>
+
+<pre><code>query = """INSERT INTO `data` (frame, sensor_row, sensor_col, value) VALUES (%s, %s, %s, %s ) """
+values = []
+rows, cols, frames = numpy.nonzero(data)
+for row, col, frame in zip(rows, cols, frames):
+    values.append((frame, row, col, data[row,col,frame]))
+
+cur.executemany(query, values)
+</code></pre>
+
+<p>or</p>
+
+<pre><code>query = """INSERT INTO `data` (frame, sensor_row, sensor_col, value) VALUES (%s, %s, %s, %s ) """
+rows, cols, frames = numpy.nonzero(data)
+values = [(row, col, frame, val) for row, col, frame, val in zip(rows, cols, frames, data[rows,cols,frames])]
+cur.executemany(query, values)
+</code></pre>
+
+<p>Hope it helps</p>
+<br /><b>#1</b><br /><p>the fastest way to insert 4 million rows (16MB of data) would be to use load data infile - <a href="http://dev.mysql.com/doc/refman/5.0/en/load-data.html" rel="nofollow">http://dev.mysql.com/doc/refman/5.0/en/load-data.html</a></p>
+
+<p>so if possible generate a csv file then use load data infile..</p>
+
+<p>hope this helps :)</p>
+
+<p><strong>EDIT</strong></p>
+
+<p>So I took one of your original data files <strong>rolloff.dat</strong> and wrote a quick and dirty program to convert it to the following csv format.</p>
+
+<p>Download frames.dat from here: <a href="http://rapidshare.com/files/454896698/frames.dat" rel="nofollow">http://rapidshare.com/files/454896698/frames.dat</a></p>
+
+<p><strong>Frames.dat</strong></p>
+
+<pre><code>patient_name, sample_date dd/mm/yyyy, frame_time (ms), frame 0..248, row 0..255, col 0..62, value
+"Krulle (opnieuw) Krupp",04/03/2010,0.00,0,5,39,0.4
+"Krulle (opnieuw) Krupp",04/03/2010,0.00,0,5,40,0.4
+...
+"Krulle (opnieuw) Krupp",04/03/2010,0.00,0,10,42,0.4
+"Krulle (opnieuw) Krupp",04/03/2010,0.00,0,10,43,0.4
+"Krulle (opnieuw) Krupp",04/03/2010,7.94,1,4,40,0.4
+"Krulle (opnieuw) Krupp",04/03/2010,7.94,1,5,39,0.4
+"Krulle (opnieuw) Krupp",04/03/2010,7.94,1,5,40,0.7
+"Krulle (opnieuw) Krupp",04/03/2010,7.94,1,6,44,0.7
+"Krulle (opnieuw) Krupp",04/03/2010,7.94,1,6,45,0.4
+...
+"Krulle (opnieuw) Krupp",04/03/2010,1968.25,248,241,10,0.4
+"Krulle (opnieuw) Krupp",04/03/2010,1968.25,248,241,11,0.4
+"Krulle (opnieuw) Krupp",04/03/2010,1968.25,248,241,12,1.1
+"Krulle (opnieuw) Krupp",04/03/2010,1968.25,248,241,13,1.4
+"Krulle (opnieuw) Krupp",04/03/2010,1968.25,248,241,14,0.4
+</code></pre>
+
+<p>The file contains data only for frames that have values for each row and col - so zeros are excluded. 24799 data rows were generated from your original file.</p>
+
+<p>Next, I created a temporary loading (staging) table into which the frames.dat file is loaded. This is a temporary table which will allow you to manipulate/transform the data before loading into the proper production/reporting tables.</p>
+
+<pre><code>drop table if exists sample_temp;
+create table sample_temp
+(
+patient_name varchar(255) not null,
+sample_date date,
+frame_time decimal(6,2) not null default 0,
+frame_id tinyint unsigned not null,
+row_id tinyint unsigned not null,
+col_id tinyint unsigned not null,
+value decimal(4,1) not null default 0,
+primary key (frame_id, row_id, col_id)
+)
+engine=innodb;
+</code></pre>
+
+<p>All that remains is to load the data (note: i am using windows so you'll have to edit this script to make it linux compatible - check pathnames and change '\r\n' to '\n')</p>
+
+<pre><code>truncate table sample_temp;
+
+start transaction;
+
+load data infile 'c:\\import\\frames.dat' 
+into table sample_temp
+fields terminated by ',' optionally enclosed by '"'
+lines terminated by '\r\n'
+ignore 1 lines
+(
+patient_name,
+@sample_date,
+frame_time,
+frame_id,
+row_id,
+col_id,
+value
+)
+set 
+sample_date = str_to_date(@sample_date,'%d/%m/%Y');
+
+commit;
+
+Query OK, 24799 rows affected (1.87 sec)
+Records: 24799  Deleted: 0  Skipped: 0  Warnings: 0
+</code></pre>
+
+<p>The 24K rows were loaded in 1.87 seconds.</p>
+
+<p>Hope this helps :)</p>
+<br /><b>#2</b><br /><p>I don't use Python or mySQL  but batch insert performance can often be sped up with transactions.</p>
+<br /><b>#3</b><br /><p>Inserting multiple rows on each statement is one way of optimizing. However, why the need for the 3 loops? Maybe some sort of data transformation might be useful instead. </p>
+
+<p>Another option is to disable indexes during the insertion, if you are certain that you won't have any duplicate data (assuming you actually have indexes on the table). Indexes must be updated for each statement, and also checked to prevent duplicates.</p>
+
+<p>Invoke <code>ALTER TABLE tablename DISABLE KEYS</code> before starting your inserts, and when finished invoke <code>ALTER TABLE tablename ENABLE KEYS</code> and see if it helps</p>
+
+<p>From the manual:</p>
+
+<p>ALTER TABLE ... DISABLE KEYS tells MySQL to stop updating nonunique indexes. ALTER TABLE ... ENABLE KEYS then should be used to re-create missing indexes. MySQL does this with a special algorithm that is much faster than inserting keys one by one, so disabling keys before performing bulk insert operations should give a considerable speedup. Using ALTER TABLE ... DISABLE KEYS requires the INDEX privilege in addition to the privileges mentioned earlier.</p>
+<br /><b>#4</b><br /><p>If i understand this correctly, executemany() executes an INSERT INTO query for each row you want to insert. This can be improved by creating a single INSERT query with all values, which should look like this:</p>
+
+<pre><code>INSERT INTO data
+  (frame, sensor_row, sensor_col, value)
+VALUES
+ (1, 1, 1, 1),
+ (2, 2, 2, 2),
+ (3, 3, 3, 3),
+ ...
+</code></pre>
+
+<p>Your python code should generate the row values in the brackets and create one query string out of it to finally execute the query once.</p>
+<br /><b>#5</b><br /><p>You could employ list comprehenshions instead of <code>for</code> loops:</p>
+
+<pre><code>values = [(frames, rows, cols, data[rows,cols,frames]) \
+        for frames in range(nz) for rows in range(ny) \
+        for cols in range(nx) if data[rows,cols,frames] &gt; 0.0]           
+</code></pre>
+
+<p>I'd estimate this could give you slight speed up such as 10-20%.</p>
+<br />

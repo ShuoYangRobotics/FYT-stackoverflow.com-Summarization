@@ -1,0 +1,74 @@
+<h3>Question (ID-1291755):</h3><h2>How can I tell whether my Django application is running on development server or not?</h2><p>How can I be certain that my application is running on development server or not? I suppose I could check value of <code>settings.DEBUG</code> and assume if <code>DEBUG</code> is <code>True</code> then it's running on development server, but I'd prefer to know for sure than relying on convention.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><pre><code>server = request.META.get('wsgi.file_wrapper', None)
+if server is not None and server.__module__ == 'django.core.servers.basehttp':
+    print 'inside dev'
+</code></pre>
+
+<p>Of course, <code>wsgi.file_wrapper</code> might be set on META, and have a class from a module named <code>django.core.servers.basehttp</code> by extreme coincidence on another server environment, but I hope this will have you covered.</p>
+
+<p>By the way, I discovered this by making a syntatically invalid template while running on the development server, and searched for interesting stuff on the <code>Traceback</code> and the <code>Request information</code> sections, so I'm just editing my answer to corroborate with Nate's ideas.</p>
+<br /><b>#1</b><br /><p>Typically I set an variable called <code>environment</code> and set it to "DEVELOPMENT", "STAGING" or "PRODUCTION".  Within the settings file I can then add basic logic to change which settings are being used, based on environment.</p>
+
+<p><strong>EDIT:</strong> Additionally, you can simply use this logic to include different <code>settings.py</code> files that override the base settings.  For example:</p>
+
+<pre><code>if environment == "DEBUG":
+    from debugsettings import *
+</code></pre>
+<br /><b>#2</b><br /><p>I put the following in my settings.py to distinguish between the standard dev server and fcgi</p>
+
+<pre><code>import sys
+RUNNING_DEVSERVER = (sys.argv[1] == 'runserver')
+</code></pre>
+
+<p>This also relies on convention, however.</p>
+<br /><b>#3</b><br /><p>settings.DEBUG could be True and running under Apache or some other non-development server. It will still run. As far as I can tell, there is nothing in the run-time environment short of examining the pid and comparing to pids in the OS that will give you this information.</p>
+<br /><b>#4</b><br /><p>One difference between the development and deployment environment is going to be the server that it’s running on. What exactly is different will depend on your dev and deployment environments.</p>
+
+<p>Knowing your own dev and deploy environments, the HTTP request variables could be used to distinguish between the two. Look at <a href="http://docs.djangoproject.com/en/dev/ref/request-response/" rel="nofollow">request variables</a> like <code>request.META.HTTP_HOST</code>, <code>request.META.SERVER_NAME</code> and <code>request.META.SERVER_PORT</code> and compare them in the two environments.</p>
+
+<p>I bet you’ll find something quite obvious that’s different and can be used to detect your development environment. Do the test in <code>settings.py</code> and set a variable that you can use elsewhere.</p>
+<br /><b>#5</b><br /><p>Relying on settings.DEBUG is the most elegant way AFAICS as it is also used in Django code base on occasion. </p>
+
+<p>I suppose what you really want is a way to set that flag automatically without needing you update it manually everytime you upload the project to production servers. </p>
+
+<p>For that I check the path of settings.py (in settings.py) to determine what server the project is running on:</p>
+
+<pre><code>if __file__ == "path to settings.py in my development machine":
+    DEBUG = True
+elif __file__ in [paths of production servers]:
+    DEBUG = False
+else:
+    raise WhereTheHellIsThisServedException()
+</code></pre>
+
+<p>Mind you, you might also prefer doing this check with environment variables as @Soviut suggests. But as someone developing on Windows and serving on Linux checking the file paths was plain easier than going with environment variables.</p>
+<br /><b>#6</b><br /><p>I came across this problem just now, and ended up writing a solution similar to Aryeh Leib Taurog's. My main difference is that I want to differentiate between a production and dev environments when running the server, but also when running some one-off scripts for my app (which I run like DJANGO_SETTINGS_MODULE=settings python [the script] ). In this case, simply looking at whether argv[1] == runserver isn't enough. So what I came up with is to pass an extra command-line argument when I run the devserver, and also when I run my scripts, and just look for that argument in settings.py. So the code looks like this:</p>
+
+<pre><code>if '--in-development' in sys.argv:
+    ## YES! we're in dev
+    pass
+else:
+    ## Nope, this is prod
+    pass
+</code></pre>
+
+<p>then, running the django server becomes</p>
+
+<p>python manage.py runserver [whatever options you want] --in-development</p>
+
+<p>and running my scripts is as easy as</p>
+
+<p>DJANGO_SETTINGS_MODULE=settings python [myscript] --in-development</p>
+
+<p>Just make sure the extra argument you pass along doens't conflict with anything django (in reality I use my app's name as part of the argument).
+I think this is pretty decent, as it lets me control exactly when my server and scripts will behave as prod or dev, and I'm not relying on anyone else's conventions, other than my own.</p>
+
+<p>EDIT: manage.py complains if you pass unrecognized options, so you need to change the code in settings.py to be something like</p>
+
+<pre><code>if sys.argv[0] == 'manage.py' or '--in-development' in sys.argv:
+    # ...
+    pass
+</code></pre>
+
+<p>Although this works, I recognize it's not the most elegant of solutions...</p>
+<br />

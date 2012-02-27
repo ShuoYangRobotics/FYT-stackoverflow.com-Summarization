@@ -1,0 +1,123 @@
+<h3>Question (ID-1158076):</h3><h2>Implement touch using Python?</h2><p><code>touch</code> is a Unix utility that sets the modification and access times of files to the current time of day.  If the file doesn't exist, it is created with default permissions.</p>
+
+<p>How would you implement it as a Python function? Try to be cross platform and complete.</p>
+
+<p>(Current Google results for "python touch file" are not that great, but point to <a href="http://docs.python.org/library/os.html#os.utime" rel="nofollow">os.utime</a>.)</p>
+
+<p><a href="http://google.com/codesearch/p?hl=en&amp;sa=N&amp;cd=3&amp;ct=rc#iehUyi%5FFgmY/coreutils-4.5.5/src/touch.c" rel="nofollow">Here's the source for GNU touch</a>.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>This tries to be a little more race-free than the other solutions.  (The <code>with</code> keyword is new in Python 2.5.)</p>
+
+<pre><code>import os
+def touch(fname, times = None):
+    with file(fname, 'a'):
+        os.utime(fname, times)
+</code></pre>
+
+<p>Roughly equivalent to this.</p>
+
+<pre><code>import os
+def touch(fname, times = None):
+    fhandle = file(fname, 'a')
+    try:
+        os.utime(fname, times)
+    finally:
+        fhandle.close()
+</code></pre>
+
+<p>Now, to really make it race-free, you need to use <a href="http://www.kernel.org/doc/man-pages/online/pages/man3/lutimes.3.html" rel="nofollow"><code>futimes</code></a> and change the timestamp of the open filehandle, instead of opening the file and then changing the timestamp on the filename (which may have been renamed).  Unfortunately, Python doesn't seem to provide a way to call <code>futimes</code> without going through <code>ctypes</code> or similar...</p>
+<br /><b>#1</b><br /><pre><code>def touch(fname):
+    if os.path.exists(fname):
+        os.utime(fname, None)
+    else:
+        open(fname, 'w').close()
+</code></pre>
+<br /><b>#2</b><br /><p>Here's some code that uses ctypes (only tested on Linux):</p>
+
+<pre><code>from ctypes import *
+libc = CDLL("libc.so.6")
+
+#  struct timespec {
+#             time_t tv_sec;        /* seconds */
+#             long   tv_nsec;       /* nanoseconds */
+#         };
+# int futimens(int fd, const struct timespec times[2]);
+
+class c_timespec(Structure):
+    _fields_ = [('tv_sec', c_long), ('tv_nsec', c_long)]
+
+class c_utimbuf(Structure):
+    _fields_ = [('atime', c_timespec), ('mtime', c_timespec)]
+
+utimens = CFUNCTYPE(c_int, c_char_p, POINTER(c_utimbuf))
+futimens = CFUNCTYPE(c_int, c_char_p, POINTER(c_utimbuf)) 
+
+# from /usr/include/i386-linux-gnu/bits/stat.h
+UTIME_NOW  = ((1l &lt;&lt; 30) - 1l)
+UTIME_OMIT = ((1l &lt;&lt; 30) - 2l)
+now  = c_timespec(0,UTIME_NOW)
+omit = c_timespec(0,UTIME_OMIT)
+
+# wrappers
+def update_atime(fileno):
+        assert(isinstance(fileno, int))
+        libc.futimens(fileno, byref(c_utimbuf(now, omit)))
+def update_mtime(fileno):
+        assert(isinstance(fileno, int))
+        libc.futimens(fileno, byref(c_utimbuf(omit, now)))
+
+# usage example:
+#
+# f = open("/tmp/test")
+# update_mtime(f.fileno())
+</code></pre>
+<br /><b>#3</b><br /><p>Why not try this?:</p>
+
+<pre><code>def touch(fname):
+    try:
+        os.utime(fname, None)
+    except:
+        open(fname, 'a').close()
+</code></pre>
+
+<p>I believe this eliminates any race condition that matters.  If the file does not exist then an exception will be thrown.</p>
+
+<p>The only possible race condition here is if the file is created before open() is called but after os.utime().  But this does not matter because in this case the modification time will be as expected since it must have happened during the call to touch().</p>
+<br /><b>#4</b><br /><p>Simplistic:</p>
+
+<pre><code>def touch(fname):
+    open(fname, 'a').close()
+    os.utime(fname, None)
+</code></pre>
+
+<ul>
+<li>The <code>open</code> ensures there is a file there</li>
+<li>the <code>utime</code> ensures that the timestamps are updated</li>
+</ul>
+
+<p>Theoretically, it's possible someone will delete the file after the <code>open</code>, causing utime to raise an exception. But arguably that's OK, since something bad did happen.</p>
+<br /><b>#5</b><br /><p>Complex (possibly buggy):</p>
+
+<pre><code>def utime(fname, atime=None, mtime=None)
+    if type(atime) is tuple:
+        atime, mtime = atime
+
+    if atime is None or mtime is None:
+        statinfo = os.stat(fname)
+        if atime is None:
+            atime = statinfo.st_atime
+        if mtime is None:
+            mtime = statinfo.st_mtime
+
+    os.utime(fname, (atime, mtime))
+
+
+def touch(fname, atime=None, mtime=None):
+    if type(atime) is tuple:
+        atime, mtime = atime
+
+    open(fname, 'a').close()
+    utime(fname, atime, mtime)
+</code></pre>
+
+<p>This tries to also allow setting the access or modification time, like GNU touch.</p>
+<br />

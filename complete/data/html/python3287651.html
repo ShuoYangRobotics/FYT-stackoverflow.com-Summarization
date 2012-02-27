@@ -1,0 +1,168 @@
+<h3>Question (ID-3287651):</h3><h2>Download a spreadsheet from Google Docs using Python</h2><p>Can you produce a Python example of how to download a Google Docs spreadsheet given its key and worksheet ID (<code>gid</code>)? I can't.</p>
+
+<p>I've scoured versions 1, 2 and 3 of the API. I'm having no luck, I can't figure out their  compilcated ATOM-like feeds API, the <code>gdata.docs.service.DocsService._DownloadFile</code> private method says that I'm unauthorized, and I don't want to write an entire Google Login authentication system myself. I'm about to stab myself in the face due to frustration.</p>
+
+<p>I have a few spreadsheets and I want to access them like so:</p>
+
+<pre><code>username = 'mygooglelogin@gmail.com'
+password = getpass.getpass()
+
+def get_spreadsheet(key, gid=0):
+    ... (help!) ...
+
+for row in get_spreadsheet('5a3c7f7dcee4b4f'):
+    cell1, cell2, cell3 = row
+    ...
+</code></pre>
+
+<p>Please save my face.</p>
+
+<hr>
+
+<p><strong>Update 1:</strong> I've tried the following, but no combination of <code>Download()</code> or <code>Export()</code> seems to work. (Docs for <code>DocsService</code> <a href="http://gdata-python-client.googlecode.com/svn/trunk/pydocs/gdata.docs.service.html" rel="nofollow">here</a>)</p>
+
+<pre><code>import gdata.docs.service
+import getpass
+import os
+import tempfile
+import csv
+
+def get_csv(file_path):
+  return csv.reader(file(file_path).readlines())
+
+def get_spreadsheet(key, gid=0):
+  gd_client = gdata.docs.service.DocsService()
+  gd_client.email = 'xxxxxxxxx@gmail.com'
+  gd_client.password = getpass.getpass()
+  gd_client.ssl = False
+  gd_client.source = "My Fancy Spreadsheet Downloader"
+  gd_client.ProgrammaticLogin()
+
+  file_path = tempfile.mktemp(suffix='.csv')
+  uri = 'http://docs.google.com/feeds/documents/private/full/%s' % key
+  try:
+    entry = gd_client.GetDocumentListEntry(uri)
+
+    # XXXX - The following dies with RequestError "Unauthorized"
+    gd_client.Download(entry, file_path)
+
+    return get_csv(file_path)
+  finally:
+    try:
+      os.remove(file_path)
+    except OSError:
+      pass
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You might try using the AuthSub method described in the <a href="http://code.google.com/apis/documents/docs/1.0/developers_guide_python.html#DownloadingSpreadsheets">Exporting Spreadsheets</a> section of the documentation.</p>
+
+<p>Get a separate login token for the spreadsheets service and substitue that for the export.  Adding this to the <code>get_spreadsheet</code> code worked for me:</p>
+
+<pre><code>import gdata.spreadsheet.service
+
+def get_spreadsheet(key, gid=0):
+    # ...
+    spreadsheets_client = gdata.spreadsheet.service.SpreadsheetsService()
+    spreadsheets_client.email = gd_client.email
+    spreadsheets_client.password = gd_client.password
+    spreadsheets_client.source = "My Fancy Spreadsheet Downloader"
+    spreadsheets_client.ProgrammaticLogin()
+
+    # ...
+    entry = gd_client.GetDocumentListEntry(uri)
+    docs_auth_token = gd_client.GetClientLoginToken()
+    gd_client.SetClientLoginToken(spreadsheets_client.GetClientLoginToken())
+    gd_client.Export(entry, file_path)
+    gd_client.SetClientLoginToken(docs_auth_token) # reset the DocList auth token
+</code></pre>
+
+<p>Notice I also used <code>Export</code>, as <code>Download</code> seems to give only PDF files.</p>
+<br /><b>#1</b><br /><p>This no longer works as of gdata 2.0.1.4:</p>
+
+<pre><code>gd_client.SetClientLoginToken(spreadsheets_client.GetClientLoginToken())
+</code></pre>
+
+<p>Instead, you have to do:</p>
+
+<pre><code>gd_client.SetClientLoginToken(gdata.gauth.ClientLoginToken(spreadsheets_client.GetClientLoginToken()))
+</code></pre>
+<br /><b>#2</b><br /><p>The following code works in my case (Ubuntu 10.4, python 2.6.5 gdata 2.0.14)</p>
+
+<pre><code>import gdata.docs.service
+import gdata.spreadsheet.service
+gd_client = gdata.docs.service.DocsService()
+gd_client.ClientLogin(email,password)
+spreadsheets_client = gdata.spreadsheet.service.SpreadsheetsService()
+spreadsheets_client.ClientLogin(email,password)
+#...
+file_path = file_path.strip()+".xls"
+docs_token = gd_client.auth_token
+gd_client.SetClientLoginToken(spreadsheets_client.GetClientLoginToken())
+gd_client.Export(entry, file_path)  
+gd_client.auth_token = docs_token
+</code></pre>
+<br /><b>#3</b><br /><p>In case anyone comes across this looking for a quick fix, here's <a href="https://gist.github.com/1650271" rel="nofollow">another (currently) working solution</a> that doesn't rely on the gdata client library:</p>
+
+<pre><code>#!/usr/bin/python
+
+import re, urllib, urllib2
+
+class Spreadsheet(object):
+    def __init__(self, key):
+        super(Spreadsheet, self).__init__()
+        self.key = key
+
+class Client(object):
+    def __init__(self, email, password):
+        super(Client, self).__init__()
+        self.email = email
+        self.password = password
+
+    def _get_auth_token(self, email, password, source, service):
+        url = "https://www.google.com/accounts/ClientLogin"
+        params = {
+            "Email": email, "Passwd": password,
+            "service": service,
+            "accountType": "HOSTED_OR_GOOGLE",
+            "source": source
+        }
+        req = urllib2.Request(url, urllib.urlencode(params))
+        return re.findall(r"Auth=(.*)", urllib2.urlopen(req).read())[0]
+
+    def get_auth_token(self):
+        source = type(self).__name__
+        return self._get_auth_token(self.email, self.password, source, service="wise")
+
+    def download(self, spreadsheet, gid=0, format="csv"):
+        url_format = "https://spreadsheets.google.com/feeds/download/spreadsheets/Export?key=%s&amp;exportFormat=%s&amp;gid=%i"
+        headers = {
+            "Authorization": "GoogleLogin auth=" + self.get_auth_token(),
+            "GData-Version": "3.0"
+        }
+        req = urllib2.Request(url_format % (spreadsheet.key, format, gid), headers=headers)
+        return urllib2.urlopen(req)
+
+if __name__ == "__main__":
+    import getpass
+    import csv
+
+    email = "" # (your email here)
+    password = getpass.getpass()
+    spreadsheet_id = "" # (spreadsheet id here)
+
+    # Create client and spreadsheet objects
+    gs = Client(email, password)
+    ss = Spreadsheet(spreadsheet_id)
+
+    # Request a file-like object containing the spreadsheet's contents
+    csv_file = gs.download(ss)
+
+    # Parse as CSV and print the rows
+    for row in csv.reader(csv_file):
+        print ", ".join(row)
+</code></pre>
+<br /><b>#4</b><br /><p>This isn't a complete answer, but <a href="http://andreaskahler.com/" rel="nofollow">Andreas Kahler</a> wrote up an interesting CMS solution using Google Docs + Google App Engline + Python. Not having any experience in the area, I cannot see exactly what portion of the code may be of use to you, but check it out. I know it interfaces with a Google Docs account and plays with files, so I have a feeling you'll recognize what's going on. It should at least point you in the right direction.</p>
+
+<p><a href="http://blog.andreaskahler.com/2010/03/google-appengine-google-docs-some.html" rel="nofollow">Google AppEngine + Google Docs + Some Python = Simple CMS</a></p>
+<br /><b>#5</b><br /><p>A hacky solution, but works:
+<a href="http://bitbucket.org/dariusdamalakas/parasykjiems/src/tip/contactdb/management/commands/downloadDocs.py" rel="nofollow">http://bitbucket.org/dariusdamalakas/parasykjiems/src/tip/contactdb/management/commands/downloadDocs.py</a></p>
+<br />

@@ -1,0 +1,218 @@
+Question (ID-7495886): Use a class in the context of a different module I want to modify some classes in the standard library to use a different set of globals the ones that other classes in that module use. 
+
+ Example 
+
+ This example is an example only: 
+
+ # module_a.py
+
+my_global = []
+
+class A:
+ def __init__(self):
+  my_global.append(self)
+
+class B:
+ def __init__(self):
+  my_global.append(self)
+ 
+
+ In this example, If I create an instance of A , via A() , it will call append on the object named by my_global . But now I wish to create a new module, import B to it, and have B use my_global from the module it's been imported into, instead of the my_global from the module B was original defined. 
+
+ # module_b.py
+
+from module_a import B
+
+my_global = []
+ 
+
+ Related 
+
+ I'm struggling to explain my problem, here is my previous attempt which did in fact ask something completely different: 
+
+ 
+ Clone a module and make changes to the copy 
+ 
+
+ Update0 
+
+ 
+ The example above is only for illustration of what I'm trying to achieve. 
+ Since there is no variable scope for classes (unlike say, C++), I think a reference to a globals mapping is not stored in a class, but instead is attached to every function when defined. 
+ 
+
+ Update1 
+
+ An example was requested from the standard library: 
+
+ Many (maybe all?) of the classes in the threading module make use of globals such as _allocate_lock , get_ident , and _active , defined here and here . One cannot change these globals without changing it for all the classes in that module. 
+ Answers (Total-7): #0 You can't change the globals without affecting all other users of the module, but what you sort of can do is create a private copy of the whole module. 
+
+ I trust you are familiar with sys.modules , and that if you remove a module from there, Python forgets it was imported, but old objects referencing it will continue to do so. When imported again, a new copy of the module will be made. 
+
+ A hacky solution to your problem could would be something like this: 
+
+ import sys
+import threading
+
+# Remove the original module, but keep it around
+main_threading = sys.modules.pop('threading')
+
+# Get a private copy of the module
+import threading as private_threading
+
+# Cover up evidence by restoring the original
+sys.modules['threading'] = main_threading
+
+# Modify the private copy
+private_threading._allocate_lock = my_allocate_lock()
+ 
+
+ And now, private_threading.Lock has globals entirely separate from threading.Lock ! 
+
+ Needless to say, the module wasn't written with this in mind, and especially with a system module such as threading you might run into problems. For example, threading._active is supposed to contain all running threads, but with this solution, neither _active will have them all. The code may also eat your socks and set your house on fire, etc. Test rigorously. 
+ #1 Okay, here's a proof-of-concept that shows how to do it. Note that it only goes one level deep -- properties and nested functions are not adjusted. To implement that, as well as make this more robust, each function's globals() should be compared to the globals() that should be replaced, and only make the substitution if they are the same. 
+
+ def migrate_class(cls, globals):
+ """Recreates a class substituting the passed-in globals for the
+ globals already in the existing class. This proof-of-concept
+ version only goes one-level deep (i.e. properties and other nested
+ functions are not changed)."""
+ name = cls.__name__
+ bases = cls.__bases__
+ new_dict = dict()
+ if hasattr(cls, '__slots__'):
+  new_dict['__slots__'] = cls.__slots__
+  for name in cls.__slots__:
+   if hasattr(cls, name):
+    attr = getattr(cls, name)
+    if callable(attr):
+     closure = attr.__closure__
+     defaults = attr.__defaults__
+     func_code = attr.__code__
+     attr = FunctionType(func_code, globals)
+    new_dict[name] = attr
+ if hasattr(cls, '__dict__'):
+  od = getattr(cls, '__dict__')
+  for name, attr in od.items():
+   if callable(attr):
+    closure = attr.__closure__
+    defaults = attr.__defaults__
+    kwdefaults = attr.__kwdefaults__
+    func_code = attr.__code__
+    attr = FunctionType(func_code, globals, name, defaults, closure)
+    if kwdefaults:
+     attr.__kwdefaults__ = kwdefaults
+   new_dict[name] = attr
+ return type(name, bases, new_dict)
+ 
+
+ After having gone through this excercise, I am really curious as to why you need to do this? 
+ #2 "One cannot change these globals without changing it for all the classes in that module." That's the root of the problem isn't it, and a good explanation of the problem with global variables in general. The use of globals in threading tethers its classes to those global objects. 
+
+ By the time you jerry-rig something to find and monkey patch each use of a global variable within an individual class from the module, are you any further ahead of just reimplementing the code for your own use? 
+
+ The only work around that "might" be of use in your situation is something like mock . Mock's patch decorators/context managers (or something similar) could be used to swap out a global variable for the life-time of a given object. It works well within the very controlled context of unit testing, but in any other circumstances I wouldn't recommend it and would think about just reimplementing the code to suit my needs. 
+ #3 Globals are bad for exactly this reason, as I am sure you know well enough. 
+
+ I'd try to reimplement A and B (maybe by subclassing them) in my own module and with all references to 
+my_global replaced by an injected dependency on A and B, which I'll call registry here. 
+
+ class A(orig.A):
+
+ def __init__(self, registry):
+  self.registry = registry
+  self.registry.append(self)
+
+ # more updated methods
+ 
+
+ If you are creating all instances of A yourself you are pretty much done. You might want to create a factory which hides away the new init parameter. 
+
+ my_registry = []
+def A_in_my_registry():
+ return A(my_registry)
+ 
+
+ If foreign code creates orig.A instances for you, and you would rather have new A instances, you have to hope the foreign code is customizeable
+with factories. If not, derive from the foreign classes and update them to use (newly injected) A factories instead. .... And rinse repeat for for the creation of those updated classes. I realize this can be tedious to almost impossible depending on the complexity of the foreign code, but most std libs are quite flat. 
+
+ -- 
+
+ Edit: Monkey patch std lib code. 
+
+ If you don't mind monkey patching std libs, you could also try to modifiy the original classes to work
+with a redirection level which defaults to the original globals, but is customizable per instance: 
+
+ import orig
+
+class A(orig.A):
+
+ def __init__(self, registry=orig.my_globals):
+  self.registry = registry
+  self.registry.append(self)
+
+ # more updated methods
+
+orig.A = A
+ 
+
+ As before you will need to control creations of A which should use non "standard globals",
+but you won't have different A classes around as long as you monkey patch early enough. 
+ #4 If you use Python 3, you can subclass B and redefine the __globals__ attribute of the __init__ method like this: 
+
+ from module_a import B
+
+function = type(lambda: 0) # similar to 'from types import FunctionType as function', but faster
+my_global = []
+
+
+class My_B (B):
+ __init__ = function(B.__init__.__code__, globals(), '__init__', B.__init__.__defaults__, B.__init__.__closure__)
+ 
+ #5 IMHO it is not possible to override global variables... 
+ #6 Globals are rarely a good idea. 
+
+ Implicit variables are rarely a good idea. 
+
+ An implicitly-used global is easy to indict as also "rarely good". 
+
+ Additionally, you don't want A.__init__() doing anything "class-level" like updating some mysterious collection that exists for the class as a whole. That's often a bad idea. 
+
+ Rather than mess with implicit class-level collection, you want a Factory in module_a that (1) creates A or B instances and (b) updates an explicit collection. 
+
+ You can then use this factory in module_b , except with a different collection. 
+
+ This can promote testability by exposing an implicit dependency. 
+
+ module_a.py 
+
+ class Factory( object ):
+ def __init__( self, collection ):
+  self.collection= collection
+ def make( self, name, *args, **kw ):
+  obj= eval( name )( *args, **kw )
+  self.collection.append( obj )
+  return obj
+
+module_collection = []
+factory= Factory( module_collection )
+ 
+
+ module_b.py 
+
+ module_collection = []
+factory = module_a.Factory( module_collection )
+ 
+
+ Now a client can do this 
+
+ import module_b
+a = module_b.factory.make( "A" )
+b = module_b.factory.make( "B" )
+print( module_b.module_collection )
+ 
+
+ You can make the API a bit more fluent by making the factory "callable" (implementing __call__ instead of make . 
+
+ The point is to make the collection explicit via a factory class.

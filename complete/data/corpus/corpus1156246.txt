@@ -1,0 +1,79 @@
+Question (ID-1156246): Having Django serve downloadable files I want users on the site to be able to download files whose paths are obscured so they cannot be directly downloaded. 
+
+ For instance, I'd like the URL to be something like this, "http://example.com/download/?f=somefile.txt 
+
+ And on the server, I know that all downloadable files reside in a folder "/home/user/files/". 
+
+ Is there a way to make Django serve that file for download as opposed to trying to find a URL and View to display it? 
+ Answers (Total-8): #0 For the "best of both worlds" you could combine S.Lott's solution with the xsendfile module : django generates the path to the file (or the file itself), but the actual file serving is handled by Apache/Lighttpd. Once you've set up mod_xsendfile, integrating with your view takes a few lines of code: 
+
+ response = HttpResponse(mimetype='application/force-download')
+response['Content-Disposition'] = 'attachment; filename=%s' % smart_str(file_name)
+response['X-Sendfile'] = smart_str(path_to_file)
+# It's usually a good idea to set the 'Content-Length' header too.
+# You can also set any other required headers: Cache-Control, etc.
+return response
+ 
+
+ Of course, this will only work if you have control over your server, or your hosting company has mod_xsendfile already set up. 
+ #1 A "download" is simply an HTTP header change. 
+
+ See http://docs.djangoproject.com/en/dev/ref/request-response/#telling-the-browser-to-treat-the-response-as-a-file-attachment for how to respond with a download. 
+
+ You only need one URL definition for "/download" . 
+
+ The request's GET or POST dictionary will have the "f=somefile.txt" information. 
+
+ Your view function will simply merge the base path with the " f " value, open the file, create and return a response object. It should be less than 12 lines of code. 
+ #2 S.Lott has the "good"/simple solution, and elo80ka has the "best"/efficient solution. Here is a middle "better"/middle solution - no server setup, but more efficient for large files than the naive fix. 
+
+ http://djangosnippets.org/snippets/365/ 
+
+ Basically django still handles serving the file, but does not load the whole thing into memory at once. This allows your server to (slowly) server a big file without ramping up the memory usage. 
+
+ Again, S.Lott's X-SendFile is still better for larger files. But if you can't or don't want to bother with that, then this middle solution will gain you better efficiency without the hassle. 
+ #3 It was mentioned above that the mod_xsendfile method does not allow for non-ASCII characters in filenames. 
+
+ For this reason, I have a patch available for mod_xsendfile that will allow any file to be sent, as long as the name is url encoded, and the additional header: 
+
+ X-SendFile-Encoding: url
+ 
+
+ Is sent as well. 
+
+ http://ben.timby.com/?p=149 
+ #4 Try: https://github.com/rosarior/django-sendfile 
+ #5 Django recommend that you use another server to serve static media (another server running on the same machine is fine.) They recommend the use of such servers as lighttp . 
+
+ This is very simple to set up. However. if 'somefile.txt' is generated on request (content is dynamic) then you may want django to serve it. 
+
+ Django Docs - Static Files 
+ #6 Another project to have a look at: http://readthedocs.org/docs/django-private-files/en/latest/usage.html 
+Looks promissing, haven't tested it myself yet tho. 
+
+ Basically the project abstracts the mod_xsendfile configuration and allows you to do things like: 
+
+ from django.db import models
+from django.contrib.auth.models import User
+from private_files import PrivateFileField
+
+def is_owner(request, instance):
+ return (not request.user.is_anonymous()) and request.user.is_authenticated and
+     instance.owner.pk = request.user.pk
+
+class FileSubmission(models.Model):
+ description = models.CharField("description", max_length = 200)
+  owner = models.ForeignKey(User)
+ uploaded_file = PrivateFileField("file", upload_to = 'uploads', condition = is_owner)
+ 
+ #7 Is there any way to return a file and a redirect? 
+
+ Ideally: 
+
+ 1) The user would click a link 
+
+ 2) A dynamically generated file would download 
+
+ 3) The user would be redirected to another page 
+
+ Thanks

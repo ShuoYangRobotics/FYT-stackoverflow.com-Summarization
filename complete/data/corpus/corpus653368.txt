@@ -1,0 +1,220 @@
+Question (ID-653368): How to create a Python decorator that can be used either with or without parameters? I'd like to create a Python decorator that can be used either with parameters: 
+
+ @redirect_output("somewhere.log")
+def foo():
+ ....
+ 
+
+ or without them (for instance to redirect the output to stderr by default): 
+
+ @redirect_output
+def foo():
+ ....
+ 
+
+ Is that at all possible? 
+
+ Note that I'm not looking for a different solution to the problem of redirecting output, it's just an example of the syntax I'd like to achieve. 
+ Answers (Total-7): #0 Using keyword arguments with default values (as suggested by kquinn) is a good idea, but will require you to include the parenthesis: 
+
+ @redirect_output()
+def foo():
+ ...
+ 
+
+ If you would like a version that works without the parenthesis on the decorator you will have to account both scenarios in your decorator code. 
+
+ If you were using Python 3.0 you could use keyword only arguments for this: 
+
+ def redirect_output(fn=None,*,destination=None):
+ destination = sys.stderr if destination is None else destination
+ def wrapper(*args, **kwargs):
+ ... # your code here
+ if fn is None:
+ def decorator(fn):
+  return functools.update_wrapper(wrapper, fn)
+ return decorator
+ else:
+ return functools.update_wrapper(wrapper, fn)
+ 
+
+ In Python 2.x this can be emulated with varargs tricks: 
+
+ def redirected_output(*fn,**options):
+ destination = options.pop('destination', sys.stderr)
+ if options:
+ raise TypeError("unsupported keyword arguments: %s" % 
+     ",".join(options.keys()))
+ def wrapper(*args, **kwargs):
+ ... # your code here
+ if fn:
+ return functools.update_wrapper(wrapper, fn[0])
+ else:
+ def decorator(fn):
+  return functools.update_wrapper(wrapper, fn)
+ return decorator
+ 
+
+ Any of these versions would allow you to write code like this: 
+
+ @redirected_output
+def foo():
+ ...
+
+@redirected_output(destination="somewhere.log")
+def bar():
+ ...
+ 
+ #1 A python decorator is called in a fundamentally different way depending on whether you give it arguments or not. The decoration is actually just a (syntactically restricted) expression. 
+
+ In your first example: 
+
+ @redirect_output("somewhere.log")
+def foo():
+ ....
+ 
+
+ the function redirect_output is called with the
+given argument, which is expected to return a decorator
+function, which itself is called with foo as an argument,
+which (finally!) is expected to return the final decorated function. 
+
+ The equivalent code looks like this: 
+
+ def foo():
+ ....
+d = redirect_output("somewhere.log")
+foo = d(foo)
+ 
+
+ The equivalent code for your second example looks like: 
+
+ def foo():
+ ....
+d = redirect_output
+foo = d(foo)
+ 
+
+ So you can do what you'd like but not in a totally seamless way: 
+
+ import types
+def redirect_output(arg):
+ def decorator(file, f):
+  def df(*args, **kwargs):
+   print 'redirecting to ', file
+   return f(*args, **kwargs)
+  return df
+ if type(arg) is types.FunctionType:
+  return decorator(sys.stderr, arg)
+ return lambda f: decorator(arg, f)
+ 
+
+ This should be ok unless you wish to use a function as an
+argument to your decorator, in which case the decorator
+will wrongly assume it has no arguments. It will also fail
+if this decoration is applied to another decoration that
+does not return a function type. 
+
+ An alternative method is just to require that the
+decorator function is always called, even if it is with no arguments.
+In this case, your second example would look like this: 
+
+ @redirect_output()
+def foo():
+ ....
+ 
+
+ The decorator function code would look like this: 
+
+ def redirect_output(file = sys.stderr):
+ def decorator(file, f):
+  def df(*args, **kwargs):
+   print 'redirecting to ', file
+   return f(*args, **kwargs)
+  return df
+ return lambda f: decorator(file, f)
+ 
+ #2 You need to detect both cases, for example using the type of the first argument, and accordingly return either the wrapper (when used without parameter) or a decorator (when used with arguments). 
+
+ from functools import wraps
+import inspect
+
+def redirect_output(fn_or_output):
+ def decorator(fn):
+  @wraps(fn)
+  def wrapper(*args, **args):
+   # Redirect output
+   try:
+    return fn(*args, **args)
+   finally:
+    # Restore output
+  return wrapper
+
+ if inspect.isfunction(fn_or_output):
+  # Called with no parameter
+  return decorator(fn_or_output)
+ else:
+  # Called with a parameter
+  return decorator
+ 
+
+ When using the @redirect_output("output.log") syntax, redirect_output is called with a single argument "output.log" , and it must return a decorator accepting the function to be decorated as an argument. When used as @redirect_output , it is called directly with the function to be decorated as an argument. 
+
+ Or in other words: the @ syntax must be followed by an expression whose result is a function accepting a function to be decorated as its sole argument, and returning the decorated function. The expression itself can be a function call, which is the case with @redirect_output("output.log") . Convoluted, but true :-) 
+ #3 Generally you can give default arguments in Python... 
+
+ def redirect_output(fn, output = stderr):
+ # whatever
+ 
+
+ Not sure if that works with decorators as well, though. I don't know of any reason why it wouldn't. 
+ #4 Have you tried keyword arguments with default values? Something like 
+
+ def decorate_something(foo=bar, baz=quux):
+ pass
+ 
+ #5 You can use default argument like that: 
+
+ import sys
+def redirect_output(fn, output = sys.stderr):
+ ...
+ 
+
+ Not however, that default arguments are bound when function definition is parsed. So if you'd redirect all of stderr elsewhere, it won't work. So the other option is "magic" default value: 
+
+ def redirect_output(fn, output = '#stderr#'):
+ if(output == '#stderr#')
+  import sys
+  output = sys.stderr
+ #you might also use None as value to redirect nowhere.
+ if(output == None)
+  import os.path
+  if(os.path.exists('/dev/null')) 
+   # one of many UNIX flavours
+   output = open('/dev/null','w')
+  else:
+   # Windows of something like that
+   output = open('nul:', 'w')   
+
+ ...
+ 
+
+ Now this way following will work as expected: 
+
+ import sys
+sys.stderr = open('/var/log/error.log','w+')
+
+@redirect_output
+def foo():
+ ...
+ 
+ #6 Building on vartec's answer: 
+
+ imports sys
+
+def redirect_output(func, output=None):
+ if output is None:
+  output = sys.stderr
+ if isinstance(output, basestring):
+  output = open(output, 'w') # etc...
+ # everything else...

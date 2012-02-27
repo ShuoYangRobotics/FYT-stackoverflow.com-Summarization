@@ -1,0 +1,360 @@
+Question (ID-3253383): Parsing text files using Python I am very new to Python and am looking to use it to parse a text file. The file has between 250-300 lines of the following format: 
+
+ ---- Mark Grey (mark.grey@gmail.com) changed status from Busy to Available @ 14/07/2010 16:32:36 ----
+---- Silvia Pablo (spablo@gmail.com) became Available @ 14/07/2010 16:32:39 ----
+ 
+
+ I need to store the following information into another file (excel or text) for all the entries from this file 
+
+ UserName/ID Previous Status New Status Date Time
+ 
+
+ So my result file should look like this for the above entried 
+
+ Mark Grey/mark.grey@gmail.com Busy Available 14/07/2010 16:32:36
+Silvia Pablo/spablo@gmail.com NaN Available 14/07/2010 16:32:39
+ 
+
+ Thanks in advance, 
+
+ Any help would be really appreciated 
+ Answers (Total-7): #0 import re
+
+pat = re.compile(r"----\s+(.*?) \((.*?)\) (?:changed status from (\w+) to|became) (\w+) @ (.*?) ----\s*")
+with open("data.txt") as f:
+ for line in f:
+  (name, email, prev, curr, date) = pat.match(line).groups()
+  print "{0}/{1} {2} {3} {4}".format(name, email, prev or "NaN", curr, date)
+ 
+
+ This makes assumptions about whitespace and also assumes that every line conforms to the pattern. You might want to add error checking (such as checking that pat.match() doesn't return None ) if you want to handle dirty input gracefully. 
+ #1 To get you started: 
+
+ result = []
+regex = re.compile(
+ r"""^-*\s+
+ (?P&lt;name&gt;.*?)\s+
+ \((?P&lt;email&gt;.*?)\)\s+
+ (?:changed\s+status\s+from\s+(?P&lt;previous&gt;.*?)\s+to|became)\s+
+ (?P&lt;new&gt;.*?)\s+@\s+
+ (?P&lt;date&gt;\S+)\s+
+ (?P&lt;time&gt;\S+)\s+
+ -*$""", re.VERBOSE)
+with open("inputfile") as f:
+ for line in f:
+  match = regex.match(line)
+  if match:
+   result.append([
+    match.group("name"),
+    match.group("email"),
+    match.group("previous")
+    # etc.
+   ])
+  else:
+   # Match attempt failed
+ 
+
+ will get you an array of the parts of the match. I'd then suggest you use the csv module to store the results in a standard format. 
+ #2 The two RE patterns of interest seem to be...: 
+
+ p1 = r'^---- ([^(]+) \(([^)]+)\) changed status from (\w+) to (\w+) (\S+) (\S+) ----$'
+p2 = r'^---- ([^(]+) \(([^)]+)\) became (\w+) (\S+) (\S+) ----$'
+ 
+
+ so I'd do: 
+
+ import csv, re, sys
+
+# assign p1, p2 as above (or enhance them, etc etc)
+
+r1 = re.compile(p1)
+r2 = re.compile(p2)
+data = []
+
+with open('somefile.txt') as f:
+ for line in f:
+  m = p1.match(line)
+  if m:
+   data.append(m.groups())
+   continue
+  m = p2.match(line)
+  if not m:
+   print&gt;&gt;sys.stderr, "No match for line: %r" % line
+   continue
+  listofgroups = m.groups()
+  listofgroups.insert(2, 'NaN')
+  data.append(listofgroups)
+
+with open('result.csv', 'w') as f:
+ w = csv.writer(f)
+ w.writerow('UserName/ID Previous Status New Status Date Time'.split())
+ w.writerows(data)
+ 
+
+ If the two patterns I described are not general enough, they may need to be tweaked, of course, but I think this general approach will be useful. While many Python users on Stack Overflow intensely dislike REs, I find them very useful for this kind of pragmatical ad hoc text processing. 
+
+ Maybe the dislike is explained by others wanting to use REs for absurd uses such as ad hoc parsing of CSV, HTML, XML, ... -- and many other kinds of structured text formats for which perfectly good parsers exist! And also, other tasks well beyond REs' "comfort zone", and requiring instead solid general parser systems like pyparsing . Or at the other extreme super-simple tasks done perfectly well with simple strings (e.g. I remember a recent SO question which used if re.search('something', s): instead of if 'something' in s: !-). 
+
+ But for the reasonably broad swathe of tasks (excluding the very simplest ones at one end, and the parsing of structured or somewhat-complicated grammars at the other) for which REs are appropriate, there's really nothing wrong with using them, and I recommend to all programmers to learn at least REs' basics. 
+ #3 Alex mentioned pyparsing and so here is a pyparsing approach to your same problem: 
+
+ from pyparsing import Word, Suppress, Regex, oneOf, SkipTo
+import datetime
+
+DASHES = Word('-').suppress()
+LPAR,RPAR,AT = map(Suppress,"()@")
+date = Regex(r'\d{2}/\d{2}/\d{4}')
+time = Regex(r'\d{2}:\d{2}:\d{2}')
+status = oneOf("Busy Available Idle Offline Unavailable")
+
+statechange1 = 'changed status from' + status('fromstate') + 'to' + status('tostate')
+statechange2 = 'became' + status('tostate')
+linefmt = (DASHES + SkipTo('(')('name') + LPAR + SkipTo(RPAR)('email') + RPAR + 
+   (statechange1 | statechange2) +
+   AT + date('date') + time('time') + DASHES)
+
+def convertFields(tokens):
+ if 'fromstate' not in tokens:
+  tokens['fromstate'] = 'NULL'
+ tokens['name'] = tokens.name.strip()
+ tokens['email'] = tokens.email.strip()
+ d,mon,yr = map(int, tokens.date.split('/'))
+ h,m,s = map(int, tokens.time.split(':'))
+ tokens['datetime'] = datetime.datetime(yr, mon, d, h, m, s)
+linefmt.setParseAction(convertFields)
+
+for line in text.splitlines():
+ fields = linefmt.parseString(line)
+ print "%(name)s/%(email)s %(fromstate)-10.10s %(tostate)-10.10s %(datetime)s" % fields
+ 
+
+ prints: 
+
+ Mark Grey/mark.grey@gmail.com Busy  Available 2010-07-14 16:32:36
+Silvia Pablo/spablo@gmail.com NULL  Available 2010-07-14 16:32:39
+ 
+
+ pyparsing allows you to attach names to the results fields (just like the named groups in Tom Pietzcker's RE-styled answer), plus parse-time actions to act on or manipulate the parsed actions - note the conversion of the separate date and time fields into a true datetime object, already converted and ready for processing after parsing with no additional muss nor fuss. 
+
+ Here is a modified loop that just dumps out the parsed tokens and the named fields for each line: 
+
+ for line in text.splitlines():
+ fields = linefmt.parseString(line)
+ print fields.dump()
+ 
+
+ prints: 
+
+ ['Mark Grey ', 'mark.grey@gmail.com', 'changed status from', 'Busy', 'to', 'Available', '14/07/2010', '16:32:36']
+- date: 14/07/2010
+- datetime: 2010-07-14 16:32:36
+- email: mark.grey@gmail.com
+- fromstate: Busy
+- name: Mark Grey
+- time: 16:32:36
+- tostate: Available
+['Silvia Pablo ', 'spablo@gmail.com', 'became', 'Available', '14/07/2010', '16:32:39']
+- date: 14/07/2010
+- datetime: 2010-07-14 16:32:39
+- email: spablo@gmail.com
+- fromstate: NULL
+- name: Silvia Pablo
+- time: 16:32:39
+- tostate: Available
+ 
+
+ I suspect that as you continue to work on this problem, you will find other variations on the format of the input text specifying how the user's state changed. In this case, you would just add another definition like statechange1 or statechange2 , and insert it into linefmt with the others. I feel that pyparsing's structuring of the parser definition helps developers come back to a parser after things have changed, and easily extend their parsing program. 
+ #4 Well, if i were to approach this problem, probably I'd start by splitting each entry into its own, separate string. This looks like it might be line oriented, so a inputfile.split('\n') is probably adequate. From there I would probably craft a regular expression to match each of the possible status changes, with subgroups wrapping each of the important fields. 
+ #5 EDIT NOTE: Marcelo and Tim gave you a pretty good answer for what you want to do. 
+
+ Here's documentation for the regular expression library, included in Python, which may help you expand the code further:
+ http://docs.python.org/library/re.html 
+ #6 thanks very much for all your comments. They were very useful. I wrote my code using the directory functionality. What it does is it reads through the file and creates an output file for each of the user with all his status updates. Here is the code pasted below. 
+
+ #Script to extract info from individual data files and print out a data file combining info from these files
+
+import os
+import commands
+
+dataFileDir="data/";
+
+#Dictionary linking names to email ids
+#For the time being, assume no 2 people have the same name
+usrName2Id={};
+
+#User id to user name mapping to check for duplicate names
+usrId2Name={};
+
+#Store info: key: user ids and values a dictionary with time stamp keys and status messages values
+infoDict={};
+
+#Given an array of space tokenized inputs, extract user name
+def getUserName(info,mailInd):
+
+ userName="";
+ for i in range(mailInd-1,0,-1):
+
+  if info[i].endswith("-") or info[i].endswith("+"):
+   break;
+
+  userName=info[i]+" "+userName;
+
+ userName=userName.strip();
+ userName=userName.replace(" "," ");
+ userName=userName.replace(" ","_");
+
+ return userName;
+
+#Given an array of space tokenized inputs, extract time stamp
+def getTimeStamp(info,timeStartInd):
+ timeStamp="";
+ for i in range(timeStartInd+1,len(info)):
+  timeStamp=timeStamp+" "+info[i];
+
+ timeStamp=timeStamp.replace("-","");
+ timeStamp=timeStamp.strip();
+ return timeStamp;
+
+#Given an array of space tokenized inputs, extract status message
+def getStatusMsg(info,startInd,endInd):
+ msg="";
+ for i in range(startInd,endInd):
+  msg=msg+" "+info[i];
+ msg=msg.strip();
+ msg=msg.replace(" ","_");
+ return msg;
+
+#Extract and store info from each line in the datafile
+def extractLineInfo(line):
+
+ print line;
+ info=line.split(" ");
+
+ mailInd=-1;userId="-NONE-";
+ timeStartInd=-1;timeStamp="-NONE-";
+ becameInd="-1";
+ statusMsg="-NONE-";
+
+ #Find indices of email id and "@" char indicating start of timestamp
+ for i in range(0,len(info)):
+  #print (str(i)+" "+info[i]);
+  if(info[i].startswith("(") and info[i].endswith("@in.ibm.com)")):
+   mailInd=i;
+  if(info[i]=="@"):
+   timeStartInd=i;
+
+  if(info[i]=="became"):
+   becameInd=i;
+
+ #Debug print of mail and time stamp start inds
+ """print "\n";
+ print "Index of mail id: "+str(mailInd);
+ print "Index of time start index: "+str(timeStartInd);
+ print "\n";"""
+
+ #Extract IBM user id and name for lines with ibm id
+ if(mailInd&gt;=0):
+  userId=info[mailInd].replace("(","");
+  userId=userId.replace(")","");
+  userName=getUserName(info,mailInd);
+ #Lines with no ibm id are of the form "Suraj Godar Mr became idle @ 15/07/2010 16:30:18"
+ elif(becameInd&gt;0):
+  userName=getUserName(info,becameInd);
+
+ #Time stamp info
+ if(timeStartInd&gt;=0):
+  timeStamp=getTimeStamp(info,timeStartInd);
+  if(mailInd&gt;=0):
+   statusMsg=getStatusMsg(info,mailInd+1,timeStartInd);
+  elif(becameInd&gt;0):
+   statusMsg=getStatusMsg(info,becameInd,timeStartInd);
+
+ print userId;
+ print userName;
+ print timeStamp
+ print statusMsg+"\n";
+
+ if not(userName in usrName2Id) and not(userName=="-NONE-") and not(userId=="-NONE-"):
+  usrName2Id[userName]=userId;
+
+ #Store status messages keyed by user email ids
+ timeDict={};
+
+ #Retrieve user id corresponding to user name
+ if userName in usrName2Id:
+  userId=usrName2Id[userName];
+
+ #For valid user ids, store status message in the dict within dict data str arrangement
+ if not(userId=="-NONE-"):
+
+  if not(userId in infoDict.keys()):
+   infoDict[userId]={};
+
+  timeDict=infoDict[userId];
+  if not(timeStamp in timeDict.keys()):
+   timeDict[timeStamp]=statusMsg;
+  else:
+   timeDict[timeStamp]=timeDict[timeStamp]+" "+statusMsg;
+
+
+#Print for each user a file containing status
+def printStatusFiles(dataFileDir):
+
+
+ volNum=0;
+
+ for userName in usrName2Id:
+  volNum=volNum+1;
+
+  filename=dataFileDir+"/"+"status-"+str(volNum)+".txt";
+  file = open(filename,"w");
+
+  print "Printing output file name: "+filename;
+  print volNum,userName,usrName2Id[userName]+"\n";
+  file.write(userName+" "+usrName2Id[userName]+"\n");
+
+  timeDict=infoDict[usrName2Id[userName]];
+  for time in sorted(timeDict.keys()):
+   file.write(time+" "+timeDict[time]+"\n");
+
+
+#Read and store data from individual data files
+def readDataFiles(dataFileDir):
+
+ #Process each datafile
+ files=os.listdir(dataFileDir)
+ files.sort();
+ for i in range(0,len(files)):
+ #for i in range(0,1):
+
+  file=files[i];
+
+  #Do not process other non-data files lying around in that dir
+  if not file.endswith(".txt"):
+   continue
+
+  print "Processing data file: "+file
+  dataFile=dataFileDir+str(file);
+  inpFile=open(dataFile,"r");
+  lines=inpFile.readlines();
+
+  #Process lines
+  for line in lines:
+
+   #Clean lines
+   line=line.strip();
+   line=line.replace("/India/Contr/IBM","");
+   line=line.strip();
+
+   #Skip header line of the file and L's sign in sign out times
+   if(line.startswith("System log for account") or line.find("signed")&gt;-1):
+    continue;
+
+
+   extractLineInfo(line);
+
+
+print "\n";
+readDataFiles(dataFileDir);
+print "\n";
+printStatusFiles("out/");

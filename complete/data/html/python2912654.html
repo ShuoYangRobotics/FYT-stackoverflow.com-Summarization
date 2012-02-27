@@ -1,0 +1,139 @@
+<h3>Question (ID-2912654):</h3><h2>Python: How To copy function parameters into object's fields effortlessly?</h2><p>Many times I have member functions that copy parameters into object's fields. For Example:</p>
+
+<pre><code>class NouveauRiches(object):
+  def __init__(self, car, mansion, jet, bling):
+    self.car = car
+    self.mansion = mansion
+    self.jet = jet
+    self.bling = bling
+</code></pre>
+
+<p>Is there a python language construct that would make the above code less tedious? 
+One could use *args:</p>
+
+<pre><code>def __init__(self, *args):
+  self.car, self.mansion, self.jet, self.bling = args
+</code></pre>
+
+<p>+: less tedious</p>
+
+<p>-: function signature not revealing enough. need to dive into function code to know how to use function</p>
+
+<p>-: does not raise a <code>TypeError</code> on call with wrong # of parameters (but does raise a <code>ValueError</code>)</p>
+
+<p>Any other ideas? (Whatever your suggestion, make sure the code calling the function does stays simple)</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I would go for this, also you could override already defined properties.</p>
+
+<pre><code>class D:
+  def __init__(self, **kwargs):
+    self.__dict__.update(kwargs)
+</code></pre>
+
+<p>But i personally would just go the long way.
+Think of those:</p>
+
+<pre><code>- Explicit is better than implicit.
+- Flat is better than nested.
+(The Zen of Python)
+</code></pre>
+<br /><b>#1</b><br /><p>I am not sure this is such a good idea, but it can be done:</p>
+
+<pre><code>import inspect
+class NouveauRiches(object):
+    def __init__(self, car, mansion, jet, bling):
+        arguments = inspect.getargvalues(frame)[0]
+        values = inspect.getargvalues(frame)[3];
+        for name in arguments:
+            self.__dict__[name] = values[name]
+</code></pre>
+
+<p>It does not read great either, though I suppose you could put this in a utility method that is reused.</p>
+<br /><b>#2</b><br /><p>You could do this with a helper method, something like this:</p>
+
+<pre><code>import inspect
+
+def setargs(func):
+    f = inspect.currentframe(1)
+    argspec = inspect.getargspec(func)
+    for arg in argspec.args:
+        setattr(f.f_locals["self"], arg, f.f_locals[arg])
+</code></pre>
+
+<p>Usage:</p>
+
+<pre><code>class Foo(object):
+
+    def __init__(self, bar, baz=4711):
+        setargs(self.__init__)
+
+        print self.bar # Now defined
+        print self.baz # Now defined
+</code></pre>
+
+<p>This is not pretty, and it should probably only be used when prototyping. Please use explicit assignment if you plan to have others read it.</p>
+
+<p>It could probably be improved not to need to take the function as an argument, but that would require even more ugly hacks and trickery :)</p>
+<br /><b>#3</b><br /><p>Try something like</p>
+
+<pre><code>d = dict(locals())
+del d['self']
+self.__dict__.update(d)
+</code></pre>
+
+<p>Of course, it returns all local variables, not just function arguments.</p>
+<br /><b>#4</b><br /><p>You could try something like this:</p>
+
+<pre><code>class C(object):
+    def __init__(self, **kwargs):
+        for k in kwargs:
+            d = {k: kwargs[k]}
+            self.__dict__.update(d)
+</code></pre>
+
+<p>Or using setattr you can do:</p>
+
+<pre><code>class D(object):
+    def __init__(self, **kwargs):
+        for k in kwargs:
+            setattr(self, k, kwargs[k])
+</code></pre>
+
+<p>Both can then be called like:</p>
+
+<pre><code>myclass = C(test=1, test2=2)
+</code></pre>
+
+<p>So you have to use **kwargs, rather than *args.</p>
+<br /><b>#5</b><br /><p>I sometimes do this for classes that act "bunch-like", that is, they have a bunch of customizable attributes:</p>
+
+<pre><code>class SuperClass(object):
+    def __init__(self, **kw):
+        for name, value in kw.iteritems():
+            if not hasattr(self, name):
+                raise TypeError('Unexpected argument: %s' % name)
+            setattr(self, name, value)
+
+class SubClass(SuperClass):
+    instance_var = None # default value
+
+class SubClass2(SubClass):
+    other_instance_var = True
+
+    @property
+    def something_dynamic(self):
+        return self._internal_var
+
+    @something_dynamic.setter # new Python 2.6 feature of properties
+    def something_dynamic(self, value):
+        assert value is None or isinstance(value, str)
+        self._internal_var = value
+</code></pre>
+
+<p>Then you can call <code>SubClass2(instance_var=[], other_instance_var=False)</code> and it'll work without defining <code>__init__</code> in either of them.  You can use any property as well.  Though this allows you to overwrite methods, which you probably wouldn't intend (as they return True for <code>hasattr()</code> just like an instance variable).</p>
+
+<p>If you add any <code>property</code> or other other descriptor it will work fine.  You can use that to do type checking; unlike type checking in <code>__init__</code> it'll be applied any time that value is updated.  Note you can't use <em>any</em> positional arguments for these unless you override <code>__init__</code>, so sometimes what would be a natural positional argument won't work.  <a href="http://bitbucket.org/ianb/formencode/src/tip/formencode/declarative.py" rel="nofollow">formencode.declarative</a> covers this and other issues, probably with a thoroughness I would not suggest you attempt (in retrospect I don't think it's worth it).</p>
+
+<p>Note that any recipe that uses <code>self.__dict__</code> won't respect properties and descriptors, and if you use those together you'll just get weird and unexpected results.  I <em>only</em> recommend using <code>setattr()</code> to set attributes, <em>never</em> <code>self.__dict__</code>.</p>
+
+<p>Also this recipe doesn't give a very helpful signature, while some of the ones that do frame and function introspection do.  With <a href="http://bitbucket.org/ianb/formencode/src/tip/formencode/api.py#cl-283" rel="nofollow">some work</a> it is possible to dynamically generate a <code>__doc__</code> that clarifies the arguments... but again I'm not sure the payoff is worth the addition of more moving parts.</p>
+<br />

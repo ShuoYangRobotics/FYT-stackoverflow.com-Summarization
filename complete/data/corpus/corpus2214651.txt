@@ -1,0 +1,119 @@
+Question (ID-2214651): Efficient Python array with 100 million zeros? What is an efficient way to initialize and access elements of a large array in Python? 
+
+ I want to create an array in Python with 100 million entries, unsigned 4-byte integers, initialized to zero. I want fast array access, preferably with contiguous memory. 
+
+ Strangely, NumPy arrays seem to be performing very slow. Are there alternatives I can try? 
+
+ There is the array.array module, but I don't see a method to efficiently allocate a block of 100 million entries. 
+
+ Responses to comments: 
+
+ 
+ I cannot use a sparse array. It will be too slow for this algorithm because the array becomes dense very quickly. 
+ I know Python is interpreted, but surely there is a way to do fast array operations? 
+ I did some profiling, and I get about 160K array accesses (looking up or updating an element by index) per second with NumPy. This seems very slow. 
+ 
+ Answers (Total-9): #0 I have done some profiling, and the results are completely counterintuitive.
+For simple array access operations, numpy and array.array are 10x slower than native Python arrays . 
+
+ Note that for array access, I am doing operations of the form: 
+
+ a[i] += 1
+ 
+
+ Profiles: 
+
+ 
+ [0] * 20000000 
+
+ 
+ Access: 2.3M / sec 
+ Initialization: 0.8s 
+ 
+ numpy.zeros(shape=(20000000,), dtype=numpy.int32) 
+
+ 
+ Access: 160K/sec 
+ Initialization: 0.2s 
+ 
+ array.array('L', [0] * 20000000) 
+
+ 
+ Access: 175K/sec 
+ Initialization: 2.0s 
+ 
+ array.array('L', (0 for i in range(20000000))) 
+
+ 
+ Access: 175K/sec, presumably, based upon the profile for the other array.array 
+ Initialization: 6.7s 
+ 
+ 
+ #1 Just a reminder how Python's integers work: if you allocate a list by saying 
+
+ a = [0] * K
+ 
+
+ you need the memory for the list ( sizeof(PyListObject) + K * sizeof(PyObject*) ) and the memory for the single integer object 0 . As long as the numbers in the list stay below the magic number V that Python uses for caching, you are fine because those are shared, i.e. any name that points to a number n &lt; V points to the exact same object. You can find this value by using the following snippet: 
+
+ &gt;&gt;&gt; i = 0
+&gt;&gt;&gt; j = 0
+&gt;&gt;&gt; while i is j:
+... i += 1
+... j += 1
+&gt;&gt;&gt; i # on my system!
+257 
+ 
+
+ This means that as soon as the counts go above this number, the memory you need is sizeof(PyListObject) + K * sizeof(PyObject*) + d * sizeof(PyIntObject) , where d &lt; K is the number of integers above V (== 256) . On a 64 bit system, sizeof(PyIntObject) == 24 and sizeof(PyObject*) == 8 , i.e. the worst case memory consumption is 3,200,000,000 bytes. 
+
+ With numpy.ndarray or array.array , memory consumption is constant after initialization, but you pay for the wrapper objects that are created transparently, as Thomas Wouters said. Probably, you should think about converting the update code (which accesses and increases the positions in the array) to C code, either by using Cython or scipy.weave . 
+ #2 Try this: 
+
+ x = [0] * 100000000
+ 
+
+ It takes just a few seconds to execute on my machine, and access is close to instant. 
+ #3 If you are are not able to vectorize your calculuations, Python/Numpy will be slow. Numpy is fast because vectorized calculations occur at a lower level than Python. The core numpy functions are all written in C or Fortran. Hence sum(a) is not a python loop with many accesses, it's a single low level C call. 
+
+ Numpy's Performance Python demo page has a good example with different options. You can easily get 100x increase by using a lower level compiled language, Cython, or using vectorized functions if feasible. This blog post that shows a 43 fold increase using Cython for a numpy usecase. 
+ #4 It's unlikely you'll find anything faster than numpy 's array . The implementation of the array itself is as efficient as it would be in, say, C (and basically the same as array.array , just with more usefulness.) 
+
+ If you want to speed up your code, you'll have to do it by doing just that. Even though the array is implemented efficiently, accessing it from Python code has certain overhead; for example, indexing the array produces integer objects, which have to be created on the fly. numpy offers a number of operations implemented efficiently in C, but without seeing the actual code that isn't performing as well as you want it's hard to make any specific suggestions. 
+ #5 For fast creation, use the array module. 
+
+ Using the array module is ~5 times faster for creation, but about twice as slow for accessing elements compared to a normal list: 
+
+ # Create array
+python -m timeit -s "from array import array" "a = array('I', '\x00'
+ * 100000000)"
+10 loops, best of 3: 204 msec per loop
+
+# Access array
+python -m timeit -s "from array import array; a = array('I', '\x00'
+* 100000000)" "a[4975563]"
+10000000 loops, best of 3: 0.0902 usec per loop
+
+# Create list
+python -m timeit "a = [0] * 100000000"
+10 loops, best of 3: 949 msec per loop
+
+# Access list
+python -m timeit -s "a = [0] * 100000000" "a[4975563]"
+10000000 loops, best of 3: 0.0417 usec per loop
+ 
+ #6 In addition to the other excellent solutions, another way is to use a dict instead of an array (elements which exist are non-zero, otherwise they're zero). Lookup time is O(1). 
+
+ You might also check if your application is resident in RAM, rather than swapping out. It's only 381 MB, but the system may not be giving you it all for whatever reason. 
+
+ However there are also some really fast sparse matrices ( SciPy and ndsparse ). They are done in low-level C, and might also be good. 
+ #7 NumPy is the appropriate tool for a large, fixed-size, homogeneous array. Accessing individual elements of anything in Python isn't going to be all that fast, though whole-array operations can often be conducted at speeds similar to C or Fortran. If you need to do operations on millions and millions of elements individually quickly, there is only so much you can get out of Python. 
+
+ What sort of algorithm are you implementing? How do you know that using sparse arrays is too slow if you haven't tried it? What do you mean by "efficient"? You want quick initialization? That is the bottleneck of your code? 
+ #8 I would simply create your own data type that doesn't initialize ANY values. 
+
+ If you want to read an index position that has NOT been initialized, you return zeroes. Still, do not initialize any storage. 
+
+ If you want to read an index position that HAS been initialized, simply return the value. 
+
+ If you want to write to an index position that has NOT been initialized, initialize it, and store the input.

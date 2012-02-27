@@ -1,0 +1,154 @@
+Question (ID-1216794): Python subprocess.Popen erroring with OSError: [Errno 12] Cannot allocate memory after period of time Note : This question has been re-asked with a summary of all debugging attempts here . 
+
+ 
+
+ I have a Python script that is running as a background process executing every 60 seconds. Part of that is a call to subprocess.Popen to get the output of ps . 
+
+ ps = subprocess.Popen(['ps', 'aux'], stdout=subprocess.PIPE).communicate()[0]
+ 
+
+ After running for a few days, the call is erroring with: 
+
+ 
+File "/home/admin/sd-agent/checks.py", line 436, in getProcesses
+File "/usr/lib/python2.4/subprocess.py", line 533, in __init__
+File "/usr/lib/python2.4/subprocess.py", line 835, in _get_handles
+OSError: [Errno 12] Cannot allocate memory
+ 
+
+ However the output of free on the server is: 
+
+ 
+$ free -m
+     total  used  free  shared  buffers cached
+Mem:    894  345  549   0   0   0
+-/+ buffers/cache: 345  549
+Swap:     0   0   0
+ 
+
+ I have searched around for the problem and found this article which says: 
+
+ Solution is to add more swap space to your server. When the kernel is forking to start the modeler or discovery process, it first ensures there's enough space available on the swap store the new process if needed. 
+
+ I note that there is no available swap from the free output above. Is this likely to be the problem and/or what other solutions might there be? 
+
+ Update 13th Aug 09 The code above is called every 60 seconds as part of a series of monitoring functions. The process is daemonized and the check is scheduled using sched . The specific code for the above function is: 
+
+ def getProcesses(self):
+ self.checksLogger.debug('getProcesses: start')
+
+ # Memory logging (case 27152)
+ if self.agentConfig['debugMode'] and sys.platform == 'linux2':
+ 	mem = subprocess.Popen(['free', '-m'], stdout=subprocess.PIPE).communicate()[0]
+ 	self.checksLogger.debug('getProcesses: memory before Popen - ' + str(mem))
+
+ # Get output from ps
+ try:
+ 	self.checksLogger.debug('getProcesses: attempting Popen')
+
+ 	ps = subprocess.Popen(['ps', 'aux'], stdout=subprocess.PIPE).communicate()[0]
+
+ except Exception, e:
+ 	import traceback
+ 	self.checksLogger.error('getProcesses: exception = ' + traceback.format_exc())
+ 	return False
+
+ self.checksLogger.debug('getProcesses: Popen success, parsing')
+
+ # Memory logging (case 27152)
+ if self.agentConfig['debugMode'] and sys.platform == 'linux2':
+ 	mem = subprocess.Popen(['free', '-m'], stdout=subprocess.PIPE).communicate()[0]
+ 	self.checksLogger.debug('getProcesses: memory after Popen - ' + str(mem))
+
+ # Split out each process
+ processLines = ps.split('\n')
+
+ del processLines[0] # Removes the headers
+ processLines.pop() # Removes a trailing empty line
+
+ processes = []
+
+ self.checksLogger.debug('getProcesses: Popen success, parsing, looping')
+
+ for line in processLines:
+ 	line = line.split(None, 10)
+ 	processes.append(line)
+
+ self.checksLogger.debug('getProcesses: completed, returning')
+
+ return processes
+ 
+
+ This is part of a bigger class called checks which is initialised once when the daemon is started. 
+
+ The entire checks class can be found at http://github.com/dmytton/sd-agent/blob/82f5ff9203e54d2adeee8cfed704d09e3f00e8eb/checks.py with the getProcesses function defined from line 442. This is called by doChecks() starting at line 520. 
+ Answers (Total-8): #0 You've perhaps got a memory leak bounded by some resource limit ( RLIMIT_DATA , RLIMIT_AS ?) inherited by your python script. Check your ulimit(1) s before you run your script, and profile the script's memory usage, as others have suggested. 
+
+ What do you do with the variable ps after the code snippet you show us? Do you keep a reference to it, never to be freed? Quoting the subprocess module docs : 
+
+ 
+ Note: The data read is buffered in memory, so do not use this
+ method if the data size is large or unlimited. 
+ 
+
+ ... and ps aux can be verbose on a busy system... 
+
+ Update 
+
+ You can check rlimits from with your python script using the resource module: 
+
+ import resource
+print resource.getrlimit(resource.RLIMIT_DATA) # =&gt; (soft_lim, hard_lim)
+print resource.getrlimit(resource.RLIMIT_AS)
+ 
+
+ If these return "unlimited" -- (-1, -1) -- then my hypothesis is incorrect and you may move on! 
+
+ See also resource.getrusage , esp. the ru_??rss fields, which can help you to instrument for memory consumption from with the python script, without shelling out to an external program. 
+ #1 That swap space answer is bogus. Historically Unix systems wanted swap space available like that, but they don't work that way anymore (and Linux never worked that way). You're not even close to running out of memory, so that's not likely the actual problem - you're running out of some other limited resource. 
+
+ Given where the error is occuring (_get_handles calls os.pipe() to create pipes to the child), the only real problem you could be running into is not enough free file descriptors. I would instead look for unclosed files (lsof -p on the PID of the process doing the popen). If your program really needs to keep a lot of files open at one time, then increase the user limit and/or the system limit for open file descriptors. 
+ #2 You might want to actually wait for all of those PS processes to finish before adding swap space. 
+
+ It's not at all clear what "running as a background process executing every 60 seconds" means. 
+
+ But your call to subprocess.Popen is forking a new process each time. 
+
+ Update . 
+
+ I'd guess that you're somehow leaving all those processes running or hung in a zombie state. However, the communicate method should clean up the spawned subprocesses. 
+ #3 If you're running a background process, chances are that you've redirected your processes stdin/stdout/stderr. 
+
+ In that case, append the option "close_fds=True" to your Popen call, which will prevent the child process from inheriting your redirected output. This may be the limit you're bumping into. 
+ #4 I don't think that the circumstances given in the Zenoss article you linked to is the only cause of this message, so it's not clear yet that swap space is definitely the problem. I would advise logging some more information even around successful calls, so that you can see the state of free memory every time just before you do the ps call. 
+
+ One more thing - if you specify shell=True in the Popen call, do you see different behaviour? 
+
+ Update: If not memory, the next possible culprit is indeed file handles. I would advise running the failing command under strace to see exactly which system calls are failing. 
+ #5 Have you watched your process over time? 
+
+ 
+ lsof 
+ ps -aux | grep -i pname 
+ top 
+ 
+
+ All should give interesting information. I am thinking that the process is tying up resources that should be freed up. Is there a chance that it is tying up resource handles (memory blocks, streams, file handles, thread or process handles)? stdin, stdout, stderr from the spawned "ps". Memory handles, ... from many small incremental allocations. I would be very interested in seeing what the above commands display for your process when it has just finished launching and running for the first time and after 24 hours of "sitting" there launching the sub-process regularly. 
+
+ Since it dies after a few days, you could have it run for only a few loops, and then restart it once a day as a workaround. That would help you in the meantime. 
+
+ Jacob 
+ #6 You need to 
+
+ ps = subprocess.Popen(["sleep", "1000"])
+os.waitpid(ps.pid, 0)
+ 
+
+ to free resources. 
+
+ Note: this does not work on Windows. 
+ #7 when you use popen you need to hand in close_fds=True if you want it to close extra file descriptors. 
+
+ creating a new pipe, which occurs in the _get_handles function from the back trace, creates 2 file descriptors, but your current code never closes them and your eventually hitting your systems max fd limit. 
+
+ Not sure why the error your getting is indicating an out of memory condition, it should be a file descriptor error as the return value of pipe() has an error code for this problem.

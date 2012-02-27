@@ -1,0 +1,128 @@
+Question (ID-5916270): python's webbrowser launches IE instead of default on windows 7 I'm attempting to launch a local html file from python in the default browser. Right now my default is google chrome. If I double-click on a .html file, chrome launches. 
+
+ When I use python's webbrowser.open, IE launches instead, with a blank address bar. 
+
+ Python 2.7.1 (r271:86832, Nov 27 2010, 17:19:03) [MSC v.1500 64 bit (AMD64)] on win32
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import webbrowser
+&gt;&gt;&gt; filename = 'test.html'
+&gt;&gt;&gt; webbrowser.open('file://'+filename)
+True
+&gt;&gt;&gt; print(webbrowser.get().__class__.__name__)
+WindowsDefault
+ 
+
+ I've checked my default programs and they look correct. I'm on Win 7 SP1. Why is chrome not launching? 
+
+ Update : The code will be running on unknown os's and machines, so registering browsers or path updates are not options. I'm thinking that parsing the url for file:// and then doing an os.path.exists check and os.path.realpath might be the answer. 
+ Answers (Total-6): #0 You can use get(name) to use a specific browser. 
+
+ You'll need to register the Chrome webbrowser , as it doesn't seem to be one of the predefined browser types, and then you should be able to do this: 
+
+ webbrowser.get('chrome').open('http://www.google.com') 
+
+ Update: 
+
+ Actually, you might be able to just do: 
+
+ webbrowser.get('windows-default').open('http://www.google.com') 
+ #1 Looking at the module source code , it first tries to use the Windows default browser but if it doesn't work, it searches for common browser names that are commands, ie. that are in the PATH variable. Try adding the location of your web browser to your PATH. 
+ #2 The webbrowser module is supposed to use the default browser, so this might be a bug. On the other hand, use this explanation from the docs to troubleshoot your problem: 
+
+ 
+ If the environment variable BROWSER
+ exists, it is interpreted to override
+ the platform default list of browsers,
+ as a os.pathsep-separated list of
+ browsers to try in order. When the
+ value of a list part contains the
+ string %s, then it is interpreted as a
+ literal browser command line to be
+ used with the argument URL substituted
+ for %s; if the part does not contain
+ %s, it is simply interpreted as the
+ name of the browser to launch. 
+ 
+ #3 My main issue was a bad URL by attempting prepend file:// to a relative path. It can be fixed with this: 
+
+ webbrowser.open('file://' + os.path.realpath(filename))
+ 
+
+ Using webbrowser.open will try multiple methods until one "succeeds", which is a loose definition. 
+
+ The WindowsDefault class calls os.startfile() which fails and returns False . I can verify that by entering the URL in the windows run command and seeing an error message rather than a browser. 
+
+ Both GenericBrowser and BackgroundBrowser will call subprocess.Popen() with an exe which will succeed, even with a bad URL, and return True . IE gives no indication of the issue, all other browsers have a nice messages saying they can't find the file. 
+
+ 
+ GenericBrowser is set by the environment variable BROWSER and is first. 
+ WindowsDefault is second. 
+ BackgroundBrowser is last and includes the fall back IE if nothing else works. 
+ 
+
+ Here is my original setup: 
+
+ &gt;&gt;&gt; import webbrowser
+&gt;&gt;&gt; webbrowser._tryorder
+['windows-default',
+ 'C:\\Program Files\\Internet Explorer\\IEXPLORE.EXE']
+&gt;&gt;&gt; webbrowser._browsers.items()
+[('windows-default', [&lt;class 'webbrowser.WindowsDefault'&gt;, None]),
+ ('c:\\program files\\internet explorer\\iexplore.exe', [None, &lt;webbrowser.BackgroundBrowser object at 0x00000000022E3898&gt;])]
+&gt;&gt;&gt;
+ 
+
+ Here is my setup after modifiying the environment variables: 
+
+ C:&gt;path=C:\Program Files (x86)\Mozilla Firefox;%path%
+
+C:&gt;set BROWSER=C:\Users\Scott\AppData\Local\Google\Chrome\Application\chrome.exe
+
+C:&gt;python
+Python 2.7.1 (r271:86832, Nov 27 2010, 17:19:03) [MSC v.1500 64 bit (AMD64)] on win32
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import webbrowser
+&gt;&gt;&gt; webbrowser._tryorder
+['C:\\Users\\Scott\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe',
+ 'windows-default',
+ 'firefox',
+ 'C:\\Program Files\\Internet Explorer\\IEXPLORE.EXE']
+&gt;&gt;&gt; webbrowser._browsers.items()
+[('windows-default', [&lt;class 'webbrowser.WindowsDefault'&gt;, None]),
+ ('c:\\program files\\internet explorer\\iexplore.exe',[None, &lt;webbrowser.BackgroundBrowser object at 0x000000000235E828&gt;]),
+ ('firefox', [None, &lt;webbrowser.BackgroundBrowser object at 0x000000000235E780&gt;]),
+ ('c:\\users\\scott\\appdata\\local\\google\\chrome\\application\\chrome.exe', [None, &lt;webbrowser.GenericBrowser object at 0x000000000235E8D0&gt;])]
+&gt;&gt;&gt;
+ 
+
+ The webbrowser._tryorder gives the list of browsers tried. Registering chrome or adding a BROWSER env var or modifiying my path all would have gotten me the correct browser with a better error message. 
+
+ Thanks for the help guys, I couldn't have solved this without your ideas. 
+ #4 I have the same problem with firefox. http://www.google.com is opened in ff while file:///test.html is opened in IE. 
+
+ webbrowser doc says: 
+
+ 
+ Note that on some platforms, trying to
+ open a filename using this function,
+ may work and start the operating
+ system’s associated program. However,
+ this is neither supported nor
+ portable. 
+ 
+ #5 This problem appears for me only with file:/// protocol URLs, which are probably not registered to chrome, so os.startfile() (which is the first thing webbrowser.open tries on Windows) opens them in Internet Explorer. I don't think putting your other browser in the PATH will help, since os.startfile() still gets invoked before even trying the browsers in the path. 
+
+ What you can do, is to check the default browser for http:// in the registry (for instance, by checking the registry key HKEY_CLASSES_ROOT\http\shell\open\command ) and use that one for file:/// URLs. Not pretty, but it should work. 
+
+ import _winreg
+import webbrowser
+import shlex
+import subprocess
+
+def win_browser_open(url):
+ if url.startswith('file:///'):
+  browser = _winreg.QueryValue(_winreg.HKEY_CLASSES_ROOT, r'http\shell\open\command')
+  browser = browser.replace('%1', url)
+  subprocess.Popen(shlex.split(browser))
+ else:
+  webbrowser.open(url)

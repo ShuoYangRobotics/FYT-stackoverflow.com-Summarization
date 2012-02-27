@@ -1,0 +1,179 @@
+<h3>Question ( ID-4997831 ) : </h3><h2>A way to pass milions of items in python to C program many times in rapid succesion </h2><p>I 've wrote a python script that need to pass millions of items to a C program and receive its output many times in a short period ( pass from 1 up to 10 millions of <span style="background-color:yellow;">vertices</span> data ( integer index and 2 float coords ) rapidly 500 times , and each time the python script call the C program , i need to store the returned values in variables ) . I already implemented a way reading and writing text and or binary files , but it 's slow and not smart ( why write files to hdd while you do n't need to store the data after the python script terminates ? ) . I tried to use pipes , but for large data they gave me errors.. . So , by now i think the best way can be using the ability of ctypes to load functions in .dll Since i 've never created a dll , i would like to know how to set it up ( i know many ide have a template for this , but my wxdev-c + + crashes when i try to open it. Right now i 'm downloading Code : : Blocks ) </p>
+<p>Can you tell me if the solution i 'm starting to implement is right , or if there is a better solution ? The 2 functions i need to call in python are these </p>
+<pre><code>void find_vertex(vertex *list, int len, vertex* lower, vertex* highter)
+{
+    int i;
+    *lower=list[0];
+    *highter=list[1];
+    for(i=0;i<len;i++)
+    {
+        if ((list[i].x<=lower->x) && (list[i].y<=lower->y))
+            *lower=list[i];
+        else
+        {
+            if ((list[i].x>=highter->x) && (list[i].y>=highter->y))
+                *highter=list[i];
+        }
+    }
+}
+</code></pre>
+<p>and </p>
+<pre><code>vertex *square_list_of_vertex(vertex *list,int len,vertex start, float size)
+{
+    int i=0,a=0;
+    unsigned int *num;
+    num=(int*)malloc(sizeof(unsigned int)*len);
+    if (num==NULL)
+    {
+        printf("Can't allocate the memory");
+        return 0;
+    }
+    //controlls which points are in the right position and adds their index from the main list in another list
+    for(i=0;i<len;i++)
+    {
+        if ((list[i].x-start.x)<size && (list[i].y-start.y<size))
+        {
+            if (list[i].y-start.y>-size/100)
+            {
+                num[a]=i;
+                a++;//len of the list to return
+            }
+        }
+    }
+
+    //create the list with the right vertices
+    vertex *retlist;
+    retlist=(vertex*)malloc(sizeof(vertex)*(a+1));
+    if (retlist==NULL)
+    {
+        printf("Can't allocate the memory");
+        return 0;
+    }
+    //the first index is used only as an info container
+    vertex infos;
+    infos.index=a+1;
+    retlist[0]=infos;
+
+    //set the value for the return pointer
+    for(i=1;i<=a;i++)
+    {
+        retlist[i]=list[num[i-1]];
+    }
+
+    return retlist;
+}
+</code></pre>
+<p>EDIT : forgot to post the type defintion of <span style="background-color:yellow;">vertex</span> </p>
+<pre><code>typedef struct{
+    int index;
+    float x,y;
+} vertex;
+</code></pre>
+<p>EDIT2 : I 'll redistribute the code , so i prefer not to use external modules in python and external programs in C. Alsa i want try to keep the code cross platform. The script is an addon for a 3D app , so the less it uses external " stuff " the better it is . </p>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>Using ctypes or <span style="background-color:yellow;">Cython</span> to wrap your C functions is definitely the way to go. That way , you wo n't even need to copy the data between the C and Python code -- both the C and the Python part run within the same process and access the same data. Let 's stick with ctypes , since this is what you suggested. Additionally , using NumPy will make this a lot more comfortable . </p>
+<p>I infer your <span style="background-color:yellow;">vertex</span> type looks like this : </p>
+<pre><code>typedef struct
+{
+    int index;
+    float x, y;
+} vertex;
+</code></pre>
+<p>To have these <span style="background-color:yellow;">vertices</span> in a NumPy array , you can define a record " dtype " for it : </p>
+<pre><code>vertex_dtype = [('index', 'i'), ('x', 'f'), ('y', 'f')]
+</code></pre>
+<p>Also define this type as a ctypes structure : </p>
+<pre><code>class Vertex(ctypes.Structure):
+    _fields_ = [("index", ctypes.c_int),
+                ("x", ctypes.c_float),
+                ("y", ctypes.c_float)]
+</code></pre>
+<p>Now , the ctypes prototype for your function <span style="background-color:yellow;">find_vertex</span> ( ) would look like this : </p>
+<pre><code>from numpy.ctypeslib import ndpointer
+lib = ctypes.CDLL(...)
+lib.find_vertex.argtypes = [ndpointer(dtype=vertex_dtype, flags="C_CONTIGUOUS"),
+                            ctypes.c_int,
+                            ctypes.POINTER(Vertex),
+                            ctypes.POINTER(Vertex)]
+lib.find_vertex.restypes = None
+</code></pre>
+<p>To call this function , create a NumPy array of <span style="background-color:yellow;">vertices</span> </p>
+<pre><code>vertices = numpy.empty(1000, dtype=vertex_dtype)
+</code></pre>
+<p>and two structures for the return values </p>
+<pre><code>lower = Vertex()
+higher = Vertex()
+</code></pre>
+<p>and finally call your function : </p>
+<pre><code>lib.find_vertex(vertices, len(vertices), lower, higher)
+</code></pre>
+<p>NumPy and ctypes will take care of passing the pointer to the beginning of the data of <span style="background-color:yellow;">vertices</span> to your C function -- no copying required . </p>
+<p>Probably , you will have to read a bit of documentation on ctypes and NumPy , but I hope this answer helps you to get started with it . </p>
+<br /><b># 1 </b><br /><p>It seems like what you really want is to turn your C program into a Python module. Here is a tutorial that will get you started . </p>
+<br /><b># 2 </b><br /><p>If you want to pass data between two programs , and you already have the code to use a file , why not just use a RAMdisk ? For Windows , you can use something like http : //www.ltr-data.se/opencode.html/ # ImDisk to create the RAMdisk and you can use the commands listed here for Linux. For smallish amounts of data ( anything that will fit in RAM without requiring to be constantly paged out ) , this should outperform disk-based operations by a couple of orders of magnitude . </p>
+<br /><b># 3 </b><br /><p>I think I would use a <span style="background-color:yellow;">library</span> like sysv ipc for this job and simply map the data to a shared memory segment . </p>
+<br /><b># 4 </b><br /><p>Iterating over millions of items is the worst possible operation you could do in Python... If at all possible write this portion of the program in C or C + + , it will be 100 's of times faster and use 100 's of times less memory.. . </p>
+<p>I love python , but it 's not a best solution for this type of operation . </p>
+<br /><b># 5 </b><br /><p>If you can , make the Python program buffer the data that it is sending so that it does not send every <span style="background-color:yellow;">vertex</span> one by one. Save them up until there are 100 or 500 or 1000 and that way you will make fewer calls. Do some timing tests to determine optimal buffer size . </p>
+<br /><b># 6 </b><br /><p>Here 's a variant that uses <span style="background-color:yellow;">Cython</span> to write an <span style="background-color:yellow;">extension</span> module for CPython . </p>
+<h3>C declarations to be used in <span style="background-color:yellow;">Cython</span> : </h3>
+<pre><code># file: cvertex.pxd
+cdef extern from "vertex.h":
+    ctypedef struct vertex:
+        int index
+        float x,y
+    void find_vertex(vertex *list, int len, vertex* lower, vertex* highter)
+</code></pre>
+<p>Where <span style="background-color:yellow;">vertex.h</span> is : </p>
+<pre><code>typedef struct{
+    int index;
+    float x,y;
+} vertex;
+
+void find_vertex(vertex *list, int len, vertex* lower, vertex* highter);
+</code></pre>
+<h3><span style="background-color:yellow;">Cython</span> implementation to be used in Python : </h3>
+<pre><code># file: pyvertex.pyx
+cimport numpy
+cimport cvertex # use declarations from cvertex.pxd
+
+def find_vertex(numpy.ndarray[cvertex.vertex,ndim=1,mode="c"] vertices):
+    if len(vertices) < 2:
+        raise ValueError('provide at least 2 vertices')
+
+    cdef cvertex.vertex lower, highter
+    cvertex.find_vertex(<cvertex.vertex*>vertices.data, len(vertices),
+                        &lower, &highter)
+    return lower, highter # implicitly convert to dicts
+</code></pre>
+<h3>To compile the <span style="background-color:yellow;">extension</span> , run : </h3>
+<pre><code>$ python setup.py build_ext -i
+</code></pre>
+<p>Where setup.py is : </p>
+<pre><code>from distutils.core import setup
+from distutils.extension import Extension
+from Cython.Distutils import build_ext
+
+setup(
+    cmdclass = {'build_ext': build_ext},
+    ext_modules = [Extension("vertex", ["pyvertex.pyx", "vertex.c"])]
+)
+</code></pre>
+<h3>Now the <span style="background-color:yellow;">extension</span> can be used from Python : </h3>
+<pre><code>import numpy
+import vertex # import the extension
+
+n = 10000000
+vertex_list = numpy.zeros(n, dtype=[('index', 'i'), ('x', 'f'), ('y', 'f')])
+i = n//2
+vertex_list[i] = i, 1, 1
+v1, v2 = vertex.find_vertex(vertex_list)
+print(v2['index'])
+print(v1, v2)
+</code></pre>
+
+Output
+
+<pre><code>5000000
+{'y': 0.0, 'index': 0, 'x': 0.0} {'y': 1.0, 'index': 5000000, 'x': 1.0}
+</code></pre>
+<br />

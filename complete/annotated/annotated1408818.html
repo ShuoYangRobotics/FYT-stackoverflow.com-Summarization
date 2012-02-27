@@ -1,0 +1,188 @@
+<h3>Question ( ID-1408818 ) : </h3><h2>Getting the the keyword arguments actually passed to a Python method </h2><p>I 'm dreaming of a Python method with explicit keyword args : </p>
+<pre><code>def func(a=None, b=None, c=None):
+    for arg, val in magic_arg_dict.items():   # Where do I get the magic?
+        print '%s: %s' % (arg, val)
+</code></pre>
+<p>I want to get a dictionary of only those arguments the caller actually passed into the method , just like * * kwargs , but I do n't want the caller to be able to pass any old random args , unlike * * kwargs . </p>
+<pre><code>>>> func(b=2)
+b: 2
+>>> func(a=3, c=5)
+a: 3
+c: 5
+</code></pre>
+<p>So : is there such an incantation ? In my case , I happen to be able to compare each argument against its default to <span style="background-color:yellow;">find</span> the ones that are different , but this is kind of inelegant and gets tedious when you have nine arguments. For bonus points , provide an incantation that can tell me even when the caller passes in a keyword argument assigned its default value : </p>
+<pre><code>>>> func(a=None)
+a: None
+</code></pre>
+<p>Tricksy ! </p>
+<p>Edit : The ( lexical ) <span style="background-color:yellow;">function</span> signature has to remain intact. It 's part of a public API , and the primary worth of the explicit keyword args lies in their documentary value. Just to make things interesting. : ) </p>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>I was inspired by lost-theory 's <span style="background-color:yellow;">decorator</span> goodness , and after playing about with it <span style="background-color:yellow;">for</span> a bit came up with this : </p>
+<pre><code>def actual_kwargs():
+    """
+    Decorator that provides the wrapped function with an attribute 'actual_kwargs'
+    containing just those keyword arguments actually passed in to the function.
+    """
+    def decorator(function):
+        def inner(*args, **kwargs):
+            inner.actual_kwargs = kwargs
+            return function(*args, **kwargs)
+        return inner
+    return decorator
+
+
+if __name__ == "__main__":
+
+    @actual_kwargs()
+    def func(msg, a=None, b=False, c='', d=0):
+        print msg
+        for arg, val in sorted(func.actual_kwargs.iteritems()):
+            print '  %s: %s' % (arg, val)
+
+    func("I'm only passing a", a='a')
+    func("Here's b and c", b=True, c='c')
+    func("All defaults", a=None, b=False, c='', d=0)
+    func("Nothin'")
+    try:
+        func("Invalid kwarg", e="bogon")
+    except TypeError, err:
+        print 'Invalid kwarg\n  %s' % err
+</code></pre>
+<p>Which prints this : </p>
+<pre>
+I'm only passing a
+  a: a
+Here's b and c
+  b: True
+  c: c
+All defaults
+  a: None
+  b: False
+  c: 
+  d: 0
+Nothin'
+Invalid kwarg
+  func() got an unexpected keyword argument 'e'
+</pre>
+<p>I 'm happy with this. A more <span style="background-color:yellow;">flexible</span> approach is to pass the name of the attribute you want to use to the <span style="background-color:yellow;">decorator</span> , instead of hard-coding it to 'actual_kwargs ' , but this is the simplest approach that illustrates the solution . </p>
+<p>Mmm , Python is tasty . </p>
+<br /><b># 1 </b><br /><p>Here is the easiest and simplest way : </p>
+<pre><code>def func(a=None, b=None, c=None):
+    args = locals().copy()
+    print args
+
+func(2, "egg")
+</code></pre>
+<p>This give the output : { 'a ' : 2 , 'c ' : None , 'b ' : 'egg ' } . The reason args should be a copy of the locals dictionary is that dictionaries are mutable , so if you created any local variables in this <span style="background-color:yellow;">function</span> args would contain all of the local variables and their values , not just the arguments . </p>
+<p>More documentation on the built-in locals <span style="background-color:yellow;">function</span> here . </p>
+<br /><b># 2 </b><br /><p>One possibility : </p>
+<pre><code>def f(**kw):
+  acceptable_names = set('a', 'b', 'c')
+  if not (set(kw) <= acceptable_names):
+    raise WhateverYouWantException(whatever)
+  ...proceed...
+</code></pre>
+<p>IOW , it 's very easy to check that the passed-in names are within the acceptable <span style="background-color:yellow;">set</span> and otherwise raise <span style="background-color:yellow;">whatever</span> you 'd want Python to raise ( TypeError , I guess ; - ) . Pretty easy to turn into a <span style="background-color:yellow;">decorator</span> , btw . </p>
+<p>Another possibility : </p>
+<pre><code>_sentinel = object():
+def f(a=_sentinel, b=_sentinel, c=_sentinel):
+   ...proceed with checks `is _sentinel`...
+</code></pre>
+<p>by making a unique object _sentinel you remove the risk that the caller might be accidentally passing None ( or other non-unique default values the caller could possibly pass ) . This is all object ( ) is good <span style="background-color:yellow;">for</span> , btw : an extremely-lightweight , unique sentinel that can not possibly be accidentally confused with any other object ( when you check with the is operator ) . </p>
+<p>Either solution is preferable <span style="background-color:yellow;">for</span> slightly different problems . </p>
+<br /><b># 3 </b><br /><p>How about using a <span style="background-color:yellow;">decorator</span> to validate the incoming kwargs ? </p>
+<pre><code>def validate_kwargs(*keys):
+    def entangle(f):
+        def inner(*args, **kwargs):
+            for key in kwargs:
+                if not key in keys:
+                    raise ValueError("Received bad kwarg: '%s', expected: %s" % (key, keys))
+            return f(*args, **kwargs)
+        return inner
+    return entangle
+
+###
+
+@validate_kwargs('a', 'b', 'c')
+def func(**kwargs):
+   for arg,val in kwargs.items():
+       print arg, "->", val
+
+func(b=2)
+print '----'
+func(a=3, c=5)
+print '----'
+func(d='not gonna work')
+</code></pre>
+<p>Gives this output : </p>
+<pre><code>b -> 2
+----
+a -> 3
+c -> 5
+----
+Traceback (most recent call last):
+  File "kwargs.py", line 20, in <module>
+    func(d='not gonna work')
+  File "kwargs.py", line 6, in inner
+    raise ValueError("Received bad kwarg: '%s', expected: %s" % (key, keys))
+ValueError: Received bad kwarg: 'd', expected: ('a', 'b', 'c')
+</code></pre>
+<br /><b># 4 </b><br /><p>There 's probably better ways to do this , but here 's my take : </p>
+<pre><code>def CompareArgs(argdict, **kwargs):
+    if not set(argdict.keys()) <= set(kwargs.keys()):
+        # not <= may seem weird, but comparing sets sometimes gives weird results.
+        # set1 <= set2 means that all items in set 1 are present in set 2
+        raise ValueError("invalid args")
+
+def foo(**kwargs):
+    # we declare foo's "standard" args to be a, b, c
+    CompareArgs(kwargs, a=None, b=None, c=None)
+    print "Inside foo"
+
+
+if __name__ == "__main__":
+    foo(a=1)
+    foo(a=1, b=3)
+    foo(a=1, b=3, c=5)
+    foo(c=10)
+    foo(bar=6)
+</code></pre>
+<p>and its output : </p>
+<pre>
+Inside foo
+Inside foo
+Inside foo
+Inside foo
+Traceback (most recent call last):
+  File "a.py", line 18, in 
+    foo(bar=6)
+  File "a.py", line 9, in foo
+    CompareArgs(kwargs, a=None, b=None, c=None)
+  File "a.py", line 5, in CompareArgs
+    raise ValueError("invalid args")
+ValueError: invalid args
+</pre>
+<p>This could probably be converted to a <span style="background-color:yellow;">decorator</span> , but my <span style="background-color:yellow;">decorators</span> need work. Left as an exercise to the reader : P </p>
+<br /><b># 5 </b><br /><p>Perhaps raise an error if they pass any * args ? </p>
+<pre><code>def func(*args, **kwargs):
+  if args:
+    raise TypeError("no positional args allowed")
+  arg1 = kwargs.pop("arg1", "default")
+  if kwargs:
+    raise TypeError("unknown args " + str(kwargs.keys()))
+</code></pre>
+<p>It 'd be simple to <span style="background-color:yellow;">factor</span> it into taking a list of varnames or a generic parsing <span style="background-color:yellow;">function</span> to use. It would n't be too hard to make this into a <span style="background-color:yellow;">decorator</span> ( python 3.1 ) , too : </p>
+<pre><code>def OnlyKwargs(func):
+  allowed = func.__code__.co_varnames
+  def wrap(*args, **kwargs):
+    assert not args
+    # or whatever logic you need wrt required args
+    assert sorted(allowed) == sorted(kwargs)
+    return func(**kwargs)
+</code></pre>
+<p>Note : i 'm not sure how well this would work around already <span style="background-color:yellow;">wrapped</span> <span style="background-color:yellow;">functions</span> or <span style="background-color:yellow;">functions</span> that have * args or * * kwargs already . </p>
+<br /><b># 6 </b><br /><p>Mostly Magic is not the answer : </p>
+<pre><code>def funky(a=None, b=None, c=None):
+    for name, value in [('a', a), ('b', b), ('c', c)]:
+        print name, value
+</code></pre>
+<br />

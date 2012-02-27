@@ -1,0 +1,195 @@
+Question (ID-4374006): Check for mutability in Python? Consider this code : 
+
+ a = {...} # a is an dict with arbitrary contents
+b = a.copy()
+ 
+
+ 
+ What role does mutability play in the keys and values of the dicts? 
+ How do I ensure changes to keys or values of one dict are not reflected in the other? 
+ How does this relate to the hashable constraint of the dict keys? 
+ Are there any differences in behaviour between Python 2.x and Python 3.x? 
+ 
+
+ How do I check if a type is mutable in Python? 
+ Answers (Total-6): #0 1) Keys must not be mutable, unless you have a user-defined class that is hashable but also mutable. That's all that's forced upon you. However, using a hashable, mutable object as a dict key might be a bad idea. 
+
+ 2) By not sharing values between the two dicts. It's OK to share the keys, because they must be immutable. Copying the dictionary, in the copy module sense, is definitely safe. Calling the dict constructor here works, too: b = dict(a) . You could also use immutable values. 
+
+ 3) All built-in immutable types are hashable. All built-in mutable types are not hashable. For an object to be hashable, it must have the same hash over its entire lifetime, even if it is mutated. 
+
+ 4) Not that I'm aware of; I'm describing 2.x. 
+
+ A type is mutable if it is not immutable. A type is immutable if it is a built-in immutable type: str , int , long , bool , float , tuple , and probably a couple others I'm forgetting. User-defined types are always mutable. 
+
+ An object is mutable if it is not immutable. An object is immutable if it consists, recursively, of only immutable-typed sub-objects. Thus, a tuple of lists is mutable; you cannot replace the elements of the tuple, but you can modify them through the list interface, changing the overall data. 
+ #1 
+ dict keys must be hashable, which implies they have an immutable hash value. dict values may or may not be mutable; however, if they are mutable this impacts your second question. 
+ "Changes to the keys" will not be reflected between the two dicts. Changes to immutable values, such as strings will also not be reflected. Changes to mutable objects, such as user defined classes will be reflected because the object is stored by id (i.e. reference). 
+
+ class T(object):
+ def __init__(self, v):
+ self.v = v
+
+
+t1 = T(5)
+
+
+d1 = {'a': t1}
+d2 = d1.copy()
+
+
+d2['a'].v = 7
+d1['a'].v # = 7
+
+
+d2['a'] = T(2)
+d2['a'].v # = 2
+d1['a'].v # = 7
+
+
+import copy
+d3 = copy.deepcopy(d2) # perform a "deep copy"
+d3['a'].v = 12
+d3['a'].v # = 12
+d2['a'].v # = 2
+ 
+ I think this is explained by the first two answers. 
+ Not that I know of in this respect. 
+ 
+
+ some additional thoughts : 
+
+ There are two main things to know for understanding the behavior of keys : keys must be hashable (which means they implement object.__hash__(self) ) and they must also be "comparable" (which means they implement something like object.__cmp__(self) ). One important take-away from the docs: by default, user-defined objects' hash functions return id() . 
+
+ Consider this example: 
+
+ class K(object):
+ def __init__(self, x, y):
+  self.x = x
+  self.y = y
+ def __hash__(self):
+  return self.x + self.y
+
+k1 = K(1, 2)
+d1 = {k1: 3}
+d1[k1] # outputs 3
+k1.x = 5
+d1[k1] # KeyError! The key's hash has changed!
+k2 = K(2, 1)
+d1[k2] # KeyError! The key's hash is right, but the keys aren't equal.
+k1.x = 1
+d1[k1] # outputs 3
+
+class NewK(object):
+ def __init__(self, x, y):
+  self.x = x
+  self.y = y
+ def __hash__(self):
+  return self.x + self.y
+ def __cmp__(self, other):
+  return self.x - other.x
+
+nk1 = NewK(3, 4)
+nd1 = {nk1: 5}
+nd1[nk1] # outputs 5
+nk2 = NewK(3, 7)
+nk1 == nk2 # True!
+nd1[nk2] # KeyError! The keys' hashes differ.
+hash(nk1) == hash(nk2) # False
+nk2.y = 4
+nd1[nk2] # outputs 5
+
+# Where this can cause issues:
+nd1.keys()[0].x = 5
+nd1[nk1] # KeyError! nk1 is no longer in the dict!
+id(nd1.keys()[0]) == id(nk1) # Yikes. True?!
+nd1.keys()[0].x = 3
+nd1[nk1] # outputs 5
+id(nd1.keys()[0]) == id(nk1) # True!
+ 
+
+ Values are much easier to understand, the dict stores references to objects. Read the sections on hashable. Things like strings are immutable, if you "change" them, the dict you changed it in now references a new object. Objects which are mutable can be "changed in-place", hence the value of both dicts will change. 
+
+ d1 = {1: 'a'}
+d2 = d1.copy()
+id(d1[1]) == id(d2[1]) # True
+d2[1] = 'z'
+id(d1[1]) == id(d2[1]) # False
+
+# the examples in section 2 above have more examples of this.
+ 
+
+ Anyway, here are the main points of all this: 
+
+ 
+ For keys , it may not be mutability , but rather hashability and comparability , that you care about. 
+ You care about mutability for values, because by definition, a mutable object's value can be changed without changing the reference to it. 
+ 
+
+ I do not think there is a general way to test either of those points. The tests for suitability would depend on your use-case. For instance, it may be sufficient to check that an object does or does not implement __hash__ and comparison ( __eq__ or __cmp__ ) functions. Like-wise, you might be able to "check" an object's __setattr__ method in some way to determine if it is mutable. 
+ #2 There's really no guarantee that a type which is hashable is also immutable, but at very least, correctly implementing __hash__ requires that the type is immutable, with respect to it's own hash, and to equality. This is not enforced in any particular way. 
+
+ However, we are all adults. It would be unwise to implement __hash__ unless you really meant it. Roughly speaking, this just boils down to saying that if a type actually can be used as a dictionary key, then it is intended to be used in that way. 
+
+ If you're looking for something that is like a dict, but also immutable, then namedtuple might be your best bet from what's in the standard library. Admittedly it's not a very good approximation, but it's a start. 
+ #3 There isn't actually any such thing as mutability or immutability at the language level in Python. Some objects provide no way to change them (eg. strings and tuples), and so are effectively immutable, but it's purely conceptual; there's no property at the language level indicating this, neither to your code nor to Python itself. 
+
+ Immutability is not actually relevant to dicts; it's perfectly fine to use mutable values as keys. What matters is comparison and hashing: the object must always remain equal to itself. For example: 
+
+ class example(object):
+ def __init__(self, a):
+  self.value = a
+ def __eq__(self, rhs):
+  return self.value == rhs.value
+ def __hash__(self):
+  return hash(self.value)
+
+a = example(1)
+d = {a: "first"}
+a.data = 2
+print d[example(1)]
+ 
+
+ Here, example is not immutable; we're modifying it with a.data = 2 . Yet, we're using it as a key of a hash without any trouble. Why? The property we're changing has no effect on equality: the hash is unchanged, and example(1) is always equal to example(1) , ignoring any other properties. 
+
+ The most common use of this is caching and memoization: having a property cached or not doesn't logically change the object, and usually has no effect on equality. 
+
+ (I'm going to stop here--please don't ask five questions at once.) 
+ #4 There are MutableSequence, MutableSet, MutableMapping in module collections . Which can be used to check mutability of premade types. 
+
+ issubclass(TYPE, (MutableSequence, MutableSet, MutableMapping))
+ 
+
+ If you want use this on user defined types, the type must be either inherited from one of them or registered as a virtual subclass. 
+
+ class x(MutableSequence):
+ ...
+ 
+
+ or 
+
+ class x:
+ ...
+
+abc.ABCMeta.register(MutableSequence,x)
+ 
+ #5 Dicts are unordered sets of key:value pairs. The keys must be immutable, and therefore hashable. To determine if an object is hashable, you can use the hash() function: 
+
+ &gt;&gt;&gt; hash(1)
+1
+&gt;&gt;&gt; hash('a')
+12416037344
+&gt;&gt;&gt; hash([1,2,3])
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: unhashable type: 'list'
+&gt;&gt;&gt; hash((1,2,3))
+2528502973977326415
+&gt;&gt;&gt; hash({1: 1})
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: unhashable type: 'dict'
+ 
+
+ The values, on the other hand, can be any object. If you need to check if an object is immutable, then I would use hash() .

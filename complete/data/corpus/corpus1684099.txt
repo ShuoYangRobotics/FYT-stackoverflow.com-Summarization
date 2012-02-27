@@ -1,0 +1,172 @@
+Question (ID-1684099): Is it possible to delete a method from an object (not class) in python? I have a class with a few methods, some of which are only valid when the object is in a particular state. I would like to have the methods simply not be bound to the objects when they're not in a suitable state, so that I get something like: 
+
+ &gt;&gt;&gt; wiz=Wizard()
+&gt;&gt;&gt; dir(wiz)
+['__doc__', '__module__', 'addmana']
+&gt;&gt;&gt; wiz.addmana()
+&gt;&gt;&gt; dir(wiz)
+['__doc__', '__module__', 'addmana', 'domagic']
+&gt;&gt;&gt; wiz.domagic()
+&gt;&gt;&gt; dir(wiz)
+['__doc__', '__module__', 'addmana']
+&gt;&gt;&gt; wiz.domagic()
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: Wizard instance has no attribute 'domagic'
+ 
+
+ I can see how to add methods (types.MethodType(method, object)), but I can't see any way to delete a method for just a single object: 
+
+ &gt;&gt;&gt; wiz.domagic
+&lt;bound method Wizard.domagic of &lt;__main__.Wizard instance at 0x7f0390d06950&gt;&gt;
+&gt;&gt;&gt; del wiz.domagic
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: Wizard instance has no attribute 'domagic'
+ 
+
+ Overriding __dir__ (and getting an InvalidState or NotEnoughMana exception on invocation instead of AttributeError on reference) might be okay, but I can't see how to mimic the built-in behaviour of dir() accurately. (Ideally I'd prefer a way that works in Python 2.5, too) 
+
+ Ideas? 
+ Answers (Total-6): #0 This isn't directly answering your question, but I think a better approach to solving this problem would be to not add/remove the member method domagic on your wiz object: 
+
+ What I would do instead is within the domagic method, add a condition that checks for the relevant state of the wiz object, and then only perform the rest of the domagic method for a valid state, otherwise outputting an error message of your choosing. 
+
+ def domagic():
+ if (state != desired_state):
+ 	print "You cannot do any magic now!"
+ 	return
+ print "Doing some magic"
+ [some more commands]
+ 
+ #1 If an object is in a state where calling a given method on that object doesn't make sense, having it disappear from the object's interface seems like the wrong way to handle the problem. More explicit error handling gives you the ability to explain the problem more precisely to your callers, throwing NotEnoughMana instead of presenting them with a method-not-found error. 
+
+ If you're worried about having a bunch of function prefixes that look like this: 
+
+ if self.StateNotValid():
+ raise NotEnoughMana()
+ 
+
+ ...then you could use a decorator on each function. It's shorter, and gives you an easy way to grep for all special-state-requiring functions. 
+ #2 You can't delete a class method from an instance of that class because the instance doesn't have that method. The protocol is: if o is an instance of class Foo , and I call o.bar() , first o is examined to see if it has a method named bar . If it doesn't, then Foo is examined. The methods aren't bound to the instance unless they override its class. 
+
+ I don't see any good that can come from the road that you're going down here, either. 
+ #3 You can use a hack like that: 
+
+ &gt;&gt;&gt; class A(object):
+...  def test(self):
+...   print 'test'
+... 
+&gt;&gt;&gt; a = A()
+&gt;&gt;&gt; def noattr(name):
+...  raise AttributeError('no attribute %s' % name)
+... 
+&gt;&gt;&gt; a.test = lambda *a, **k: noattr('test')
+&gt;&gt;&gt; a.test()
+---------------------------------------------------------------------------
+AttributeError       Traceback (most recent call last)
+
+/Users/piranha/&lt;ipython console&gt; in &lt;module&gt;()
+
+/Users/piranha/&lt;ipython console&gt; in &lt;lambda&gt;(*a, **k)
+
+/Users/piranha/&lt;ipython console&gt; in noattr(name)
+
+AttributeError: no attribute test
+ 
+
+ Of course, this gives you wrong traceback, but exception is the same. ;-) 
+
+ Another (IMHO - better) way is to override __getattr__ and then put dispatch logic there, then you can use it like that: 
+
+ &gt;&gt;&gt; class A(object):
+...  def __getattr__(self, name):
+...   def inner(*args, **kwargs):
+...    print args, kwargs
+...   return inner
+... 
+&gt;&gt;&gt; a = A()
+&gt;&gt;&gt; a.test
+ &lt;function inner at 0x1006c36e0&gt;
+&gt;&gt;&gt; a.test('q')
+('q',) {}
+ 
+ #4 There seem to be some pretty good ideas to address the explicit question of how to hide/remove a method from a python object, so I'd like to address a higher level question. 
+
+ Specifically, the problem statement from the original question: 
+
+ 
+ I have a class with a few methods,
+ some of which are only valid when the
+ object is in a particular state. 
+ 
+
+ This situation is a classic example of the problem solved via the State Design Pattern : 
+
+ 
+ This pattern is used in computer
+ programming to represent the state of
+ an object. This is a clean way for an
+ object to partially change its type at
+ runtime. 
+ 
+
+ I would consider using this pattern if your Wizard has the following properties: 
+
+ 
+ The are a small number of well defined states that a Wizard object can be in. This pattern can be problematic if there is a quickly growing/changing set of states the object can be in. There is no hard number as to the number of states that can be too much, but I'd suggest that if you're unsure to use the pattern and then pursue an alternative if maintenance becomes too much. 
+ There are multiple methods that need to do different things depending on the state. In this case you could end up with a series of long if/elif statements for each method. This scatters the logic for each state across one monolithic class making difficult to maintain. Have a class which represents each state encapsulates the rules for each logic state in it's own unit making it easier to understand how each state functions on it's own. Additionally, you can unit test each state independent of the consumer of the state objects. 
+ The states in question are fairly concrete as well as easily distinguishable from each other. This will make it much easier to separate each state into its own class. 
+ 
+ #5 Looks like the way to dir() works by default is: 
+
+ dir(obj) == sorted(obj.__dict__.keys() + dir(obj.__class__))
+ 
+
+ (well, removing duplicates anyway) 
+
+ So an approach would be: 
+
+ class Wizard(object):
+ def __init__(self):
+  self.mana = 0
+
+ def __dir__(self):
+  natdir = set(self.__dict__.keys() + dir(self.__class__))
+  if self.mana &lt;= 0:
+   natdir.remove("domagic")
+  return list(natdir)
+
+ def addmana(self):
+  self.mana += 1
+
+ def domagic(self):
+  if self.mana &lt;= 0:
+   raise NotEnoughMana()
+  print "Abracadabra!"
+  self.mana -= 1
+ 
+
+ With the behaviour in Py2.6 being: 
+
+ &gt;&gt;&gt; wiz = Wizard()
+
+&gt;&gt;&gt; [x for x in dir(wiz) if not x.startswith("_")]
+['addmana', 'mana']
+
+&gt;&gt;&gt; wiz.addmana()
+
+&gt;&gt;&gt; [x for x in dir(wiz) if not x.startswith("_")]
+['addmana', 'domagic', 'mana']
+
+&gt;&gt;&gt; wiz.domagic()
+Abracadabra!
+
+&gt;&gt;&gt; [x for x in dir(wiz) if not x.startswith("_")]
+['addmana', 'mana']
+
+&gt;&gt;&gt; wiz.domagic()
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "&lt;stdin&gt;", line 13, in domagic
+__main__.NotEnoughMana

@@ -1,0 +1,316 @@
+Question (ID-8310039): Why do std::string operations perform poorly? I made a test to compare string operations in several languages for choosing a language for the server-side application. The results seemed normal until I finally tried C++, which surprised me a lot. So I wonder if I had missed any optimization and come here for help. 
+
+ The test are mainly intensive string operations, including concatenate and searching. The test is performed on Ubuntu 11.10 amd64, with GCC's version 4.6.1. The machine is Dell Optiplex 960, with 4G RAM, and Quad-core CPU. 
+
+ in Python (2.7.2): 
+
+ def test():
+ x = ""
+ limit = 102 * 1024
+ while len(x) &lt; limit:
+  x += "X"
+  if x.find("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0) &gt; 0:
+   print("Oh my god, this is impossible!")
+ print("x's length is : %d" % len(x))
+
+test()
+ 
+
+ which gives result: 
+
+ x's length is : 104448
+
+real 0m8.799s
+user 0m8.769s
+sys  0m0.008s
+ 
+
+ in Java (OpenJDK-7): 
+
+ public class test {
+ public static void main(String[] args) {
+  int x = 0;
+  int limit = 102 * 1024;
+  String s="";
+  for (; s.length() &lt; limit;) {
+   s += "X";
+   if (s.indexOf("ABCDEFGHIJKLMNOPQRSTUVWXYZ") &gt; 0)
+   System.out.printf("Find!\n");
+  }
+  System.out.printf("x's length = %d\n", s.length());
+ }
+}
+ 
+
+ which gives result: 
+
+ x's length = 104448
+
+real 0m50.436s
+user 0m50.431s
+sys  0m0.488s
+ 
+
+ in Javascript (Nodejs 0.6.3) 
+
+ function test()
+{
+ var x = "";
+ var limit = 102 * 1024;
+ while (x.length &lt; limit) {
+  x += "X";
+  if (x.indexOf("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0) &gt; 0)
+   console.log("OK");
+ }
+ console.log("x's length = " + x.length);
+}();
+ 
+
+ which gives result: 
+
+ x's length = 104448
+
+real 0m3.115s
+user 0m3.084s
+sys  0m0.048s
+ 
+
+ in C++ (g++ -Ofast) 
+
+ It's not surprising that Nodejs performas better than Python or Java. But I expected libstdc++ would give much better performance than Nodejs, whose result really suprised me. 
+
+ #include &lt;iostream&gt;
+#include &lt;string&gt;
+using namespace std;
+void test()
+{
+ int x = 0;
+ int limit = 102 * 1024;
+ string s("");
+ for (; s.size() &lt; limit;) {
+  s += "X";
+  if (s.find("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0) != string::npos)
+   cout &lt;&lt; "Find!" &lt;&lt; endl;
+ }
+ cout &lt;&lt; "x's length = " &lt;&lt; s.size() &lt;&lt; endl;
+}
+
+int main()
+{
+ test();
+}
+ 
+
+ which gives result: 
+
+ x length = 104448
+
+real 0m5.905s
+user 0m5.900s
+sys  0m0.000s
+ 
+
+ Brief Summary 
+
+ OK, now let's see the summary: 
+
+ 
+ javascript on Nodejs(V8): 3.1s 
+ Python on CPython 2.7.2 : 8.8s 
+ C++ with libstdc++: 5.9s 
+ Java on OpenJDK 7: 50.4s 
+ 
+
+ Surprisingly! I tried "-O2, -O3" in C++ but noting helped. C++ seems about only 50% performance of javascript in V8, and even poor than CPython. Could anyone explain to me if I had missed some optimization in GCC or is this just the case? Thank you a lot. 
+ Answers (Total-10): #0 It's not that std::string performs poorly (as much as I dislike C++), it's that string handling is so heavily optimized for those other languages. 
+
+ Your comparisons of string performance are misleading, and presumptuous if they are intended to represent more than just that. 
+
+ I know for a fact that Python string objects are completely implemented in C , and indeed on Python 2.7, numerous optimizations exist due to the lack of separation between unicode strings and bytes. If you ran this test on Python 3.x you will find it considerably slower. 
+
+ Javascript has numerous heavily optimized implementations. It's to be expected that string handling is excellent here. 
+
+ Your Java result may be due to proper string handling, or some other poor case. I expect that a Java expert could step in and fix this test with a few changes. 
+
+ As for your C++ example, I'd expect performance to slightly exceed the Python version. It does the same operations, with less interpreter overhead. This is reflected in your results. Preceding the test with s.reserve(limit); would remove reallocation overhead. 
+
+ I'll repeat that you're only testing a single facet of the languages implementations . The results for this test do not reflect the overall language speed. 
+
+ I've provided a C version to show how silly such pissing contests can be: 
+
+ #define _GNU_SOURCE
+#include &lt;string.h&gt;
+#include &lt;stdio.h&gt;
+
+void test()
+{
+ int limit = 102 * 1024;
+ char s[limit];
+ size_t size = 0;
+ while (size &lt; limit) {
+  s[size++] = 'X';
+  if (memmem(s, size, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 26)) {
+   fprintf(stderr, "zomg\n");
+   return;
+  }
+ }
+ printf("x's length = %zu\n", size);
+}
+
+int main()
+{
+ test();
+ return 0;
+}
+ 
+
+ Timing: 
+
+ matt@stanley:~/Desktop$ time ./smash 
+x's length = 104448
+
+real 0m0.681s
+user 0m0.680s
+sys  0m0.000s
+ 
+ #1 So I went and played a bit with this on ideone.org. 
+
+ Here a slightly modified version of your original C++ program, but with the appending in the loop eliminated, so it only measures the call to std::string::find() . Note that I had to cut the number of iterations to ~40%, otherwise ideone.org would kill the process. 
+
+ #include &lt;iostream&gt;
+#include &lt;string&gt;
+
+int main()
+{
+ const std::string::size_type limit = 42 * 1024;
+ unsigned int found = 0;
+
+ //std::string s;
+ std::string s(limit, 'X');
+ for (std::string::size_type i = 0; i &lt; limit; ++i) {
+  //s += 'X';
+  if (s.find("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0) != std::string::npos)
+   ++found;
+ }
+
+ if(found &gt; 0)
+  std::cout &lt;&lt; "Found " &lt;&lt; found &lt;&lt; " times!\n";
+ std::cout &lt;&lt; "x's length = " &lt;&lt; s.size() &lt;&lt; '\n';
+
+ return 0;
+}
+ 
+
+ My results at ideone.org are time: 3.37s . (Of course, this is highly questionably, but indulge me for a moment and wait for the other result.) 
+
+ Now we take this code and swap the commented lines, to test appending, rather than finding. Note that, this time, I had increased the number of iterations tenfold in trying to see any time result at all. 
+
+ #include &lt;iostream&gt;
+#include &lt;string&gt;
+
+int main()
+{
+ const std::string::size_type limit = 1020 * 1024;
+ unsigned int found = 0;
+
+ std::string s;
+ //std::string s(limit, 'X');
+ for (std::string::size_type i = 0; i &lt; limit; ++i) {
+  s += 'X';
+  //if (s.find("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0) != std::string::npos)
+  // ++found;
+ }
+
+ if(found &gt; 0)
+  std::cout &lt;&lt; "Found " &lt;&lt; found &lt;&lt; " times!\n";
+ std::cout &lt;&lt; "x's length = " &lt;&lt; s.size() &lt;&lt; '\n';
+
+ return 0;
+}
+ 
+
+ My results at ideone.org , despite the tenfold increase in iterations, are time: 0s . 
+
+ My conclusion: This benchmark is, in C++, highly dominated by the searching operation , the appending of the character in the loop has no influence on the result at all. Was that really your intention? 
+ #2 The idiomatic C++ solution would be: 
+
+ #include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;algorithm&gt;
+
+int main()
+{
+ const int limit = 102 * 1024;
+ std::string s;
+ s.reserve(limit);
+
+ const std::string pattern("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+ for (int i = 0; i &lt; limit; ++i) {
+  s += 'X';
+  if (std::search(s.begin(), s.end(), pattern.begin(), pattern.end()) != s.end())
+   std::cout &lt;&lt; "Omg Wtf found!";
+ }
+ std::cout &lt;&lt; "X's length = " &lt;&lt; s.size();
+ return 0;
+}
+ 
+
+ I could speed this up considerably by putting the string on the stack, and using memmem -- but there seems to be no need. Running on my machine, this is over 10x the speed of the python solution already.. 
+
+ [On my laptop] 
+
+ time ./test
+X's length = 104448
+real 0m2.055s
+user 0m2.049s
+sys 0m0.001s 
+ #3 That is the most obvious one: please try to do s.reserve(limit); before main loop. 
+
+ Documentation is here . 
+
+ I should mention that direct usage of standard classes in C++ in the same way you are used to do it in Java or Python will often give you sub-par performance if you are unaware of what is done behind the desk. There is no magical performance in language itself, it just gives you right tools. 
+ #4 For C++, try to use std::string for "ABCDEFGHIJKLMNOPQRSTUVWXYZ" - in my implementation string::find(const charT* s, size_type pos = 0) const calculates length of string argument. 
+ #5 What you are missing here is the inherent complexity of the find search. 
+
+ You are executing the search 102 * 1024 (104 448) times. A naive search algorithm will, each time, try to match the pattern starting from the first character, then the second, etc... 
+
+ Therefore, you have a string that is going from length 1 to N , and at each step you search the pattern against this string, which is a linear operation in C++. That is N * (N+1) / 2 = 5 454 744 576 comparisons. I am not as surprised as you are that this would take some time... 
+
+ Let us verify the hypothesis by using the overload of find that searches for a single A : 
+
+ Original: 6.94938e+06 ms
+Char : 2.10709e+06 ms
+ 
+
+ About 3 times faster, so we are within the same order of magnitude. Therefore the use of a full string is not really interesting. 
+
+ Conclusion ? Maybe that find could be optimized a bit. But the problem is not worth it. 
+
+ Note: and to those who tout Boyer Moore, I am afraid that the needle is too small, so it won't help much. May cut an order of magnitude (26 characters), but no more. 
+ #6 My first thought is that there isn't a problem. 
+
+ C++ gives second-best performance, nearly ten times faster than Java. Maybe all but Java are running close to the best performance achievable for that functionality, and you should be looking at how to fix the Java issue (hint - StringBuilder ). 
+
+ In the C++ case, there are some things to try to improve performance a bit. In particular... 
+
+ 
+ s += 'X'; rather than s += "X"; 
+ Declare string searchpattern ("ABCDEFGHIJKLMNOPQRSTUVWXYZ"); outside the loop, and pass this for the find calls. An std::string instance knows it's own length, whereas a C string requires a linear-time check to determine that, and this may (or may not) be relevant to std::string::find performance. 
+ Try using std::stringstream , for a similar reason to why you should be using StringBuilder for Java, though most likely the repeated conversions back to string will create more problems. 
+ 
+
+ Overall, the result isn't too surprising though. JavaScript, with a good JIT compiler, may be able to optimise a little better than C++ static compilation is allowed to in this case. 
+
+ With enough work, you should always be able to optimise C++ better than JavaScript, but there will always be cases where that doesn't just naturally happen and where it may take a fair bit of knowledge and effort to achieve that. 
+ #7 I just tested the C++ example myself. If I remove the the call to std::sting::find , the program terminates in no time. Thus the allocations during string concatenation is no problem here. 
+
+ If I add a variable sdt::string abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" and replace the occurence of "ABC...XYZ" in the call of std::string::find , the program needs almost the same time to finish as the original example. This again shows that allocation as well as computing the string's length does not add much to the runtime. 
+
+ Therefore, it seems that the string search algorithm used by libstdc++ is not as fast for your example as the search algorithms of javascript or python. Maybe you want to try C++ again with your own string search algorithm which fits your purpose better. 
+ #8 It seems that in nodejs better algorithm for search substrings. You can implement self and try it. 
+ #9 Your test code is checking a pathological scenario of excessive string concatenation. (The string-search part of the test could have probably been omitted, I bet you it contributes almost nothing to the final results.) Excessive string concatenation is a pitfall that most languages warn very strongly against, and provide very well known alternatives for, (i.e. StringBuilder,) so what you are essentially testing here is how badly these languages fail under scenarios of perfectly expected failure. That's pointless. 
+
+ An example of a similarly pointless test would be to compare the performance of various languages when throwing and catching an exception in a tight loop. All languages warn that exception throwing and catching is abysmally slow. They do not specify how slow, they just warn you not to expect anything. Therefore, to go ahead and test precisely that, would be pointless. 
+
+ So, it would make a lot more sense to repeat your test substituting the mindless string concatenation part (s += "X") with whatever construct is offered by each one of these languages precisely for avoiding string concatenation. (Such as class StringBuilder.)

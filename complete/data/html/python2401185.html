@@ -1,0 +1,253 @@
+<h3>Question (ID-2401185):</h3><h2>Python Vector Class</h2><p>I'm coming from a C# background where this stuff is super easy—trying to translate into Python for Maya.</p>
+
+<p>There's gotta' be a better way to do this. Basically, I'm looking to create a Vector class that will simply have x, y and z coordinates, but it would be ideal if this class returned a tuple with all 3 coordinates and if you could edit the values of this tuple through x, y and z properties, somehow.</p>
+
+<p>This is what I have so far, but there <em>must</em> be a better way to do this than using an exec statement, right? I hate using exec statements.</p>
+
+<pre><code>class Vector(object):
+    '''Creates a Maya vector/triple, having x, y and z coordinates as float values'''
+
+    def __init__(self, x=0, y=0, z=0):
+        self.x, self.y, self.z = x, y, z
+
+    def attrsetter(attr):
+        def set_float(self, value):
+            setattr(self, attr, float(value))
+        return set_float
+
+    for xyz in 'xyz':
+        exec("%s = property(fget=attrgetter('_%s'), fset=attrsetter('_%s'))" % (xyz, xyz, xyz))
+</code></pre>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>If I understand your question correctly, you want something like this ?</p>
+
+<pre><code>class Vector(object):
+
+    def __init__(self, x=0, y=0, z=0):
+        self._x, self._y, self._z = x, y, z
+
+    def setx(self, x): self._x = float(x)
+    def sety(self, y): self._y = float(y)        
+    def setz(self, z): self._z = float(z)     
+
+    x = property(lambda self: float(self._x), setx)
+    y = property(lambda self: float(self._y), sety)
+    z = property(lambda self: float(self._z), setz)
+</code></pre>
+
+<p>This uses _x, _y and _z to (internally) store the incoming values and exposes them via the use of <a href="http://docs.python.org/library/functions.html#property" rel="nofollow">property</a> (with getters, setters); I abbreviated the 'getters' using a lambda statement.</p>
+
+<p>Note that in Python it would be <strong>very common</strong> to manipulate these values (say: x, y, z) on the object itself directly (I guess you want ensure the explicit float casts?)</p>
+<br /><b>#1</b><br /><p><s>I may be misreading your question, but I think what you want is already made for you in <a href="http://docs.python.org/library/collections.html#collections.namedtuple" rel="nofollow"><code>collections.namedtuple</code></a>:</p>
+
+<pre><code>&gt;&gt;&gt; from collections import namedtuple
+&gt;&gt;&gt; Vector = namedtuple('Vector', 'x y z')
+&gt;&gt;&gt; v = Vector(0, 0, 0)
+&gt;&gt;&gt; v
+Vector(x=0, y=0, z=0)
+&gt;&gt;&gt; v.x = 10
+&gt;&gt;&gt; v
+Vector(x=10, y=0, z=0)
+&gt;&gt;&gt; tuple(v)
+(10, 0, 0)
+&gt;&gt;&gt; v._asdict()
+{'x': 10, 'y': 0, 'z': 0}
+&gt;&gt;&gt;
+</code></pre>
+
+<p>Does that look about right?</s></p>
+
+<p>For shame, I forgot that tuples are immutable. Curse me for not upgrading from Python 2.5 so I could have actually tested the code I wrote. Anyway, you may want something quite similar to <code>collections.namedtuple</code>, except more like a hypothetical <code>namedlist</code>. Or you may want to discard that idea entirely and use something different. The point is that this answer was wrong, and I would delete it, except I feel obligated to the people who upvoted me to correct my mistake.</p>
+<br /><b>#2</b><br /><p><strong>Edit:</strong> I've modified the code with my answer a bit more from @unutbu's original to simplify it and make what is being done clearer. In the latest version, the <code>@staticmethod</code>'s have been eliminated altogether and replaced with nested one-liners. The outer function and nested class have been renamed <code>AutoFloatProperties</code> and <code>_AutoFloatProperties</code> to reflect their specialized behavior of converting and storing the values assigned as floats. Despite all this, @unutbu's own revised answer using a class decorator instead of a metaclass is a slightly simpler solution, although the internals and usage are very similar.</p>
+
+<pre><code>def AutoFloatProperties(*props):
+    '''metaclass'''
+    class _AutoFloatProperties(type):
+        # Inspired by autoprop (http://www.python.org/download/releases/2.2.3/descrintro)
+        def __init__(cls, name, bases, cdict):
+            super(_AutoFloatProperties, cls).__init__(name, bases, cdict)
+            for attr in props:
+                def fget(self, _attr='_'+attr): return getattr(self, _attr)
+                def fset(self, value, _attr='_'+attr): setattr(self, _attr, float(value))
+                setattr(cls, attr, property(fget, fset))
+    return _AutoFloatProperties
+
+class Vector(object):
+    '''Creates a Maya vector/triple, having x, y and z coordinates as float values'''
+    __metaclass__ = AutoFloatProperties('x','y','z')
+    def __init__(self, x=0, y=0, z=0):
+        self.x, self.y, self.z = x, y, z # values converted to float via properties
+
+if __name__=='__main__':
+    v=Vector(1,2,3)
+    print(v.x)
+    # 1.0
+    v.x=4
+    print(v.x)
+    # 4.0
+</code></pre>
+<br /><b>#3</b><br /><p><strong>Edit:</strong> My previous answer tried to make a generalized AutoProperties metaclass which I hoped could be of general use. As @martineau's answer shows a solution specialized to the <code>Vector</code> class can make things simpler. </p>
+
+<p>Here's another idea along those lines (specialized simplicity over generalized complexity). It uses a class decorator (which I think is slightly simpler to understand than a metaclass) and @martineau's idea of simplifying the getters and setters with default values: </p>
+
+<pre><code>def AutoProperties(*props):
+    def _AutoProperties(cls):
+        for attr in props:
+            def getter(self,_attr='_'+attr):
+                return getattr(self, _attr)
+            def setter(self, value, _attr='_'+attr):
+                setattr(self, _attr, float(value))
+            setattr(cls,attr,property(getter,setter))
+        return cls
+    return _AutoProperties
+
+@AutoProperties('x','y','z')
+class Vector(object):
+    '''Creates a Maya vector/triple, having x, y and z coordinates as float values'''
+    def __init__(self, x=0, y=0, z=0):
+        self._x, self._y, self._z = map(float,(x, y, z))
+</code></pre>
+
+<p><strong>Original answer:</strong>
+Here is a way to avoid repeating boiler-plate code when defining many similar properties. </p>
+
+<p>I've tried to make the solution reasonably general, so it might be of use to people in other situations beside this particular one.</p>
+
+<p>To use it you need to do 2 things:
+<OL>
+<LI>Put</p>
+
+<pre><code>    __metaclass__=AutoProperties(('x','y','z'))
+</code></pre>
+
+<p>at the beginning of the definition of your class. You can list (as strings) as many attributes (e.g. <code>x</code>,<code>y</code>,<code>z</code>) as you wish. <code>AutoProperties</code> will turn them into properties.</p>
+
+<p><LI>Your class, e.g. <code>Vector</code>, needs to define staticmethods <code>_auto_setter</code> and <code>_auto_getter</code>. They take one argument, the attribute name as a string, and return the setter or getter function, respectively, for that attribute.
+</OL></p>
+
+<p>The idea of using metaclasses to automatically set up properties comes from Guido Rossum's essay on <a href="http://www.python.org/download/releases/2.2.3/descrintro/#metaclasses" rel="nofollow">properties and metaclasses</a>. There he defines an <code>autoprop</code> metaclass similar to what I use below. The main difference is that <code>AutoProperties</code> expects the user to define getter and setter <em>factories</em> instead of manually defined getters and setters.</p>
+
+<pre><code>def AutoProperties(props):
+    class _AutoProperties(type):
+        # Inspired by autoprop (http://www.python.org/download/releases/2.2.3/descrintro/)
+        def __init__(cls, name, bases, cdict):
+            super(_AutoProperties, cls).__init__(name, bases, cdict)
+            for attr in props:
+                fget=cls._auto_getter(attr)
+                fset=cls._auto_setter(attr)
+                setattr(cls,attr,property(fget,fset))
+    return _AutoProperties
+
+class Vector(object):
+    '''Creates a Maya vector/triple, having x, y and z coordinates as float values'''
+    __metaclass__=AutoProperties(('x','y','z'))
+    def __init__(self, x=0, y=0, z=0):
+        # I assume you want the initial values to be converted to floats too.
+        self._x, self._y, self._z = map(float,(x, y, z))
+    @staticmethod
+    def _auto_setter(attr):
+        def set_float(self, value):
+            setattr(self, '_'+attr, float(value))
+        return set_float
+    @staticmethod   
+    def _auto_getter(attr):
+        def get_float(self):
+            return getattr(self, '_'+attr)
+        return get_float
+
+if __name__=='__main__':
+    v=Vector(1,2,3)
+    print(v.x)
+    # 1.0
+    v.x=4
+    print(v.x)
+    # 4.0
+</code></pre>
+<br /><b>#4</b><br /><p>I don't really understand the question. You have a Vector which describes a point in space with 3 coordinates. Your implementation already allows you to change the values:</p>
+
+<pre><code>v = Vector()
+v.x = 10 # now x is 10
+</code></pre>
+
+<p>why should it return a tuple? What would you use it for? That said, a tuple is immutable so can't be modified, but you could use a list. Changing the numbers in that list will not reflect in Vector though.</p>
+
+<p>If you do need to ensure the type is a float, consider <a href="http://docs.python.org/library/functions.html#property" rel="nofollow">property setters</a>:</p>
+
+<pre><code>class C(object):
+    def __init__(self):
+        self._x = None
+
+    @property
+    def x(self):
+        """I'm the 'x' property."""
+        return self._x
+
+    @x.setter
+    def x(self, value):
+        print "x set to ", value
+        self._x = value
+
+c = C()
+c.x = 10
+
+print c.x, c._x
+</code></pre>
+<br /><b>#5</b><br /><p>Is this what you're looking for?   </p>
+
+<pre><code>class vector(object):
+    def __init__(self, x,y,z):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    # overload []
+    def __getitem__(self, index):
+        data = [self.x,self.y,self.z]
+        return data[index]
+
+    # overload set []
+    def __setitem__(self, key, item):
+        if (key == 0):
+            self.x = item
+        elif (key == 1):
+            self.y = item
+        elif (key == 2):
+            self.z = item
+        #TODO: Default should throw excetion
+</code></pre>
+
+<p>This is the most naive way of doing it.  I'm sure some Python guru will come along sneer at my code and replace it with a one-liner.</p>
+
+<p>Examples of this code:</p>
+
+<pre><code>v = vector(1,2,3)
+v[1] = 4
+v[2] = 5
+
+v.x = 1
+v.z= 66
+</code></pre>
+<br /><b>#6</b><br /><p>I understand that</p>
+
+<ol>
+<li>you want to have a filter that transform the input values into floats</li>
+<li>you don't want to write the property three times</li>
+</ol>
+
+<p>You could use the following code:</p>
+
+<pre><code>class Vector(object):
+    def __init__(self, x,y,z):
+         self._x = x
+
+def mangle(name):
+return '_'+name
+
+for name in ['x','y','z']:
+    def set_xyz(self, value):
+        self.__setattr__(mangle(name), float(value))
+    def get_xyz(self):
+        return self.__getattribute__(mangle(name))
+    prop = property(get_xyz, set_xyz)
+    setattr(Vector,name, prop)
+</code></pre>
+<br />

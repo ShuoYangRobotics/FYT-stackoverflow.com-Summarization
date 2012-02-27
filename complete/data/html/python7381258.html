@@ -1,0 +1,143 @@
+<h3>Question (ID-7381258):</h3><h2>Minimising reading from and writing to disk in Python for a memory-heavy operation</h2><p><strong>Background</strong></p>
+
+<p>I am working on a fairly computationally intensive project for a computational linguistics project, but the problem I have is quite general and hence I expect that a solution would be interesting to others as well.</p>
+
+<p><strong>Requirements</strong></p>
+
+<p>The key aspect of this particular program I must write is that it must: </p>
+
+<ol>
+<li>Read through a large corpus (between 5G and 30G, and potentially larger stuff down the line)</li>
+<li>Process the data on each line.</li>
+<li>From this processed data, construct a large number of vectors (dimensionality of some of these vectors is > 4,000,000). Typically it is building hundreds of thousands of such vectors.</li>
+<li>These vectors must all be saved to disk in some format or other.</li>
+</ol>
+
+<p>Steps 1 and 2 are not hard to do efficiently: just use generators and have a data-analysis pipeline. The big problem is operation 3 (and by connection 4)</p>
+
+<p><strong>Parenthesis: Technical Details</strong></p>
+
+<p>In case the actual procedure for building vectors affects the solution:</p>
+
+<p>For each line in the corpus, one or more vectors must have its basis weights updated. </p>
+
+<p>If you think of them in terms of python lists, each line, when processed, updates one or more lists (creating them if needed) by incrementing the values of these lists at one or more indices by a value (which may differ based on the index). </p>
+
+<p>Vectors do not depend on each other, nor does it matter which order the corpus lines are read in.</p>
+
+<p><strong>Attempted Solutions</strong></p>
+
+<p>There are three extrema when it comes to how to do this:</p>
+
+<ol>
+<li>I could build all the vectors in memory. Then write them to disk.</li>
+<li>I could build all the vectors directly on the disk, using shelf of pickle or some such library.</li>
+<li>I could build the vectors in memory one at a time and writing it to disk, passing through the corpus once per vector.</li>
+</ol>
+
+<p>All these options are fairly intractable. 1 just uses up all the system memory, and it panics and slows to a crawl. 2 is way too slow as IO operations aren't fast. 3 is possibly even slower than 2 for the same reasons.</p>
+
+<p><strong>Goals</strong></p>
+
+<p>A good solution would involve:</p>
+
+<ol>
+<li>Building as much as possible in memory.</li>
+<li>Once memory is full, dump everything to disk.</li>
+<li>If bits are needed from disk again, recover them back into memory to add stuff to those vectors. </li>
+<li>Go back to 1 until all vectors are built.</li>
+</ol>
+
+<p>The problem is that I'm not really sure how to go about this. It seems somewhat unpythonic to worry about system attributes such as RAM, but I don't see how this sort of problem can be optimally solved without taking this into account. As a result, I don't really know how to get started on this sort of thing.</p>
+
+<p><strong>Question</strong></p>
+
+<p>Does anyone know how to go about solving this sort of problem? I python simply not the right language for this sort of thing? Or is there a simple solution to maximise how much is done from memory (within reason) while minimising how many times data must be read from the disk, or written to it?</p>
+
+<p>Many thanks for your attention. I look forward to seeing what the bright minds of stackoverflow can throw my way.</p>
+
+<p><strong>Additional Details</strong></p>
+
+<p>The sort of machine this problem is run on usually has 20+ cores and ~70G of RAM. The problem can be parallelised (à la MapReduce) in that separate vectors for one entity can be built from segments of the corpus and then added to obtain the vector that would have been built from the whole corpus.</p>
+
+<p>Part of the question involves determining a limit on how much can be built in memory before disk-writes need to occur. Does python offer any mechanism to determine how much RAM is available?</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>take a look at <a href="http://www.pytables.org/moin" rel="nofollow">pytables</a>. One of the advantages is you can work with very large amounts of data, stored on disk, as if it were in memory.</p>
+
+<p>edit: Because the I/O performance will be a bottleneck (if not THE bottleneck), you will want to consider SSD technology: high I/O per second and virtually no seeking times. The size of your project is perfect for todays affordable SSD 'drives'.</p>
+<br /><b>#1</b><br /><p>A couple libraries come to mind which you might want to evaluate:</p>
+
+<ul>
+<li><p><a href="http://packages.python.org/joblib/" rel="nofollow">joblib</a> - Makes parallel computation easy, and provides transparent disk-caching of output and lazy re-evaluation.</p></li>
+<li><p><a href="http://packages.python.org/mrjob/" rel="nofollow">mrjob</a> - Makes it easy to write Hadoop streaming jobs on Amazon Elastic MapReduce or your own Hadoop cluster.</p></li>
+</ul>
+<br /><b>#2</b><br /><p>Two ideas:</p>
+
+<ol>
+<li><p>Use numpy arrays to represent vectors. They are much more memory-efficient, at the cost that they will force elements of the vector to be of the same type (all ints or all doubles...).</p></li>
+<li><p>Do multiple passes, each with a different set of vectors. That is, choose first 1M vectors and do only the calculations involving them (you said they are independent, so I assume this is viable). Then another pass over all the data with second 1M vectors.</p></li>
+</ol>
+
+<p>It seems you're on the edge of what you can do with your hardware. It would help if you could describe what hardware (mostly, RAM) is available to you for this task. If there are 100k vectors, each of them with 1M ints, this gives ~370GB. If multiple passes method is viable and you've got a machine with 16GB RAM, then it is about ~25 passes -- should be easy to parallelize if you've got a cluster.</p>
+<br /><b>#3</b><br /><p>You didn't mention either way, but if you're not, you should use <a href="http://numpy.scipy.org/" rel="nofollow">NumPy</a> arrays for your lists rather than native Python lists, which should help speed things up and reduce memory usage, as well as making whatever math you're doing faster and easier.</p>
+
+<p>If you're at all familiar with C/C++, you might also look into <a href="http://cython.org/" rel="nofollow">Cython</a>, which lets you write some or all of your code in C, which is much faster than Python, and integrates well with NumPy arrays.  You might want to <a href="http://docs.python.org/library/profile.html" rel="nofollow">profile</a> your code to find out which spots are taking the most time, and write those sections in C.</p>
+
+<p>It's hard to say what the best approach will be, but of course any speedups you can make in critical parts of will help.  Also keep in mind that once RAM is exhausted, your program will start running in virtual memory on disk, which will probably cause far more disk I/O activity than the program itself, so if you're concerned about disk I/O, your best bet is probably to make sure that the batch of data you're working on in memory doesn't get much greater than available RAM.</p>
+<br /><b>#4</b><br /><p>Hard to say exactly because there are a few details missing, eg. is this a dedicated box?  Does the process run on several machines?  Does the avail memory change?</p>
+
+<p>In general I recommend not reimplementing the job of the operating system.  </p>
+
+<p>Note this next paragraph doesn't seem to apply since the whole file is read each time:
+I'd test implementation three, giving it a healthy disk cache and see what happens.  With plenty of cache performance might not be as bad as you'd expect.</p>
+
+<p>You'll also want to cache expensive calculations that will be needed soon.  In short, when an expensive operation is calculated that can be used again, you store it in a dictionary (or perhaps disk, memcached, etc), and then look there first before calculating again.  The Django docs have a good <a href="https://docs.djangoproject.com/en/dev/topics/cache/" rel="nofollow">introduction</a>.</p>
+<br /><b>#5</b><br /><p>Use a database. That problem seems large enough that language choice (Python, Perl, Java, etc) won't make a difference. If each dimension of the vector is a column in the table, adding some indexes is probably a good idea. In any case this is a lot of data and won't process terribly quickly.</p>
+<br /><b>#6</b><br /><p>I'd suggest to do it this way: </p>
+
+<p>1) Construct the easy pipeline you mentioned</p>
+
+<p>2) Construct your vectors in memory and "flush" them into a DB. ( <a href="http://redis.io" rel="nofollow">Redis</a> and <a href="http://www.mongodb.org" rel="nofollow">MongoDB</a> are good candidates)</p>
+
+<p>3) Determine how much memory this procedure consumes and parallelize accordingly ( or even better use a map/reduce approach, or a distributed task queue like <a href="http://celeryproject.org/" rel="nofollow">celery</a>)</p>
+
+<p>Plus all the tips mentioned before (numPy etc..)</p>
+<br /><b>#7</b><br /><p>Think about using an existing in-memory DB solution like <a href="http://redis.io/" rel="nofollow">Redis</a>. The problem of switching to disk once RAM is gone and tricks to tweak this process should already be in place. Python client as well.</p>
+
+<p>Moreover this solution could scale vertically without much effort.</p>
+<br /><b>#8</b><br /><p>From another comment I infer that your corpus fits into the memory, and you have some cores to throw at the problem, so I would try this:</p>
+
+<ul>
+<li>Find a method to have your corpus in memory. This might be a sort of ram disk with file system, or a database. No idea, which one is best for you. </li>
+<li><p>Have a smallish shell script monitor ram usage, and spawn every second another process of the following, as long as there is x memory left (or, if you want to make things a bit more complex, y I/O bandwith to disk):</p>
+
+<ul>
+<li>iterate through the corpus and build and write some vectors</li>
+</ul></li>
+<li><p>in the end you can collect and combine all vectors, if needed (this would be the reduce part)</p></li>
+</ul>
+<br /><b>#9</b><br /><p>Many of the methods discussed by others on this page are very helpful, and I recommend that anyone else needing to solve this sort of problem look at them.</p>
+
+<p>One of the crucial aspects of this problem is deciding when to stop building vectors (or whatever you're building) in memory and dump stuff to disk. This requires a (pythonesque) way of determining how much memory one has left.</p>
+
+<p>It turns out that the <a href="http://code.google.com/p/psutil/" rel="nofollow">psutil</a> python module does just the trick.</p>
+
+<p>For example say I want to have a while-loop that adds stuff to a Queue for other processes to deal with until my RAM is 80% full. The follow pseudocode will do the trick:</p>
+
+<pre><code>while (someCondition):
+   if psutil.phymem_usage().percent &gt; 80.0:
+      dumpQueue(myQueue,somefile)
+   else:
+      addSomeStufftoQueue(myQueue,stuff)
+</code></pre>
+
+<p>This way you can have one process tracking memory usage and deciding that it's time to write to disk and free up some system memory (deciding which vectors to cache is a separate problem).</p>
+
+<p>PS. Props to to <a href="http://twitter.com/#!/seanhn" rel="nofollow">Sean</a> for suggesting this module.</p>
+<br /><b>#10</b><br /><p>Split the corpus evenly in size between parallel jobs (one per core) - process in parallel, ignoring any incomplete line (or if you cannot tell if it is incomplete, ignore the first and last line of that each job processes).</p>
+
+<p>That's the map part.</p>
+
+<p>Use one job to merge the 20+ sets of vectors from each of the earlier jobs - That's the reduce step.</p>
+
+<p>You stand to loose information from 2*N lines where N is the number of parallel processes, but you gain by not adding complicated logic to try and capture these lines for processing.</p>
+<br />

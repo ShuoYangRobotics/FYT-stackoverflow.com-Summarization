@@ -1,0 +1,125 @@
+<h3>Question (ID-664118):</h3><h2>What's the difference between dict() and {}?</h2><p>So let's say I wanna make a dictionary. We'll call it <code>d</code>. But there are multiple ways to initialize a dictionary in Python! For example, I could do this:</p>
+
+<pre><code>d = {'hash': 'bang', 'slash': 'dot'}
+</code></pre>
+
+<p>Or I could do this:</p>
+
+<pre><code>d = dict(hash='bang', slash='dot')
+</code></pre>
+
+<p>Or this, curiously:</p>
+
+<pre><code>d = dict({'hash': 'bang', 'slash': 'dot'})
+</code></pre>
+
+<p>Or this:</p>
+
+<pre><code>d = dict([['hash', 'bang'], ['slash', 'dot']])
+</code></pre>
+
+<p>And a whole other multitude of ways with the <code>dict()</code> function. So obviously one of the things <code>dict()</code> provides is flexibility in syntax and initialization. But that's not what I'm asking about.</p>
+
+<p>Say I were to make <code>d</code> just an empty dictionary. What goes on behind the scenes of the Python interpreter when I do <code>d = {}</code> versus <code>d = dict()</code>? Is it simply two ways to do the same thing? Does using <code>{}</code> have the <i>additional</i> call of <code>dict()</code>? Does one have (even negligible) more overhead than the other? While the question is really completely unimportant, it's a curiosity I would love to have answered.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><pre><code>&gt;&gt;&gt; def f():
+...     return {'a' : 1, 'b' : 2}
+... 
+&gt;&gt;&gt; def g():
+...     return dict(a=1, b=2)
+... 
+&gt;&gt;&gt; g()
+{'a': 1, 'b': 2}
+&gt;&gt;&gt; f()
+{'a': 1, 'b': 2}
+&gt;&gt;&gt; import dis
+&gt;&gt;&gt; dis.dis(f)
+  2           0 BUILD_MAP                0
+              3 DUP_TOP             
+              4 LOAD_CONST               1 ('a')
+              7 LOAD_CONST               2 (1)
+             10 ROT_THREE           
+             11 STORE_SUBSCR        
+             12 DUP_TOP             
+             13 LOAD_CONST               3 ('b')
+             16 LOAD_CONST               4 (2)
+             19 ROT_THREE           
+             20 STORE_SUBSCR        
+             21 RETURN_VALUE        
+&gt;&gt;&gt; dis.dis(g)
+  2           0 LOAD_GLOBAL              0 (dict)
+              3 LOAD_CONST               1 ('a')
+              6 LOAD_CONST               2 (1)
+              9 LOAD_CONST               3 ('b')
+             12 LOAD_CONST               4 (2)
+             15 CALL_FUNCTION          512
+             18 RETURN_VALUE
+</code></pre>
+
+<p>dict() is apparently some C built-in. A really smart or dedicated person (not me) could look at the interpreter source and tell you more. I just wanted to show off dis.dis. :)</p>
+<br /><b>#1</b><br /><p>As far as performance goes:</p>
+
+<pre><code>&gt;&gt;&gt; from timeit import timeit
+&gt;&gt;&gt; timeit("a = {'a': 1, 'b': 2}")
+0.424...
+&gt;&gt;&gt; timeit("a = dict(a = 1, b = 2)")
+0.889...
+</code></pre>
+<br /><b>#2</b><br /><p>@Jacob: There is a difference in how the objects are allocated, but they are not copy-on-write.  Python allocates a fixed-size "free list" where it can quickly allocate dictionary objects (until it fills).  Dictionaries allocated via the <code>{}</code> syntax (or a C call to <code>PyDict_New</code>) can come from this free list.  When the dictionary is no longer referenced it gets returned to the free list and that memory block can be reused (though the fields are reset first).</p>
+
+<p>This first dictionary gets immediately returned to the free list, and the next will reuse its memory space:</p>
+
+<pre><code>&gt;&gt;&gt; id({})
+340160
+&gt;&gt;&gt; id({1: 2})
+340160
+</code></pre>
+
+<p>If you keep a reference, the next dictionary will come from the next free slot:</p>
+
+<pre><code>&gt;&gt;&gt; x = {}
+&gt;&gt;&gt; id(x)
+340160
+&gt;&gt;&gt; id({})
+340016
+</code></pre>
+
+<p>But we can delete the reference to that dictionary and free its slot again:</p>
+
+<pre><code>&gt;&gt;&gt; del x
+&gt;&gt;&gt; id({})
+340160
+</code></pre>
+
+<p>Since the <code>{}</code> syntax is handled in byte-code it can use this optimization mentioned above.  On the other hand <code>dict()</code> is handled like a regular class constructor and Python uses the generic memory allocator, which does not follow an easily predictable pattern like the free list above.</p>
+
+<p>Also, looking at compile.c from Python 2.6, with the <code>{}</code> syntax it seems to pre-size the hashtable based on the number of items it's storing which is known at parse time.</p>
+<br /><b>#3</b><br /><p>Basically, {} is syntax and is handled on a language and bytecode level. dict() is just another builtin with a more flexible initialization syntax. Note that dict() was only added in the middle of 2.x series.</p>
+<br /><b>#4</b><br /><p><em>Update</em>: thanks for the responses.  Removed speculation about copy-on-write.</p>
+
+<p>One other difference between <code>{}</code> and <code>dict</code> is that <code>dict</code> always allocates a new dictionary (even if the contents are static) whereas <code>{}</code> doesn't <em>always</em> do so (see <a href="http://stackoverflow.com/questions/664118/whats-the-difference-between-dict-and/681358#681358">mgood's answer</a> for when and why):</p>
+
+<pre><code>def dict1():
+    return {'a':'b'}
+
+def dict2():
+    return dict(a='b')
+
+print id(dict1()), id(dict1())
+print id(dict2()), id(dict2())
+</code></pre>
+
+<p>produces:</p>
+
+<pre>
+$ ./mumble.py
+11642752 11642752
+11867168 11867456
+</pre>
+
+<p>I'm not suggesting you try to take advantage of this or not, it depends on the particular situation, just pointing it out.  (It's also probably evident from the <a href="http://stackoverflow.com/questions/664118/whats-the-difference-between-dict-and/664143#664143">disassembly</a> if you understand the opcodes).</p>
+<br /><b>#5</b><br /><p>dict() is used when you want to create a dictionary from an iterable, like :</p>
+
+<pre><code>dict( generator which yields (key,value) pairs )
+dict( list of (key,value) pairs )
+</code></pre>
+<br />

@@ -1,0 +1,114 @@
+Question (ID-174890): How to output CDATA using ElementTree I've discovered that cElementTree is about 30 times faster than xml.dom.minidom and I'm redoing my XML encoding decoding code. However, I need to output XML that contains CDATA sections and there doesn't seem to be a way to do that with ElementTree. 
+
+ Can it be done? 
+ Answers (Total-6): #0 After a bit of work, I found the answer myself. Looking at the ElementTree.py source code, I found there was special handling of XML comments and preprocessing instructions. What they do is create a factory function for the special element type that uses a special (non-string) tag value to differentiate it from regular elements. 
+
+ def Comment(text=None):
+ element = Element(Comment)
+ element.text = text
+ return element
+ 
+
+ Then in the _write function of ElementTree that actually outputs the XML, there's a special case handling for comments: 
+
+ if tag is Comment:
+ file.write("&lt;!-- %s --&gt;" % _escape_cdata(node.text, encoding))
+ 
+
+ In order to support CDATA sections, I create a factory function called CDATA , extended the ElementTree class and changed the _write function to handle the CDATA elements. 
+
+ This still doesn't help if you want to parse an XML with CDATA sections and then output it again with the CDATA sections, but it at least allows you to create XMLs with CDATA sections programmatically, which is what I needed to do. 
+
+ The implementation seems to work with both ElementTree and cElementTree. 
+
+ import elementtree.ElementTree as etree
+#~ import cElementTree as etree
+
+def CDATA(text=None):
+ element = etree.Element(CDATA)
+ element.text = text
+ return element
+
+class ElementTreeCDATA(etree.ElementTree):
+ def _write(self, file, node, encoding, namespaces):
+  if node.tag is CDATA:
+   text = node.text.encode(encoding)
+   file.write("\n&lt;![CDATA[%s]]&gt;\n" % text)
+  else:
+   etree.ElementTree._write(self, file, node, encoding, namespaces)
+
+if __name__ == "__main__":
+ import sys
+
+ text = """
+ &lt;?xml version='1.0' encoding='utf-8'?&gt;
+ &lt;text&gt;
+ This is just some sample text.
+ &lt;/text&gt;
+ """
+
+ e = etree.Element("data")
+ cdata = CDATA(text)
+ e.append(cdata)
+ et = ElementTreeCDATA(e)
+ et.write(sys.stdout, "utf-8")
+ 
+ #1 It's not possible AFAIK... which is a pity. Basically, ElementTree modules assume that the reader is 100% XML compliant, so it shouldn't matter if they output a section as CDATA or some other format that generates the equivalent text. 
+
+ See this thread on the Python mailing list for more info. Basically, they recommend some kind of DOM-based XML library instead. 
+ #2 lxml has support for CDATA and API like ElementTree. 
+ #3 Actually this code has a bug, since you don't catch ]]> appearing in the data you are inserting as CDATA 
+
+ as per http://stackoverflow.com/questions/223652/is-there-a-way-to-escape-a-cdata-end-token-in-xml 
+
+ you should break it into two CDATA's in that case 
+
+ basically data = re.sub(r">\]\]", r">\]>\]\]&lt;!\[CDATA\[\]", data) 
+(I hope this is correct, not tested) 
+ #4 The DOM has (atleast in level 2) an interface
+DATASection, and an operation Document::createCDATASection. They are
+extension interfaces, supported only if an implementation supports the
+"xml" feature. 
+
+ from xml.dom import minidom 
+
+ my_xmldoc=minidom.parse(xmlfile) 
+
+ my_xmldoc.createCDATASection(data) 
+
+ now u have cadata node add it wherever u want.... 
+ #5 Here is a variant of gooli's solution that works for python 3.2: 
+
+ import xml.etree.ElementTree as etree
+
+def CDATA(text=None):
+ element = etree.Element('![CDATA[')
+ element.text = text
+ return element
+
+etree._original_serialize_xml = etree._serialize_xml
+def _serialize_xml(write, elem, qnames, namespaces):
+ if elem.tag == '![CDATA[':
+  write("\n&lt;%s%s]]&gt;\n" % (
+    elem.tag, elem.text))
+  return
+ return etree._original_serialize_xml(
+  write, elem, qnames, namespaces)
+etree._serialize_xml = etree._serialize['xml'] = _serialize_xml
+
+
+if __name__ == "__main__":
+ import sys
+
+ text = """
+ &lt;?xml version='1.0' encoding='utf-8'?&gt;
+ &lt;text&gt;
+ This is just some sample text.
+ &lt;/text&gt;
+ """
+
+ e = etree.Element("data")
+ cdata = CDATA(text)
+ e.append(cdata)
+ et = etree.ElementTree(e)
+ et.write(sys.stdout.buffer.raw, "utf-8")

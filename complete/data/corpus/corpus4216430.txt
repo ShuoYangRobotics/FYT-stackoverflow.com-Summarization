@@ -1,0 +1,164 @@
+Question (ID-4216430): Python CMS to create a video site like youtube? Is anyone aware of a open source CMS written in python using which I can make a site like YouTube? 
+ Answers (Total-6): #0 Django is a good Python Framework, as well as CherryPy and Pylons . However, a framework is not a CMS. 
+
+ An open source video CMS would be: Media Core 
+
+ Here is some info about how YouTube is build: 
+
+ (source: Google Video ) 
+
+ Platform: 
+
+ 
+ Apache 
+ Python 
+ Linux (SuSe) 
+ MySQL 
+ psyco, a dynamic python->C compiler 
+ lighttpd for video instead of Apache 
+ 
+
+ Webservers: 
+
+ 
+ NetScalar is used for load balancing and caching static content. 
+ Run Apache with mod_fast_cgi. 
+ Requests are routed for handling by a Python application server. 
+ Application server talks to various databases and other informations sources to get all the data and formats the html page. 
+ Can usually scale web tier by adding more machines. 
+ The Python web code is usually NOT the bottleneck, it spends most of its time blocked on RPCs. 
+ Python allows rapid flexible development and deployment. This is critical given the competition they face. 
+ Usually less than 100 ms page service times. 
+ Use psyco, a dynamic python->C compiler that uses a JIT compiler approach to optimize inner loops. 
+ For high CPU intensive activities like encryption, they use C extensions. 
+ Some pre-generated cached HTML for expensive to render blocks. 
+ Row level caching in the database. 
+ Fully formed Python objects are cached. 
+ Some data are calculated and sent to each application so the values are cached in local memory. This is an underused strategy. The fastest cache is in your application server and it doesn't take much time to send precalculated data to all your servers. Just have an agent that watches for changes, precalculates, and sends. 
+ 
+
+ Video serving: 
+
+ 
+ Costs include bandwidth, hardware, and power consumption. 
+ Each video hosted by a mini-cluster. Each video is served by more than one machine. 
+ Using a a cluster means: 
+
+ 
+ More disks serving content which means more speed. 
+ Headroom. If a machine goes down others can take over. 
+ There are online backups. 
+ 
+ Servers use the lighttpd web server for video: 
+
+ 
+ Apache had too much overhead. 
+ Uses epoll to wait on multiple fds. 
+ Switched from single process to multiple process configuration to handle more connections. 
+ 
+ Most popular content is moved to a CDN (content delivery network): 
+
+ 
+ CDNs replicate content in multiple places. There's a better chance of content being closer to the user, with fewer hops, and content will run over a more friendly network. 
+ CDN machines mostly serve out of memory because the content is so popular there's little thrashing of content into and out of memory. 
+ 
+ Less popular content (1-20 views per day) uses YouTube servers in various colo sites. 
+
+ 
+ There's a long tail effect. A video may have a few plays, but lots of videos are being played. Random disks blocks are being accessed. 
+ Caching doesn't do a lot of good in this scenario, so spending money on more cache may not make sense. This is a very interesting point. If you have a long tail product caching won't always be your performance savior. 
+ Tune RAID controller and pay attention to other lower level issues to help. 
+ Tune memory on each machine so there's not too much and not too little. 
+ 
+ 
+
+ Serving Video Key Points: 
+
+ 
+ Keep it simple and cheap. 
+ Keep a simple network path. Not too many devices between content and users. Routers, switches, and other appliances may not be able to keep up with so much load. 
+ Use commodity hardware. More expensive hardware gets the more expensive everything else gets too (support contracts). You are also less likely find help on the net. 
+ Use simple common tools. They use most tools build into Linux and layer on top of those. 
+ Handle random seeks well (SATA, tweaks). 
+ 
+
+ Serving Thumbnails: 
+
+ 
+ Surprisingly difficult to do efficiently. 
+ There are a like 4 thumbnails for each video so there are a lot more thumbnails than videos. 
+ Thumbnails are hosted on just a few machines. 
+ Saw problems associated with serving a lot of small objects:
+ 
+ Lots of disk seeks and problems with inode caches and page caches at OS level. 
+ Ran into per directory file limit. Ext3 in particular. Moved to a more hierarchical structure. Recent improvements in the 2.6 kernel may improve Ext3 large directory handling up to 100 times, yet storing lots of files in a file system is still not a good idea. 
+ A high number of requests/sec as web pages can display 60 thumbnails on page. 
+ Under such high loads Apache performed badly. 
+ Used squid (reverse proxy) in front of Apache. This worked for a while, but as load increased performance eventually decreased. Went from 300 requests/second to 20. 
+ Tried using lighttpd but with a single threaded it stalled. Run into problems with multiprocesses mode because they would each keep a separate cache. 
+ With so many images setting up a new machine took over 24 hours. 
+ Rebooting machine took 6-10 hours for cache to warm up to not go to disk. 
+ 
+ To solve all their problems they started using Google's BigTable, a distributed data store:
+ 
+ Avoids small file problem because it clumps files together. 
+ Fast, fault tolerant. Assumes its working on a unreliable network. 
+ Lower latency because it uses a distributed multilevel cache. This cache works across different collocation sites. 
+ 
+ 
+
+ Databases: 
+
+ 
+ The Early Years
+ 
+ Use MySQL to store meta data like users, tags, and descriptions. 
+ Served data off a monolithic RAID 10 Volume with 10 disks. 
+ Living off credit cards so they leased hardware. When they needed more hardware to handle load it took a few days to order and get delivered. 
+ They went through a common evolution: single server, went to a single master with multiple read slaves, then partitioned the database, and then settled on a sharding approach. 
+ Suffered from replica lag. The master is multi-threaded and runs on a large machine so it can handle a lot of work. Slaves are single threaded and usually run on lesser machines and replication is asynchronous, so the slaves can lag significantly behind the master. 
+ Updates cause cache misses which goes to disk where slow I/O causes slow replication. 
+ Using a replicating architecture you need to spend a lot of money for incremental bits of write performance. 
+ One of their solutions was prioritize traffic by splitting the data into two clusters: a video watch pool and a general cluster. The idea is that people want to watch video so that function should get the most resources. The social networking features of YouTube are less important so they can be routed to a less capable cluster. 
+ 
+ The later years:
+ 
+ Went to database partitioning. 
+ Split into shards with users assigned to different shards. 
+ Spreads writes and reads. 
+ Much better cache locality which means less IO. 
+ Resulted in a 30% hardware reduction. 
+ Reduced replica lag to 0. 
+ Can now scale database almost arbitrarily. 
+ 
+ 
+
+ Data Center Strategy 
+
+ 
+ Used manage hosting providers at first. Living off credit cards so it was the only way. 
+ Managed hosting can't scale with you. You can't control hardware or make favorable networking agreements. 
+ So they went to a colocation arrangement. Now they can customize everything and negotiate their own contracts. 
+ Use 5 or 6 data centers plus the CDN. 
+ Videos come out of any data center. Not closest match or anything. If a video is popular enough it will move into the CDN. 
+ Video bandwidth dependent, not really latency dependent. Can come from any colo. 
+ For images latency matters, especially when you have 60 images on a page. 
+ Images are replicated to different data centers using BigTable. Code looks at different metrics to know who is closest. 
+ 
+ #1 You might want to tak ea look at zencoder for video encoding too..... 
+ #2 Even though is not a CMS, Django could be very useful. 
+ #3 Django and Pylons are the two most popular Python frameworks that will allow you to rapidly build your own CMS and youtube like video hosting site. 
+
+ Django
+ http://www.djangoproject.com/ 
+
+ Pylons
+ http://pylonshq.com/ 
+
+ Making your own site instead of relying on a CMS is really going to be your best bet because you will have to figure out a lot of other things like how to convert the uploaded video to FLV that won't a part of the core CMS functionality. There are a lot of other considerations like leveraging a cloud CDN to deliver your video content that just doesn't exist out of the box in any framework that I can think of, even those written in different languages. 
+ #4 MediaCore any good? 
+
+ http://getmediacore.com/ 
+
+ "The open source video CMS for centralizing all of your video and podcasting needs" 
+ #5 i think PHPmotion is best VIDEO SHARING CMS YET

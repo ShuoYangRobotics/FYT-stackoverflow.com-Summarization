@@ -1,0 +1,145 @@
+<h3>Question ( ID-295438 ) : </h3><h2>How can one <span style="background-color:yellow;">mock/stub</span> python <span style="background-color:yellow;">module</span> like <span style="background-color:yellow;">urllib</span> </h2><p>I need to test a function that needs to query a page on an external server using <span style="background-color:yellow;">urllib.urlopen</span> ( it also uses <span style="background-color:yellow;">urllib.urlencode</span> ) . The server could be down , the page could change ; I ca n't rely on it for a test . </p>
+<p>What is the best way to control what <span style="background-color:yellow;">urllib.urlopen</span> returns ? </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>Another simple approach is to have your test override <span style="background-color:yellow;">urllib</span> 's <span style="background-color:yellow;">urlopen</span> ( ) function. For example , if your <span style="background-color:yellow;">module</span> has </p>
+<pre><code>import urllib
+
+def some_function_that_uses_urllib():
+    ...
+    urllib.urlopen()
+    ...
+</code></pre>
+<p>You could define your test like this : </p>
+<pre><code>import mymodule
+
+def dummy_urlopen(url):
+    ...
+
+mymodule.urllib.urlopen = dummy_urlopen
+</code></pre>
+<p>Then , when your tests invoke functions in <span style="background-color:yellow;">mymodule</span> , <span style="background-color:yellow;">dummy_urlopen</span> ( ) will be <span style="background-color:yellow;">called</span> instead of the real <span style="background-color:yellow;">urlopen</span> ( ) . Dynamic languages like Python <span style="background-color:yellow;">make</span> it super easy to stub out <span style="background-color:yellow;">methods</span> and classes for testing . </p>
+<p>See <span style="background-color:yellow;">my</span> blog posts at http : //visionandexecution.org for <span style="background-color:yellow;">more</span> information about stubbing out dependencies for tests . </p>
+<br /><b># 1 </b><br /><p>Did you give Mox a look ? It should do everything you need ? Here is a simple interactive session illustrating the solution you need : </p>
+<pre><code>>>> import urllib
+>>> # check that it works
+>>> urllib.urlopen('http://www.google.com/')
+<addinfourl at 3082723820L ...>
+>>> # check what happens when it doesn't
+>>> urllib.urlopen('http://hopefully.doesnotexist.com/')
+#-- snip --
+IOError: [Errno socket error] (-2, 'Name or service not known')
+
+>>> # OK, let's mock it up
+>>> import mox
+>>> m = mox.Mox()
+>>> m.StubOutWithMock(urllib, 'urlopen')
+>>> # We can be verbose if we want to :)
+>>> urllib.urlopen(mox.IgnoreArg()).AndRaise(
+...   IOError('socket error', (-2, 'Name or service not known')))
+
+>>> # Let's check if it works
+>>> m.ReplayAll()
+>>> urllib.urlopen('http://www.google.com/')
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/usr/lib/python2.5/site-packages/mox.py", line 568, in __call__
+    raise expected_method._exception
+IOError: [Errno socket error] (-2, 'Name or service not known')
+
+>>> # yay! now unset everything
+>>> m.UnsetStubs()
+>>> m.VerifyAll()
+>>> # and check that it still works
+>>> urllib.urlopen('http://www.google.com/')
+<addinfourl at 3076773548L ...>
+</code></pre>
+<br /><b># 2 </b><br /><p>I am using Mock 's <span style="background-color:yellow;">patch</span> decorator : </p>
+<pre><code>from mock import patch
+
+[...]
+
+@patch('urllib.urlopen')
+def test_foo(self, urlopen_mock):
+    urlopen_mock.return_value = MyUrlOpenMock()
+</code></pre>
+<br /><b># 3 </b><br /><p>Probably the best way to handle this is to split up the code , so that logic that processes the page contents is split from the code that fetches the page . </p>
+<p>Then pass an instance of the fetcher code into the processing logic , then you can easily replace it with a <span style="background-color:yellow;">mock</span> fetcher for the unit test . </p>
+<p>e.g . </p>
+<pre><code>class Processor(oject):
+    def __init__(self, fetcher):
+        self.m_fetcher = fetcher
+
+    def doProcessing(self):
+        ## use self.m_fetcher to get page contents
+
+class RealFetcher(object):
+    def fetchPage(self, url):
+        ## get real contents
+
+class FakeFetcher(object):
+    def fetchPage(self, url):
+        ## Return whatever fake contents are required for this test
+</code></pre>
+<br /><b># 4 </b><br /><p>The simplest way is to change your function so that it does n't necessarily use <span style="background-color:yellow;">urllib.urlopen.</span> Let 's say this is your original function : </p>
+<pre><code>def my_grabber(arg1, arg2, arg3):
+    # .. do some stuff ..
+    url = make_url_somehow()
+    data = urllib.urlopen(url)
+    # .. do something with data ..
+    return answer
+</code></pre>
+<p>Add an argument which is the function to use to open the URL. Then you can provide a <span style="background-color:yellow;">mock</span> function to do whatever you need : </p>
+<pre><code>def my_grabber(arg1, arg2, arg3, urlopen=urllib.urlopen):
+    # .. do some stuff ..
+    url = make_url_somehow()
+    data = urlopen(url)
+    # .. do something with data ..
+    return answer
+
+def test_my_grabber():
+    my_grabber(arg1, arg2, arg3, urlopen=my_mock_open)
+</code></pre>
+<br /><b># 5 </b><br /><p>In case you do n't want to even load the <span style="background-color:yellow;">module</span> : </p>
+<pre><code>import sys,types
+class MockCallable():
+  """ Mocks a function, can be enquired on how many calls it received """
+  def __init__(self, result):
+    self.result  = result
+    self._calls  = []
+
+  def __call__(self, *arguments):
+    """Mock callable"""
+    self._calls.append(arguments)
+    return self.result
+
+  def called(self):
+    """docstring for called"""
+    return self._calls
+
+class StubModule(types.ModuleType, object):
+  """ Uses a stub instead of loading libraries """
+
+  def __init__(self, moduleName):
+    self.__name__ = moduleName
+    sys.modules[moduleName] = self
+
+  def __repr__(self):
+    name  = self.__name__
+    mocks = ', '.join(set(dir(self)) - set(['__name__']))
+    return "<StubModule: %(name)s; mocks: %(mocks)s>" % locals()
+
+class StubObject(object):
+  pass
+</code></pre>
+<p>And then : </p>
+<pre><code>>>> urllib = StubModule("urllib")
+>>> import urllib # won't actually load urllib
+
+>>> urls.urlopen = MockCallable(StubObject())
+
+>>> example = urllib.urlopen('http://example.com')
+>>> example.read = MockCallable('foo')
+
+>>> print(example.read())
+'foo'
+</code></pre>
+<br />

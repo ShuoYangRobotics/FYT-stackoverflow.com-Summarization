@@ -1,0 +1,679 @@
+Question (ID-5902653): Optimize this python log-parsing code The runtime of this code on my laptop for a 4.2 GB input file is 48 seconds. The input file is tab-delimited, with each value appearing in quotes. Each record ends with a newline, e.g. '"val1"\t"val2"\t"val3"\t..."valn"\n' 
+
+ I've tried using multiprocessing with 10 threads: One to queue up the lines, 8 to parse individual lines and fill an output queue, and one to reduce the output queue into the defaultdict shown below, but the code took 300 seconds to run, over 6 times longer than the following: 
+
+ from collections import defaultdict
+def get_users(log):
+ users = defaultdict(int)
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('"', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+ for (i, line) in enumerate(f): 
+  if i % 1000000 == 0: print "Line %d" % i # progress notification
+
+  l = line.split('\t')
+  if l[ix_profile] != '"7"': # "7" indicates a bad value
+   # use list slicing to remove quotes
+   users[l[ix_user][1:-1]] += 1 
+
+ f.close()
+ return users
+ 
+
+ I've checked that I'm not I/O-bound by removing everything but the print statement from the for loop. That code ran in 9 seconds, which I'll consider a lower-bound for how fast this code can run. 
+
+ I have a lot of these 5 GB files to process, so even a pretty small improvement in runtime (I know, I can remove the print!) will help. The machine I am running on has 4 cores, so I can't help but wonder if there's a way to get the multithread/multiprocess code to run faster than the code above. 
+
+ UPDATE: 
+
+ I rewrote the multiprocessing code as follows: 
+
+ from multiprocessing import Pool, cpu_count
+from collections import defaultdict
+
+def parse(line, ix_profile=10, ix_user=9):
+ """ix_profile and ix_user predetermined; hard-coding for expedience."""
+ l = line.split('\t')
+ if l[ix_profile] != '"7"':
+  return l[ix_user][1:-1]
+
+def get_users_mp():
+ f = open('20110201.txt')
+ h = f.readline() # remove header line
+ pool = Pool(processes=cpu_count())
+ result_iter = pool.imap_unordered(parse, f, 100)
+ users = defaultdict(int)
+ for r in result_iter:
+  if r is not None:
+   users[r] += 1
+ return users
+ 
+
+ It runs in 26 seconds, a 1.85x speedup. Not bad, but with 4 cores, not as much as I had hoped for. 
+ Answers (Total-7): #0 Use regular expressions. 
+
+ A test determines that the expensive part of the process is the call to str.split(). Probably having to construct a list and a bunch of string objects for every line is expensive. 
+
+ Firstly, you need to construct a regular expression to match against the line. Something like: 
+
+ expression = re.compile(r'("[^"]")\t("[^"]")\t')
+ 
+
+ If you call expression.match(line).groups(), you'll get the first two columns extracted as two string objects and you can do logic with those directly. 
+
+ Now this assumes that the two columns of interest are the first two columns. If not you'll just have to tweak the regular expression to match the correct columns. Your code checks the header to see where the columns are located. You can generate the regular expression based on that, but I'm gonna guess that the columns are really always located at the same place. Just verify that they are still there and use a regular expression on the lines. 
+
+ EDIT 
+
+ from collections import defaultdict
+import re 
+
+ def get_users(log):
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('\'', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+
+ assert ix_user &lt; ix_profile
+ 
+
+ This code assumes that user is before profile 
+
+  keep_field = r'"([^"]*)"'
+ 
+
+ This regular expression will capture a single column 
+
+  skip_field = r'"[^"]*"'
+ 
+
+ This regular expression will match the column, but not capture the results. (Note the lack of parenthesis) 
+
+  fields = [skip_field] * len(h)
+ fields[ix_profile] = keep_field
+ fields[ix_user] = keep_field
+ 
+
+ Create a list for all the fields, and only the keep the ones we care about 
+
+  del fields[max(ix_profile, ix_user)+1:]
+ 
+
+ Eliminate all the fields after the ones we care about (they take time to match, and we don't care about them) 
+
+  regex = re.compile(r"\t".join(fields))
+ 
+
+ Actually produce the regex. 
+
+  users = defaultdict(int)
+ for line in f:
+  user, profile = regex.match(line).groups()
+ 
+
+ Pull out the two values, and do the logic 
+
+   if profile != "7": # "7" indicates a bad value
+   # use list slicing to remove quotes
+   users[user] += 1 
+
+ f.close()
+ return users
+ 
+ #1 If you're running unix or cygwin, the following little script would produce you the frequency of user id's where profile != 7. Should be quick. 
+
+ Updated with awk to count the user ids 
+
+ #!/bin/bash
+
+FILENAME="test.txt"
+
+IX_PROFILE=`head -1 ${FILENAME} | sed -e 's/\t/\n/g' | nl -w 1 | grep profile.type | cut -f1`
+IX_USER=`head -1 ${FILENAME} | sed -e 's/\t/\n/g' | nl -w 1 | grep profile.id | cut -f1`
+# Just the userids
+# sed 1d ${FILENAME} | cut -f${IX_PROFILE},${IX_USER} | grep -v \"7\" | cut -f2
+
+# userids counted:
+# sed 1d ${FILENAME} | cut -f${IX_PROFILE},${IX_USER} | grep -v \"7\" | cut -f2 | sort | uniq -c
+
+# Count using awk..?
+sed 1d ${FILENAME} | cut -f${IX_PROFILE},${IX_USER} | grep -v \"7\" | cut -f2 | awk '{ count[$1]++; } END { for (x in count) { print x "\t" count[x] } }'
+ 
+ #2 Seeing that your log file is tab-delimited, you can use the csv module - with a dialect='excel-tab' argument - for a nice performance and readability boost. That is, of course, if you have to use Python instead of the much faster console commands. 
+ #3 If using regexes can speed it up so much by ignoring the tail of the line that doesn't need to be split, perhaps a more straightforward approach might help: 
+
+ [snip)
+ix_profile = h.index('profile.type')
+ix_user = h.index('profile.id')
+maxsplits = max(ix_profile, ix_user) + 1 #### new statement ####
+# If either ix_* is the last field in h, it will include a newline. 
+# That's fine for now.
+for (i, line) in enumerate(f): 
+ if i % 1000000 == 0: print "Line %d" % i # progress notification
+ l = line.split('\t', maxsplits) #### changed line ####
+[snip]
+ 
+
+ Please give that a whirl on your data. 
+ #4 Maybe you can do 
+
+ users[l[ix_user]] += 1 
+ 
+
+ instead of 
+
+ users[l[ix_user][1:-1]] += 1 
+ 
+
+ and remove the quotes on the dict at the end. Should save some time. 
+
+ For the multi-threading approach: try reading a few thousand lines from the file each time and passing those thousand lines to a thread to process. Doing it line-by-line seems to be too much overhead. 
+
+ Or read on the solution in this article as he seems to be doing something very similar to what you're trying to do. 
+ #5 This may be slightly besides the point, but Python has some extremely strange behavior when dealing with multiple threads (particularly bad when the threads aren't IO bound). More specifically, it sometimes runs much slower than when single-threaded. This is due to the way that the Global Interpreter Lock (GIL) in Python gets used to ensure that no more than one thread can execute in the Python interpreter at any given time. 
+
+ Because of the constraint that only one thread can actually use the interpreter at any given time, the fact that you have multiple cores won't help you. In fact, it might actually make things much worse due to some pathological interactions between two threads trying to acquire the GIL. If you want to stick to Python you have one of two options: 
+
+ 
+ Try using the Python 3.2 (or higher, 3.0 won't work). It has a massively different way of dealing with the GIL which fixes the multithreaded slowdown issue in a number of cases. I'm assuming that you aren't using the Python 3 series since you're using the old print statement. 
+ Use processes instead of threads. Since processes share open file descriptors, you don't really need to pass any state in between the processes once you actually start eating the file (you could use pipes or messages if you really needed to). This will somewhat increase the initial startup time because processes take more time to create than threads, but you avoid the GIL issue. 
+ 
+
+ If you want more information on this wonderfully arcane bit of Python look up the talks related to the GIL on this page: http://www.dabeaz.com/talks.html . 
+ #6 I realize that I had nearly exactly the same idea than Winston Ewert: building a regex. 
+
+ But my regex: 
+
+ 
+ is done to the cases in which ix_profile &lt; ix_user as well the cases in which ix_profile &gt; ix_user   
+ the regex captures only the user's column: the profile's column is matched with a sub-pattern '"(?!7")[^\t\r\n"]*"' that doesn't match if "7" is present in this column; so we obtain only the correct user with the only group defined 
+ 
+
+ . 
+
+ Additionally, I tested several algorithms of matching and extracting: 
+
+ 1) with re.finditer() 
+
+ 2) with re.match() and the regex matching 40 fields 
+
+ 3) withe re.match( ) and the regex matching only max(ix_profile,ix_user) + 1 fields 
+
+ 4) like 3 but with a simple dictionary instead of a defaultdict instance 
+
+ To measure times, my code creates a file based on the information you gave concerning its content. 
+
+ . 
+
+ I tested the 4 following functions in 4 codes: 
+
+ 1 
+
+ def get_users_short_1(log):
+ users_short = defaultdict(int)
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('"', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+
+ glo = 40*['[^\t]*']
+ glo[ix_profile] = '"(?!7")[^\t"]+"'
+ glo[ix_user] = '"([^\t"]*)"'
+ glo[39] = '"[^\t\r\n]*"'
+ regx = re.compile('^'+'\t'.join(glo),re.MULTILINE)
+
+ content = f.read()
+ for mat in regx.finditer(content):
+  users_short[mat.group(1)] += 1
+
+ f.close()
+ return users_short
+ 
+
+ 2 
+
+ def get_users_short_2(log):
+ users_short = defaultdict(int)
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('"', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+
+ glo = 40*['[^\t]*']
+ glo[ix_profile] = '"(?!7")[^\t"]*"'
+ glo[ix_user] = '"([^\t"]*)"'
+ regx = re.compile('\t'.join(glo))
+
+
+ for line in f:
+  gugu = regx.match(line)
+  if gugu:
+   users_short[gugu.group(1)] += 1
+ f.close()
+ return users_short
+ 
+
+ 3 
+
+ def get_users_short_3(log):
+ users_short = defaultdict(int)
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('"', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+
+ glo = (max(ix_profile,ix_user) + 1) * ['[^\t]*']
+ glo[ix_profile] = '"(?!7")[^\t"]*"'
+ glo[ix_user] = '"([^\t"]*)"'
+ regx = re.compile('\t'.join(glo))
+
+ for line in f:
+  gugu = regx.match(line)
+  if gugu:
+   users_short[gugu.group(1)] += 1
+
+ f.close()
+ return users_short
+ 
+
+ 4 
+
+ The full code 4, that seems to be the fastest: 
+
+ import re
+from random import choice,randint,sample
+import csv
+import random
+from time import clock
+
+choi = 1
+if choi:
+ ntot = 1000
+ chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+ def ry(a=30,b=80,chars=chars,nom='abcdefghijklmnopqrstuvwxyz'):
+  if a==30:
+   return ''.join(choice(chars) for i in xrange(randint(30,80)))
+  else:
+   return ''.join(choice(nom) for i in xrange(randint(8,12)))
+
+ num = sample(xrange(1000),200)
+ num.sort()
+ print 'num==',num
+ several = [e//3 for e in xrange(0,800,7) if e//3 not in num]
+ print
+ print 'several==',several
+
+ with open('biggy.txt','w') as f:
+  head = ('aaa','bbb','ccc','ddd','profile.id','fff','ggg','hhhh','profile.type','iiii',
+    'jjj','kkkk','lll','mmm','nnn','ooo','ppp','qq','rr','ss',
+    'tt','uu','vv','ww','xx','yy','zz','razr','fgh','ty',
+    'kfgh','zer','sdfs','fghf','dfdf','zerzre','jkljkl','vbcvb','kljlk','dhhdh')
+  f.write('\t'.join(head)+'\n')
+  for i in xrange(1000):
+   li = [ ry(a=8).join('""') if n==4 else ry().join('""')
+     for n in xrange(40) ]
+   if i in num:
+    li[4] = '@#~&amp;=*;'
+    li[8] = '"7"'
+   if i in several:
+    li[4] = '"BRAD"'
+   f.write('\t'.join(li)+'\n')
+
+
+
+from collections import defaultdict
+def get_users(log):
+ users = defaultdict(int)
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('"', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+ for (i, line) in enumerate(f): 
+  #if i % 1000000 == 0: print "Line %d" % i # progress notification
+
+  l = line.split('\t')
+  if l[ix_profile] != '"7"': # "7" indicates a bad value
+   # use list slicing to remove quotes
+
+   users[l[ix_user][1:-1]] += 1 
+ f.close()
+ return users
+
+
+
+
+def get_users_short_4(log):
+ users_short = {}
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('"', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+
+ glo = (max(ix_profile,ix_user) + 1) * ['[^\t]*']
+ glo[ix_profile] = '"(?!7")[^\t"]*"'
+ glo[ix_user] = '"([^\t"]*)"'
+ regx = re.compile('\t'.join(glo))
+
+ for line in f:
+  gugu = regx.match(line)
+  if gugu:
+   gugugroup = gugu.group(1)
+   if gugugroup in users_short:
+    users_short[gugugroup] += 1
+   else:
+    users_short[gugugroup] = 1
+
+ f.close()
+ return users_short
+
+
+
+
+print '\n\n'
+
+te = clock()
+USERS = get_users('biggy.txt')
+t1 = clock()-te
+
+te = clock()
+USERS_short_4 = get_users_short_4('biggy.txt')
+t2 = clock()-te
+
+
+
+if choi:
+ print '\nlen(num)==',len(num),' : number of lines with ix_profile==\'"7"\''
+ print "USERS['BRAD']==",USERS['BRAD']
+ print 'then :'
+ print str(ntot)+' lines - '+str(len(num))+' incorrect - '+str(len(several))+\
+   ' identical + 1 user BRAD = '+str(ntot - len(num)-len(several)+1) 
+print '\nlen(USERS)==',len(USERS)
+print 'len(USERS_short_4)==',len(USERS_short_4)
+print 'USERS == USERS_short_4 is',USERS == USERS_short_4
+
+print '\n----------------------------------------'
+print 'time of get_users() :\n', t1,'\n----------------------------------------'
+print 'time of get_users_short_4 :\n', t2,'\n----------------------------------------'
+print 'get_users_short_4() / get_users() = '+str(100*t2/t1)+ ' %'
+print '----------------------------------------'
+ 
+
+ One result of this code 4 is for exemple: 
+
+ num== [2, 12, 16, 23, 26, 33, 38, 40, 43, 45, 51, 53, 84, 89, 93, 106, 116, 117, 123, 131, 132, 135, 136, 138, 146, 148, 152, 157, 164, 168, 173, 176, 179, 189, 191, 193, 195, 199, 200, 208, 216, 222, 224, 227, 233, 242, 244, 245, 247, 248, 251, 255, 256, 261, 262, 266, 276, 278, 291, 296, 298, 305, 307, 308, 310, 312, 314, 320, 324, 327, 335, 337, 340, 343, 350, 356, 362, 370, 375, 379, 382, 385, 387, 409, 413, 415, 419, 433, 441, 443, 444, 446, 459, 462, 474, 489, 492, 496, 505, 509, 511, 512, 518, 523, 541, 546, 548, 550, 552, 558, 565, 566, 572, 585, 586, 593, 595, 601, 609, 610, 615, 628, 632, 634, 638, 642, 645, 646, 651, 654, 657, 660, 662, 665, 670, 671, 680, 682, 687, 688, 690, 692, 695, 703, 708, 716, 717, 728, 729, 735, 739, 741, 742, 765, 769, 772, 778, 790, 792, 797, 801, 808, 815, 825, 828, 831, 839, 849, 858, 859, 862, 864, 872, 874, 890, 899, 904, 906, 913, 916, 920, 923, 928, 941, 946, 947, 953, 955, 958, 959, 961, 971, 975, 976, 979, 981, 985, 989, 990, 999]
+
+several== [0, 4, 7, 9, 11, 14, 18, 21, 25, 28, 30, 32, 35, 37, 39, 42, 44, 46, 49, 56, 58, 60, 63, 65, 67, 70, 72, 74, 77, 79, 81, 86, 88, 91, 95, 98, 100, 102, 105, 107, 109, 112, 114, 119, 121, 126, 128, 130, 133, 137, 140, 142, 144, 147, 149, 151, 154, 156, 158, 161, 163, 165, 170, 172, 175, 177, 182, 184, 186, 196, 198, 203, 205, 207, 210, 212, 214, 217, 219, 221, 226, 228, 231, 235, 238, 240, 249, 252, 254, 259, 263]
+
+
+
+
+len(num)== 200 : number of lines with ix_profile=='"7"'
+USERS['BRAD']== 91
+then :
+1000 lines - 200 incorrect - 91 identical + 1 user BRAD = 710
+
+len(USERS)== 710
+len(USERS_short_4)== 710
+USERS == USERS_short_4 is True
+
+----------------------------------------
+time of get_users() :
+0.0788686830309 
+----------------------------------------
+time of get_users_short_4 :
+0.0462885646081 
+----------------------------------------
+get_users_short_4() / get_users() = 58.690677756 %
+----------------------------------------
+ 
+
+ But results are more or less variable. I obtained: 
+
+ get_users_short_1() / get_users() = 82.957476637 %
+get_users_short_1() / get_users() = 82.3987686867 %
+get_users_short_1() / get_users() = 90.2949842932 %
+get_users_short_1() / get_users() = 78.8063007461 %
+get_users_short_1() / get_users() = 90.4743181768 %
+get_users_short_1() / get_users() = 81.9635560003 %
+get_users_short_1() / get_users() = 83.9418269406 %
+get_users_short_1() / get_users() = 89.4344442255 %
+
+
+get_users_short_2() / get_users() = 80.4891442088 %
+get_users_short_2() / get_users() = 69.921943776 %
+get_users_short_2() / get_users() = 81.8006709304 %
+get_users_short_2() / get_users() = 83.6270772928 %
+get_users_short_2() / get_users() = 97.9821084403 %
+get_users_short_2() / get_users() = 84.9307558629 %
+get_users_short_2() / get_users() = 75.9384820018 %
+get_users_short_2() / get_users() = 86.2964748485 %
+
+
+get_users_short_3() / get_users() = 69.4332754744 %
+get_users_short_3() / get_users() = 58.5814726668 %
+get_users_short_3() / get_users() = 61.8011476831 %
+get_users_short_3() / get_users() = 67.6925083362 %
+get_users_short_3() / get_users() = 65.1208124156 %
+get_users_short_3() / get_users() = 72.2621727569 %
+get_users_short_3() / get_users() = 70.6957501222 %
+get_users_short_3() / get_users() = 68.5310031226 %
+get_users_short_3() / get_users() = 71.6529128259 %
+get_users_short_3() / get_users() = 71.6153554073 %
+get_users_short_3() / get_users() = 64.7899044975 %
+get_users_short_3() / get_users() = 72.947531363 %
+get_users_short_3() / get_users() = 65.6691965629 %
+get_users_short_3() / get_users() = 61.5194374401 %
+get_users_short_3() / get_users() = 61.8396133666 %
+get_users_short_3() / get_users() = 71.5447862466 %
+get_users_short_3() / get_users() = 74.6710538858 %
+get_users_short_3() / get_users() = 72.9651233485 %
+
+
+
+get_users_short_4() / get_users() = 65.5224210767 %
+get_users_short_4() / get_users() = 65.9023813161 %
+get_users_short_4() / get_users() = 62.8055210129 %
+get_users_short_4() / get_users() = 64.9690049062 %
+get_users_short_4() / get_users() = 61.9050866134 %
+get_users_short_4() / get_users() = 65.8127125992 %
+get_users_short_4() / get_users() = 66.8112344201 %
+get_users_short_4() / get_users() = 57.865635278 %
+get_users_short_4() / get_users() = 62.7937713964 %
+get_users_short_4() / get_users() = 66.3440149528 %
+get_users_short_4() / get_users() = 66.4429530201 %
+get_users_short_4() / get_users() = 66.8692388625 %
+get_users_short_4() / get_users() = 66.5949137537 %
+get_users_short_4() / get_users() = 69.1708488794 %
+get_users_short_4() / get_users() = 59.7129743801 %
+get_users_short_4() / get_users() = 59.755297387 %
+get_users_short_4() / get_users() = 60.6436352185 %
+get_users_short_4() / get_users() = 64.5023727945 %
+get_users_short_4() / get_users() = 64.0153937511 %
+ 
+
+ . 
+
+ I'd like to know what kind of result you would obtain with my code on your real file with a computer certainly more powerful than mine. Please, give me news. 
+
+ . 
+
+ . 
+
+ EDIT 1 
+
+ With 
+
+ def get_users_short_Machin(log):
+ users_short = defaultdict(int)
+ f = open(log)
+ # Read header line
+ h = f.readline().strip().replace('"', '').split('\t')
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ maxsplits = max(ix_profile, ix_user) + 1
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+ for line in f: 
+  #if i % 1000000 == 0: print "Line %d" % i # progress notification
+  l = line.split('\t', maxsplits)
+  if l[ix_profile] != '"7"': # "7" indicates a bad value
+   # use list slicing to remove quotes
+   users_short[l[ix_user][1:-1]] += 1 
+ f.close()
+ return users_short
+ 
+
+ I've got 
+
+ get_users_short_Machin() / get_users() = 60.6771821308 %
+get_users_short_Machin() / get_users() = 71.9300992989 %
+get_users_short_Machin() / get_users() = 85.1695214715 %
+get_users_short_Machin() / get_users() = 72.7722233685 %
+get_users_short_Machin() / get_users() = 73.6311173237 %
+get_users_short_Machin() / get_users() = 86.0848484053 %
+get_users_short_Machin() / get_users() = 75.1661981729 %
+get_users_short_Machin() / get_users() = 72.8888452474 %
+get_users_short_Machin() / get_users() = 76.7185685993 %
+get_users_short_Machin() / get_users() = 82.7007096958 %
+get_users_short_Machin() / get_users() = 71.1678957888 %
+get_users_short_Machin() / get_users() = 71.9845835126 %
+ 
+
+ Using a simple dict: 
+
+ users_short = {}
+.......
+for line in f: 
+ #if i % 1000000 == 0: print "Line %d" % i # progress notification
+ l = line.split('\t', maxsplits)
+ if l[ix_profile] != '"7"': # "7" indicates a bad value
+  # use list slicing to remove quotes
+  us = l[ix_user][1:-1]
+  if us not in users_short:
+   users_short[us] = 1
+  else:
+   users_short[us] += 1
+ 
+
+ improves a little the execution's time but it remains higher than my last code 4 
+
+ get_users_short_Machin2() / get_users() = 71.5959919389 %
+get_users_short_Machin2() / get_users() = 71.6118864535 %
+get_users_short_Machin2() / get_users() = 66.3832514274 %
+get_users_short_Machin2() / get_users() = 68.0026407277 %
+get_users_short_Machin2() / get_users() = 67.9853921552 %
+get_users_short_Machin2() / get_users() = 69.8946203037 %
+get_users_short_Machin2() / get_users() = 71.8260030248 %
+get_users_short_Machin2() / get_users() = 78.4243267003 %
+get_users_short_Machin2() / get_users() = 65.7223734428 %
+get_users_short_Machin2() / get_users() = 69.5903935612 %
+ 
+
+ . 
+
+ EDIT 2 
+
+ The fastest: 
+
+ def get_users_short_CSV(log):
+ users_short = {}
+ f = open(log,'rb')
+ rid = csv.reader(f,delimiter='\t')
+ # Read header line
+ h = rid.next()
+ ix_profile = h.index('profile.type')
+ ix_user = h.index('profile.id')
+ # If either ix_* is the last field in h, it will include a newline. 
+ # That's fine for now.
+
+ glo = (max(ix_profile,ix_user) + 1) * ['[^\t]*']
+ glo[ix_profile] = '"(?!7")[^\t\r\n"]*"'
+ glo[ix_user] = '"([^\t\r\n"]*)"'
+ regx = re.compile('\t'.join(glo))
+
+ for line in f:
+  gugu = regx.match(line)
+  if gugu:
+   gugugroup = gugu.group(1)
+   if gugugroup in users_short:
+    users_short[gugugroup] += 1
+   else:
+    users_short[gugugroup] = 1
+
+ f.close()
+ return users_short
+ 
+
+ result 
+
+ get_users_short_CSV() / get_users() = 31.6443901114 %
+get_users_short_CSV() / get_users() = 44.3536176134 %
+get_users_short_CSV() / get_users() = 47.2295100511 %
+get_users_short_CSV() / get_users() = 45.4912200716 %
+get_users_short_CSV() / get_users() = 63.7997241038 %
+get_users_short_CSV() / get_users() = 43.5020255488 %
+get_users_short_CSV() / get_users() = 40.9188320386 %
+get_users_short_CSV() / get_users() = 43.3105062139 %
+get_users_short_CSV() / get_users() = 59.9184895288 %
+get_users_short_CSV() / get_users() = 40.22047881 %
+get_users_short_CSV() / get_users() = 48.3615872543 %
+get_users_short_CSV() / get_users() = 47.0374831251 %
+get_users_short_CSV() / get_users() = 44.5268626789 %
+get_users_short_CSV() / get_users() = 53.1690205938 %
+get_users_short_CSV() / get_users() = 43.4022458372 %
+ 
+
+ . 
+
+ EDIT 3 
+
+ I tested get_users_short_CSV() with 10000 lines in the file instead of only 1000: 
+
+ len(num)== 2000 : number of lines with ix_profile=='"7"'
+USERS['BRAD']== 95
+then :
+10000 lines - 2000 incorrect - 95 identical + 1 user BRAD = 7906
+
+len(USERS)== 7906
+len(USERS_short_CSV)== 7906
+USERS == USERS_short_CSV is True
+
+----------------------------------------
+time of get_users() :
+0.794919186656 
+----------------------------------------
+time of get_users_short_CSV :
+0.358942826532 
+----------------------------------------
+get_users_short_CSV() / get_users() = 41.5618307521 %
+
+get_users_short_CSV() / get_users() = 42.2769300584 %
+get_users_short_CSV() / get_users() = 45.154631132 %
+get_users_short_CSV() / get_users() = 44.1596819482 %
+get_users_short_CSV() / get_users() = 30.3192350266 %
+get_users_short_CSV() / get_users() = 34.4856637748 %
+get_users_short_CSV() / get_users() = 43.7461535628 %
+get_users_short_CSV() / get_users() = 41.7577246935 %
+get_users_short_CSV() / get_users() = 41.9092878608 %
+get_users_short_CSV() / get_users() = 44.6772360665 %
+get_users_short_CSV() / get_users() = 42.6770989413 %

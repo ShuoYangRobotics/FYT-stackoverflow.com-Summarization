@@ -1,0 +1,158 @@
+Question (ID-4142406): How to have data structure with both tuple and dictionary characteristic By refering code at 
+
+ http://initd.org/psycopg/docs/extras.html#dictionary-like-cursor 
+
+ &gt;&gt;&gt; rec['data']
+"abc'def"
+&gt;&gt;&gt; rec[2]
+"abc'def"
+ 
+
+ I was wondering how they manage to make a data structure having both tuple and dictionary characteristic? 
+ Answers (Total-6): #0 In Python the [] lookups are handled by the __getitem__ magic method; in other words, when you index a custom class Python will call instance.__getitem__(...) and return you the value. This lets you do e.g. 
+
+ &gt;&gt;&gt; class Foo:
+...  def __getitem__(self, value):
+...    return value
+...
+&gt;&gt;&gt; foo = Foo()
+&gt;&gt;&gt; foo["1"]
+'1'
+&gt;&gt;&gt; foo[0]
+0
+ 
+
+ There are several natural ways of maintaining the actual data structure; probably the easiest is to maintain both a dict and a list and index into one of them depending on the type of the key. 
+
+ Notice that this is unnatural; you would expect a dict-like object to treat 0 as a key. it might be worth writing a different method e.g. index to handle the indexing. 
+
+ You may also wish to implement the __setitem__ and __contains__ methods. 
+ #1 Here's a modified version of demas 's answer that (I think) will preserve ordering (but will not be efficient): 
+
+ class TupleDict(collections.OrderedDict):
+
+ def __getitem__(self, key):
+  if isinstance(key, int):
+   return list(self.values())[key]
+  return super(TupleDict, self).__getitem__(key)
+ 
+ #2 Read the code. Thats my best suggestion. 
+
+ For example: 
+
+ class cursor(_2cursor):
+ """psycopg 1.1.x cursor.
+
+ Note that this cursor implements the exact procedure used by psycopg 1 to
+ build dictionaries out of result rows. The DictCursor in the
+ psycopg.extras modules implements a much better and faster algorithm.
+ """
+
+ def __build_dict(self, row):
+  res = {}
+  for i in range(len(self.description)):
+   res[self.description[i][0]] = row[i]
+  return res
+ .....
+ 
+
+ And where it is coming from .. 
+
+ class connection(_2connection):
+ """psycopg 1.1.x connection."""
+
+ def cursor(self):
+  """cursor() -&gt; new psycopg 1.1.x compatible cursor object"""
+  return _2connection.cursor(self, cursor_factory=cursor)
+ 
+ #3 After reading Glenn Maynard's comment on the answer that caused me to delete this one, I've decided to resurrect it. This uses a normal list to store the indices and so will have the same O(1) access. 
+
+ 
+
+ Here's my take on it. Error handling could probably be improved but I didn't want to clutter up the code too much. I don't know how the original code handled it but why not go ahead and handle slices as well. We can only handle slice assignment for slices that don't create new keys (that is, that don't change the count of items) but we can handle arbitrary slice lookups. Note that it also effectively disallows integer keys. Here's a small demo of it in action. 
+
+ class IndexedDict(object):
+ def __init__(self, *args, **kwargs):
+  d = dict(*args, **kwargs)
+  self._keys = d.keys() # list(d.keys()) in python 3.1
+  self._d = d
+
+ def __getitem__(self, item):
+  if isinstance(item, int):
+   key = self._keys[item]
+   return self._d[key]
+  elif isinstance(item, slice):
+   keys = self._keys[item]
+   return tuple(self._d[key] for key in keys)
+  else:
+   return self._d[key]
+
+ def __setitem__(self, item, value):
+  if isinstance(item, int):
+   key = self._keys[item]
+   self._d[key] = value
+  elif isinstance(item, slice):
+   # we only handle slices that don't require the creation of
+   # new keys.
+   keys = self._keys[item]
+   if not len(keys) == len(value):
+    raise ValueError("Complain here")
+   for key, v in zip(keys, value):
+    self._d[key] = v
+  else:
+   self._d[item] = value
+   if item not in self._keys:
+    # This is the only form that can create a new element
+    self._keys.append(item)
+
+
+ def __delitem__(self, item):
+  if isinstance(item, int):
+   key = self._keys[item]
+   del self._keys[item]
+   del self._d[key]
+  elif isinstance(item, slice):
+   keys = self._keys[item]
+   del self._keys[item]
+   for key in keys:
+    del self._d[key]
+  else:
+   del self._d[item]
+   self._keys.remove(item)
+
+ def __contains__(self, item):
+  if isinstance(item, int):
+   return i &lt; len(self._keys)
+  else:
+   return i in self._d
+
+ # Just for debugging. Not intended as part of API.
+ def assertions(self):
+  assert len(self._d) == len(self._keys)
+  assert set(self._d.keys()) == set(self._keys)
+ 
+
+ There's still some stuff to implement. keys , items , iteritems , update , etc. but they shouldn't be too hard. Just work with self._keys and use list comps and generator expressions. for example, iteritems is just (self._d[key] for key in self._keys) For update, I would just make sure you're dealing with a dictlike object and then update self._keys as self._keys += [key for key in other.keys() if key not in self._keys] . I might go so far as to define __add__ in essentially the same way. 
+ #4 A dictionary can map any python type against any other python type, so it's simple to retrieve a value where the key is an integer. 
+
+ v = {}
+v[0] = 'a'
+v[1] = 'b'
+v['abc'] = 'def'
+
+&gt;&gt;&gt; v[0]
+'a'
+ 
+ #5 Something like that: 
+
+ class d(dict):
+ def __getitem__(self, key):
+  if str(key).isdigit():
+   return self.values()[key]
+  else:
+   return super(d, self).get(key)
+
+cls = d()
+cls["one"] = 1
+print cls["one"]
+print cls[0]

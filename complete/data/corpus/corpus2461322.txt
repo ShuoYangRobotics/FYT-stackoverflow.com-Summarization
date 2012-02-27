@@ -1,0 +1,118 @@
+Question (ID-2461322): How to implement full text search in Django? I would like to implement a search function in a django blogging application. The status quo is that I have a list of strings supplied by the user and the queryset is narrowed down by each string to include only those objects that match the string. 
+
+ See: 
+
+ if request.method == "POST":
+  form = SearchForm(request.POST)
+  if form.is_valid():
+   posts = Post.objects.all()
+   for string in form.cleaned_data['query'].split():
+    posts = posts.filter(
+      Q(title__icontains=string) | 
+      Q(text__icontains=string) |
+      Q(tags__name__exact=string)
+      )
+   return archive_index(request, queryset=posts, date_field='date')
+ 
+
+ Now, what if I didn't want do concatenate each word that is searched for by a logical AND but with a logical OR? How would I do that? Is there a way to do that with Django's own Queryset methods or does one have to fall back to raw SQL queries? 
+
+ In general, is it a proper solution to do full text search like this or would you recommend using a search engine like Solr, Whoosh or Xapian. What are there benefits? 
+
+ Thanks for taking the time 
+ Answers (Total-6): #0 I suggest you to adopt a search engine. 
+
+ We've used Haystack search , a modular search application for django supporting many search engines (Solr, Xapian, Whoosh, etc...) 
+
+ Advantages: 
+
+ 
+ Faster 
+ perform search queries even without querying the database. 
+ Highlight searched terms 
+ "More like this" functionality 
+ Spelling suggestions 
+ Better ranking 
+ etc... 
+ 
+
+ Disadvantages: 
+
+ 
+ Search Indexes can grow in size pretty fast 
+ One of the best search engines (Solr) run as a Java servlet (Xapian does not) 
+ 
+
+ We're pretty happy with this solution and it's pretty easy to implement. 
+ #1 Answer to your general question: Definitely use a proper application for this. 
+
+ With your query, you always examine the whole content of the fields (title, text, tags). You gain no benefit from indexes, etc. 
+
+ With a proper full text search engine (or whatever you call it), text (words) is (are) indexed every time you insert new records. So queries will be a lot faster especially when your database grows. 
+ #2 For full text search in Python, look at PyLucene . It allows for very complex queries. The main problem here is that you must find a way to tell your search engine which pages changed and update the index eventually. 
+
+ Alternatively, you can use Google Sitemaps to tell Google to index your site faster and then embed a custom query field in your site. The advantage here is that you just need to tell Google the changed pages and Google will do all the hard work (indexing, parsing the queries, etc). On top of that, most people are used to use Google to search plus it will keep your site current in the global Google searches, too. 
+ #3 Actually, the query you have posted does use OR rather than AND - you're using \ to separate the Q objects. AND would be &amp; . 
+
+ In general, I would highly recommend using a proper search engine. We have had good success with Haystack on top of Solr - Haystack manages all the Solr configuration, and exposes a nice API very similar to Django's own ORM. 
+ #4 SOLR is very easy to setup and integrate with Django. Haystack makes it even simpler. 
+ #5 I think full text search on an application level is more a matter of what you have and how you expect it to scale. If you run a small site with low usage I think it might be more affordable to put some time into making an custom full text search rather than installing an application to perform the search for you. And application would create more dependency, maintenance and extra effort when storing data. By making your search yourself and you can build in nice custom features. Like for example, if your text exactly matches one title you can direct the user to that page instead of showing the results. Another would be to allow title: or author: prefixes to keywords. 
+
+ Here is a method I've used for generating relevant search results from a web query. 
+
+ import shlex
+
+class WeightedGroup:
+ def __init__(self): 
+  # using a dictionary will make the results not paginate
+  # but it will be a lot faster when storing data   
+  self.data = {}
+
+ def list(self, max_len=0):
+  # returns a sorted list of the items with heaviest weight first
+  res = []
+  while len(self.data) != 0:
+   nominated_weight = 0      
+   for item, weight in self.data.iteritems():
+    if weight &gt; nominated_weight:
+     nominated = item
+     nominated_weight = weight
+   self.data.pop(nominated)
+   res.append(nominated)
+   if len(res) == max_len:
+    return res
+  return res
+
+ def append(self, weight, item):
+  if item in self.data:
+   self.data[item] += weight
+  else:
+   self.data[item] = weight
+
+
+def search(searchtext):
+ candidates = WeightedGroup()
+
+ for arg in shlex.split(searchtext): # shlex understand quotes
+
+  # Search TITLE
+  # order by date so we get most recent posts
+  query = Post.objects.filter_by(title__icontains=arg).order_by('-date')
+  arg_hits = query.count() # count is cheap
+
+  if arg_hits &gt; 1000:
+   continue # skip keywords which has too many hits
+
+  # Each of these are expensive as it would transfer data
+  # from the db and build a python object, 
+  for post in query[:50]: # so we limit it to 50 for example    
+   # more hits a keyword has the lesser it's relevant
+   candidates.append(100.0 / arg_hits, post.post_id)
+
+  # TODO add searchs for other areas
+  # Weight might also be adjusted with number of hits within the text
+  # or perhaps you can find other metrics to value an post higher,
+  # like number of views
+
+ # candidates can contain a lot of stuff now, show most relevant only
+ sorted_result = Post.objects.filter_by(post_id__in=candidates.list(20))

@@ -1,0 +1,104 @@
+<h3>Question (ID-1267260):</h3><h2>Python: remove lots of items from a list</h2><p>I am in the final stretch of a project I have been working on.  Everything is running smoothly but I have a bottleneck that I am having trouble working around.</p>
+
+<p>I have a list of tuples.  The list ranges in length from say 40,000 - 1,000,000 records.  Now I have a dictionary where each and every (value, key) is a tuple in the list.</p>
+
+<p>So, I might have</p>
+
+<pre><code>myList = [(20000, 11), (16000, 4), (14000, 9)...]
+myDict = {11:20000, 9:14000, ...}
+</code></pre>
+
+<p>I want to remove each (v, k) tuple from the list.</p>
+
+<p>Currently I am doing:</p>
+
+<pre><code>for k, v in myDict.iteritems():
+    myList.remove((v, k))
+</code></pre>
+
+<p>Removing 838 tuples from the list containing 20,000 tuples takes anywhere from 3 - 4 seconds.  I will most likely be removing more like 10,000 tuples from a list of 1,000,000 so I need this to be faster.</p>
+
+<p>Is there a better way to do this?</p>
+
+<p>I can provide code used to test, plus pickled data from the actual application if needed.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>You'll have to measure, but I can imagine this to be more performant:</p>
+
+<pre><code>myList = filter(lambda x: myDict.get(x[1], None) != x[0], myList)
+</code></pre>
+
+<p>because the lookup happens in the dict, which is more suited for this kind of thing. Note, though, that this will create a new list before removing the old one; so there's a memory tradeoff. If that's an issue, rethinking your container type as jkp suggest might be in order.</p>
+
+<p><strong>Edit</strong>: Be careful, though, if <code>None</code> is actually in your list -- you'd have to use a different "placeholder."</p>
+<br /><b>#1</b><br /><p>To remove about 10,000 tuples from a list of about 1,000,000, if the values are hashable, the fastest approach should be:</p>
+
+<pre><code>totoss = set((v,k) for (k,v) in myDict.iteritems())
+myList[:] = [x for x in myList if x not in totoss]
+</code></pre>
+
+<p>The preparation of the set is a small one-time cost, wich saves doing tuple unpacking and repacking, or tuple indexing, a lot of times. Assignign to <code>myList[:]</code> instead of assigning to <code>myList</code> is also semantically important (in case there are any other references to <code>myList</code> around, it's not enough to rebind just the name -- you really want to rebind the <em>contents</em>!-).</p>
+
+<p>I don't have your test-data around to do the time measurement myself, alas!, but, let me know how it plays our on your test data!</p>
+
+<p>If the values are not hashable (e.g. they're sub-lists, for example), fastest is probably:</p>
+
+<pre><code>sentinel = object()
+myList[:] = [x for x in myList if myDict.get(x[0], sentinel) != x[1]]
+</code></pre>
+
+<p>or maybe (shouldn't make a big difference either way, but I suspect the previous one is better -- indexing is cheaper than unpacking and repacking):</p>
+
+<pre><code>sentinel = object()
+myList[:] = [(a,b) for (a,b) in myList if myDict.get(a, sentinel) != b]
+</code></pre>
+
+<p>In these two variants the sentinel idiom is used to ward against values of <code>None</code> (which is not a problem for the preferred set-based approach -- if values are hashable!) as it's going to be way cheaper than <code>if a not in myDict or myDict[a] != b</code> (which requires two indexings into myDict).</p>
+<br /><b>#2</b><br /><p>Every time you call <code>myList.remove</code>, Python has to scan over the entire list to search for that item and remove it.  In the worst case scenario, every item you look for would be at the end of the list each time.</p>
+
+<p>Have you tried doing the "inverse" operation of:</p>
+
+<pre><code>newMyList = [(v,k) for (v,k) in myList if not k in myDict]
+</code></pre>
+
+<p>But I'm really not sure how well that would scale, either, since you would be making a copy of the original list -- could potentially be a lot of memory usage there.</p>
+
+<p>Probably the best alternative here is to wait for Alex Martelli to post some mind-blowingly intuitive, simple, and efficient approach.</p>
+<br /><b>#3</b><br /><pre><code>[(i, j) for i, j in myList if myDict.get(j) != i]
+</code></pre>
+<br /><b>#4</b><br /><p>Try something like this:</p>
+
+<pre><code>myListSet = set(myList)
+myDictSet = set(zip(myDict.values(), myDict.keys()))
+myList = list(myListSet - myDictSet)
+</code></pre>
+
+<p>This will convert <code>myList</code> to a set, will swap the keys/values in <code>myDict</code> and put them into a set, and will then find the difference, turn it back into a list, and assign it back to myList. :)</p>
+<br /><b>#5</b><br /><p>The problem looks to me to be the fact you are using a <code>list</code> as the container you are trying to remove from, and it is a totally unordered type.  So to find each item in the list is a linear operation (<a href="http://en.wikipedia.org/wiki/Big%5FO%5Fnotation" rel="nofollow">O(n)</a>), it has to iterate over the whole list until it finds a match.</p>
+
+<p>If you could swap the <code>list</code> for some other container (<code>set</code>?) which uses a <code>hash()</code> of each item to order them, then each match could be performed much quicker.</p>
+
+<p>The following code shows how you could do this using a combination of ideas offered by myself and Nick on this thread:</p>
+
+<pre><code>list_set = set(original_list)
+dict_set = set(zip(original_dict.values(), original_dict.keys()))
+difference_set = list(list_set - dict_set)
+final_list = []
+for item in original_list:
+    if item in difference_set:
+        final_list.append(item)
+</code></pre>
+<br /><b>#6</b><br /><pre><code>[i for i in myList if i not in list(zip(myDict.values(), myDict.keys()))]
+</code></pre>
+<br /><b>#7</b><br /><p>A list containing a million 2-tuples is not large on most machines running Python. However if you absolutely must do the removal in situ, here is a clean way of doing it properly:</p>
+
+<pre><code>def filter_by_dict(my_list, my_dict):
+    sentinel = object()
+    for i in xrange(len(my_list) - 1, -1, -1):
+        key = my_list[i][1]
+        if my_dict.get(key, sentinel) is not sentinel:
+            del my_list[i]
+</code></pre>
+
+<p><strong>Update</strong> Actually each del costs O(n) shuffling the list pointers down using C's memmove(), so if there are d dels, it's <code>O(n*d)</code> not <code>O(n**2)</code>. Note that (1) the OP suggests that d approx == <code>0.01 * n</code> and (2) the <code>O(n*d)</code> effort is copying one pointer to somewhere else in memory ... so this method could in fact be somewhat faster than a quick glance would indicate. Benchmarks, anyone?</p>
+
+<p>What are you going to do with the list <strong>after</strong> you have removed the items that are in the dict? Is it possible to piggy-back the dict-filtering onto the next step?</p>
+<br />

@@ -1,0 +1,211 @@
+Question (ID-455580): JSON datetime between Python and JavaScript I want to send a datetime.datetime object in serialized form from Python using JSON and de-serialize in JavaScript using JSON. What is the best way to do this? 
+ Answers (Total-7): #0 You can add the 'default' parameter to json.dumps to handle this: 
+
+ &gt;&gt;&gt; dthandler = lambda obj: obj.isoformat() if isinstance(obj, datetime.datetime) else None
+&gt;&gt;&gt; json.dumps(datetime.datetime.now(), default=dthandler)
+'"2010-04-20T20:08:21.634121"'
+ 
+
+ A more comprehensive default handler function: 
+
+ def handler(obj):
+ if hasattr(obj, 'isoformat'):
+  return obj.isoformat()
+ elif isinstance(obj, ...):
+  return ...
+ else:
+  raise TypeError, 'Object of type %s with value of %s is not JSON serializable' % (type(obj), repr(obj))
+ 
+
+ Update: Added output of type as well as value. 
+ #1 For cross language projects I found out that strings containing RfC 3339 dates are the best way to go. A RfC 3339 date looks like this: 
+
+ 1985-04-12T23:20:50.52Z
+ 
+
+ I think most of the format is obvious. The only somewhat unusual thing may be the "Z" at the end. It stands for GMT/UTC. You could also add a timezone offset like +02:00 for CEST (Germany in summer). I personally prefer to keep everything in UTC until it is displayed. 
+
+ For displaying, comparisons and storage you can leave it in string format across all languages. If you need the date for calculations easy to convert it back to a native date object in most language. 
+
+ So generate the JSON like this: 
+
+ json.dump(datetime.now().strftime('%Y-%m-%dT%H:%M:%S'))
+ 
+
+ Unfortunately Javascripts Date constructor doesn't accept RfC 3339 strings but there are many parsers available on the Internet. 
+
+ huTools.hujson tries to handle the most common encoding issues you might come across in Python code including date/datetime objects while handling timezones correctly. 
+ #2 If you're certain that only Javascript will be consuming the JSON, I prefer to pass Javascript Date objects directly. 
+
+ The ctime() method on datetime objects will return a string that the Javascript Date object can understand. 
+
+ import datetime
+date = datetime.datetime.today()
+json = '{"mydate":new Date("%s")}' % date.ctime()
+ 
+
+ Javascript will happily use that as an object literal, and you've got your Date object built right in. 
+ #3 If you are using simplejson, you can subclass JSONEncoder and override the default() method to provide your own custom serializers: 
+
+ class JSONEncoder(simplejson.JSONEncoder):
+ def default(self, obj):
+  if isinstance(obj, datetime.datetime):
+   return obj.strftime('%Y-%m-%dT%H:%M:%S')
+  else:
+   return simplejson.JSONEncoder.default(self, obj)
+ 
+
+ Then, you can call it like this: 
+
+ &gt;&gt;&gt; JSONEncoder().encode([datetime.datetime.now()])
+'["2010-06-15T14:42:28"]'
+ 
+ #4 Here's a fairly complete solution for recursively encoding and decoding datetime.datetime and datetime.date objects using the standard library json module. This needs Python >= 2.6 since the %f format code in the datetime.datetime.strptime() format string is only supported in since then. For Python 2.5 support, drop the %f and strip the microseconds from the ISO date string before trying to convert it, but you'll loose microseconds precision, of course. For interoperability with ISO date strings from other sources, which may include a time zone name or UTC offset, you may also need to strip some parts of the date string before the conversion. For a complete parser for ISO date strings (and many other date formats) see the third-party dateutil module. 
+
+ Decoding only works when the ISO date strings are values in a JavaScript
+literal object notation or in nested structures within an object. ISO date
+strings, which are items of a top-level array will not be decoded. 
+
+ I.e. this works: 
+
+ date = datetime.datetime.now()
+&gt;&gt;&gt; json = dumps(dict(foo='bar', innerdict=dict(date=date)))
+&gt;&gt;&gt; json
+'{"innerdict": {"date": "2010-07-15T13:16:38.365579"}, "foo": "bar"}'
+&gt;&gt;&gt; loads(json)
+{u'innerdict': {u'date': datetime.datetime(2010, 7, 15, 13, 16, 38, 365579)},
+u'foo': u'bar'}
+ 
+
+ And this too: 
+
+ &gt;&gt;&gt; json = dumps(['foo', 'bar', dict(date=date)])
+&gt;&gt;&gt; json
+'["foo", "bar", {"date": "2010-07-15T13:16:38.365579"}]'
+&gt;&gt;&gt; loads(json)
+[u'foo', u'bar', {u'date': datetime.datetime(2010, 7, 15, 13, 16, 38, 365579)}]
+ 
+
+ But this doesn't work as expected: 
+
+ &gt;&gt;&gt; json = dumps(['foo', 'bar', date])
+&gt;&gt;&gt; json
+'["foo", "bar", "2010-07-15T13:16:38.365579"]'
+&gt;&gt;&gt; loads(json)
+[u'foo', u'bar', u'2010-07-15T13:16:38.365579']
+ 
+
+ Here's the code: 
+
+ __all__ = ['dumps', 'loads']
+
+import datetime
+
+try:
+ import json
+except ImportError:
+ import simplejson as json
+
+class JSONDateTimeEncoder(json.JSONEncoder):
+ def default(self, obj):
+  if isinstance(obj, (datetime.date, datetime.datetime)):
+   return obj.isoformat()
+  else:
+   return json.JSONEncoder.default(self, obj)
+
+def datetime_decoder(d):
+ if isinstance(d, list):
+  pairs = enumerate(d)
+ elif isinstance(d, dict):
+  pairs = d.items()
+ result = []
+ for k,v in pairs:
+  if isinstance(v, basestring):
+   try:
+    # The %f format code is only supported in Python &gt;= 2.6.
+    # For Python &lt;= 2.5 strip off microseconds
+    # v = datetime.datetime.strptime(v.rsplit('.', 1)[0],
+    #  '%Y-%m-%dT%H:%M:%S')
+    v = datetime.datetime.strptime(v, '%Y-%m-%dT%H:%M:%S.%f')
+   except ValueError:
+    try:
+     v = datetime.datetime.strptime(v, '%Y-%m-%d').date()
+    except ValueError:
+     pass
+  elif isinstance(v, (dict, list)):
+   v = datetime_decoder(v)
+  result.append((k, v))
+ if isinstance(d, list):
+  return [x[1] for x in result]
+ elif isinstance(d, dict):
+  return dict(result)
+
+def dumps(obj):
+ return json.dumps(obj, cls=JSONDateTimeEncoder)
+
+def loads(obj):
+ return json.loads(obj, object_hook=datetime_decoder)
+
+if __name__ == '__main__':
+ mytimestamp = datetime.datetime.utcnow()
+ mydate = datetime.date.today()
+ data = dict(
+  foo = 42,
+  bar = [mytimestamp, mydate],
+  date = mydate,
+  timestamp = mytimestamp,
+  struct = dict(
+   date2 = mydate,
+   timestamp2 = mytimestamp
+  )
+ )
+
+ print repr(data)
+ jsonstring = dumps(data)
+ print jsonstring
+ print repr(loads(jsonstring))
+ 
+ #5 I've worked it out. 
+
+ Let's say you have a Python datetime object, d , created with datetime.now(). Its value is: 
+
+ datetime.datetime(2011, 5, 25, 13, 34, 5, 787000)
+ 
+
+ You can serialize it to JSON as an ISO 8601 datetime string: 
+
+ import json 
+json.dumps(d.isoformat())
+ 
+
+ The example datetime object would be serialized as: 
+
+ '"2011-05-25T13:34:05.787000"'
+ 
+
+ This value, once received in the Javascript layer, can construct a Date object: 
+
+ var d = new Date("2011-05-25T13:34:05.787000");
+ 
+
+ As of Javascript 1.8.5, Date objects have a toJSON method, which returns a string in a standard format. To serialize the above Javascript object back to JSON, therefore, the command would be: 
+
+ d.toJSON()
+ 
+
+ Which would give you: 
+
+ '2011-05-25T20:34:05.787Z'
+ 
+
+ This string, once received in Python, could be deserialized back to a datetime object: 
+
+ datetime.strptime('2011-05-25T20:34:05.787Z', '%Y-%m-%dT%H:%M:%S.%fZ')
+ 
+
+ This results in the following datetime object, which is the same one you started with and therefore correct: 
+
+ datetime.datetime(2011, 5, 25, 20, 34, 5, 787000)
+ 
+ #6 I can address you to eGenix Python extension , containing a lot of functions for handling date and time.
+Plus, i've found this article with some code to deal with Python to Javascript marshaling.

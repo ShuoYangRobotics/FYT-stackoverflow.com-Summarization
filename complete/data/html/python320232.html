@@ -1,0 +1,112 @@
+<h3>Question (ID-320232):</h3><h2>Ensuring subprocesses are dead on exiting Python program</h2><p>Is there a way to ensure all created subprocess are dead at exit time of a Python program? By subprocess I mean those created with subprocess.Popen().</p>
+
+<p>If not, should I iterate over all of the issuing kills and then kills -9? anything cleaner?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>The <code>subprocess.Popen.wait()</code> is the only way to assure that they're dead.  Indeed, POSIX OS's require that you wait on your children.  Many *nix's will create a "zombie" process:  a dead child for which the parent didn't wait.</p>
+
+<p>If the child is reasonably well-written, it terminates.   Often, children read from PIPE's.  Closing the input is a big hint to the child that it should close up shop and exit.</p>
+
+<p>If the child has bugs and doesn't terminate, you may have to kill it.  You should fix this bug.  </p>
+
+<p>If the child is a "serve-forever" loop, and is not designed to terminate, you should either kill it or provide some input or message which will force it to terminate.  </p>
+
+<p><hr /></p>
+
+<p>Edit.</p>
+
+<p>In standard OS's, you have <code>os.kill( PID, 9 )</code>.  Kill -9 is harsh, BTW.  If you can kill them with SIGABRT (6?) or SIGTERM (15) that's more polite.</p>
+
+<p>In Windows OS, you don't have an <code>os.kill</code> that works.  Look at this <a href="http://code.activestate.com/recipes/347462/" rel="nofollow">ActiveState Recipe</a> for terminating a process in Windows.</p>
+
+<p>We have child processes that are WSGI servers.  To terminate them we do a GET on a special URL; this causes the child to clean up and exit.</p>
+<br /><b>#1</b><br /><p>You can use <a href="http://docs.python.org/library/atexit.html" rel="nofollow"><strong>atexit</strong></a> for this, and register any clean up tasks to be run when your program exits. </p>
+
+<p><strong>atexit.register(func[, *args[, **kargs]])</strong></p>
+
+<p>In your cleanup process, you can also implement your own wait, and kill it when a your desired timeout occurs.</p>
+
+<pre><code>&gt;&gt;&gt; import atexit
+&gt;&gt;&gt; import sys
+&gt;&gt;&gt; import time
+&gt;&gt;&gt; 
+&gt;&gt;&gt; 
+&gt;&gt;&gt;
+&gt;&gt;&gt; def cleanup():
+...     timeout_sec = 5
+...     for p in all_processes: # list of your processes
+...         p_sec = 0
+...         for second in range(timeout_sec):
+...             if p.poll() == None:
+...                 time.sleep(1)
+...                 p_sec += 1
+...         if p_sec &gt;= timeout_sec:
+...             p.kill() # supported from python 2.6
+...     print 'cleaned up!'
+...
+&gt;&gt;&gt;
+&gt;&gt;&gt; atexit.register(cleanup)
+&gt;&gt;&gt;
+&gt;&gt;&gt; sys.exit()
+cleaned up!
+</code></pre>
+
+<p><strong>Note</strong> -- Registered functions won't be run if this process (parent process) is killed.</p>
+
+<p>Here's a way to kill a process in windows. Your Popen object has a pid attribute, so you can just call it by <strong>success = win_kill(p.pid)</strong> (Needs <a href="http://sourceforge.net/projects/pywin32/" rel="nofollow">pywin32</a> installed):</p>
+
+<pre><code>    def win_kill(pid):
+        '''kill a process by specified PID in windows'''
+        import win32api
+        import win32con
+
+        hProc = None
+        try:
+            hProc = win32api.OpenProcess(win32con.PROCESS_TERMINATE, 0, pid)
+            win32api.TerminateProcess(hProc, 0)
+        except Exception:
+            return False
+        finally:
+            if hProc != None:
+                hProc.Close()
+
+        return True
+</code></pre>
+<br /><b>#2</b><br /><p>On *nix's, maybe using process groups can help you out - you can catch subprocesses spawned by your subprocesses as well.</p>
+
+<pre><code>if __name__ == "__main__":
+  os.setpgrp() # create new process group, become its leader
+  try:
+    # some code
+  finally:
+    os.killpg(0, signal.SIGKILL) # kill all processes in my group
+</code></pre>
+
+<p>Another consideration is to escalate the signals: from SIGTERM (default signal for <code>kill</code>) to SIGKILL (a.k.a <code>kill -9</code>). Wait a short while between the signals to give the process a chance to exit cleanly before you <code>kill -9</code> it.</p>
+<br /><b>#3</b><br /><blockquote>
+  <p>poll( ) </p>
+  
+  <p>Check if child process has terminated.
+  Returns returncode attribute.</p>
+</blockquote>
+<br /><b>#4</b><br /><blockquote>
+  <p>Is there a way to ensure all created subprocess are dead at exit time of a Python program? By subprocess I mean those created with subprocess.Popen().</p>
+</blockquote>
+
+<p>You could violate encapsulation and <em>test</em> that all Popen processes have terminated by doing</p>
+
+<pre><code>subprocess._cleanup()
+print subprocess._active == []
+</code></pre>
+
+<blockquote>
+  <p>If not, should I iterate over all of the issuing kills and then kills -9? anything cleaner?</p>
+</blockquote>
+
+<p>You cannot ensure that all subprocesses are dead without going out and killing every survivor. But if you have this problem, it is probably because you have a deeper design problem.</p>
+<br /><b>#5</b><br /><p>This is what I did for my posix app:</p>
+
+<p>When your app exists call the kill() method of this class:
+<a href="http://www.pixelbeat.org/libs/subProcess.py" rel="nofollow">http://www.pixelbeat.org/libs/subProcess.py</a></p>
+
+<p>Example use here:
+<a href="http://code.google.com/p/fslint/source/browse/trunk/fslint-gui#608" rel="nofollow">http://code.google.com/p/fslint/source/browse/trunk/fslint-gui#608</a></p>
+<br />

@@ -1,0 +1,72 @@
+<h3>Question (ID-4670350):</h3><h2>How do I write a long integer as binary in Python?</h2><p>In Python, long integers have unlimited precision. I would like to write a 16 byte (128 bit) integer to a file. <code>struct</code> from the standard library supports only up to 8 byte integers. <code>array</code> has the same limitation. Is there a way to do this without masking and shifting each integer?</p>
+
+<p>Some clarification here: I'm writing to a file that's going to be read in from non-Python programs, so pickle is out. All 128 bits are used.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Two possible solutions:</p>
+
+<ol>
+<li><p>Just <a href="http://docs.python.org/library/pickle.html" rel="nofollow">pickle</a> your long integer.  This will write the integer in a special format which allows it to be read again, if this is all you want.</p></li>
+<li><p>Use the second code snippet in <a href="http://stackoverflow.com/questions/4358285/is-there-a-faster-way-to-convert-an-arbitrary-large-integer-to-a-big-endian-seque/4358429#4358429">this answer</a> to convert the long int to a big endian string (which can be easily changed to little endian if you prefer), and write this string to your file.</p></li>
+</ol>
+
+<p>The problem is that the internal representation of bigints does not directly include the binary data you ask for.</p>
+<br /><b>#1</b><br /><p>I think for unsigned integers (and ignoring endianness) something like</p>
+
+<pre><code>import binascii
+
+def binify(x):
+    h = hex(x)[2:].rstrip('L')
+    return binascii.unhexlify('0'*(32-len(h))+h)
+
+>>> for i in 0, 1, 2**128-1:
+...     print i, repr(binify(i))
+... 
+0 '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+1 '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+340282366920938463463374607431768211455 '\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+</code></pre>
+
+<p>might technically satisfy the requirements of having non-Python-specific output, not using an explicit mask, and (I assume) not using any non-standard modules.  Not particularly elegant, though.</p>
+<br /><b>#2</b><br /><p>This may not avoid the "mask and shift each integer" requirement.  I'm not sure that avoiding mask and shift means in the context of Python long values. </p>
+
+<p>The bytes are these:</p>
+
+<pre><code>def bytes( long_int ):
+    bytes = []
+    while long_int != 0:
+        b = long_int%256
+        bytes.insert( 0, b )
+        long_int //= 256
+    return bytes
+</code></pre>
+
+<p>You can then pack this list of bytes using <code>struct.pack( '16b', bytes )</code></p>
+<br /><b>#3</b><br /><p>The <a href="http://pypi.python.org/pypi/bitarray" rel="nofollow">PyPi bitarray</a> module in combination with the builtin <code>bin()</code> function seems like a good combination for a solution that is simple and flexible.</p>
+
+<pre><code>bytes = bitarray(bin(my_long)).tostring()
+</code></pre>
+
+<p>The indianness can be controlled with a few more lines of code. You'll have to evaluate the efficiency.</p>
+<br /><b>#4</b><br /><p>You could pickle the object to binary, use protocol buffers (I don't know if they allow you to serialize unlimited precision integers though) or BSON if you do not want to write code.</p>
+
+<p>But writing a function that dumps 16 byte integers by shifting it should not be so hard to do if it's not time critical.</p>
+<br /><b>#5</b><br /><p>Why not use struct with the <em>unsigned long long</em> type twice?</p>
+
+<pre><code>import struct
+some_file.write(struct.pack("QQ", var/(2**64), var%(2**64)))
+</code></pre>
+
+<p>That's documented here (scroll down to get the table with Q): <a href="http://docs.python.org/library/struct.html" rel="nofollow">http://docs.python.org/library/struct.html</a></p>
+<br /><b>#6</b><br /><p>This may be a little late, but I don't see why you can't use struct:</p>
+
+<pre><code>bigint = 0xFEDCBA9876543210FEDCBA9876543210L
+print bigint,hex(bigint).upper()
+
+cbi = struct.pack("!QQ",bigint&amp;0xFFFFFFFFFFFFFFFF,(bigint&gt;&gt;64)&amp;0xFFFFFFFFFFFFFFFF)
+
+print len(cbi)
+</code></pre>
+
+<p>The bigint by itself is rejected, but if you mask it with &amp;0xFFFFFFFFFFFFFFFF you can reduce it to an 8 byte int instead of 16.  Then the upper part is shifted and masked as well.  You may have to play with byte ordering a bit.  I used the ! mark to tell it to produce a network endian byte order.  Also, the msb and lsb (upper and lower bytes) may need to be reversed.  I will leave that as an exercise for the user to determine.  I would say saving things as network endian would be safer so you always know what the endianess of your data is.</p>
+
+<p>No, don't ask me if network endian is big or little endian...</p>
+<br />

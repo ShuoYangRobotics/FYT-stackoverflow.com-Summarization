@@ -1,0 +1,187 @@
+Question (ID-418915): Pythonic equivalent of unshift or redo? I'm learning Python, and I have a situation where I want to consume items from an iterator. The tricky part is that under certain conditions, I want to "un-iterate." That is, put an item back onto the front of the iterator before I loop. 
+
+ For example, suppose I'm picking apples from a tree. My fruit basket can only hold 10kg before it needs to be emptied. But I have to pick each apple before I can weigh it and determine if this apple would exceed the capacity of the basket. 
+
+ In a language like Perl, I could unshift() the apple back onto the tree, and then let the loop expression re-pick the apple: 
+
+ while ($apple = shift(@tree)) {
+ $wt = weight($apple);
+ if ($wt + weight(@basket) &gt; 10) {
+ send(@basket);
+ @basket = ();
+ unshift(@tree, $apple);
+ } else {
+ push(@basket, $element);
+ }
+}
+ 
+
+ Or else I can also use redo , which resumes processing at the top of block, without evaluating the loop expression. So the same apple can be re-processed, after the basket has been emptied. 
+
+ while ($apple = shift(@tree)) {
+ $wt = weight($apple);
+ if ($wt + weight(@basket) &gt; 10) {
+ send(@basket);
+ @basket = ();
+ redo;
+ } else {
+ push(@basket, $apple);
+ }
+}
+ 
+
+ What would be the most pythonic solution for this kind of problem? 
+ Answers (Total-8): #0 
+ I'm learning Python, and I have a situation where I want to consume items from an iterator. The tricky part is that under certain conditions, I want to "un-iterate." That is, put an item back onto the front of the iterator before I loop. 
+ 
+
+ Here's a simple solution: 
+
+ class MyIterator(object): # undo-able iterator wrapper
+ def __init__(self, iterable):
+ 	super(MyIterator, self).__init__()
+ 	self.iterator = iter(iterable)
+ 	self.stack = []
+
+ def __iter__(self):
+ 	return self
+
+ def next(self):
+ 	if self.stack:
+ 		return self.stack.pop()
+ 	return self.iterator.next() # Raises StopIteration eventually
+
+ def undo(self, item):
+ 	self.stack.append(item)
+ 
+
+ for i in MyIterator(xrange(5)): print i
+0
+1
+2
+3
+4
+ 
+
+ rng = MyIterator(xrange(5))
+rng.next()
+0
+rng.next()
+1
+rng.undo(1)
+rng.next()
+1
+ 
+ #1 Why bother with unshifting when the else clause should always occur? 
+
+ for apple in tree:
+ if (apple.weight + basket.weight) &gt; 10:
+  send(basket)
+  basket.clear()
+ basket.add(apple)
+ 
+
+ Anyway, I'm fairly certain that Python doesn't have the sort of behavior you're looking for. 
+ #2 I'd say that the most Pythonic solution is the simplest one . Instead of trying to wrap an iterator in a generator expression that allows you to "backtrack" or something similarly complex, use a while loop, as you have in Perl! Iterators don't mix very nicely with mutation , anywho. 
+
+ Simple translation of your implementation (ignoring @Patrick 's optimization): 
+
+ while tree:
+ apple = tree.pop(0)
+ if apple.weight + basket.weight &gt; 10:
+  basket.send()
+  basket.clear()
+  tree.insert(0, apple) # Put it back.
+ else:
+  basket.append(apple)
+ 
+
+ Or, you could use a peek -like functionality with ordered sequence indices:  
+
+ while tree:
+ apple = tree[0] # Take a peek at it.
+ if apple.weight + basket.weight &gt; 10:
+  basket.send()
+  basket.clear()
+ else:
+  basket.append(tree.pop(0))
+ 
+
+ If you don't like the "simple" argument, check out the collections.deque iterators mentioned in the above (linked) thread. 
+ #3 If you don't want to follow the other's suggestion of just removing the else clause, you can write your own unshift function that will work in a way similar to perl's with any iterable: 
+
+ class UnshiftableIterable(object):
+ def __init__(self, iterable):
+  self._iter = iter(iterable)
+  self._unshifted = [] # empty list of unshifted stuff
+ def __iter__(self):
+  while True:
+   if self._unshifted:
+    yield self._unshifted.pop()
+   else:
+    yield self._iter.next()
+ def unshift(self, item):
+  self._unshifted.append(item)
+ 
+
+ Then in your code: 
+
+ it = UnshiftableIterable(tree)
+for apple in tree:
+ if weigth(basket) + weight(apple) &gt; MAX_WEIGHT:
+  send(basket)
+  basket = []
+  it.unshift(apple)
+ else:
+  basket.append(apple)
+ 
+
+ Some testing of the UnshiftableIterable : 
+
+ it = UnshiftableIterable(xrange(5))
+
+for i in it:
+ print '*',
+ if i == 2:
+  it.unshift(10)
+ else:
+  print i,
+# output: * 0 * 1 * * 10 * 3 * 4
+ 
+ #4 You're looking for a generator, an iterator that can receive modifications to its internal state via the send() method 
+
+ http://www.python.org/doc/current/howto/functional.html#passing-values-into-a-generator 
+ #5 While I was writing this @Patrick already suggested the same thing. But since I have written it I will paste the code anyways, with comments in code marking methods from Patrick. 
+
+ import random
+
+apples=[random.randint(1,3) for j in range(10)]
+print 'apples',apples
+
+basket=[]
+y=6
+baskets=[]
+
+for i in range(len(apples)):
+ if sum(basket+[apples[i]])&gt;y:
+  #basket is full                                  
+  baskets.append(basket)#basket.send()                            
+  basket=[]#basket.empty()                               
+ basket.append(apples[i])#add apple to basket                           
+
+print 'baskets',baskets
+ 
+
+ though this does not pop() the apples from the original iterator. Please remark if that's a desired behavior too. 
+
+ the output 
+
+ apples [1, 1, 3, 3, 1, 1, 3, 3, 2, 3]
+baskets [[1, 1, 3], [3, 1, 1], [3, 3]]
+ 
+ #6 By the way, what you really want is list.insert(0,yourObject) 
+ #7 There is no way general way to push a value into an iterator in python. A stack or linked list is better suited to that. 
+
+ If you're iterating over a list or something, of course you can add the item manually back to the list. But you can also iterate over objects which can't be manipulated in such a way. 
+
+ If you want to use python to implement that algorithm, you'll have to choose a data structure that allows the operations you want to use. I suggest the .push() and .pop() methods which let you treat lists as stacks.

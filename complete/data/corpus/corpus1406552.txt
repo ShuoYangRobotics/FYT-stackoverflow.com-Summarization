@@ -1,0 +1,110 @@
+Question (ID-1406552): Non-critical unittest failures I'm using Python's built-in unittest module and I want to write a few tests that are not critical. 
+
+ I mean, if my program passes such tests, that's great! However, if it doesn't pass, it's not really a problem, the program will still work. 
+
+ For example, my program is designed to work with a custom type "A". If it fails to work with "A", then it's broken. However, for convenience, most of it should also work with another type "B", but that's not mandatory. If it fails to work with "B", then it's not broken (because it still works with "A", which is its main purpose). Failing to work with "B" is not critical, I will just miss a "bonus feature" I could have. 
+
+ Another (hypothetical) example is when writing an OCR. The algorithm should recognize most images from the tests, but it's okay if some of them fails. (and no, I'm not writing an OCR) 
+
+ Is there any way to write non-critical tests in unittest (or other testing framework)? 
+ Answers (Total-10): #0 As a practical matter, I'd probably use print statements to indicate failure in that case. A more correct solution is to use warnings: 
+
+ http://docs.python.org/library/warnings.html 
+
+ You could, however, use the logging facility to generate a more detailed record of your test results (i.e. set your "B" class failures to write warnings to the logs). 
+
+ http://docs.python.org/library/logging.html 
+
+ Edit: 
+
+ The way we handle this in Django is that we have some tests we expect to fail, and we have others that we skip based on the environment. Since we can generally predict whether a test SHOULD fail or pass (i.e. if we can't import a certain module, the system doesn't have it, and so the test won't work), we can skip failing tests intelligently. This means that we still run every test that will pass, and have no tests that "might" pass. Unit tests are most useful when they do things predictably, and being able to detect whether or not a test SHOULD pass before we run it makes this possible. 
+ #1 Im not totally sure how unittest works, but most unit testing frameworks have something akin to categories. I suppose you could just categorize such tests, mark them to be ignored, and then run them only when your interested in them. But I know from experience that ignored tests very quickly become...just that ignored tests that nobody ever runs and are therefore a waste of time and energy to write them. 
+
+ My advice is for your app to do, or do not, there is no try. 
+ #2 Asserts in unit tests are binary: they will work or they will fail, there's no mid-term. 
+
+ Given that, to create those "non-critical" tests you should not use assertions when you don't want the tests to fail. You should do this carefully so you don't compromise the "usefulness" of the test. 
+
+ My advice to your OCR example is that you use something to record the success rate in your tests code and then create one assertion like: "assert success_rate > 8.5", and that should give the effect you desire. 
+ #3 From unittest documentation which you link: 
+
+ 
+ Instead of unittest.main(), there are
+ other ways to run the tests with a
+ finer level of control, less terse
+ output, and no requirement to be run
+ from the command line. For example,
+ the last two lines may be replaced
+ with: 
+
+ suite = unittest.TestLoader().loadTestsFromTestCase(TestSequenceFunctions)
+unittest.TextTestRunner(verbosity=2).run(suite)
+ 
+ 
+
+ In your case, you can create separate TestSuite instances for the criticial and non-critical tests. You could control which suite is passed to the test runner with a command line argument. Test suites can also contain other test suites so you can create big hierarchies if you want. 
+ #4 There are some test systems that allow warnings rather than failures, but test_unit is not one of them (I don't know which ones do, offhand) unless you want to extend it (which is possible). 
+
+ You can make the tests so that they log warnings rather than fail. 
+
+ Another way to handle this is to separate out the tests and only run them to get the pass/fail reports and not have any build dependencies (this depends on your build setup). 
+ #5 Take a look at Nose : http://somethingaboutorange.com/mrl/projects/nose/0.11.1/ 
+
+ There are plenty of command line options for selecting tests to run, and you can keep your existing unittest tests. 
+ #6 Another possibility is to create a "B" branch (you ARE using some sort of version control, right?) and have your unit tests for "B" in there. That way, you keep your release version's unit tests clean (Look, all dots!), but still have tests for B. If you're using a modern version control system like git or mercurial (I'm partial to mercurial), branching/cloning and merging are trivial operations, so that's what I'd recommend. 
+
+ However, I think you're using tests for something they're not meant to do. The real question is "How important to you is it that 'B' works?" Because your test suite should only have tests in it that you care whether they pass or fail. Tests that, if they fail, it means the code is broken. That's why I suggested only testing "B" in the "B" branch, since that would be the branch where you are developing the "B" feature. 
+
+ You could test using logger or print commands, if you like. But if you don't care enough that it's broken to have it flagged in your unit tests, I'd seriously question whether you care enough to test it at all. Besides, that adds needless complexity (extra variables to set debug level, multiple testing vectors that are completely independent of each other yet operate within the same space, causing potential collisions and errors, etc, etc). Unless you're developing a "Hello, World!" app, I suspect your problem set is complicated enough without adding additional, unnecessary complications. 
+ #7 Thank you for the great answers. No only one answer was really complete, so I'm writing here a combination of all answers that helped me . If you like this answer, please vote up the people who were responsible for this. 
+
+ Conclusions 
+
+ Unit tests (or at least unit tests in unittest module) are binary. As Guilherme Chapiewski says : they will work or they will fail, there's no mid-term. 
+
+ Thus, my conclusion is that unit tests are not exactly the right tool for this job. It seems that unit tests are more concerned about "keep everything working, no failure is expected" , and thus I can't (or it's not easy) to have non-binary tests. 
+
+ So, unit tests don't seem the right tool if I'm trying to improve an algorithm or an implementation, because unit tests can't tell me how better is one version when compared to the other (supposing both of them are correctly implemented, then both will pass all unit tests). 
+
+ My final solution 
+
+ My final solution is based on ryber's idea and code shown in wcoenen answer . I'm basically extending the default TextTestRunner and making it less verbose. Then, my main code call two test suits: the critical one using the standard TextTestRunner , and the non-critical one, with my own less-verbose version. 
+
+ class _TerseTextTestResult(unittest._TextTestResult):
+ def printErrorList(self, flavour, errors):
+  for test, err in errors:
+   #self.stream.writeln(self.separator1)
+   self.stream.writeln("%s: %s" % (flavour,self.getDescription(test)))
+   #self.stream.writeln(self.separator2)
+   #self.stream.writeln("%s" % err)
+
+
+class TerseTextTestRunner(unittest.TextTestRunner):
+ def _makeResult(self):
+  return _TerseTextTestResult(self.stream, self.descriptions, self.verbosity)
+
+
+if __name__ == '__main__':
+ sys.stderr.write("Running non-critical tests:\n")
+ non_critical_suite = unittest.TestLoader().loadTestsFromTestCase(TestSomethingNonCritical)
+ TerseTextTestRunner(verbosity=1).run(non_critical_suite)
+
+ sys.stderr.write("\n")
+
+ sys.stderr.write("Running CRITICAL tests:\n")
+ suite = unittest.TestLoader().loadTestsFromTestCase(TestEverythingImportant)
+ unittest.TextTestRunner(verbosity=1).run(suite)
+ 
+
+ Possible improvements 
+
+ It should still be useful to know if there is any testing framework with non-binary tests, like Kathy Van Stone suggested . Probably I won't use it this simple personal project, but it might be useful on future projects. 
+ #8 Python 2.7 (and 3.1) added support for skipping some test methods or test cases, as well as marking some tests as expected failure . 
+
+ http://docs.python.org/library/unittest.html#skipping-tests-and-expected-failures 
+
+ Tests marked as expected failure won't be counted as failure on a TestResult. 
+ #9 You could write your test so that they count success rate. 
+With OCR you could throw at code 1000 images and require that 95% is successful. 
+
+ If your program must work with type A then if this fails the test fails. If it's not required to work with B, what is the value of doing such a test ?

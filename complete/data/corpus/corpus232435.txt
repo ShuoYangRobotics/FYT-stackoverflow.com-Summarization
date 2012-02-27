@@ -1,0 +1,130 @@
+Question (ID-232435): How do I restrict foreign keys choices to related objects only in django I have a two way foreign relation similar to the following 
+
+ class Parent(models.Model):
+ name = models.CharField(max_length=255)
+ favoritechild = models.ForeignKey("Child", blank=True, null=True)
+
+class Child(models.Model):
+ name = models.CharField(max_length=255)
+ myparent = models.ForeignKey(Parent)
+ 
+
+ How do I restrict the choices for Parent.favoritechild to only children whose parent is itself? I tried 
+
+ class Parent(models.Model):
+ name = models.CharField(max_length=255)
+ favoritechild = models.ForeignKey("Child", blank=True, null=True, limit_choices_to = {"myparent": "self"})
+ 
+
+ but that causes the admin interface to not list any children. 
+ Answers (Total-8): #0 I just came across ForeignKey.limit_choices_to in the Django docs.
+Not sure yet how this works, but it might just be the right think here. 
+
+ Update: ForeignKey.limit_choices_to allows to specify either a constant, a callable or a Q object to restrict the allowable choices for the key. A constant obviously is no use here, since it knows nothing about the objects involved. 
+
+ Using a callable (function or class method or any callable object) seem more promising. The problem remains how to access the necessary information form the HttpRequest object. Using thread local storage may be a solution. 
+
+ 2. Update: Here is what hast worked for me: 
+
+ I created a middle ware as described in the link above. It extracts one or more arguments from the request's GET part, such as "product=1" and stores this information in the thread locals. 
+
+ Next there is a class method in the model that reads the thread local variable and returns a list of ids to limit the choice of a foreign key field. 
+
+ @classmethod
+def _product_list(cls):
+ """
+ return a list containing the one product_id contained in the request URL,
+ or a query containing all valid product_ids if not id present in URL
+
+ used to limit the choice of foreign key object to those related to the current product
+ """
+ id = threadlocals.get_current_product()
+ if id is not None:
+  return [id]
+ else:
+  return Product.objects.all().values('pk').query
+ 
+
+ It is important to return a query containing all possible ids if none was selected so the normal admin pages work ok. 
+
+ The foreign key field is then declared as: 
+
+ product = models.ForeignKey(Product, limit_choices_to=dict(id__in=BaseModel._product_list))
+ 
+
+ The catch is that you have to provide the information to restrict the choices via the request. I don't see a way to access "self" here. 
+ #1 This isn't how django works. You would only create the relation going one way. 
+
+ class Parent(models.Model):
+ name = models.CharField(max_length=255)
+
+class Child(models.Model):
+ name = models.CharField(max_length=255)
+ myparent = models.ForeignKey(Parent)
+ 
+
+ And if you were trying to access the children from the parent you would do
+ parent_object.child_set.all() . If you set a related_name in the myparent field, then that is what you would refer to it as. Ex: related_name='children' , then you would do parent_object.children.all() 
+
+ Read the docs http://docs.djangoproject.com/en/dev/topics/db/models/#many-to-one-relationships for more. 
+ #2 Do you want to restrict the choices available in the admin interface when creating/editing a model instance? 
+
+ One way to do this is validation of the model. This lets you raise an error in the admin interface if the foreign field is not the right choice. 
+
+ Of course, Eric's answer is correct: You only really need one foreign key, from child to parent here. 
+ #3 @Ber: I have added validation to the model similar to this 
+
+ class Parent(models.Model):
+ name = models.CharField(max_length=255)
+ favoritechild = models.ForeignKey("Child", blank=True, null=True)
+ def save(self, force_insert=False, force_update=False):
+ if self.favoritechild is not None and self.favoritechild.myparent.id != self.id:
+  raise Exception("You must select one of your own children as your favorite")
+ super(Parent, self).save(force_insert, force_update)
+ 
+
+ which works exactly how I want, but it would be really nice if this validation could restrict choices in the dropdown in the admin interface rather than validating after the choice. 
+ #4 I'm trying to do something similar. It seems like everyone saying 'you should only have a foreign key one way' has maybe misunderstood what you're trying do. 
+
+ It's a shame the limit_choices_to={"myparent": "self"} you wanted to do doesn't work... that would have been clean and simple. Unfortunately the 'self' doesn't get evaluated and goes through as a plain string. 
+
+ I thought maybe I could do: 
+
+ class MyModel(models.Model):
+ def _get_self_pk(self):
+  return self.pk
+ favourite = modles.ForeignKey(limit_choices_to={'myparent__pk':_get_self_pk})
+ 
+
+ But alas that gives an error because the function doesn't get passed a self arg :( 
+
+ It seems like the only way is to put the logic into all the forms that use this model (ie pass a queryset in to the choices for your formfield). Which is easily done, but it'd be more DRY to have this at the model level. Your overriding the save method of the model seems a good way to prevent invalid choices getting through. 
+ #5 I am also looking for an answer to this question--it seems like it should be possible, and that the "right" way would be going through either a callable or Q object in the model, but the catch is how to pass the right key to it so that it limits the choices to relevant ones. 
+
+ My question on limiting foreign keys in an inline admin form 
+ #6 An alternative approach would be not to have 'favouritechild' fk as a field on the Parent model. 
+
+ Instead you could have an is_favourite boolean field on the Child. 
+
+ This may help:
+ https://anentropic.wordpress.com/2009/12/08/snippet-exclusive-boolean-field-for-django-models/ 
+
+ That way you'd sidestep the whole problem of ensuring Children could only be made the favourite of the Parent they belong to. 
+
+ The view code would be slightly different but the filtering logic would be straightforward. 
+
+ In the admin you could even have an inline for Child models that exposed the is_favourite checkbox (if you only have a few children per parent) otherwise the admin would have to be done from the Child's side. 
+ #7 The new "right" way of doing this, at least since Django 1.1 is by overriding the AdminModel.formfield_for_foreignkey(self, db_field, request, **kwargs). 
+
+ See http://docs.djangoproject.com/en/1.2/ref/contrib/admin/#django.contrib.admin.ModelAdmin.formfield_for_foreignkey 
+
+ For those who don't want to follow the link below is an example function that is close for the above questions models. 
+
+ class MyModelAdmin(admin.ModelAdmin):
+ def formfield_for_foreignkey(self, db_field, request, **kwargs):
+  if db_field.name == "favoritechild":
+   kwargs["queryset"] = Child.objects.filter(myparent=request.object_id)
+  return super(MyModelAdmin, self).formfield_for_manytomany(db_field, request, **kwargs)
+ 
+
+ I'm only not sure about how to get the current object that is being edited. I expect it is actually on the self somewhere but I'm not sure.

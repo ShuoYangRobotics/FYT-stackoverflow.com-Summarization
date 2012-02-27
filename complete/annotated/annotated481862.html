@@ -1,0 +1,286 @@
+<h3>Question ( ID-481862 ) : </h3><h2>Extracting info from large structured text <span style="background-color:yellow;">files</span> </h2><p>I need to read some large files (from 50k to 100k lines), structured in groups separated by empty lines. Each group start at the same pattern "No.999999999  dd/mm/yyyy  ZZZ". Here´s some sample data.</p>
+<blockquote>
+<p>No.813829461  16/09/1987  270<br />
+  Tit.SUZANO PAPEL E CELULOSE S.A. (BR/BA)<br />
+  C.N.P.J./C.I.C./N INPI : 16404287000155<br />
+  Procurador: MARCELLO DO NASCIMENTO  </p>
+<p>No.815326777  28/12/1989  351<br />
+  Tit.SIGLA SISTEMA GLOBO DE GRAVACOES AUDIO VISUAIS LTDA (BR/RJ)<br />
+  C.N.P.J./C.I.C./NºINPI : 34162651000108<br />
+  Apres.: Nominativa ; Nat.: De Produto<br />
+  Marca: TRIO TROPICAL<br />
+  Clas.Prod/Serv: 09.40<br />
+  *DEFERIDO CONFORME RESOLUÇÃO 123 DE 06/01/2006, PUBLICADA NA RPI 1829, DE 24/01/2006.<br />
+  Procurador: WALDEMAR RODRIGUES PEDRA  </p>
+<p>No.900148764  11/01/2007  LD3<br />
+  Tit.TIARA BOLSAS E CALÇADOS LTDA<br />
+  Procurador: Marcia Ferreira Gomes<br />
+  *Escritório: Marcas Marcantes e Patentes  Ltda<br />
+  *Exigência Formal não respondida Satisfatoriamente, Pedido de Registro de Marca considerado inexistente, de acordo com Art. 157 da LPI<br />
+  *Protocolo da Petição de cumprimento de Exigência Formal: 810080140197</p>
+</blockquote>
+<p>I wrote some code that´s parsing it accordingly. There´s anything that I can improve, to improve readability or performance? Here´s what I come so far:</p>
+<pre><code>import re, pprint
+
+class Despacho(object):
+    """
+    Class to parse each line, applying the regexp and storing the results
+    for future use
+    """
+    regexp = {
+        re.compile(r'No.([\d]{9})  ([\d]{2}/[\d]{2}/[\d]{4})  (.*)'): lambda self: self._processo,
+        re.compile(r'Tit.(.*)'): lambda self: self._titular,
+        re.compile(r'Procurador: (.*)'): lambda self: self._procurador,
+        re.compile(r'C.N.P.J./C.I.C./N INPI :(.*)'): lambda self: self._documento,
+        re.compile(r'Apres.: (.*) ; Nat.: (.*)'): lambda self: self._apresentacao,
+        re.compile(r'Marca: (.*)'): lambda self: self._marca,
+        re.compile(r'Clas.Prod/Serv: (.*)'): lambda self: self._classe,
+        re.compile(r'\*(.*)'): lambda self: self._complemento,
+    }
+
+    def __init__(self):
+        """
+        'complemento' is the only field that can be multiple in a single registry
+        """
+        self.complemento = []
+
+    def _processo(self, matches):
+        self.processo, self.data, self.despacho = matches.groups()
+
+    def _titular(self, matches):
+        self.titular = matches.group(1)
+
+    def _procurador(self, matches):
+        self.procurador = matches.group(1)
+
+    def _documento(self, matches):
+        self.documento = matches.group(1)
+
+    def _apresentacao(self, matches):
+        self.apresentacao, self.natureza = matches.groups()
+
+    def _marca(self, matches):
+        self.marca = matches.group(1)
+
+    def _classe(self, matches):
+        self.classe = matches.group(1)
+
+    def _complemento(self, matches):
+        self.complemento.append(matches.group(1))
+
+    def read(self, line):
+        for pattern in Despacho.regexp:
+            m = pattern.match(line)
+            if m:
+                Despacho.regexp[pattern](self)(m)
+
+
+def process(rpi):
+    """
+    read data and process each group
+    """
+    rpi = (line for line in rpi)
+    group = False
+
+    for line in rpi:
+        if line.startswith('No.'):
+            group = True
+            d = Despacho()        
+
+        if not line.strip() and group: # empty line - end of block
+            yield d
+            group = False
+
+        d.read(line)
+
+
+arquivo = open('rm1972.txt') # file to process
+for desp in process(arquivo):
+    pprint.pprint(desp.__dict__)
+    print('--------------')
+</code></pre>
+<p>Thank you . </p>
+<p>By the way , sorry for my poor english. : ) </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>That is pretty good. Below some suggestions , let me know if you like'em : </p>
+<pre><code>import re
+import pprint
+import sys
+
+class Despacho(object):
+    """
+    Class to parse each line, applying the regexp and storing the results
+    for future use
+    """
+    #used a dict with the keys instead of functions.
+    regexp = {
+        ('processo', 
+         'data', 
+         'despacho'): re.compile(r'No.([\d]{9})  ([\d]{2}/[\d]{2}/[\d]{4})  (.*)'),
+        ('titular',): re.compile(r'Tit.(.*)'),
+        ('procurador',): re.compile(r'Procurador: (.*)'),
+        ('documento',): re.compile(r'C.N.P.J./C.I.C./N INPI :(.*)'),
+        ('apresentacao',
+         'natureza'): re.compile(r'Apres.: (.*) ; Nat.: (.*)'),
+        ('marca',): re.compile(r'Marca: (.*)'),
+        ('classe',): re.compile(r'Clas.Prod/Serv: (.*)'),
+        ('complemento',): re.compile(r'\*(.*)'),
+    }
+
+    def __init__(self):
+        """
+        'complemento' is the only field that can be multiple in a single registry
+        """
+        self.complemento = []
+
+
+    def read(self, line):
+        for attrs, pattern in Despacho.regexp.iteritems():
+            m = pattern.match(line)
+            if m:
+                for groupn, attr in enumerate(attrs):
+                    # special case complemento:
+                    if attr == 'complemento':
+                        self.complemento.append(m.group(groupn + 1))
+                    else:
+                        # set the attribute on the object
+                        setattr(self, attr, m.group(groupn + 1))
+
+    def __repr__(self):
+        # defines object printed representation
+        d = {}
+        for attrs in self.regexp:
+            for attr in attrs:
+                d[attr] = getattr(self, attr, None)
+        return pprint.pformat(d)
+
+def process(rpi):
+    """
+    read data and process each group
+    """
+    #Useless line, since you're doing a for anyway
+    #rpi = (line for line in rpi)
+    group = False
+
+    for line in rpi:
+        if line.startswith('No.'):
+            group = True
+            d = Despacho()        
+
+        if not line.strip() and group: # empty line - end of block
+            yield d
+            group = False
+
+        d.read(line)
+
+def main():
+    arquivo = open('rm1972.txt') # file to process
+    for desp in process(arquivo):
+        print desp # can print directly here.
+        print('-' * 20)
+    return 0
+
+if __name__ == '__main__':
+    main()
+</code></pre>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>It would be easier to help if you had a specific concern. Performance will <span style="background-color:yellow;">depend</span> greatly on the efficiency of the particular <span style="background-color:yellow;">regex</span> engine you are using. <span style="background-color:yellow;">100K</span> <span style="background-color:yellow;">lines</span> in a single <span style="background-color:yellow;">file</span> <span style="background-color:yellow;">does</span> n't sound that big , but again it all <span style="background-color:yellow;">depends</span> on your environment . </p>
+<p>I use Expresso in my .NET <span style="background-color:yellow;">development</span> to test expressions for accuracy and performance . A Google search turned up Kodos , a GUI Python <span style="background-color:yellow;">regex</span> authoring tool . </p>
+<br /><b># 2 </b><br /><p>It looks good overall , but why <span style="background-color:yellow;">do</span> you have the <span style="background-color:yellow;">line</span> : </p>
+<pre><code>rpi = (line for line in rpi)
+</code></pre>
+<p>You can already iterate over the <span style="background-color:yellow;">file</span> <span style="background-color:yellow;">object</span> without this intermediate step . </p>
+<br /><b># 3 </b><br /><p>I would n't use <span style="background-color:yellow;">regex</span> here. If you know that your <span style="background-color:yellow;">lines</span> will be starting with fixed strings , why not check those strings and write a logic around it ? </p>
+<pre><code>for line in open(file):
+    if line[0:3]=='No.':
+        currIndex='No'
+        map['No']=line[4:]
+   ....
+   ...
+   else if line.strip()=='':
+       //store the record in the map and clear the map
+   else:
+      //append line to the last index in map.. this is when the record overflows to the next line.
+      Map[currIndex]=Map[currIndex]+"\n"+line
+</code></pre>
+<p>Consider the above code as just the pseudocode . </p>
+<br /><b># 4 </b><br /><p>Another version with only one combined <span style="background-color:yellow;">regular</span> expression : </p>
+<pre><code>#!/usr/bin/python
+
+import re
+import pprint
+import sys
+
+class Despacho(object):
+    """
+    Class to parse each line, applying the regexp and storing the results
+    for future use
+    """
+    #used a dict with the keys instead of functions.
+    regexp = re.compile(
+        r'No.(?P<processo>[\d]{9})  (?P<data>[\d]{2}/[\d]{2}/[\d]{4})  (?P<despacho>.*)'
+        r'|Tit.(?P<titular>.*)'
+        r'|Procurador: (?P<procurador>.*)'
+        r'|C.N.P.J./C.I.C./N INPI :(?P<documento>.*)'
+        r'|Apres.: (?P<apresentacao>.*) ; Nat.: (?P<natureza>.*)'
+        r'|Marca: (?P<marca>.*)'
+        r'|Clas.Prod/Serv: (?P<classe>.*)'
+        r'|\*(?P<complemento>.*)')
+
+    simplefields = ('processo', 'data', 'despacho', 'titular', 'procurador',
+                    'documento', 'apresentacao', 'natureza', 'marca', 'classe')
+
+    def __init__(self):
+        """
+        'complemento' is the only field that can be multiple in a single
+        registry
+        """
+        self.__dict__ = dict.fromkeys(self.simplefields)
+        self.complemento = []
+
+    def parse(self, line):
+        m = self.regexp.match(line)
+        if m:
+            gd = dict((k, v) for k, v in m.groupdict().items() if v)
+            if 'complemento' in gd:
+                self.complemento.append(gd['complemento'])
+            else:
+                self.__dict__.update(gd)
+
+    def __repr__(self):
+        # defines object printed representation
+        return pprint.pformat(self.__dict__)
+
+def process(rpi):
+    """
+    read data and process each group
+    """
+    d = None
+
+    for line in rpi:
+        if line.startswith('No.'):
+            if d:
+                yield d
+            d = Despacho()
+        d.parse(line)
+    yield d
+
+def main():
+    arquivo = file('rm1972.txt') # file to process
+    for desp in process(arquivo):
+        print desp # can print directly here.
+        print '-' * 20
+
+if __name__ == '__main__':
+    main()
+</code></pre>
+<br /><b># 5 </b><br /><p>I 'm not going to go over everything but for starters : instead of making functions that each of the lambdas call , why not perform the work <span style="background-color:yellow;">directly</span> in the lambda ? </p>
+<p>For example : </p>
+<pre><code>    regexp = {
+            re.compile(r'No.([\d]{9})  ([\d]{2}/[\d]{2}/[\d]{4})  (.*)'): lambda self, matches: self.processo, self.data, self.despacho = matches.groups()
+    }
+
+...
+
+Despacho.regexp[pattern](self, m)
+</code></pre>
+<p>That saves you a lot of function <span style="background-color:yellow;">definitions</span> . </p>
+<br />

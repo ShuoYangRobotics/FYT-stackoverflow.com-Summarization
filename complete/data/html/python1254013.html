@@ -1,0 +1,89 @@
+<h3>Question (ID-1254013):</h3><h2>How to add a custom implicit conversion to a C++ type in Boost::Python?</h2><p>In my C++ code I have a class Foo with many methods taking a Bar type variable as an argument:</p>
+
+<pre><code>class Foo {
+public:
+  void do_this(Bar b);
+  void do_that(Bar b);
+  /* ... */
+};
+</code></pre>
+
+<p>Bar has a number of constructors that create a new object from many common types such as int, std::string, float, etc:</p>
+
+<pre><code>class Bar {
+public:
+  Bar(int i);
+  Bar(float f);
+  Bar(std::string s);
+  /* ... */
+};
+</code></pre>
+
+<p>I wrapped this with Boost::Python and I'm now able to call my Foo methods using Python literals directly, as they get implicitly converted to Bar objects.</p>
+
+<pre><code>f = Foo()
+f.do_this(5)
+f.do_that("hello")
+</code></pre>
+
+<p>Now, I would like to be able to use also other Python types, such as tuples, like this:</p>
+
+<pre><code>f.do_that((1,2,3))
+</code></pre>
+
+<p>But I don't want to touch the original Bar definition, and I don't want to pollute my C++ library with Boost::Python stuff. I want to write a wrapper function in my binding code, but I just can't understand if this is possible and what is the correct way for doing this.</p>
+
+<p>In other words: can I register a factory function to be used as an automatic conversion in Python?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Subclass Bar near the wrapper code and give your subclass a ctor that takes a bp::object (or a more specific python type)</p>
+
+<pre><code>struct Bar_wrapper:Bar,bp::wrapper&lt;Bar&gt;
+{
+    Bar_wrapper(bp::object arg)
+    {
+        //code to build a Bar_wrapper Here
+    }
+}
+</code></pre>
+
+<p>Then export a Bar_wrapper to python instead of a Bar, and call it a Bar as the python name:</p>
+
+<pre><code>class&lt;Bar_wrapper&gt;("Bar")
+    ...
+    .def(init&lt;bp::object&gt;())
+    ...
+</code></pre>
+<br /><b>#1</b><br /><p>Create some type TupleCollector with overridden "operator ,(int)" so you can write</p>
+
+<pre><code>f.do_that((TuppleCollector(), 1, 2, 3))
+</code></pre>
+
+<p>at last create conversion between TupleCollector and expected target</p>
+<br /><b>#2</b><br /><p>Add a new constructor <code>template &lt;typename T&gt; Bar(T)</code>
+in your header and implement as <code>template &lt;&gt;
+Bar::Bar(Tupple) {}</code></p>
+<br /><b>#3</b><br /><p>You can make a static factory method and then expose it as one of the Python constructors for the class.  Just make a converter that will take any Python object and you're free do do whatever your please.</p>
+
+<pre><code>using namespace boost::python;
+
+Bar CreateBar(object obj)
+{
+    // Do your thing here
+
+    return Bar;
+}
+
+// ..................
+
+class_&lt;Bar&gt;("Bar")
+    // .....................
+    .def("__init__", make_constructor(&amp;CreateBar))
+    //.............
+    ;
+</code></pre>
+<br /><b>#4</b><br /><p>You can register from-python converter which will construct <code>Bar</code> instance from arbitrary object. See <a href="http://misspent.wordpress.com/2009/09/27/how-to-write-boost-python-converters/" rel="nofollow">here</a> and an exmaple of my own (converts either <code>(Vector3,Quaternion)</code> tuple or 7*double-tuple to 3d transformation <code>Se3</code>) <a href="http://bazaar.launchpad.net/~eudoxos/+junk/tr2/view/head:/py/wrapper/customConverters.cpp#L76" rel="nofollow">here</a>.</p>
+
+<p>Note that the logic has two steps, first you determine whether the object is convertible (<code>convertible</code>; in your case, you check that it is a sequence, and has the right number of elements), then the <code>construct</code> method is called, which actually returns the instance, allocated with the pointer passed as parameter.</p>
+
+<p>The converter must then be registered in <code>BOOST_PYTHON_MODULE</code>. Since the converter registry is global, once registered, it will be subsequently used automatically everywhere. All function argument of type <code>Bar</code> or <code>const Bar&amp;</code> should be handled just fine (nor sure about <code>Bar&amp;</code> from the top of my head).</p>
+<br /><b>#5</b><br /><p>You can export function do_that which take boost::python::object param, check if param is a python tuple, extract data and pass it to object.</p>
+<br />

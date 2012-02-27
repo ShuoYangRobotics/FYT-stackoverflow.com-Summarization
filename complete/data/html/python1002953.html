@@ -1,0 +1,91 @@
+<h3>Question (ID-1002953):</h3><h2>Large Sqlite database search</h2><p>How is it possible to implement an efficient large Sqlite db search (more than 90000 entries)?</p>
+
+<p>I'm using Python and SQLObject ORM:</p>
+
+<pre><code>    import re
+    ...
+
+    def search1():
+        cr = re.compile(ur'foo')
+        for item in Item.select():
+            if cr.search(item.name) or cr.search(item.skim):
+                print item.name
+</code></pre>
+
+<p>This function runs in more than 30 seconds. How should I make it run faster? </p>
+
+<p><strong>UPD</strong>: The test:</p>
+
+<pre><code>    for item in Item.select():
+        pass
+</code></pre>
+
+<p>... takes almost the same time as my initial function (0:00:33.093141 to 0:00:33.322414). So the regexps eat no time.</p>
+
+<p>A Sqlite3 shell query:</p>
+
+<pre><code>    select '' from item where name like '%foo%';
+</code></pre>
+
+<p>runs in about a second. So the main time consumption happens due to the inefficient ORM's data retrieval from db. I guess SQLObject grabs entire rows here, while Sqlite touches only necessary fields.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>The best way would be to rework your logic to do the selection in the database instead of in your python program.</p>
+
+<p>Instead of doing Item.select(), you should rework it to do Item.select("""name LIKE ....</p>
+
+<p>If you do this, and make sure you have the name and skim columns indexed, it will return very quickly.  90000 entries is not a large database.</p>
+<br /><b>#1</b><br /><p>30 seconds to fetch 90,000 rows might not be all that bad.</p>
+
+<p>Have you benchmarked the time required to do the following?</p>
+
+<pre><code>    for item in Item.select():
+        pass
+</code></pre>
+
+<p>Just to see if the time is DB time, network time or application time?</p>
+
+<p>If your SQLite DB is physically very large, you could be looking at -- simply -- a lot of physical I/O to read all that database stuff in. </p>
+<br /><b>#2</b><br /><p>If you really need to use a regular expression, there's not really anything you can do to speed that up tremendously.  </p>
+
+<p>The best thing would be to write an sqlite function that performs the comparison for you in the db engine, instead of Python.</p>
+
+<p>You could also switch to a db server like postgresql that has support for SIMILAR.  </p>
+
+<p><a href="http://www.postgresql.org/docs/8.3/static/functions-matching.html" rel="nofollow">http://www.postgresql.org/docs/8.3/static/functions-matching.html</a></p>
+<br /><b>#3</b><br /><p>Given your example and expanding on Reed's answer your code could look a bit like the following:</p>
+
+<pre><code>import re
+import sqlalchemy.sql.expression as expr
+
+...
+
+def search1():
+    searchStr = ur'foo'
+    whereClause = expr.or_(itemsTable.c.nameColumn.contains(searchStr), itemsTable.c.skimColumn.contains(searchStr))
+    for item in Items.select().where(whereClause):
+        print item.name
+</code></pre>
+
+<p>which translates to</p>
+
+<pre><code>SELECT * FROM items WHERE name LIKE '%foo%' or skim LIKE '%foo%'
+</code></pre>
+
+<p>This will have the database do all the filtering work for you instead of fetching all 90000 records and doing possibly two regex operations on each record.</p>
+
+<p><a href="http://www.sqlalchemy.org/docs/05/reference/sqlalchemy/schema.html?highlight=contains#sqlalchemy.schema.Column.contains" rel="nofollow">You can find some info here on the .contains() method here</a>.</p>
+
+<p>As well as the <a href="http://www.sqlalchemy.org/docs/05/sqlexpression.html" rel="nofollow">SQLAlchemy SQL Expression Language Tutorial here</a>.</p>
+
+<p>Of course the example above assumes variable names for your itemsTable and the column it has (nameColumn and skimColumn).</p>
+<br /><b>#4</b><br /><p>I would definitely take a suggestion of Reed to pass the filter to the SQL (forget the index part though).</p>
+
+<p>I do not think that selecting only specified fields or all fields make a difference (unless you do have a lot of large fields). I would bet that SQLObject creates/instanciates 80K objects and puts them into a Session/UnitOfWork for tracking. This could definitely take some time.</p>
+
+<p>Also if you do not need objects in your session, there must be a way to select just what the fields you need using custom-query creation so that no <code>Item</code> objects are created, but only tuples.</p>
+<br /><b>#5</b><br /><p>Initially doing regex via Python was considered for y_serial, but that 
+was dropped in favor of SQLite's GLOB (which is far faster).
+GLOB is similar to LIKE except that it's syntax is more 
+conventional: * instead of %, ? instead of _ .</p>
+
+<p>See the Endnotes at <a href="http://yserial.sourceforge.net/" rel="nofollow">http://yserial.sourceforge.net/</a> for more details. </p>
+<br />

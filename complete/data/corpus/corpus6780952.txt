@@ -1,0 +1,206 @@
+Question (ID-6780952): How to change behavior of dict() for an instance So I'm writing a class that extends a dictionary which right now uses a method "dictify" to transform itself into a dict. What I would like to do instead though is change it so that calling dict() on the object results in the same behavior, but I don't know which method to override. Is this not possible, or I am I missing something totally obvious? (And yes, I know the code below doesn't work but I hope it illustrates what I'm trying to do.) 
+
+ from collections import defaultdict
+
+class RecursiveDict(defaultdict):
+ '''
+ A recursive default dict.
+
+ &gt;&gt;&gt; a = RecursiveDict()
+ &gt;&gt;&gt; a[1][2][3] = 4
+ &gt;&gt;&gt; a.dictify()
+ {1: {2: {3: 4}}}
+ '''
+ def __init__(self):
+  super(RecursiveDict, self).__init__(RecursiveDict)
+
+ def dictify(self):
+  '''Get a standard dictionary of the items in the tree.'''
+  return dict([(k, (v.dictify() if isinstance(v, dict) else v))
+      for (k, v) in self.items()])
+
+ def __dict__(self):
+  '''Get a standard dictionary of the items in the tree.'''
+  print [(k, v) for (k, v) in self.items()]
+  return dict([(k, (dict(v) if isinstance(v, dict) else v))
+      for (k, v) in self.items()])
+ 
+
+ EDIT: To show the problem more clearly: 
+
+ &gt;&gt;&gt; b = RecursiveDict()
+&gt;&gt;&gt; b[1][2][3] = 4
+&gt;&gt;&gt; b
+defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {1: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {2: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {3: 4})})})
+&gt;&gt;&gt; dict(b)
+{1: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {2: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {3: 4})})}
+&gt;&gt;&gt; b.dictify()
+{1: {2: {3: 4}}}
+ 
+
+ I want dict(b) to be same as b.dictify() 
+ Answers (Total-6): #0 Nothing wrong with your approach, but this is similar to the Autovivification feature of Perl, which has been implemented in Python in this question . Props to @nosklo for this. 
+
+ class RecursiveDict(dict):
+ """Implementation of perl's autovivification feature."""
+ def __getitem__(self, item):
+  try:
+   return dict.__getitem__(self, item)
+  except KeyError:
+   value = self[item] = type(self)()
+   return value
+
+&gt;&gt;&gt; a = RecursiveDict()
+&gt;&gt;&gt; a[1][2][3] = 4
+&gt;&gt;&gt; dict(a)
+{1: {2: {3: 4}}}
+ 
+
+ EDIT 
+
+ As suggested by @Rosh Oxymoron, using __missing__ results in a more concise implementation. Requires Python >= 2.5 
+
+ class RecursiveDict(dict):
+ """Implementation of perl's autovivification feature."""
+ def __missing__(self, key):
+  value = self[key] = type(self)()
+  return value
+ 
+ #1 edit : As ironchefpython pointed out in comments, this isn't actually doing what I thought it did, as in my example b[1] is still a RecursiveDict . This may still be useful, as you essentially get an object pretty similar Rob Cowie's answer, but it is built on defaultdict . 
+
+ 
+
+ You can get the behavior you want (or something very similar) by overriding __repr__ , check this out: 
+
+ class RecursiveDict(defaultdict):
+ def __init__(self):
+  super(RecursiveDict, self).__init__(RecursiveDict)
+
+ def __repr__(self):
+  return repr(dict(self))
+
+&gt;&gt;&gt; a = RecursiveDict()
+&gt;&gt;&gt; a[1][2][3] = 4
+&gt;&gt;&gt; a    # a looks like a normal dict since repr is overridden
+{1: {2: {3: 4}}}
+&gt;&gt;&gt; type(a)
+&lt;class '__main__.RecursiveDict'&gt;
+&gt;&gt;&gt; b = dict(a)
+&gt;&gt;&gt; b    # dict(a) gives us a normal dictionary
+{1: {2: {3: 4}}}
+&gt;&gt;&gt; b[5][6] = 7 # obviously this won't work anymore
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+KeyError: 5
+&gt;&gt;&gt; type(b)
+&lt;type 'dict'&gt;
+ 
+
+ There may be a better way to get to a normal dictionary view of the defaultdict than dict(self) but I couldn't find one, comment if you know how. 
+ #2 You can't do it. 
+
+ I deleted my previous answer, because I found after looking at the source code, that if you call dict(d) on a d that is a subclass of dict , it makes a fast copy of the underlying hash in C, and returns a new dict object. 
+
+ Sorry. 
+
+ If you really want this behavior, you'll need to create a RecursiveDict class that doesn't inherit from dict , and implement the __iter__ interface. 
+ #3 You need to override __iter__ . 
+
+ def __iter__(self): 
+ return iter((k, (v.dictify() if isinstance(v, dict) else v)) 
+    for (k, v) in self.items())
+ 
+
+ Instead of self.items() , you should use self.iteritems() on Python 2. 
+
+ Edit: OK, This seems to be your problem: 
+
+ &gt;&gt;&gt; class B(dict): __iter__ = lambda self: iter(((1, 2), (3, 4)))
+... 
+&gt;&gt;&gt; b = B()
+&gt;&gt;&gt; dict(b)
+{}
+&gt;&gt;&gt; class B(list): __iter__ = lambda self: iter(((1, 2), (3, 4)))
+... 
+&gt;&gt;&gt; b = B()
+&gt;&gt;&gt; dict(b)
+{1: 2, 3: 4}
+ 
+
+ So this method doesn't work if the object you're calling dict() on is a subclass of dict. 
+
+ Edit 2: To be clear, defaultdict is a subclass of dict . dict(a_defaultdict) is still a no-op. 
+ #4 Do you want just to print it like a dict ? use this: 
+
+ from collections import defaultdict
+
+class RecursiveDict(defaultdict):
+ '''
+ A recursive default dict.
+
+ &gt;&gt;&gt; a = RecursiveDict()
+ &gt;&gt;&gt; a[1][2][3] = 4
+ &gt;&gt;&gt; a.dictify()
+ {1: {2: {3: 4}}}
+ &gt;&gt;&gt; dict(a)
+ {1: {2: {3: 4}}}
+
+ '''
+ def __init__(self):
+  super(RecursiveDict, self).__init__(RecursiveDict)
+
+ def dictify(self):
+  '''Get a standard dictionary of the items in the tree.'''
+  return dict([(k, (v.dictify() if isinstance(v, dict) else v))
+      for (k, v) in self.items()])
+
+ def __dict__(self):
+  '''Get a standard dictionary of the items in the tree.'''
+  print [(k, v) for (k, v) in self.items()]
+  return dict([(k, (dict(v) if isinstance(v, dict) else v))
+      for (k, v) in self.items()])
+
+ def __repr__(self):
+  return repr(self.dictify())
+ 
+
+ Maybe you are looking for __missing__ : 
+
+ class RecursiveDict(dict):
+ '''
+ A recursive default dict.
+
+ &gt;&gt;&gt; a = RecursiveDict()
+ &gt;&gt;&gt; a[1][2][3] = 4
+ &gt;&gt;&gt; a
+ {1: {2: {3: 4}}}
+ &gt;&gt;&gt; dict(a)
+ {1: {2: {3: 4}}}
+
+ '''
+
+ def __missing__(self, key):
+  self[key] = self.__class__()
+  return self[key]
+ 
+ #5 Once you have your dictify function working just do 
+
+ dict = dictify
+ 
+
+ Update:
+Here is a short way to have this recursive dict: 
+
+ &gt;&gt;&gt; def RecursiveDict():
+... return defaultdict(RecursiveDict)
+ 
+
+ Then you can: 
+
+ d[1][2][3] = 5
+d[1][2][4] = 6
+&gt;&gt;&gt; d
+defaultdict(&lt;function ReturnsRecursiveDict at 0x7f3ba453a5f0&gt;, {1: defaultdict(&lt;function ReturnsRecursiveDict at 0x7f3ba453a5f0&gt;, {2: defaultdict(&lt;function ReturnsRecursiveDict at 0x7f3ba453a5f0&gt;, {3: 5, 4: 6})})})
+ 
+
+ I don't see a neat way to implement dictify.

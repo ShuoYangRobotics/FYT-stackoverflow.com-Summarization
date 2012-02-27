@@ -1,0 +1,106 @@
+<h3>Question (ID-358398):</h3><h2>Keeping a variable around from post to get?</h2><p>I have a class called myClass which defines post() and get() methods. </p>
+
+<p>From <em>index.html</em>, I have a form with an action that calls myClass.post() which grabs some data from the data base, sets a couple variables and sends the user to <em>new.html</em>. </p>
+
+<p>now, <em>new.html</em> has a form which calls myClass.get(). </p>
+
+<p><strong>I want the get() method to know the value of the variables I got in post().</strong> That is is main point here.</p>
+
+<p>I figure the submit from new.html creates a separate instance of myClass created by the submit from index.html. </p>
+
+<p>Is there a way to access the "post instance" somehow? </p>
+
+<p>Is there a workaround for this? If I have to, is there an established way to send the value from post to "new.html" and send it back with the get-submit? </p>
+
+<p>more generally, I guess I don't understand the life of my instances when web-programming. In a normal interactive environment, I know when the instance is created and destroyed, but I don't get that when I'm only using the class through calls to its methods. Are those classes even instantiated unless their methods are called? </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>What you're talking about is establishing a "session".  That is, a way to remember the user and the state of their transaction.</p>
+
+<p>There are several ways of tackling this, all of which rely on techniques for remembering that you're in a session in the first place.</p>
+
+<p>HTTP provides you no help.  You have to find some place to save session state on the server, and some place to record session identification on the client.  The two big techniques are</p>
+
+<ul>
+<li><p>Use a cookie to identify the session.  Seamless and silent.</p></li>
+<li><p>Use a query string in the URL to identify the session.   Obvious because you have a <code>?sessionid=SomeSessionGUID</code> in your URL's.  This exposes a lot and makes bookmarking annoying.  After the session is cleaned up, you still have this session id floating around in people's bookmarks.</p></li>
+<li><p>In a limited way, you can also use hidden fields in a form.  This only works if you have forms on every page.  Not always true.</p></li>
+</ul>
+
+<p>Here's how it plays out in practice.</p>
+
+<ol>
+<li><p>GET response.  Check for the cookie in the header.</p>
+
+<p>a.  No cookie.  First time user.  Create a session.  Save it somewhere (memory, file, database).  Put the unique ID into a cookie.  Respond knowing this is their first time.</p>
+
+<p>b.  Cookie.  Been here recently.  Try to get the cookie.  </p>
+
+<ul>
+<li><p>FInd the session object.  Respond using information in the cookie.</p></li>
+<li><p>Drat.  No session.  Old cookie.  Create a new one and act like this is their first visit.</p></li>
+</ul></li>
+<li><p>POST response.  Check for the cookie in the header.</p>
+
+<p>a.  No cookie.  WTF?  Stupid kids.  Get off my lawn!  Someone bookmarked a POST or is trying to mess with your head.  Respond as if it was a first-time GET.</p>
+
+<p>b.  Cookie.  Excellent.  Get the cookie.  </p>
+
+<ul>
+<li><p>Find the session object.  Find the thing you need in the session object.  Respond.</p></li>
+<li><p>Drat.  No session.  Old cookie.  Create a new one and respond as if was a first-time GET.</p></li>
+</ul></li>
+</ol>
+
+<p>You can do the same thing with a query string instead of a cookie.  Or a hidden field on a form.  </p>
+<br /><b>#1</b><br /><p>It is not a problem of how the instances are managed. Because HTTP is stateless, your program is, virtually, stateless too. (For long running processes, like GAE, it is possible to make it otherwise, but I am not sure you would need this complexity here)</p>
+
+<p>You haven't supplied any code, but I am assuming you get a POST and then you <a href="http://en.wikipedia.org/wiki/Post/Redirect/Get" rel="nofollow">redirect</a> to results (which is a GET). So it should be easy to preserve the parameter:</p>
+
+<pre><code>def save_foo(request):
+    if request.method == 'POST':
+        save(request.POST)
+        return HttpRedirect(reverse(
+            'Some_Target',
+            {'bar': 'baz', 'foo': request.POST['foo']}))
+    else:
+        # do something else
+</code></pre>
+
+<p>This view, in case of a POST, casues the client to issue a GET request to whatever URL is aliased <code>Some_Target</code>. And this GET will include <code>foo</code> parameter from the POST.</p>
+
+<p>This solution is for a single view. If you need this behaviour project-wise you can use a middleware for it. And this time caching the variable makes sense.</p>
+
+<p>There are two things that make me a little uncomfortable with this approach:</p>
+
+<ol>
+<li>Mixing GET and POST parameters. GET parameters should be used for instructions with no side effects, like filtering. POST parameter should be used for insructions with side effects, ie modifying the data. Moving a parameter from POST to get should be avoided IMHO.</li>
+<li>If we need persistence, using object instances (or function scopes as in my example) is usually not a good idea.
+<ol>
+<li>If it is non sensitive information with with lower retention needs <code>cookies</code> are the way to go. They are a mechanism of persistence on the client side, so you can just grab them form the request and unless you change them they are retained (until expiration of course.)</li>
+<li>If you need more control over retention you should use local persistence mechanisms. Server cache (of any kind), filesystem, database... Then of course you will need to filter per user manually.</li>
+</ol></li>
+</ol>
+
+<p>In any case I would avoid caching on instances.</p>
+<br /><b>#2</b><br /><p>HTTP is stateless, so you have no (built-in) way of knowing if the user that loads one page is the same user that loaded another. Further, even if you do know that, thanks to session cookies, for example, you have no way of telling if the browser window they're loading the subsequent page in is the same one they loaded the prior page in. The user could have multiple tabs accessing your site, and you don't want one page's state change to clobber another's.</p>
+
+<p>With that in mind, your best option is to include query parameters in the link to the page being fetched with GET, encoding the variables you want to send to the 'get' page (make sure they're not sensitive, since the user can modify them!). Then  you can access them through self.request.GET in the get request.</p>
+<br /><b>#3</b><br /><p>I don't know specifically about the google app engine, but normally, here's what happens:</p>
+
+<p>The server would have some kind of thread pool. Every time an http request is sent to the server, a thread is selected from the pool or created.</p>
+
+<p>In that thread an instance of some kind of controller object will be created. This object will decide what to do with the request (like instantiating other classes and preprocessing the http request parameters). Usually, this object is the core of web frameworks. The request parameters are also resent by the browser every time (the server cannot guess what the browser wants).</p>
+
+<p>Web servers usually have state stores for objects in a permanent or a session state. The session is represented by a unique user (usually by a cookie or a GUID in the url), which expires after a certain time.</p>
+
+<p>Now in your case, you would need to take the values you got from your first function, store that in the session store and in the second function, get those values back from the session store.</p>
+
+<p>Another solution would be to send the items back to the page as url parameters in your generated HTML from the first function and then you would get those back "as usual" from your second function.</p>
+<br /><b>#4</b><br /><p>Why not just use memcache to temporarily store the variable, and then redirect to the POST URL? That seems like the easiest solution. </p>
+<br /><b>#5</b><br /><p>OK -- Thanks everyone. </p>
+
+<p>I'll try some of these ideas out, soon, and get back to you all. </p>
+
+<p>It seems I can work around some these things by doing a lot of writing and reading from the datastore*, but I thought there might be an easier way of keeping that instance of the class around (I'm trying to use my known techniques in a web framework that I don't completely get yet). </p>
+
+<p>*For instance, creating a unique record based on the data in the POST, and letting some variables "tag along". Is this a bad practice? </p>
+<br />

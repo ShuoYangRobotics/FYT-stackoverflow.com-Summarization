@@ -1,0 +1,89 @@
+<h3>Question (ID-1189389):</h3><h2>python non-privileged ICMP</h2><p>While trying to figure out the best method to ping (ICMP) something from python, I came across these questions:</p>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/1151897/how-can-i-perform-a-ping-or-traceroute-in-python-accessing-the-output-as-it-is-p">How can I perform a ping or traceroute in python, accessing the output as it is produced?</a></li>
+<li><a href="http://stackoverflow.com/questions/316866/ping-a-site-in-python">ping a site in python</a></li>
+<li><a href="http://stackoverflow.com/questions/1151771/how-can-i-perform-a-ping-or-traceroute-using-native-python">How can I perform a ping or traceroute using native python?</a></li>
+</ul>
+
+<p>The answers generally boil down to "use this third party module with root privileges" or "use the system's ping command and parse the output". Of the native methods, <a href="http://code.activestate.com/recipes/409689/" rel="nofollow">icmplib</a> and <a href="http://svn.pylucid.net/pylucid/CodeSnippets/ping.py" rel="nofollow">M. Cowles and J. Diemer's ping.py</a> explicitly mention the need for root privileges, as does the <a href="http://www.secdev.org/projects/scapy/" rel="nofollow">scapy</a> <a href="http://www.secdev.org/projects/scapy/doc/usage.html?highlight=Root%20privileges" rel="nofollow">manual</a>.</p>
+
+<p>So from that front, natively sending ICMP pings without special privileges seems impossible. The system ping command does manage somehow, but its man page doesn't shed any light on how. The <a href="http://www.manpagez.com/man/4/icmp/" rel="nofollow">man page for icmp</a>, on the other hand, seems to say it's possible: </p>
+
+<pre>
+Non-privileged ICMP
+     ICMP sockets can be opened with the SOCK_DGRAM socket type without
+     requiring root privileges. The synopsis is the following:
+
+     socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
+
+     Datagram oriented ICMP sockets offer a subset of the functionality avail-
+     able to raw ICMP sockets. Only IMCP request messages of the following
+     types can be sent: ICMP_ECHO, ICMP_TSTAMP or ICMP_MASKREQ.</pre>
+
+<p>So it would seem that, at least according to icmp, it's allowed. So why is it that all the python tools are unable to do this? Are the python tools too general and expect any work on privileged sockets to be privileged? Would it be possible to write a ping function in C that can ping without root privileges, and extend python with this? Has anyone done this? Have I just misunderstood the problem?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>The ping program is installed setuid root. This allows any user to use the program, and still be able to open a raw socket.</p>
+
+<p>After it opens the raw socket, it typically drops root privs.</p>
+
+<p>You generally need a raw socket to do ICMP correctly, and raw sockets are usually restricted.  So it's not really python's fault at all.</p>
+
+<p>Regarding the bit about ICMP above, apparently many implementations don't really support those combinations of flags well.  So it is likely that most implmentations just use the way they "know" works on most / all architectures.</p>
+<br /><b>#1</b><br /><p>Here's how /sbin/ping "somehow manages" (on most Unix-y systems):</p>
+
+<pre><code>$ ls -l /sbin/ping
+-r-sr-xr-x  1 root  wheel  68448 Jan 26 10:00 /sbin/ping
+</code></pre>
+
+<p>See?  It's owned by <code>root</code> and has that crucial <code>s</code> bit in the permission -- setuserid. So, no matter what user is running it, ping <strong>runs as root</strong>.</p>
+
+<p>If you're using a BSD Kernel with the new "non-privileged ICMP sockets" it would be interesting to see what's needed to use that functionality to ping from Python (but that won't help any user that's on a less advanced kernel, of course).</p>
+<br /><b>#2</b><br /><p>I'm not sure if it is OK to post something in a question that seems it has already been answered a while ago.</p>
+
+<p>I have been searching for the same implementation and found a way to do ICMP via Python with non-root privileges.</p>
+
+<p><code>python-ping</code> uses the same 'need-root' way to do a ping, but came across a bug report where a user suggested changing <code>SOCK_RAW</code> to <code>SOCK_DGRAM</code> when calling <code>sock</code> :</p>
+
+<p><a href="http://hg.io/delroth/python-ping/issue/1/icmp-without-root-privilege" rel="nofollow">http://hg.io/delroth/python-ping/issue/1/icmp-without-root-privilege</a></p>
+
+<p>The dev explains this will be a "WONT-FIX" situation because it is a UDP ping rather. </p>
+
+<p>Since I really do not care if ICMP is going out via UDP, I went ahead and got the code and made the proposed changed.</p>
+
+<p>I am now able to do a ping without calling subprocess or needing root!</p>
+
+<p>Again, not sure if posting here after such a long time is OK, but thought this was a better thing!</p>
+<br /><b>#3</b><br /><p>I was also looking for an implementation of ping without using subprocess or needing root to ping.  My solution needed to be cross-platform, namely Windows and Linux.</p>
+
+<p>Changing the socket on Windows to SOCK_DGRAM results in a "protocol not supported 100043" exception.  So it looks like Windows correctly checks to see if icmp is being sent out on TCP rather than UDP.  However, windows does not care if it is running as "root" since that is a Linux concept.  </p>
+
+<pre><code>if os.name == 'nt':
+    #no root on windows
+    my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
+else:
+    #changed to UDP socket...gets around ROOT priv issue
+    my_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, icmp)
+</code></pre>
+<br /><b>#4</b><br /><p>Actually, on Windows 7 and Vista you do need to 'Run as Administrator' to do:</p>
+
+<pre><code>my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
+</code></pre>
+
+<p>and as you note, doing it over a datagram socket causes an error.</p>
+<br /><b>#5</b><br /><p>The error I got while trying to use SOCK_RAW is<br>
+<strong>socket.error: [Errno 10013] An attempt was made to access a socket in a way forbidden by its access permissions</strong></p>
+
+<p>To get rid of this error I tried running command prompt as an administrator and that solved the problem.</p>
+
+<p>Now since I wanted to do NON PRIVILEGED ICMP in python, I changed SOCK_RAW to SOCK_DGRAM. This came up with the following error:<br>
+<strong>socket.error: [Errno 10043] The requested protocol has not been configured into the system, or no implementation for it exists</strong></p>
+
+<p>Anyone found a way around this as yet?</p>
+
+<p>Ammar.</p>
+<br /><b>#6</b><br /><p>I am running python under windows 7 , 
+Since i am editing and "compiling" the code under Eclipse pydev plugin, 
+My solution was : Running the eclipse.exe as an administrator : this solved the problem,</p>
+
+<p>This solution is similar to running the cmd as an administrator.</p>
+<br />

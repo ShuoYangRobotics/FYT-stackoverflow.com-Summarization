@@ -1,0 +1,218 @@
+Question (ID-3744048): python: how to merge a list into clusters? I have a list of tuples: 
+
+ [(3,4), (18,27), (4,14)]
+ 
+
+ and need a code merging tuples which has repeated numbers, making another list where all list elements will only contain unique numbers. The list should be sorted by the length of the tuples, i.e.: 
+
+ &gt;&gt;&gt; MergeThat([(3,4), (18,27), (4,14)])
+[(3,4,14), (18,27)]
+
+&gt;&gt;&gt; MergeThat([(1,3), (15,21), (1,10), (57,66), (76,85), (66,76)])
+[(57,66,76,85), (1,3,10), (15,21)]
+ 
+
+ I understand it's something similar to hierarchical clustering algorithms, which I've read about, but can't figure them out. 
+
+ Is there a relatively simple code for a MergeThat() function? 
+ Answers (Total-6): #0 import itertools
+
+def merge_it(lot):
+ merged = [ set(x) for x in lot ] # operate on sets only
+ finished = False
+ while not finished:
+  finished = True
+  for a, b in itertools.combinations(merged, 2):
+   if a &amp; b:
+    # we merged in this iteration, we may have to do one more
+    finished = False
+    if a in merged: merged.remove(a)
+    if b in merged: merged.remove(b) 
+    merged.append(a.union(b))
+    break # don't inflate 'merged' with intermediate results
+ return merged
+
+if __name__ == '__main__':
+ print merge_it( [(3,4), (18,27), (4,14)] )
+ # =&gt; [set([18, 27]), set([3, 4, 14])]
+
+ print merge_it( [(1,3), (15,21), (1,10), (57,66), (76,85), (66,76)] )
+ # =&gt; [set([21, 15]), set([1, 10, 3]), set([57, 66, 76, 85])]
+
+ print merge_it( [(1,2), (2,3), (3,4), (4,5), (5,9)] )
+ # =&gt; [set([1, 2, 3, 4, 5, 9])]
+ 
+
+ Here's a snippet (including doctests): http://gist.github.com/586252 
+ #1 I tried hard to figure this out, but only after I tried the approach Ian's answer (thanks!) suggested I realized what the theoretical problem is: The input is a list of edges and defines a graph. We are looking for the strongly connected components of this graph. It's simple as that. 
+
+ While you can do this efficiently , there is actually no reason to implement this yourself! Just import a good graph library : 
+
+ import networkx as nx
+
+# one of your examples
+g1 = nx.Graph([(1,3), (15,21), (1,10), (57,66), (76,85), (66,76)])
+print nx.connected_components(g1) # [[57, 66, 76, 85], [1, 10, 3], [21, 15]]
+
+# my own test case
+g2 = nx.Graph([(1,2),(2,10), (20,3), (3,4), (4,10)])
+print nx.connected_components(g2) # [[1, 2, 3, 4, 10, 20]]
+ 
+ #2 def collapse(L):
+ """ The input L is a list that contains tuples of various sizes.
+  If any tuples have shared elements, 
+  exactly one instance of the shared and unshared elements are merged into the first tuple with a shared element.
+  This function returns a new list that contain merged tuples and an int that represents how many merges were performed."""
+ answer = []
+ merges = 0
+ seen = [] # a list of all the numbers that we've seen so far
+ for t in L:
+  tAdded = False
+  for num in t:
+   pleaseMerge = True
+   if num in seen and pleaseMerge:
+    answer += merge(t, answer)
+    merges += 1
+    pleaseMerge = False
+    tAdded= True
+   else:
+    seen.append(num)
+  if not tAdded:
+   answer.append(t)
+
+ return (answer, merges)
+
+def merge(t, L):
+ """ The input L is a list that contains tuples of various sizes.
+  The input t is a tuple that contains an element that is contained in another tuple in L.
+  Return a new list that is similar to L but contains the new elements in t added to the tuple with which t has a common element."""
+ answer = []
+ while L:
+  tup = L[0]
+  tupAdded = False
+  for i in tup:
+   if i in t:
+    try:
+     L.remove(tup)
+     newTup = set(tup)
+     for i in t:
+      newTup.add(i)
+     answer.append(tuple(newTup))
+     tupAdded = True
+    except ValueError:
+     pass
+  if not tupAdded:
+   L.remove(tup)
+   answer.append(tup)
+ return answer
+
+def sortByLength(L):
+ """ L is a list of n-tuples, where n&gt;0.
+  This function will return a list with the same contents as L 
+  except that the tuples are sorted in non-ascending order by length"""
+
+ lengths = {}
+ for t in L:
+  if len(t) in lengths.keys():
+   lengths[len(t)].append(t)
+  else:
+   lengths[len(t)] = [(t)]
+
+ l = lengths.keys()[:]
+ l.sort(reverse=True)
+
+ answer = []
+ for i in l:
+  answer += lengths[i]
+ return answer
+
+def MergeThat(L):
+ answer, merges = collapse(L)
+ while merges:
+  answer, merges = collapse(answer)
+ return sortByLength(answer)
+
+if __name__ == "__main__":
+ print 'starting'
+ print MergeThat([(3,4), (18,27), (4,14)])
+ # [(3, 4, 14), (18, 27)]
+ print MergeThat([(1,3), (15,21), (1,10), (57,66), (76,85), (66,76)])
+ # [(57, 66, 76, 85), (1, 10, 3), (15, 21)]
+ 
+ #3 Here's another solution that doesn't use itertools and takes a different, slightly more verbose, approach. The tricky bit of this solution is the merging of cluster sets when t0 in index and t1 in index . 
+
+ import doctest
+
+def MergeThat(a):
+ """ http://stackoverflow.com/questions/3744048/python-how-to-merge-a-list-into-clusters
+
+ &gt;&gt;&gt; MergeThat([(3,4), (18,27), (4,14)])
+ [(3, 4, 14), (18, 27)]
+ &gt;&gt;&gt; MergeThat([(1,3), (15,21), (1,10), (57,66), (76,85), (66,76)])
+ [(57, 66, 76, 85), (1, 3, 10), (15, 21)]
+ """
+ index = {}
+ for t0, t1 in a:
+  if t0 not in index and t1 not in index:
+   index[t0] = set()
+   index[t1] = index[t0]
+  elif t0 in index and t1 in index:
+   index[t0] |= index[t1]
+   oldt1 = index[t1]
+   for x in index.keys():
+    if index[x] is oldt1:
+     index[x] = index[t0]
+  elif t0 not in index:
+   index[t0] = index[t1]
+  else:
+   index[t1] = index[t0]
+  assert index[t0] is index[t1]
+  index[t0].add(t0)
+  index[t0].add(t1)
+ return sorted([tuple(sorted(x)) for x in set(map(frozenset, index.values()))], key=len, reverse=True)
+
+if __name__ == "__main__":
+ import doctest
+ doctest.testmod()
+ 
+ #4 The code others have written will surely work, but here's another option, maybe simpler to understand and maybe less algorithmic complexity. 
+
+ Keep a dictionary from numbers to the cluster (implemented as a python set) they're a member of. Also include that number in the corresponding set. Process an input pair either as: 
+
+ 
+ Neither element is in the dictionary: create a new set, hook up dictionary links appropriately. 
+ One or the other, but not both elements are in the dictionary: Add the yet-unseen element to the set of its brother, and add its dictionary link into the correct set. 
+ Both elements are seen before, but in different sets: Take the union of the old sets and update all dictionary links to the new set. 
+ You've seen both members before, and they're in the same set: Do nothing. 
+ 
+
+ Afterward, simply collect the unique values from the dictionary and sort in descending order of size. This portion of the job is O(m log n) and thus will not dominate runtime. 
+
+ This should work in a single pass. Writing the actual code is left as an exercise for the reader. 
+ #5 This is not efficient for huge lists. 
+
+ def merge_that(lot):
+ final_list = []
+ while len(lot) &gt;0 :
+  temp_set = set(lot[0])
+  deletable = [0]  #list of all tuples consumed by temp_set
+  for i, tup2 in enumerate(lot[1:]):
+   if tup2[0] in temp_set or tup2[1] in temp_set:
+   deletable.append(i)
+   temp_set = temp_set.union(tup2)
+  for d in deletable:
+   del lot[d]
+  deletable = []
+  # Some of the tuples consumed later might have missed their brothers
+  # So, looping again after deleting the consumed tuples
+  for i, tup2 in enumerate(lot):
+   if tup2[0] in temp_set or tup2[1] in temp_set:
+   deletable.append(i)
+   temp_set = temp_set.union(tup2)
+  for d in deletable:
+   del lot[d]
+  final_list.append(tuple(temp_set))
+ return final_list
+ 
+
+ It looks ugly but works.

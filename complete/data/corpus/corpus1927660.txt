@@ -1,0 +1,166 @@
+Question (ID-1927660): Compare two images the python/linux way Trying to solve a problem of preventing duplicate images to be uploaded. 
+
+ I have two JPGs. Looking at them I can see that they are in fact identical. But for some reason they have different file size (one is pulled from a backup, the other is another upload) and so they have a different md5 checksum. 
+
+ How can I efficiently and confidently compare two images in the same sense as a human would be able to see that they are clearly identical? 
+
+ Example: http://static.peterbe.com/a.jpg and http://static.peterbe.com/b.jpg 
+
+ Update 
+
+ I wrote this script: 
+
+ import math, operator
+from PIL import Image
+def compare(file1, file2):
+ image1 = Image.open(file1)
+ image2 = Image.open(file2)
+ h1 = image1.histogram()
+ h2 = image2.histogram()
+ rms = math.sqrt(reduce(operator.add,
+       map(lambda a,b: (a-b)**2, h1, h2))/len(h1))
+ return rms
+
+if __name__=='__main__':
+ import sys
+ file1, file2 = sys.argv[1:]
+ print compare(file1, file2)
+ 
+
+ Then I downloaded the two visually identical images and ran the script. Output: 
+
+ 58.9830484122
+ 
+
+ Can anybody tell me what a suitable cutoff should be? 
+
+ Update II 
+
+ The difference between a.jpg and b.jpg is that the second one has been saved with PIL: 
+
+ b=Image.open('a.jpg')
+b.save(open('b.jpg','wb'))
+ 
+
+ This apparently applies some very very light quality modifications. I've now solved my problem by applying the same PIL save to the file being uploaded without doing anything with it and it now works! 
+ Answers (Total-6): #0 There is a OSS project that uses WebDriver to take screen shots and then compares the images to see if there are any issues ( http://code.google.com/p/fighting-layout-bugs/) ). It does it by openning the file into a stream and then comparing every bit. 
+
+ You may be able to do something similar with PIL . 
+
+ EDIT: 
+
+ After more research I found 
+
+ h1 = Image.open("image1").histogram()
+h2 = Image.open("image2").histogram()
+
+rms = math.sqrt(reduce(operator.add,
+ map(lambda a,b: (a-b)**2, h1, h2))/len(h1))
+ 
+
+ on http://snipplr.com/view/757/compare-two-pil-images-in-python/ and http://effbot.org/zone/pil-comparing-images.htm 
+ #1 I guess you should decode the images and do a pixel by pixel comparison to see if they're reasonably similar. 
+
+ With PIL and Numpy you can do it quite easily: 
+
+ import Image
+import numpy
+import sys
+
+def main():
+ img1 = Image.open(sys.argv[1])
+ img2 = Image.open(sys.argv[2])
+
+ if img1.size != img2.size or img1.getbands() != img2.getbands():
+  return -1
+
+ s = 0
+ for band_index, band in enumerate(img1.getbands()):
+  m1 = numpy.array([p[band_index] for p in img1.getdata()]).reshape(*img1.size)
+  m2 = numpy.array([p[band_index] for p in img2.getdata()]).reshape(*img2.size)
+  s += numpy.sum(numpy.abs(m1-m2))
+ print s
+
+if __name__ == "__main__":
+ sys.exit(main())
+ 
+
+ This will give you a numeric value that should be very close to 0 if the images are quite the same. 
+ #2 First, I should note they’re not identical; b has been recompressed and lost quality. You can see this if you look carefully on a good monitor. 
+
+ To determine that they are subjectively “the same,” you would have to do something like what fortran suggested, although you will have to arbitrarily establish a threshold for “sameness.” To make s independent of image size, and to handle channels a little more sensibly, I would consider doing the RMS (root mean square) Euclidean distance in colorspace between the pixels of the two images. I don’t have time to write out the code right now, but basically for each pixel, you compute 
+
+ (R_2 - R_1) ** 2 + (G_2 - G_1) ** 2 + (B_2 - B_1) ** 2
+ 
+
+ , adding in an 
+
+ (A_2 - A_1) ** 2 
+
+ term if the image has an alpha channel, etc. The result is the square of the colorspace distance between the two images. Find the mean (average) across all pixels, then take the square root of the resulting scalar. Then decide a reasonable threshold for this value. 
+
+ Or, you might just decide that copies of the same original image with different lossy compression are not truly “the same” and stick with the file hash. 
+ #3 the problem of knowing what makes some features of the image more important than other is a whole scientific program. I would suggest some alternatives depending on the solution you want: 
+
+ 
+ if your problem is to see if there is a flipping of bits in your JPEGs, then try to image the difference image (there was perhaps a minor edit locally?), 
+ to see if images are globally the same, use the Kullback Leibler distance to compare your histograms, 
+ to see if you have some qualittative change, before applying other answers, filter your image using the functions below to raise the importance of high-level frequencies: 
+ 
+
+ code: 
+
+ def FTfilter(image,FTfilter):
+ from scipy.fftpack import fft2, fftshift, ifft2, ifftshift
+ from scipy import real
+ FTimage = fftshift(fft2(image)) * FTfilter
+ return real(ifft2(ifftshift(FTimage)))
+ #return real(ifft2(fft2(image)* FTfilter))
+
+
+#### whitening
+def olshausen_whitening_filt(size, f_0 = .78, alpha = 4., N = 0.01):
+ """
+ Returns the whitening filter used by (Olshausen, 98)
+
+ f_0 = 200 / 512
+
+ /!\ you will have some problems at dewhitening without a low-pass
+
+ """
+ from scipy import mgrid, absolute
+ fx, fy = mgrid[-1:1:1j*size[0],-1:1:1j*size[1]]
+ rho = numpy.sqrt(fx**2+fy**2)
+ K_ols = (N**2 + rho**2)**.5 * low_pass(size, f_0 = f_0, alpha = alpha)
+ K_ols /= numpy.max(K_ols)
+
+ return K_ols
+
+def low_pass(size, f_0, alpha):
+ """
+ Returns the low_pass filter used by (Olshausen, 98)
+
+ parameters from Atick (p.240)
+ f_0 = 22 c/deg in primates: the full image is approx 45 deg
+ alpha makes the aspect change (1=diamond on the vert and hor, 2 = anisotropic)
+
+ """
+
+ from scipy import mgrid, absolute
+ fx, fy = mgrid[-1:1:1j*size[0],-1:1:1j*size[1]]
+ rho = numpy.sqrt(fx**2+fy**2)
+ low_pass = numpy.exp(-(rho/f_0)**alpha)
+
+ return low_pass
+ 
+
+ (shameless copy from http://www.incm.cnrs-mrs.fr/LaurentPerrinet/Publications/Perrinet08spie ) 
+ #4 You can either compare it using PIL (iterate through pixels / segments of the picture and compare) or if you're looking for a complete identical copy comparison, try comparing the MD5 hash of both files. 
+ #5 From here 
+
+ The quickest way to determine if two images have exactly the same contents is to get the difference between the two images, and then calculate the bounding box of the non-zero regions in this image. If the images are identical, all pixels in the difference image are zero, and the bounding box function returns None. 
+
+ import ImageChops
+
+def equal(im1, im2):
+ return ImageChops.difference(im1, im2).getbbox() is None

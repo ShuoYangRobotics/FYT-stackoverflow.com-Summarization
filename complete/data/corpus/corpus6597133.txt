@@ -1,0 +1,88 @@
+Question (ID-6597133): Python/PySerial bit operator on string I'm using PySerial (Python 2.7) to read information from a device like this: 
+
+ buffer += ser.read(3) 
+
+ Now I have three bytes in buffer (i.e. 0xAE0259) which is of type str. Since I'm new to Python, I'm looking for the "pythonian" way to cut off the left most (0xAE) of the three bytes and then interpret the remaining two as int.
+First I thought of a bit mask: buffer &amp;= 0xFFFF
+but python won't let me use bit operators on str.
+Any attempt to convert buffer to int failed as well. 
+Then I read about the 'bitstring module' which let's me slice ranges of bits out of a BitArray, but I guess that using it for this would be a little over the top? 
+ Answers (Total-6): #0 You need to know whether multi-byte types are big or little endian and whether it's signed or unsigned. Assuming the two bytes are an unsigned, big-endian short, I would do the following: 
+
+ &gt;&gt;&gt; buf = '\xAE\x02\x59'
+&gt;&gt;&gt; from struct import unpack
+&gt;&gt;&gt; unpack('&gt;BH', buf)
+(174, 601)
+ 
+
+ '>' means big endian. 'B' is the first unsigned byte, which you don't want. 'H' is an unsigned short. 
+ #1 There are two easy ways to do it. One way would be to convert your buffer to a hexdecimal integer, and use a bit-mask to get the last 32 bits. The other is to use the slice operator to get the last 4 characters, and interpret that remainder as a hexadecimal integer. 
+
+ &gt;&gt;&gt; buffer = 'AE0259'
+&gt;&gt;&gt; print int(buffer, 16) &amp; 0xFFFF
+601
+&gt;&gt;&gt; print int(buffer[-4:], 16) 
+601
+ 
+
+ 
+
+ EDIT - eryksun has the right answer, but I wanted to update my example for the actual use case. 
+
+ &gt;&gt;&gt; buffer = '\xAE\x02\x59'
+&gt;&gt;&gt; # print the integer value of the last two binary "characters"
+&gt;&gt;&gt; print sum((ord(x) &lt;&lt; i*8 for i,x in enumerate(buffer[:-2-1:-1])))
+601
+&gt;&gt;&gt; # print the integer value all binary "characters" 
+&gt;&gt;&gt; # with a bitmask of the lower 32 digits
+&gt;&gt;&gt; print sum((ord(x) &lt;&lt; i*8 for i,x in enumerate(buffer[::-1]))) &amp; 0xFFFF
+601
+ 
+ #2 There's a pure python module that might help you handling bit operation: 
+
+ code.google.com/p/python-bitstring 
+ #3 If you only need to do byte unpacking then the struct module is your friend (see eryksun's answer) as is the bytearray type: 
+
+ &gt;&gt;&gt; ba = bytearray('\xae\x02\x59')
+ 
+
+ This allows you to index and slice at the byte level 
+
+ &gt;&gt;&gt; hex(ba[0])
+'0xae'
+&gt;&gt;&gt; ba[1:3]
+bytearray(b'\x02Y')
+ 
+
+ In terms of converting multiple bytes to ints this is quite helpful, but you're unlikely to gain much over struct unless you have some unusual byte lengths. Your two byte conversion to int becomes: 
+
+ &gt;&gt;&gt; (ba[1] &lt;&lt; 8) + ba[2]
+601
+ 
+
+ You say in a comment that you'd like a general way of doing bitwise slicing too. I'm afraid there isn't one - your best place to start is with shifting and masking from a bytearray. That's why modules like bitstring are useful (I wrote it btw) - you get someone else to do all the tedious error-prone stuff! 
+
+ &gt;&gt;&gt; b = bitstring.Bits(ba)
+&gt;&gt;&gt; b[8:].uint
+601
+&gt;&gt;&gt; b.unpack('hex:8, uint:16')
+['ae', 601]
+ 
+ #4 if buffer is a string, you could "cut off" the remaining characters by trimming the string like this: 
+
+ newstr = buffer[1:]
+ 
+ #5 @ironchefpython suggested what you should use, except that your comment indicates that your buffer actually consists of binary data. Assuming that is the case, this solution should work, though it is not very elegant: 
+
+ from struct import unpack
+def strmask(buffer, mask):
+ #calculate the number of bytes to extract
+ mask_length = mask.bit_length() / 8 + (1 if mask.bit_length() % 8 &gt; 0 else 0)
+ #extract those bytes and put them into a Python int, then perform the mask
+ return mask &amp; reduce(lambda l,r: (l&lt;&lt;8)+r, unpack("B" * mask_length, buffer[-1 * mask_length:]))
+ 
+
+ This yields the result you want -for example: 
+
+ &gt;&gt;&gt; print strmask('\xAE\x02\x59', 0xFFFF)
+601

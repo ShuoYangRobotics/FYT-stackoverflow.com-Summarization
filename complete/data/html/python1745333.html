@@ -1,0 +1,271 @@
+<h3>Question (ID-1745333):</h3><h2>Structured programming and Python generators?</h2><p><strong>Note:</strong> This question mutated a bit as people answered and forced me to "raise the stakes", as my trivial examples had trivial simplifications; rather than continue to mutate it here, I will repose the question when I have it clearer in my head, as per Alex's suggestion.</p>
+
+<p><hr></p>
+
+<p>Python generators are a thing of beauty, but how can I easily break one down into modules (structured programming)? I effectively want <a href="http://www.python.org/dev/peps/pep-0380/" rel="nofollow">PEP 380</a>, or at least something comparable in syntax burden, but in existing Python (e.g. 2.6)</p>
+
+<p>As an (admittedly stupid) example, take the following:</p>
+
+<pre><code>def sillyGenerator():
+  for i in xrange(10):
+    yield i*i
+  for i in xrange(12):
+    yield i*i
+  for i in xrange(8):
+    yield i*i
+</code></pre>
+
+<p>Being an ardent believer in DRY, I spot the repeated pattern here and factor it out into a method:</p>
+
+<pre><code>def quadraticRange(n):
+  for i in xrange(n)
+    yield i*i
+
+def sillyGenerator():
+  quadraticRange(10)
+  quadraticRange(12)
+  quadraticRange(8)
+</code></pre>
+
+<p>...which of course doesn't work. The parent must call the new function in a loop, yielding the results:</p>
+
+<pre><code>def sillyGenerator():
+  for i in quadraticRange(10):
+    yield i
+  for i in quadraticRange(12):
+    yield i
+  for i in quadraticRange(8):
+    yield i
+</code></pre>
+
+<p>...which is even longer than before!</p>
+
+<p>If I want to push part of a generator into a function, I always need this rather verbose, two-line wrapper to call it. It gets worse if I want to support send():</p>
+
+<pre><code>def sillyGeneratorRevisited():
+  g = subgenerator()
+  v = None
+  try:
+    while True:
+      v = yield g.send(v)
+  catch StopIteration:
+    pass
+  if v &lt; 4:
+    # ...
+  else:
+    # ...
+</code></pre>
+
+<p>And that's not taking into account passing in exceptions. The same boilerplate every time! Yet one cannot apply DRY and factor this identical code into a function, because...you'd need the boilerplate to call it! What I want is something like:</p>
+
+<pre><code>def sillyGenerator():
+  yield from quadraticRange(10)
+  yield from quadraticRange(12)
+  yield from quadraticRange(8)
+
+def sillyGeneratorRevisited():
+  v = yield from subgenerator()
+  if v &lt; 4:
+    # ...
+  else:
+    # ...
+</code></pre>
+
+<p>Does anyone have a solution to this problem? I have a first-pass attempt, but I'd like to know what others have come up with. Ultimately, any solution will have to tackle examples where the main generator performs complex logic based on the result of data sent into the generator, and potentially makes a very large number of calls to sub-generators: my use-case is generators used to implement long-running, complex state machines.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><blockquote>
+  <p>However, I'd like to make my
+  reusability criteria one notch harder:
+  what if I need a control structure
+  around my repeated generation?</p>
+</blockquote>
+
+<p><code>itertools</code> often helps even there - you need to provide concrete examples where you think it doesn't.</p>
+
+<blockquote>
+  <p>For
+  instance, I might want to call a
+  subgenerator forever with different
+  parameters.</p>
+</blockquote>
+
+<p><code>itertools.chain.from_iterable</code>.</p>
+
+<blockquote>
+  <p>Or my subgenerators might
+  be very costly, and I only want to
+  start them up as and when they are
+  reached.</p>
+</blockquote>
+
+<p>Both <code>chain</code> and <code>chain_from_iterable</code> do that -- no sub-iterator is "started up" until the very instant the first item from it is needed.</p>
+
+<blockquote>
+  <p>Or (and this is a real
+  desire) I might want to vary what I do
+  next based on what my controller
+  passes me using send().</p>
+</blockquote>
+
+<p>A specific example would be greatly appreciated. Anyway, worst case, you'll be coding <code>for x in blargh: yield x</code> where the suspended Pep3080 would let you code <code>yield from blargh</code> -- about 4 extra characters (not a tragedy;-).</p>
+
+<p>And if some sophisticated coroutine-version of some itertools functionality (itertools mostly supports iterators - there's no equivalent coroutools module yet) becomes warranted, because a certain pattern of coroutine composition is often repeated in your code, then it's not too hard to code it yourself.</p>
+
+<p>For example, suppose we often find ourselves doing something like: first yield a certain value; then, repeatedly, if we're sent 'foo', yield the next item from fooiter, if 'bla', from blaiter, if 'zop', from zopiter, anything else, from defiter.  As soon as we spot the second occurrence of this compositional pattern, we can code:</p>
+
+<pre><code>def corou_chaiters(initsend, defiter, val2itermap):
+  currentiter = iter([initsend])
+  while True:
+    val = yield next(currentiter)
+    currentiter = val2itermap(val, defiter)
+</code></pre>
+
+<p>and call this simple compositional function as and when needed.  If we need to compose other coroutines, rather than general iterators, we'll have a slightly different composer using the send method instead of the next built-in function; and so forth.</p>
+
+<p>If you can offer an example that's not easily tamed by such techniques, I suggest you do so in a separate question (specifically targeted to coroutine-like generators), as there's already a lot of material on this one that will have little to do with your other, much more complex/sophisticated, example.</p>
+<br /><b>#1</b><br /><p>You want to <a href="http://docs.python.org/library/itertools.html#itertools.chain" rel="nofollow">chain several iterators</a> together:</p>
+
+<pre><code>from itertools import chain
+
+def sillyGenerator(a,b,c):
+    return chain(quadraticRange(a),quadraticRange(b),quadraticRange(c))
+</code></pre>
+<br /><b>#2</b><br /><p>Impractical (unfortunately) answer:</p>
+
+<pre><code>from __future__ import PEP0380
+
+def sillyGenerator():
+    yield from quadraticRange(10)
+    yield from quadraticRange(12)
+    yield from quadraticRange(8)
+</code></pre>
+
+<p>Potentially practical reference: <a href="http://www.python.org/dev/peps/pep-0380/" rel="nofollow">Syntax for delegating to a subgenerator</a></p>
+
+<p>Unfortunately making this impractical: <a href="http://python.org/dev/peps/pep-3003/" rel="nofollow">Python language moratorium</a></p>
+
+<p><strong>UPDATE</strong> Feb 2011:</p>
+
+<p>The moratorium has been lifted, and PEP 380 is on the TODO list for Python 3.3. Hopefully this answer will be practical soon.</p>
+
+<p>Read <a href="http://article.gmane.org/gmane.comp.python.devel/121459" rel="nofollow">Guido's remarks on comp.python.devel</a></p>
+<br /><b>#3</b><br /><pre><code>import itertools
+
+def quadraticRange(n):
+  for i in xrange(n)
+    yield i*i
+
+def sillyGenerator():
+  return itertools.chain(
+    quadraticRange(10),
+    quadraticRange(12),
+    quadraticRange(8),
+  )
+
+def sillyGenerator2():
+  return itertools.chain.from_iterable(
+    quadraticRange(n) for n in [10, 12, 8])
+</code></pre>
+
+<p>The last is useful if you want to make sure one iterator is exhausted before another starts (including its initialization code).</p>
+<br /><b>#4</b><br /><p>There is a Python Enhancement Proposal for providing a <a href="http://www.python.org/dev/peps/pep-0380/" rel="nofollow"><code>yield from</code> statement</a> for "delegating generation".  Your example would be written as:</p>
+
+<pre><code>def sillyGenerator():
+  sq = lambda i: i * i
+  yield from map(sq, xrange(10))
+  yield from map(sq, xrange(12))
+  yield from map(sq, xrange(8))
+</code></pre>
+
+<p>Or better, in the spirit of DRY:</p>
+
+<pre><code>def sillyGenerator():
+  for i in [10, 12, 8]:
+    yield from quadraticRange(i)
+</code></pre>
+
+<p>The proposal is in draft status and its eventual inclusion is not certain, but it shows that other developers share your thoughts about generators.</p>
+<br /><b>#5</b><br /><p>For an arbitrary number of calls to <code>quadraticRange</code>:</p>
+
+<pre><code>from itertools import chain
+
+def sillyGenerator(*args):
+    return chain(*map(quadraticRange, args))
+</code></pre>
+
+<p>This code uses <a href="http://docs.python.org/3.1/library/functions.html#map" rel="nofollow"><code>map</code></a> and <a href="http://docs.python.org/3.1/library/itertools.html#chain" rel="nofollow"><code>itertools.chain</code></a>. It takes an arbitrary number of arguments and passes them in order to <code>quadraticRange</code>. The resulting iterators are then chained.</p>
+<br /><b>#6</b><br /><p>There is a pattern which I call "generator kernel" where generators don't yield directly to the user but to some "kernel" loop that treats (some of) their yields as "system calls" with special meaning.</p>
+
+<p>You can apply it here by an intermediate function that accepts yielded generators and unrolls them automatically.  To make it easy to use, we'll create that intermediate function in a decorator:</p>
+
+<pre><code>import functools, types
+
+def flatten(values_or_generators):
+    for x in values_or_generators:
+        if isinstance(x, GeneratorType):
+            for y in x:
+                yield y
+        else:
+            yield x
+
+# Better name anyone?
+def subgenerator(g):
+    """Decorator making ``yield &lt;gen&gt;`` mean ``yield from &lt;gen&gt;``."""
+
+    @functools.wraps(g)
+    def flat_g(*args, **kw):
+        return flatten(g(*args, **kw))
+    return flat_g
+</code></pre>
+
+<p>and then you can just write:</p>
+
+<pre><code>def quadraticRange(n):
+    for i in xrange(n)
+        yield i*i
+
+@subgenerator
+def sillyGenerator():
+    yield quadraticRange(10)
+    yield quadraticRange(12)
+    yield quadraticRange(8)
+</code></pre>
+
+<p>Note that subgenerator() is unrolling exactly one level of the hierarchy.  You could easily make it multi-level (by managing a manual stack, or just replacing the inner loop with <code>for y in flatten(x):</code> - but I think it's better as it is, so that every generator that wants to use this non-standard syntax has to be explicitly wrapped with @subgenerator.</p>
+
+<p>Note also that detection of generators is imperfect!  It will detect things written as generators, but that's an implementation detail.  As a caller of a generator, all you care about is that it returns an iterator.  It could be a function returning some itertools object, and then this decorator would fail.</p>
+
+<p>Checking whether the object has a <code>.next()</code> method is too broad - you won't be able to yield strings without them being taken apart.  So the most reliable way would be to check for some explicit marker, so you'd write e.g.:</p>
+
+<pre><code>@subgenerator
+def sillyGenerator():
+    yield 'from', quadraticRange(10)
+    yield 'from', quadraticRange(12)
+    yield 'from', quadraticRange(8)
+</code></pre>
+
+<p>Hey, that's almost like the PEP!</p>
+
+<p>[credits: <a href="http://stackoverflow.com/questions/248830/python-using-a-recursive-algorithm-as-a-generator/252199#252199">this answer</a> gives a similar function - but it's deep (which I consider wrong) and is not a framed as a decorator]</p>
+<br /><b>#7</b><br /><pre><code>class Communicator:
+    def __init__(self, inflow):
+        self.outflow = None
+        self.inflow = inflow
+</code></pre>
+
+<p>Then you do:</p>
+
+<pre><code>c = Communicator(something)
+yield c
+response = c.outflow
+</code></pre>
+
+<p>And instead of the boilerplate code you can simply do:</p>
+
+<pre><code> for i in run():
+     something = i.inflow
+     # ...
+     i.outflow = value_to_return_back
+</code></pre>
+
+<p>It's simple enough code that works without much brain.</p>
+<br />

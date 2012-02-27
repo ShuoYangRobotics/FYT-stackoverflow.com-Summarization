@@ -1,0 +1,76 @@
+Question (ID-321795): Comparing XML in a unit test in Python I have an object that can build itself from an XML string, and write itself out to an XML string. I'd like to write a unit test to test round tripping through XML, but I'm having trouble comparing the two XML versions. Whitespace and attribute order seem to be the issues. Any suggestions for how to do this? This is in Python, and I'm using ElementTree (not that that really matters here since I'm just dealing with XML in strings at this level). 
+ Answers (Total-7): #0 First normalize 2 XML, then you can compare them. I've used the following using lxml 
+
+  obj1 = objectify.fromstring(expect)
+ expect = etree.tostring(obj1)  
+ obj2 = objectify.fromstring(xml)
+ result = etree.tostring(obj2)  
+ self.assertEquals(expect, result)
+ 
+ #1 If the problem is really just the whitespace and attribute order, and you have no other constructs than text and elements to worry about, you can parse the strings using a standard XML parser and compare the nodes manually. Here's an example using minidom, but you could write the same in etree pretty simply: 
+
+ def isEqualXML(a, b):
+ da, db= minidom.parseString(a), minidom.parseString(b)
+ return isEqualElement(da.documentElement, db.documentElement)
+
+def isEqualElement(a, b):
+ if a.tagName!=b.tagName:
+  return False
+ if sorted(a.attributes.items())!=sorted(b.attributes.items()):
+  return False
+ if len(a.childNodes)!=len(b.childNodes):
+  return False
+ for ac, bc in zip(a.childNodes, b.childNodes):
+  if ac.nodeType!=bc.nodeType:
+   return False
+  if ac.nodeType==ac.TEXT_NODE and ac.data!=bc.data:
+   return False
+  if ac.nodeType==ac.ELEMENT_NODE and not isEqualElement(ac, bc):
+   return False
+ return True
+ 
+
+ If you need a more thorough equivalence comparison, covering the possibilities of other types of nodes including CDATA, PIs, entity references, comments, doctypes, namespaces and so on, you could use the DOM Level 3 Core method isEqualNode. Neither minidom nor etree have that, but pxdom is one implementation that supports it: 
+
+ def isEqualXML(a, b):
+ da, db= pxdom.parseString(a), pxdom.parseString(a)
+ return da.isEqualNode(db)
+ 
+
+ (You may want to change some of the DOMConfiguration options on the parse if you need to specify whether entity references and CDATA sections match their replaced equivalents.) 
+
+ A slightly more roundabout way of doing it would be to parse, then re-serialise to canonical form and do a string comparison. Again pxdom supports the DOM Level 3 LS option ‘canonical-form’ which you could use to do this; an alternative way using the stdlib's minidom implementation is to use c14n. However you must have the PyXML extensions install for this so you still can't quite do it within the stdlib: 
+
+ from xml.dom.ext import c14n
+
+def isEqualXML(a, b):
+ da, bd= minidom.parseString(a), minidom.parseString(b)
+ a, b= c14n.Canonicalize(da), c14n.Canonicalize(db)
+ return a==b
+ 
+ #2 Use xmldiff , a python tool that figures out the differences between two similar XML files, the same way that diff does it. 
+ #3 Why are you examining the XML data at all? 
+
+ The way to test object serialization is to create an instance of the object, serialize it, deserialize it into a new object, and compare the two objects. When you make a change that breaks serialization or deserialization, this test will fail. 
+
+ The only thing checking the XML data is going to find for you is if your serializer is emitting a superset of what the deserializer requires, and the deserializer silently ignores stuff it doesn't expect. 
+
+ Of course, if something else is going to be consuming the serialized data, that's another matter. But in that case, you ought to be thinking about establishing a schema for the XML and validating it. 
+ #4 This is an old question, but the accepted Kozyarchuk's answer doesn't work for me because of attributes order, and the minidom solution doesn't work as-is either (no idea why, I haven't debugged it). 
+
+ This is what I finally came up with: 
+
+ from doctest import Example
+from lxml.doctestcompare import LXMLOutputChecker
+
+class XmlTest(TestCase):
+ def assertXmlEqual(self, got, want):
+  checker = LXMLOutputChecker()
+  if not checker.check_output(want, got, 0):
+   message = checker.output_difference(Example("", want), got, 0)
+   raise AssertionError(message)
+ 
+
+ This also produces a diff that can be helpful in case of large xml files. 
+ #5 The Java component dbUnit does a lot of XML comparisons, so you might find it useful to look at their approach (especially to find any gotchas that they may have already addressed). 
+ #6 I also had this problem and did some digging around it today. The doctestcompare approach may suffice, but I found via Ian Bicking that it is based on formencode.doctest_xml_compare . Which appears to now be here . As you can see that is a pretty simple function, unlike doctestcompare (although I guess doctestcompare is collecting all the failures and maybe more sophisticated checking). Anyway copying/importing xml_compare out of formencode may be a good solution.

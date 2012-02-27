@@ -1,0 +1,190 @@
+<h3>Question ( ID-8552165 ) : </h3><h2>Importing a python module without actually executing it </h2><p>In the context of a complex application , I need to <span style="background-color:yellow;">import</span> user-supplied 'scripts'. Ideally , a script would have </p>
+<pre><code>def init():
+    blah
+
+def execute():
+    more blah
+
+def cleanup():
+    yadda
+</code></pre>
+<p>so I 'd just </p>
+<pre><code>import imp
+fname, path, desc = imp.find_module(userscript)
+foo = imp.load_module(userscript, fname, path, desc)
+foo.init()
+</code></pre>
+<p>However , as we all know , the user 's script is <span style="background-color:yellow;">executed</span> as soon as load_module runs . Which means , a script can be something like this : </p>
+<pre><code>def init():
+    blah
+
+yadda
+</code></pre>
+<p>yielding to the yadda part being called as soon as I <span style="background-color:yellow;">import</span> the script . </p>
+<p>What I need is a way to : </p>
+<ol>check first whether it has <span style="background-color:yellow;">init</span> ( ) , <span style="background-color:yellow;">execute</span> ( ) and <span style="background-color:yellow;">cleanup</span> ( ) if they exist , all is well if they do n't exist , complain do n't run any other code , or at least not until I know there 's no <span style="background-color:yellow;">init</span> ( ) </ol>
+<p>Normally I 'd force the use the same old if __name__ = = '__main__ ' trick , but I have little control on the user-supplied script , so I 'm looking for a relatively painless solution. I have seen all sorts of complicated tricks , including parsing the script , but nothing really simple. I 'm surprised it does not exist.. or maybe I 'm not getting something . </p>
+<p>Thanks . </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>My attempt using the <span style="background-color:yellow;">ast</span> module : </p>
+<pre><code>import ast
+
+# which syntax elements are allowed at module level?
+whitelist = [
+  # docstring
+  lambda x: isinstance(x, ast.Expr) \
+             and isinstance(x.value, ast.Str),
+  # import
+  lambda x: isinstance(x, ast.Import),
+  # class
+  lambda x: isinstance(x, ast.ClassDef),
+  # function
+  lambda x: isinstance(x, ast.FunctionDef),
+]
+
+def validate(source, required_functions):
+  tree = ast.parse(source)
+
+  functions = set()
+  required_functions = set(required_functions)
+
+  for item in tree.body:
+    if isinstance(item, ast.FunctionDef):
+      functions.add(item.name)
+      continue
+
+    if all(not checker(item) for checker in whitelist):
+      return False
+
+  # at least the required functions must be there
+  return len(required_functions - functions) == 0
+
+
+if __name__ == "__main__":
+  required_funcs = [ "init", "execute", "cleanup" ]
+  with open("/tmp/test.py", "rb") as f:
+    print("yay!" if validate(f.read(), required_funcs) else "d'oh!")
+</code></pre>
+<br /><b># 1 </b><br /><p>I 'd first of all not require some functions , but a class that conforms to a specified interface , using either the abc module , or zope.interface . This forces the maker of the module to supply the functions you want . </p>
+<p>Secondly , I would not bother looking for module-level code. It 's the module-makers problem if he does this. It 's too much work with no actual benefit . </p>
+<p>If you are worried about security issues , you need to sandbox the code somehow anyway . </p>
+<br /><b># 2 </b><br /><p>Not sure if you 'll consider this elegant , but it is somewhat intelligent in the sense that it recognizes when def <span style="background-color:yellow;">init</span> are <span style="background-color:yellow;">tokens</span> and not just part of a tricky multi-line string : </p>
+<pre><code>'''
+def init does not define init...
+'''
+</code></pre>
+<p>It will not recognize when <span style="background-color:yellow;">init</span> is defined in tricky alternate ways such as </p>
+<pre><code>init = lambda ...
+</code></pre>
+<p>or </p>
+<pre><code>codestr='def  i'+'nit ...'
+exec(codestr)
+</code></pre>
+<p>The only way to handle all such cases is to run the code ( e.g. in a sandbox or by <span style="background-color:yellow;">importing</span> ) and inspect the result . </p>
+<hr />
+<pre><code>import tokenize
+import token
+import io
+import collections
+
+userscript = '''\
+def init():
+    blah
+
+"""
+def execute():
+    more blah
+"""
+
+yadda
+'''
+
+class Token(object):
+    def __init__(self, tok):
+        toknum, tokval, (srow, scol), (erow, ecol), line = tok
+        self.toknum = toknum
+        self.tokname = token.tok_name[toknum]
+        self.tokval = tokval
+        self.srow = srow
+        self.scol = scol
+        self.erow = erow
+        self.ecol = ecol
+        self.line = line    
+
+class Validator(object):
+    def __init__(self, codestr):
+        self.codestr = codestr
+        self.toks = collections.deque(maxlen = 2)
+        self.names = set()
+    def validate(self):
+        tokens = tokenize.generate_tokens(io.StringIO(self.codestr).readline)
+        self.toks.append(Token(next(tokens)))
+        for tok in tokens:
+            self.toks.append(Token(tok))            
+            if (self.toks[0].tokname == 'NAME'     # First token is a name
+                and self.toks[0].scol == 0         # First token starts at col 0
+                and self.toks[0].tokval == 'def'   # First token is 'def'
+                and self.toks[1].tokname == 'NAME' # Next token is a name
+                ):
+                self.names.add(self.toks[1].tokval)
+        delta = set(['init', 'cleanup', 'execute']) - self.names
+        if delta:
+            raise ValueError('{n} not defined'.format(n = ' and '.join(delta)))
+
+v = Validator(userscript)
+v.validate()
+</code></pre>
+<p>yields </p>
+<pre><code>ValueError: execute and cleanup not defined
+</code></pre>
+<br /><b># 3 </b><br /><p>Here 's a simpler ( and more naive ) alternative to the AST approach : </p>
+<pre><code>import sys
+from imp import find_module, new_module, PY_SOURCE
+
+
+EXPECTED = ("init", "execute", "cleanup")
+
+def import_script(name):
+    fileobj, path, description = find_module(name)
+
+    if description[2] != PY_SOURCE:
+        raise ImportError("no source file found")
+
+    code = compile(fileobj.read(), path, "exec")
+
+    expected = list(EXPECTED)
+    for const in code.co_consts:
+        if isinstance(const, type(code)) and const.co_name in expected:
+            expected.remove(const.co_name)
+    if expected:
+        raise ImportError("missing expected function: {}".format(expected))
+
+    module = new_module(name)
+    exec(code, module.__dict__)
+    sys.modules[name] = module
+    return module
+</code></pre>
+<p>Keep in mind , this is a <span style="background-color:yellow;">very</span> direct way of doing it and circumvents extensions to Python 's <span style="background-color:yellow;">import</span> machinery . </p>
+<br /><b># 4 </b><br /><p>One <span style="background-color:yellow;">very</span> simple solution could be to check the first characters of every <span style="background-color:yellow;">line</span> of code : The only permitted should be : </p>
+<ul>def <span style="background-color:yellow;">init</span> ( ) : def <span style="background-color:yellow;">execute</span> ( ) : def <span style="background-color:yellow;">cleanup</span> ( ) : <span style="background-color:yellow;">lines</span> starting with 4 spaces [ optionally ] : <span style="background-color:yellow;">lines</span> starting with # </ul>
+<p>This is <span style="background-color:yellow;">very</span> primitive but it fulfills your requirements.. . </p>
+<p>Update : After a second though about it I realized that it is n't so easy after all. Consider for example this piece of code : </p>
+<pre><code>def init():
+    v = """abc
+def
+ghi"""
+    print(v)
+</code></pre>
+<p>This means that you 'd need a more complex code parsing algorithm... so forget about my solution.. . </p>
+<br /><b># 5 </b><br /><p>A solution to 1 to 3 , ( not the yadda part ) is to hand out " generic_class.py " with all the methods that you need. So, </p>
+<pre><code>class Generic(object):
+
+    def __init__(self):
+        return
+
+    def execute(self):
+        return
+
+    # etc
+</code></pre>
+<p>You can then check for the existence of " generic " in what you 've <span style="background-color:yellow;">imported.</span> If it does n't exist you can ignore it and if it does then you know exactly what 's there. Anything extra will never be called unless it 's called from within one of your pre-defined methods . </p>
+<br />

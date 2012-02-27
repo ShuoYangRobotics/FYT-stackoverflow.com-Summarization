@@ -1,0 +1,67 @@
+<h3>Question (ID-881388):</h3><h2>What is the reason for performing a double fork when creating a daemon?</h2><p>I'm trying to create a daemon in python. I've found the <a href="http://stackoverflow.com/questions/473620/how-do-you-create-a-daemon-in-python">following question</a>, which has some good resources in it which I am currently following, but I'm curious as to why a double fork is necessary. I've scratched around google and found plenty of resources declaring that one is necessary, but not why.</p>
+
+<p>Edit: Thanks for the excellent answers. Some mention that it is to prevent the daemon from acquiring a controlling terminal. How would it do this without the second fork? What are the repercussions?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Looking at the code referenced in the question referenced, the justification is:</p>
+
+<pre><code># Fork a second child and exit immediately to prevent zombies.  This
+# causes the second child process to be orphaned, making the init
+# process responsible for its cleanup.  And, since the first child is
+# a session leader without a controlling terminal, it's possible for
+# it to acquire one by opening a terminal in the future (System V-
+# based systems).  This second fork guarantees that the child is no
+# longer a session leader, preventing the daemon from ever acquiring
+# a controlling terminal.
+</code></pre>
+
+<p>So it is to ensure that the daemon is re-parented onto init (just in case the process kicking off the deamon is long lived), and removes any chance of the daemon reaquiring a controlling tty. So if neither of these cases apply, then one fork should be sufficient. "Unix Network Programming - Stevens" has a good section on this.</p>
+<br /><b>#1</b><br /><p>I was trying to understand the double fork and stumbled upon this question here. After a lot of research this is what I figured out. Hopefully it will help clarify things better for anyone who has the same question.</p>
+
+<p>In Unix every process belongs to a group which in turn belongs to a session. Here is the hierarchy …</p>
+
+<p>Session (SID) ->  Process Group (PGID) -> Process (PID)</p>
+
+<p>The first process in the process group becomes the process group leader and the first process in the session becomes the session leader. Every session can have one TTY associated with it. Only a session leader can take control of a TTY. For a process to be truly daemonized (ran in the background) we should ensure that the session leader is killed so that there is no possibility of the session ever taking control of the TTY. </p>
+
+<p>I ran Sander Marechal's python example daemon program from <a href="http://www.jejik.com/articles/2007/02/a_simple_unix_linux_daemon_in_python/" rel="nofollow">this site</a> on my Ubuntu. Here are the results with my comments. </p>
+
+<p>The parent
+PID: 28084, PGID: 28084, SID: 28046</p>
+
+<p>After fork#1
+PID: 28085, PGID: 28084, SID: 28046</p>
+
+<p>After 'decouple' from parent environment. 
+Note that Fork#1 is now a session leader because its <strong>PID = SID</strong>. It could still take control of a TTY.
+PID: 28085, PGID: 28085, SID:28085</p>
+
+<p>After fork#2
+Note that Fork#2 is no longer the session leader PID != SID. This process can never take control of a TTY. <em>Truly demonized.</em>
+PID: 28086, PGID: 28085, SID:28085</p>
+
+<p>I personally find terminology fork-twice to be confusing. A better idiom might be fork-decouple-fork.</p>
+
+<p>Additional links of interest:</p>
+
+<ul>
+<li>Unix processes - <a href="http://www.win.tue.nl/~aeb/linux/lk/lk-10.html" rel="nofollow">http://www.win.tue.nl/~aeb/linux/lk/lk-10.html</a></li>
+</ul>
+<br /><b>#2</b><br /><p>Taken from <a href="http://blog.charcoalphile.com/2008/05/03/python-tips-for-writing-daemons/" rel="nofollow">Bad CTK</a>:</p>
+
+<p>"On some flavors of Unix, you are forced to do a double-fork on startup, in order to go into daemon mode. This is because single forking isn’t guaranteed to detach from the controlling terminal."</p>
+<br /><b>#3</b><br /><p>According to "Advanced Programming in the Unix Environment", by Stephens and Rago, the second fork is more a recommendation, and it is done to guarantee that the daemon does not acquire a controlling terminal on System V-based systems. </p>
+<br /><b>#4</b><br /><p>One reason is that the parent process can immediately wait_pid() for the child, and then forget about it.  When then grand-child dies, it's parent is init, and it will wait() for it - and taking it out of the zombie state.  </p>
+
+<p>The result is that the parent process doesn't need to be aware of the forked children, and it also makes it possible to fork long running processes from libs etc.</p>
+<br /><b>#5</b><br /><p>A decent discussion of it appear to be at <a href="http://www.developerweb.net/forum/showthread.php?t=3025" rel="nofollow">http://www.developerweb.net/forum/showthread.php?t=3025</a></p>
+
+<p>Quoting mlampkin from there:</p>
+
+<blockquote>
+  <p>...think of the setsid( ) call as the "new" way to do thing (disassociate from the terminal) and the [second] fork( ) call after it as redundancy to deal with the SVr4...</p>
+</blockquote>
+<br /><b>#6</b><br /><p>The daemon() call has the parent call _exit() if it succeeds. The original motivation may have been to allow the parent to do some extra work while the child is daemonizing.</p>
+
+<p>It may also be based on a mistaken belief that it's necessary in order to ensure the daemon has no parent process and is reparented to init - but this will happen anyway once the parent dies in the single fork case.</p>
+
+<p>So I suppose it all just boils down to tradition in the end - a single fork is sufficient as long as the parent dies in short order anyway.</p>
+<br />

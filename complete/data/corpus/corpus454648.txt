@@ -1,0 +1,392 @@
+Question (ID-454648): Pythonic macro syntax I've been working on an alternative compiler front-end for Python where all syntax is parsed via macros. I'm finally to the point with its development that I can start work on a superset of the Python language where macros are an integral component. 
+
+ My problem is that I can't come up with a pythonic macro definition syntax. I've posted several examples in two different syntaxes in answers below. Can anyone come up with a better syntax? It doesn't have to build off the syntax I've proposed in any way -- I'm completely open here. Any comments, suggestions, etc would be helpful, as would alternative syntaxes showing the examples I've posted. 
+
+ A note about the macro structure, as seen in the examples I've posted: The use of MultiLine/MLMacro and Partial/PartialMacro tell the parser how the macro is applied. If it's multiline, the macro will match multiple line lists; generally used for constructs. If it's partial, the macro will match code in the middle of a list; generally used for operators. 
+ Answers (Total-9): #0 After thinking about it a while a few days ago, and coming up with nothing worth posting, I came back to it now and came up with some syntax I rather like, because it nearly looks like python: 
+
+ macro PrintMacro:
+ syntax:
+ "print", OneOrMore(Var(), name='vars')
+
+ return Printnl(vars, None)
+ 
+
+ 
+ Make all the macro "keywords" look like creating python objects ( Var() instead of simple Var ) 
+ Pass the name of elements as a "keyword parameter" to items we want a name for. 
+It should still be easy to find all the names in the parser, since this syntax definition anyway needs to be interpreted in some way to fill the macro classes syntax variable. 
+
+ needs to be converted to fill the syntax variable of the resulting macro class. 
+ 
+
+ The internal syntax representation could also look the same: 
+
+ class PrintMacro(Macro):
+ syntax = 'print', OneOrMore(Var(), name='vars')
+ ...
+ 
+
+ The internal syntax classes like OneOrMore would follow this pattern to allow subitems and an optional name: 
+
+ class MacroSyntaxElement(object):
+ def __init__(self, *p, name=None):
+ self.subelements = p
+ self.name = name
+ 
+
+ When the macro matches, you just collect all items that have a name and pass them as keyword parameters to the handler function: 
+
+ class Macro():
+ ...
+ def parse(self, ...):
+  syntaxtree = []
+  nameditems = {}
+  # parse, however this is done
+  # store all elements that have a name as
+  # nameditems[name] = parsed_element
+  self.handle(syntaxtree, **nameditems)
+ 
+
+ The handler function would then be defined like this: 
+
+ class PrintMacro(Macro):
+ ...
+ def handle(self, syntaxtree, vars):
+ return Printnl(vars, None)
+ 
+
+ I added the syntaxtree as a first parameter that is always passed, so you wouldn't need to have any named items if you just want to do very basic stuff on the syntax tree. 
+
+ Also, if you don't like the decorators, why not add the macro type like a "base class"? IfMacro would then look like this: 
+
+ macro IfMacro(MultiLine):
+ syntax:
+ Group("if", Var(), ":", Var(), name='if_')
+ ZeroOrMore("elif", Var(), ":", Var(), name='elifs')
+ Optional("else", Var(name='elseBody'))
+
+ return If(
+  [(cond, Stmt(body)) for keyword, cond, colon, body in [if_] + elifs],
+  None if elseBody is None else Stmt(elseBody)
+ )
+ 
+
+ And in the internal representation: 
+
+ class IfMacro(MultiLineMacro):
+ syntax = (
+  Group("if", Var(), ":", Var(), name='if_'),
+  ZeroOrMore("elif", Var(), ":", Var(), name='elifs'),
+  Optional("else", Var(name='elseBody'))
+ )
+
+ def handle(self, syntaxtree, if_=None, elifs=None, elseBody=None):
+ # Default parameters in case there is no such named item.
+ # In this case this can only happen for 'elseBody'.
+ return If(
+  [(cond, Stmt(body)) for keyword, cond, body in [if_] + elifs],
+  None if elseNody is None else Stmt(elseBody)
+  )
+ 
+
+ I think this would give a quite flexible system. Main advantages: 
+
+ 
+ Easy to learn (looks like standard python) 
+ Easy to parse (parses like standard python) 
+ Optional items can be easily handled, since you can have a default parameter None in the handler 
+ Flexible use of named items:
+ 
+ You don't need to name any items if you don't want, because the syntax tree is always passed in. 
+ You can name any subexpressions in a big macro definition, so it's easy to pick out specific stuff you're interested in 
+ 
+ Easily extensible if you want to add more features to the macro constructs. For example Several("abc", min=3, max=5, name="a") . I think this could also be used to add default values to optional elements like Optional("step", Var(), name="step", default=1) . 
+ 
+
+ I'm not sure about the quote/unquote syntax with "quote:" and "$", but some syntax for this is needed, since it makes life much easier if you don't have to manually write syntax trees. Probably its a good idea to require (or just permit?) parenthesis for "$", so that you can insert more complicated syntax parts, if you want. Like $(Stmt(a, b, c)) . 
+
+ The ToMacro would look something like this: 
+
+ # macro definition
+macro ToMacro(Partial):
+ syntax:
+ Var(name='start'), "to", Var(name='end'), Optional("inclusive", name='inc'), Optional("step", Var(name='step'))
+
+ if step == None:
+ step = quote(1)
+ if inclusive:
+ return quote:
+  xrange($(start), $(end)+1, $(step))
+ else:
+ return quote:
+  xrange($(start), $(end), $(step))
+
+# resulting macro class
+class ToMacro(PartialMacro):
+ syntax = Var(name='start'), "to", Var(name='end'), Optional("inclusive", name='inc'), Optional("step", Var(name='step'))
+
+ def handle(syntaxtree, start=None, end=None, inc=None, step=None):
+ if step is None:
+  step = Number(1)
+ if inclusive:
+  return ['xrange', ['(', start, [end, '+', Number(1)], step, ')']]
+ return ['xrange', ['(', start, end, step, ')']]
+ 
+ #1 You might consider looking at how Boo (a .NET-based language with a syntax largely inspired by Python) implements macros, as described at http://boo.codehaus.org/Syntactic+Macros . 
+ #2 You should take a look at MetaPython to see if it accomplishes what you're looking for. 
+ #3 Incorporating BNF 
+
+ class IfMacro(Macro):
+ syntax: "if" expression ":" suite ("elif" expression ":" suite )* ["else" ":" suite] 
+
+ def handle(self, if_, elifs, elseBody):
+  return If(
+   [(expression, Stmt(suite)) for expression, suite in [if_] + elifs],
+   elseBody != None and Stmt(elseBody) or None
+   )
+ 
+ #4 I'm posting a bit of floating ideas to see if it inspires. 
+I don't know much python, and I'm not using real python syntax, but it beats nothing :p 
+
+ macro PrintMacro:
+ syntax: 
+   print $a
+ rules: 
+  a: list(String), as vars
+ handle:
+  # do something with 'vars' 
+
+macro IfMacro:
+ syntax: 
+  if $a :
+   $b
+  $c 
+ rules: 
+  a: 1 boolean as if_cond 
+  b: 1 coderef  as if_code 
+  c: optional macro(ElseIf) as else_if_block 
+
+ if( if_cond ):
+   if_code();
+ elsif( defined else_if_block ): 
+   else_if_block();
+ 
+
+ More ideas: 
+
+ Implementing Perl quote style, but in Python! ( its a very bad implementation, and note: whitespace is significant in the rule ) 
+
+ macro stringQuote:
+ syntax: 
+   q$open$content$close
+ rules: 
+  open: anyOf('[{(/_') or anyRange('a','z') or anyRange('0','9');
+  content: string
+  close: anyOf(']})/_') or anyRange('a','z') or anyRange('0','9');
+ detect: 
+  return 1 if open == '[' and close == ']' 
+  return 1 if open == '{' and close == '}'
+  return 1 if open == '(' and close == ')'
+  return 1 if open == close 
+  return 0
+ handle: 
+  return content;
+ 
+ #5 This is a new macro syntax I've come up with based on Kent Fredric's ideas. It parses the syntax into a list just like the code is parsed. 
+
+ Print macro: 
+
+ macro PrintMacro:
+ syntax:
+  print $stmts
+
+ if not isinstance(stmts, list):
+ stmts = [stmts]
+ return Printnl(stmts, None)
+ 
+
+ If macro: 
+
+ @MultiLine
+macro IfMacro:
+ syntax:
+ @if_ = if $cond: $body
+ @elifs = ZeroOrMore(elif $cond: $body)
+ Optional(else: $elseBody)
+
+ return If(
+  [(cond, Stmt(body)) for cond, body in [if_] + elifs],
+  elseBody != None and Stmt(elseBody) or None
+ )
+ 
+
+ X to Y [inclusive] [step Z] macro: 
+
+ @Partial
+macro ToMacro:
+ syntax:
+ $start to $end Optional(inclusive) Optional(step $step)
+
+ if step == None:
+ step = quote 1
+ if inclusive:
+ return quote:
+  xrange($start, $end+1, $step)
+ else:
+ return quote:
+  xrange($start, $end, $step)
+ 
+
+ Aside from the minor issue of using decorators to identify macro type, my only real issue with this is the way you can name groups, e.g. in the if case.
+I'm using @name = ..., but this just reeks of Perl. I don't want to just use name = ... because that could conflict with a macro pattern to match. Any ideas? 
+ #6 If you're only asking about the syntax (not implementation) of macros within Python, then I believe the answer is obvious. The syntax should closely match what Python already has (i.e., the " def " keyword). 
+
+ Whether you implement this as one of the following is up to you: 
+
+ def macro largest(lst):
+defmac largest(lst):
+macro largest(lst):
+ 
+
+ but I believe it should be exactly the same as a normal function with respect to the rest so that: 
+
+ def twice_second(a,b):
+ glob_i = glob_i + 1
+ return b * 2
+x = twice_second (1,7);
+ 
+
+ and 
+
+ defmac twice_second(a,b):
+ glob_i = glob_i + 1
+ return b * 2
+x = twice_second (1,7);
+ 
+
+ are functionally equivalent. 
+
+ The way I would implement this is with a pre-processor (a la C) which would: 
+
+ 
+ replace all defmac's with defs in the input file. 
+ pass it through Python to check syntax (sneaky bit, this). 
+ put the defmac's back in. 
+ find all uses of each macro and "inline" them, using your own reserved variables, such as converting local var a with __macro_second_local_a . 
+ return value should be a special variable as well (macro_second_retval). 
+ global variables would keep their real names. 
+ parameter can be given _macro_second_param_XXX names. 
+ once all inlining is done, remove the defmac 'functions' entirely. 
+ pass the resultant file through Python. 
+ 
+
+ No doubt there'll be some nigglies to take care of (like tuples or multiple return points) but Python is sufficiently robust to handle that in my opinion. 
+
+ So: 
+
+ x = twice_second (1,7);
+ 
+
+ becomes: 
+
+ # These lines are the input params.
+__macro_second_param_a = 1
+__macro_second_param_b = 7
+
+# These lines are the inlined macro.
+glob_i = glob_i + 1
+__macro_second_retval = __macro_second_param_b * 2
+
+# Modified call to macro.
+x = __macro_second_retval
+ 
+ #7 This is the current mechanism for defining syntax by use of a standard Python class. 
+
+ Print macro: 
+
+ class PrintMacro(Macro):
+ syntax = 'print', Var
+ def handle(self, stmts):
+ if not isinstance(stmts, list):
+  stmts = [stmts]
+ return Printnl(stmts, None)
+ 
+
+ If/elif/else macro class: 
+
+ class IfMacro(MLMacro):
+ syntax = (
+  ('if', Var, Var),
+  ZeroOrMore('elif', Var, Var),
+  Optional('else', Var)
+ )
+ def handle(self, if_, elifs, elseBody):
+ return If(
+  [(cond, Stmt(body)) for cond, body in [if_] + elifs],
+  elseBody != None and Stmt(elseBody) or None
+  )
+ 
+
+ X to Y [inclusive] [step Z] macro class: 
+
+ class ToMacro(PartialMacro):
+ syntax = Var, 'to', Var, Optional('inclusive'), Optional('step', Var)
+ def handle(self, start, end, inclusive, step):
+ if inclusive:
+  end = ['(', end, '+', Number(1), ')']
+ if step == None: step = Number(1)
+ return ['xrange', ['(', start, end, step, ')']]
+ 
+
+ My issues with this design is that things are very verbose and don't feel pythonic in the least. In addition, the lack of quotation ability makes complex macros difficult. 
+ #8 This is the macro syntax I've come up with for my Python superset. 
+
+ Print macro: 
+
+ macro PrintMacro:
+ syntax:
+ 	stmts = 'print', Var
+
+ if not isinstance(stmts, list):
+ stmts = [stmts]
+ return Printnl(stmts, None)
+ 
+
+ If macro: 
+
+ @MultiLine
+macro IfMacro:
+ syntax:
+ if_ = 'if', Var, Var
+ elifs = ZeroOrMore('elif', Var, Var)
+ else_ = Optional('else', Var)
+
+ return If(
+  [(cond, Stmt(body)) for cond, body in [if_] + elifs],
+  elseBody != None and Stmt(elseBody) or None
+ )
+ 
+
+ X to Y [inclusive] [step Z] macro: 
+
+ @Partial
+macro ToMacro:
+ syntax:
+ start = Var
+ 'to'
+ end = Var
+ inclusive = Optional('inclusive')
+ step = Optional('step', Var)
+
+ if step == None:
+ step = quote 1
+ if inclusive:
+ return quote:
+  xrange($start, $end+1, $step)
+ else:
+ return quote:
+  xrange($start, $end, $step)
+ 
+
+ My primary issue with this is that the syntax block is unclear, particularly the 'to' line in the last example. I'm also not a big fan of using decorators to differentiate macro types.

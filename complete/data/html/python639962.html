@@ -1,0 +1,131 @@
+<h3>Question (ID-639962):</h3><h2>Unzipping directory structure with python</h2><p>I have a zip file which contains the following directory structure:</p>
+
+<pre><code>dir1\dir2\dir3a
+dir1\dir2\dir3b
+</code></pre>
+
+<p>I'm trying to unzip it and maintain the directory structure however I get the error:</p>
+
+<pre><code>IOError: [Errno 2] No such file or directory: 'C:\\\projects\\\testFolder\\\subdir\\\unzip.exe'
+</code></pre>
+
+<p>where testFolder is dir1 above and subdir is dir2.</p>
+
+<p>Is there a quick way of unzipping the file and maintaining the directory structure?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>The extract and extractall methods are great if you're on Python 2.6.  I have to use Python 2.5 for now, so I just need to create the directories if they don't exist.  You can get a listing of directories with the <code>namelist()</code> method.  The directories will always end with a forward slash (even on Windows) e.g.,</p>
+
+<pre><code>import os, zipfile
+
+z = zipfile.ZipFile('myfile.zip')
+for f in z.namelist():
+    if f.endswith('/'):
+        os.makedirs(f)
+</code></pre>
+
+<p>You probably don't want to do it <em>exactly</em> like that (i.e., you'd probably want to extract the contents of the zip file as you iterate over the namelist), but you get the idea.</p>
+<br /><b>#1</b><br /><p><strong>Don't</strong> trust extract() or extractall().</p>
+
+<p>These methods blindly extract files to the paths given in their filenames. But ZIP filenames can be anything at all, including dangerous strings like “x/../../../etc/passwd”. Extract such files and you could have just compromised your entire server.</p>
+
+<p>Maybe this should be considered a reportable security hole in Python's zipfile module, but any number of zip-dearchivers have exhibited the exact same behaviour in the past. To unarchive a ZIP file with folder structure safely you need in-depth checking of each file path.</p>
+<br /><b>#2</b><br /><p>I tried this out, and can reproduce it.  The extractall method, as suggested by other answers, does <strong>not</strong> solve the problem.  This seems like a bug in the zipfile module to me (perhaps Windows-only?), unless I'm misunderstanding how zipfiles are structured.</p>
+
+<pre><code>testa\
+testa\testb\
+testa\testb\test.log
+&gt; test.zip
+
+&gt;&gt;&gt; from zipfile import ZipFile
+&gt;&gt;&gt; zipTest = ZipFile("C:\\...\\test.zip")
+&gt;&gt;&gt; zipTest.extractall("C:\\...\\")
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "...\zipfile.py", line 940, in extractall
+  File "...\zipfile.py", line 928, in extract
+  File "...\zipfile.py", line 965, in _extract_member
+IOError: [Errno 2] No such file or directory: 'C:\\...\\testa\\testb\\test.log'
+</code></pre>
+
+<p>If I do a <code>printdir()</code>, I get this (first column):</p>
+
+<pre><code>&gt;&gt;&gt; zipTest.printdir()
+File Name
+testa/testb/
+testa/testb/test.log
+</code></pre>
+
+<p>If I try to extract just the first entry, like this:</p>
+
+<pre><code>&gt;&gt;&gt; zipTest.extract("testa/testb/")
+'C:\\...\\testa\\testb'
+</code></pre>
+
+<p>On disk, this results in the creation of a folder <code>testa</code>, with a <strong>file</strong> <code>testb</code> inside.  This is apparently the reason why the subsequent attempt to extract <code>test.log</code> fails; <code>testa\testb</code> is a file, not a folder.</p>
+
+<p>Edit #1: If you extract just the file, then it works:</p>
+
+<pre><code>&gt;&gt;&gt; zipTest.extract("testa/testb/test.log")
+'C:\\...\\testa\\testb\\test.log'
+</code></pre>
+
+<p>Edit #2: Jeff's code is the way to go; iterate through <code>namelist</code>; if it's a directory, create the directory.  Otherwise, extract the file.</p>
+<br /><b>#3</b><br /><p>There's a very easy way if you're using Python 2.6: the <a href="http://docs.python.org/library/zipfile.html#zipfile.ZipFile.extractall" rel="nofollow">extractall</a> method.</p>
+
+<p>However, since the <code>zipfile</code> module is implemented completely in Python without any C extensions, you can probably copy it out of a 2.6 installation and use it with an older version of Python; you may find this easier than having to reimplement the functionality yourself.  However, the function itself is quite short:</p>
+
+<pre><code>def extractall(self, path=None, members=None, pwd=None):
+    """Extract all members from the archive to the current working
+       directory. `path' specifies a different directory to extract to.
+       `members' is optional and must be a subset of the list returned
+       by namelist().
+    """
+    if members is None:
+        members = self.namelist()
+
+    for zipinfo in members:
+        self.extract(zipinfo, path, pwd)
+</code></pre>
+<br /><b>#4</b><br /><p>I know it may be a little late to say this but Jeff is right.
+It's as simple as:</p>
+
+<pre><code>import os
+from zipfile import ZipFile as zip
+
+def extractAll(zipName):
+    z = zip(zipName)
+    for f in z.namelist():
+        if f.endswith('/'):
+            os.makedirs(f)
+        else:
+            z.extract(f)
+
+if __name__ == '__main__':
+    zipList = ['one.zip', 'two.zip', 'three.zip']
+    for zip in zipList:
+        extractAll(zipName)
+</code></pre>
+
+<p>So thanks Jeff you helped me heaps :)</p>
+<br /><b>#5</b><br /><p>It sounds like you are trying to run unzip to extract the zip.</p>
+
+<p>It would be better to use the python <a href="http://docs.python.org/library/zipfile.html" rel="nofollow"><code>zipfile</code></a> module, and therefore do the extraction in python.</p>
+
+<pre><code>import zipfile
+
+def extract(zipfilepath, extractiondir):
+    zip = zipfile.ZipFile(zipfilepath)
+    zip.extractall(path=extractiondir)
+</code></pre>
+<br /><b>#6</b><br /><p>Note that zip files can have entries for directories as well as files. When creating archives with the <code>zip</code> command, pass the <code>-D</code> option to disable adding directory entries explicitly to the archive. When Python 2.6's <code>ZipFile.extractall</code> method runs across a directory entry, it seems to create a <em>file</em> in its place. Since archive entries aren't necessarily in order, this causes <code>ZipFile.extractall</code> to fail quite often, as it tries to create a file in a subdirectory of a file. If you've got an archive that you want to use with the Python module, simply extract it and re-zip it with the <code>-D</code> option. Here's a little snippet I've been using for a while to do exactly that:</p>
+
+<pre><code>P=`pwd` &amp;&amp; 
+Z=`mktemp -d -t zip` &amp;&amp; 
+pushd $Z &amp;&amp; 
+unzip $P/&lt;busted&gt;.zip &amp;&amp; 
+zip -r -D $P/&lt;new&gt;.zip . &amp;&amp; 
+popd &amp;&amp; 
+rm -rf $Z
+</code></pre>
+
+<p>Replace <code>&lt;busted&gt;.zip</code> and <code>&lt;new&gt;.zip</code> with real filenames relative to the current directory. Then just copy the whole thing and paste it into a command shell, and it will create a new archive that's ready to rock with Python 2.6. There <em>is</em> a <code>zip</code> command that will remove these directory entries without unzipping but IIRC it behaved oddly in different shell environments or zip configurations.</p>
+<br />

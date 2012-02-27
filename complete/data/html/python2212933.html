@@ -1,0 +1,189 @@
+<h3>Question (ID-2212933):</h3><h2>Python regex for reading CSV-like rows</h2><p>I want to parse incoming CSV-like rows of data. Values are separated with commas (and there could be leading and trailing whitespaces around commas), and can be quoted either with ' or with ". For example - this is a valid row:</p>
+
+<pre><code>    data1, data2  ,"data3'''",  'data4""',,,data5,
+</code></pre>
+
+<p>but this one is malformed:</p>
+
+<pre><code>    data1, data2, da"ta3", 'data4',
+</code></pre>
+
+<p>-- quotation marks can only be prepended or trailed by spaces. </p>
+
+<p>Such malformed rows should be recognized - best would be to somehow mark malformed value within row, but if regex doesn't match the whole row then it's also acceptable.</p>
+
+<p>I'm trying to write regex able to parse this, using either match() of findall(), but every single regex I'm coming with has some problems with edge cases.</p>
+
+<p>So, maybe someone with experience in parsing something similar could help me on this?
+(Or maybe this is too complex for regex and I should just write a function)</p>
+
+<p>EDIT1:</p>
+
+<p><code>csv</code> module is not much of use here:</p>
+
+<pre><code>    &gt;&gt;&gt; list(csv.reader(StringIO('''2, "dat,a1", 'dat,a2',''')))
+    [['2', ' "dat', 'a1"', " 'dat", "a2'", '']]
+
+    &gt;&gt;&gt; list(csv.reader(StringIO('''2,"dat,a1",'dat,a2',''')))
+    [['2', 'dat,a1', "'dat", "a2'", '']]
+</code></pre>
+
+<p>-- unless this can be tuned?</p>
+
+<p>EDIT2: A few language edits - I hope it's more valid English now</p>
+
+<p>EDIT3: Thank you for all answers, I'm now pretty sure that regular expression is not that good idea here as (1) covering all edge cases can be tricky (2) writer output is not regular. Writing that, I've decided to check mentioned pyparsing and either use it, or write custom FSM-like parser.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Although it would likely be possible with some combination of pre-processing, use of <code>csv</code> module, post-processing, and use of regular expressions, your stated requirements do not fit well with the design of the <code>csv</code> module, nor possibly with regular expressions (depending on the complexity of nested quotation marks that you might have to handle).</p>
+
+<p>In complex parsing cases, <a href="http://pyparsing.wikispaces.com/" rel="nofollow">pyparsing</a> is always a good package to fall back on.  If this isn't a one-off situation, it will likely produce the most straightforward and maintainable result, at the cost of possibly a little extra effort up front.  Consider that investment to be paid back quickly, however, as you save yourself the extra effort of debugging the regex solutions to handle corner cases...</p>
+
+<p>You can likely find examples of pyparsing-based CSV parsing easily, with <a href="http://stackoverflow.com/questions/1387644/verify-csv-against-given-format">this question</a> maybe enough to get you started.</p>
+<br /><b>#1</b><br /><p>Python has a standard library module to read csv files:</p>
+
+<pre><code>import csv
+
+reader = csv.reader(open('file.csv'))
+
+for line in reader:
+    print line
+</code></pre>
+
+<p>For your example input this prints</p>
+
+<pre><code>['data1', ' data2 ', "data3'''", ' \'data4""\'', '', '', 'data5', '']
+</code></pre>
+
+<p>EDIT:</p>
+
+<p>you need to add skipinitalspace=True to allow spaces before double quotation marks for the extra examples you provided. Not sure about the single quotes yet.</p>
+
+<pre><code>&gt;&gt;&gt; list(csv.reader(StringIO('''2, "dat,a1", 'dat,a2','''), skipinitialspace=True))
+[['2', 'dat,a1', "'dat", "a2'", '']]
+
+&gt;&gt;&gt; list(csv.reader(StringIO('''2,"dat,a1",'dat,a2','''), skipinitialspace=True))
+[['2', 'dat,a1', "'dat", "a2'", '']]
+</code></pre>
+<br /><b>#2</b><br /><p>While the <code>csv</code> module is the right answer here, a regex that could do this is quite doable:</p>
+
+<pre><code>import re
+
+r = re.compile(r'''
+    \s*                # Any whitespace.
+    (                  # Start capturing here.
+      [^,"']+?         # Either a series of non-comma non-quote characters.
+      |                # OR
+      "(?:             # A double-quote followed by a string of characters...
+          [^"\\]|\\.   # That are either non-quotes or escaped...
+       )*              # ...repeated any number of times.
+      "                # Followed by a closing double-quote.
+      |                # OR
+      '(?:[^'\\]|\\.)*'# Same as above, for single quotes.
+    )                  # Done capturing.
+    \s*                # Allow arbitrary space before the comma.
+    (?:,|$)            # Followed by a comma or the end of a string.
+    ''', re.VERBOSE)
+
+line = r"""data1, data2  ,"data3'''",  'data4""',,,data5,"""
+
+print r.findall(line)
+
+# That prints: ['data1', 'data2', '"data3\'\'\'"', '\'data4""\'', 'data5']
+</code></pre>
+
+<p><strong>EDIT:</strong> To validate lines, you can reuse the regex above with small additions:</p>
+
+<pre><code>import re
+
+r_validation = re.compile(r'''
+    ^(?:    # Capture from the start.
+      # Below is the same regex as above, but condensed.
+      # One tiny modification is that it allows empty values
+      # The first plus is replaced by an asterisk.
+      \s*([^,"']*?|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*(?:,|$)
+    )*$    # And don't stop until the end.
+    ''', re.VERBOSE)
+
+line1 = r"""data1, data2  ,"data3'''",  'data4""',,,data5,"""
+line2 = r"""data1, data2, da"ta3", 'data4',"""
+
+if r_validation.match(line1):
+    print 'Line 1 is valid.'
+else:
+    print 'Line 1 is INvalid.'
+
+if r_validation.match(line2):
+    print 'Line 2 is valid.'
+else:
+    print 'Line 2 is INvalid.'
+
+# Prints:
+#    Line 1 is valid.
+#    Line 2 is INvalid.
+</code></pre>
+<br /><b>#3</b><br /><p><strong>It is not possible to give you an answer, because you have not completely specified the protocol that is being used by the writer.</strong></p>
+
+<p>It evidently contains rules like:</p>
+
+<p>If a field contains any commas or single quotes, quote it with double quotes.<br>
+Else if the field contains any double quotes, quote it with single quotes.<br>
+Note: the result is still valid if you swap double and single in the above 2 clauses.<br>
+Else don't quote it.<br>
+The resultant field may have spaces (or other whitespace?) prepended or appended.<br>
+The so-augmented fields are assembled into a row, separated by commas and terminated by the platform's newline (LF or CRLF).  </p>
+
+<p>What is not mentioned is what the writer does in these cases:<br>
+   (0) field contains BOTH single quotes and double quotes<br>
+   (1) field contains leading non-newline whitespace<br>
+   (2) field contains trailing non-newline whitespace<br>
+   (3) field contains any newlines.<br>
+Where the writer ignores any of these cases, please specify what outcomes you want.</p>
+
+<p>You also mention "quotation marks can only be prepended or trailed by spaces" -- surely you mean commas are allowed also, otherwise your example <code>'data4""',,,data5,</code> fails on the first comma.</p>
+
+<p>How is your data encoded?</p>
+<br /><b>#4</b><br /><p>This probably sounds too simple, but really from the looks of things you are looking for a string that contains either [a-zA-Z0-9]["']+[a-zA-Z0-9], I mean without in depth testing against the data really what you're looking for is a quote or double quote (or any combination) in between letters (you could also add numbers there).</p>
+
+<p>Based on what you were asking, it really doesn't matter that it's a CSV, it matter's that you have data that doesn't conform. Which I believe just doing a search for a letter, then any combination of one or more " or ' and another letter.  </p>
+
+<p>Now are you looking to get a "quantity" or just a printout of the line that contains it so you know which ones to go back and fix?</p>
+
+<p>I'm sorry I don't know python regex's but in perl this would look something like this:</p>
+
+<pre><code># Look for one or more letter/number at least one ' or " or more and at least one    
+#  or more letter/number
+if ($line =~ m/[a-zA-Z0-9]+['"]+[a-zA-Z0-9]+/ig)
+{
+    # Prints the line if the above regex is found
+    print $line;
+
+}
+</code></pre>
+
+<p>Just simply convert that for when you look at a line.</p>
+
+<p>I'm sorry if I misunderstood the question</p>
+
+<p>I hope it helps!</p>
+<br /><b>#5</b><br /><p>If your goal is to convert the data to XML (or JSON, or YAML), look at <a href="http://github.com/knipknap/Gelatin/tree/master/syntax/csv/syntax.gel" rel="nofollow">this example</a> for a <a href="http://wiki.github.com/knipknap/Gelatin/" rel="nofollow">Gelatin</a> syntax that produces the following output:</p>
+
+<pre><code>&lt;xml&gt;
+  &lt;line&gt;
+    &lt;column&gt;data1&lt;/column&gt;
+    &lt;column&gt;data2  &lt;/column&gt;
+    &lt;column&gt;data3'''&lt;/column&gt;
+    &lt;column&gt;data4""&lt;/column&gt;
+    &lt;column/&gt;
+    &lt;column/&gt;
+    &lt;column&gt;data5&lt;/column&gt;
+    &lt;column/&gt;
+  &lt;/line&gt;
+&lt;/xml&gt;
+</code></pre>
+
+<p>Note that Gelatin also has a Python API:</p>
+
+<pre><code>from Gelatin.util import compile, generate_to_file
+syntax = compile('syntax.gel')
+generate_to_file(syntax, 'input.csv', 'output.xml', 'xml')
+</code></pre>
+<br />

@@ -1,0 +1,65 @@
+Question (ID-2808092): UDP security and identifying incoming data I have been creating an application using UDP for transmitting and receiving information. The problem I am running into is security. Right now I am using the IP/socketid in determining what data belongs to whom. 
+
+ However, I have been reading about how people could simply spoof their IP, then just send data as a specific IP. So this seems to be the wrong way to do it (insecure). So how else am I suppose to identify what data belongs to what users? For instance you have 10 users connected, all have specific data. The server would need to match the user data to this data we received. 
+
+ The only way I can see to do this is to use some sort of client/server key system and encrypt the data. I am curious as to how other applications (or games, since that's what this application is) make sure their data is genuine. Also there is the fact that encryption takes much longer to process than unencrypted. Although I am not sure by how much it will affect performance. 
+
+ Any information would be appreciated. Thanks. 
+ Answers (Total-6): #0 One solution is to use TCP because it is immune to spoofing the source address over the open internet because of the three-way-handshake ( More information on why TCP source address spoofing is impossible .). If you still want to use UDP, you could have a simulated three way handshake to begin the connection. A session id could then be added to each UDP packet. This will increase the connection overhead by 2 packets and a few bits per packet, however you will still gain from UDP's speed for the rest of the session when compared to tcp. 
+
+ However, using TCP or UDP as a transport layer still leaves you open to other attacks such as Sniffing and Man in The Middle attacks using arp spoofing or dns cache poising . Another problem is if both the attacker and the gamers are on the same local lan, such as a wireless network or another broadcast network then you are able to receive traffic regardless of the source/dest address and ONLY THEN does spoofing a three way handshake become possible (and an hmac can't help!). The best soltuion is to use SSL/TLS as your transport layer which solves all of these problems. 
+
+ You should not reinvent the wheal, but if you need to encrypt UDP for some reason you should use a Stream Cipher like RC4-drop1024 or even better a Block Cipher like AES 256 in OFB Mode . This will save bandwidth over other modes of encryption because they round up to the largest block size. 
+
+ EDIT:
+Based on Marts comment for (Datagram Transport Layer Security)DTLS I did some digging and I found there is an official RFC and its supported by OpenSSL and should be exposed using the pyOpenSSL library. I recommend using the RC4-SHA cipher suite to reduce overhead, this suite is supported by SSL 3.0 (newest). However DTLS will probably have more overhead (LAG!) then TCP. 
+ #1 You can look at HMAC 
+
+ Wikipedia: 
+
+ 
+ In cryptography, HMAC (Hash-based
+ Message Authentication Code), is a
+ specific construction for calculating
+ a message authentication code (MAC)
+ involving a cryptographic hash
+ function in combination with a secret
+ key. As with any MAC, it may be used
+ to simultaneously verify both the data
+ integrity and the authenticity of a
+ message. 
+ 
+
+ Each client would need to get a unique token which only they know. Every message they send, they'll make a hash based on the token and the message and send it along with the message itself. Then you can verify that the message came from a specific client. 
+ #2 If you absolutely need to verify that a particular user is a particular user then you need to use some form of encryption where the user signs their messages. This can be done pretty quickly because the user only needs to generate a hash of their message and then sign (encrypt) the hash. 
+
+ For your game application you probably don't need to worry about this. Most ISPs wont allow their users to spoof IP addresses thus you need to only worry about users behind NAT in which you may have multiple users running from the same IP address. In this case, and the general one, you can fairly safely identify unique users based on a tuple containing ip address and UDP port. 
+ #3 DTLS is likely the best solution, however, it appears to be very poorly documented. I've been looking for a similar solution for a while now and all of the references I've seen to OpenSSL's DTLS implementation suggests that you'll be needing to dig through the OpenSSL examples &amp; source code to figure out how to use it... which, to me, means I'm going to make 10 serious security mistakes when I try to set it up. Also, I don't believe the pyOpenSSL liberary exports this functionality. 
+
+ An alternative I've been considering is the Secure Remote Password Protocol . The advantage of this solution is that it gives you strong mutual authentication (on par with the security of Kerberos according to the docs) and, just as importantly in your case, it provides both ends with a shared session key that can be used for encryption. 
+
+ Given the shared key, each packet could contain AES256_CBC( &lt;random starter block for CBC&gt;&lt;user-id&gt;&lt;sequence_number&gt;&lt;application data&gt; ) If the decryption succeeds in providing the anticipated user-id, the packet is authenticated as coming from your user and the sequence number can be used for avoiding replay attacks. 
+
+ One downside to SRP is that, in Python, the number crunching is pretty slow. I modified the demo Python code into something a bit more usable and found that it took about 300ms to perform a single client-server SRP exchange (2Ghz CPU). However, a straight-forward implementation in C++ of the SRP algorithim using the BigNumber support in the OpenSSL took only 2ms. So, if you intend to go this route, I'd highly recommend using a C/C++ implementation of the algorihim for production code. Otherwise, you'll likely only be able to handle a few logins per second. 
+ #4 I'm breaking this down into four levels of security. 
+
+ 
+ Extremely Insecure - Anyone on the network can spoof a valid request/response with generally available prior knowledge. (ie syslog) 
+ Very Insecure - Anyone on the network can spoof a valid request/response only if they have at least read access to the wire. (Passive MITM) (ie http accessable forum with browser cookies) 
+ Somewhat Insecure - Anyone in the network can spoof a valid request/response if they can read AND make changes to the wire (Active MITM) (ie https site with self-signed cert) 
+ Secure - Requests/Responses cannot be spoofed even with full access to the
+wire. (ie https accessable ecommerce site) 
+ 
+
+ For Internet games the very insecure solution might actually be acceptable (It would be my choice) It requires no crypto. Just a field in your apps UDP packet format with some kind of random practically unguessable session identifier ferried around for the duration of the game. 
+
+ Somewhat insecure requires a little bit of crypto but none of the trust/PKI/PSK needed to prevent Active-MITM of the secure solution. With somewhat insecure if the data payloads were not sensitive you could use an integrity only cipher with (TCP) TLS/ (UDP) DTLS to reduce processing overhead and latency at the client and server. 
+
+ For games UDP is a huge benefit because if there is packet loss you don't want the IP stack to waste time retransmitting stale state - you want to send new state. With UDP there are a number of clever schemes such as non-acknowledged frames (world details which don't matter so much if their lost) and statistical methods of duplicating important state data to counter predictable levels of observed packet loss. 
+
+ At the end of the day I would recommend go very insecure or somewhat insecure /w DTLS integrity only. 
+ #5 I would look into the Garage Games networking library. It is written in C++ and uses UDP. It is designed for low latency and is considered one of the best for games. 
+
+ If I remember correctly they would actually calculate the likely position of the player both on the client side and the server side. It would do this for many aspects to ensure integrity of the data. It also would do a crc check on the client software and compare against the server software to make sure they matched. 
+
+ I am not sure you can license it separately anymore so you may have to license the game engine (100 bucks). It would at least give you some insight on a proven approach to UDP for games. Another possibility is looking into the PyGame networking code. It may have already addressed the issues you are facing.

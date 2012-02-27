@@ -1,0 +1,455 @@
+Question (ID-9040669): How can I implement a C++ class in Python, to be called by C++? I have a class interface written in C++. I have a few classes that implement this interface also written in C++. These are called in the context of a larger C++ program, which essentially implements "main". I want to be able to write implementations of this interface in Python, and allow them to be used in the context of the larger C++ program, as if they had been just written in C++. 
+
+ There's been a lot written about interfacing python and C++ but I cannot quite figure out how to do what I want. The closest I can find is here: http://www.cs.brown.edu/~jwicks/boost/libs/python/doc/tutorial/doc/html/python/exposing.html#python.class_virtual_functions , but this isn't quite right. 
+
+ To be more concrete, suppose I have an existing C++ interface defined something like: 
+
+ // myif.h
+class myif {
+ public:
+  virtual float myfunc(float a);
+};
+ 
+
+ What I want to be able to do is something like: 
+
+ // mycl.py
+... some magic python stuff ...
+class MyCl(myif):
+ def myfunc(a):
+ return a*2
+ 
+
+ Then, back in my C++ code, I want to be able to say something like: 
+
+ // mymain.cc
+void main(...) {
+ ... some magic c++ stuff ...
+ myif c = MyCl(); // get the python class
+ cout &lt;&lt; c.myfunc(5) &lt;&lt; endl; // should print 10
+}
+ 
+
+ I hope this is sufficiently clear ;) 
+ Answers (Total-7): #0 There's two parts to this answer. First you need to expose your interface in Python in a way which allows Python implementations to override parts of it at will. Then you need to show your C++ program (in main how to call Python. 
+
+ 
+
+ Exposing the existing interface to Python: 
+
+ The first part is pretty easy to do with SWIG. I modified your example scenario slightly to fix a few issues and added an extra function for testing: 
+
+ // myif.h
+class myif {
+ public:
+  virtual float myfunc(float a) = 0;
+};
+
+inline void runCode(myif *inst) {
+ std::cout &lt;&lt; inst-&gt;myfunc(5) &lt;&lt; std::endl;
+}
+ 
+
+ For now I'll look at the problem without embedding Python in your application, i.e. you start excetion in Python, not in int main() in C++. It's fairly straightforward to add that later though. 
+
+ First up is getting cross-language polymorphism working : 
+
+ %module(directors="1") module
+
+// We need to include myif.h in the SWIG generated C++ file
+%{
+#include &lt;iostream&gt;
+#include "myif.h"
+%}
+
+// Enable cross-language polymorphism in the SWIG wrapper. 
+// It's pretty slow so not enable by default
+%feature("director") myif;
+
+// Tell swig to wrap everything in myif.h
+%include "myif.h"
+ 
+
+ To do that we've enabled SWIG's director feature globally and specifically for our interface. The rest of it is pretty standard SWIG though. 
+
+ I wrote a test Python implementation: 
+
+ import module
+
+class MyCl(module.myif):
+ def __init__(self):
+ module.myif.__init__(self)
+ def myfunc(self,a):
+ return a*2.0
+
+cl = MyCl()
+
+print cl.myfunc(100.0)
+
+module.runCode(cl)
+ 
+
+ With that I was then able to compile and run this: 
+
+ 
+swig -python -c++ -Wall myif.i 
+g++ -Wall -Wextra -shared -o _module.so myif_wrap.cxx -I/usr/include/python2.7 -lpython2.7
+
+python mycl.py 
+200.0
+10
+ 
+
+ Exactly what you'd hope to see from that test. 
+
+ 
+
+ Embedding the Python in the application: 
+
+ Next up we need to implement a real version of your mymain.cc. I've put together a sketch of what it might look like: 
+
+ #include &lt;iostream&gt;
+#include "myif.h"
+#include &lt;Python.h&gt;
+
+int main()
+{
+ Py_Initialize();
+
+ const double input = 5.0;
+
+ PyObject *main = PyImport_AddModule("__main__");
+ PyObject *dict = PyModule_GetDict(main);
+ PySys_SetPath(".");
+ PyObject *module = PyImport_Import(PyString_FromString("mycl"));
+ PyModule_AddObject(main, "mycl", module);
+
+ PyObject *instance = PyRun_String("mycl.MyCl()", Py_eval_input, dict, dict);
+ PyObject *result = PyObject_CallMethod(instance, "myfunc", (char *)"(O)" ,PyFloat_FromDouble(input));
+
+ PyObject *error = PyErr_Occurred();
+ if (error) {
+ std::cerr &lt;&lt; "Error occured in PyRun_String" &lt;&lt; std::endl;
+ PyErr_Print();
+ }
+
+ double ret = PyFloat_AsDouble(result);
+ std::cout &lt;&lt; ret &lt;&lt; std::endl;
+
+ Py_Finalize();
+ return 0;
+}
+ 
+
+ It's basically just standard embedding Python in another application . It works and gives exactly what you'd hope to see also: 
+
+ 
+g++ -Wall -Wextra -I/usr/include/python2.7 main.cc -o main -lpython2.7
+./main
+200.0
+10
+10
+ 
+
+ 
+
+ The final piece of the puzzle is being able to convert the PyObject* that you get from creating the instance in Python into a myif * . SWIG again makes this reasonably straightforward. 
+
+ First we need to ask SWIG to expose its runtime in a headerfile for us. We do this with an extra call to SWIG: 
+
+ 
+swig -Wall -c++ -python -external-runtime runtime.h
+ 
+
+ Next we need to re-compile our SWIG module, explicitly giving the table of types SWIG knows about a name so we can look it up from within our main.cc. We recompile the .so using: 
+
+ 
+g++ -DSWIG_TYPE_TABLE=myif -Wall -Wextra -shared -o _module.so myif_wrap.cxx -I/usr/include/python2.7 -lpython2.7
+ 
+
+ Then we add a helper function for converting the PyObject* to myif* in our main.cc: 
+
+ #include "runtime.h"
+// runtime.h was generated by SWIG for us with the second call we made
+
+myif *python2interface(PyObject *obj) {
+ void *argp1 = 0;
+ swig_type_info * pTypeInfo = SWIG_TypeQuery("myif *");
+
+ const int res = SWIG_ConvertPtr(obj, &amp;argp1,pTypeInfo, 0);
+ if (!SWIG_IsOK(res)) {
+ abort();
+ }
+ return reinterpret_cast&lt;myif*&gt;(argp1);
+}
+ 
+
+ Now this is in place we can use it from within main() : 
+
+ int main()
+{
+ Py_Initialize();
+
+ const double input = 5.5;
+
+ PyObject *main = PyImport_AddModule("__main__");
+ PyObject *dict = PyModule_GetDict(main);
+ PySys_SetPath(".");
+ PyObject *module = PyImport_Import(PyString_FromString("mycl"));
+ PyModule_AddObject(main, "mycl", module);
+
+ PyObject *instance = PyRun_String("mycl.MyCl()", Py_eval_input, dict, dict);
+
+ // Get C++ interface poiner rather than Python object:
+ myif *inst = python2interface(instance);
+ std::cout &lt;&lt; inst-&gt;myfunc(input) &lt;&lt; std::endl;
+
+ Py_Finalize();
+ return 0;
+}
+ 
+
+ Finally we have to compile main.cc with -DSWIG_TYPE_TABLE=myif and this gives: 
+
+ 
+./main
+11
+ 
+ #1 Quoting http://wiki.python.org/moin/boost.python/Inheritance 
+
+ "Boost.Python also allows us to represent C++ inheritance relationships so that wrapped derived classes may be passed where values, pointers, or references to a base class are expected as arguments." 
+
+ There are examples of virtual functions so that solves the first part (the one with class MyCl(myif)) 
+
+ For specific examples doing this, http://wiki.python.org/moin/boost.python/OverridableVirtualFunctions 
+
+ For the line myif c = MyCl(); you need to expose your python (module) to C++. There are examples here http://wiki.python.org/moin/boost.python/EmbeddingPython 
+ #2 Minimal example; note that it is complicated by the fact that Base is not pure virtual. There we go: 
+
+ 
+ baz.cpp: 
+
+ #include&lt;string&gt;
+#include&lt;boost/python.hpp&gt;
+using std::string;
+namespace py=boost::python;
+
+struct Base{
+ virtual string foo() const { return "Base.foo"; }
+ // fooBase is non-virtual, calling it from anywhere (c++ or python)
+ // will go through c++ dispatch
+ string fooBase() const { return foo(); }
+};
+struct BaseWrapper: Base, py::wrapper&lt;Base&gt;{
+ string foo() const{
+ // if Base were abstract (non-instantiable in python), then
+ // there would be only this-&gt;get_override("foo")() here
+ //
+ // if called on a class which overrides foo in python
+ if(this-&gt;get_override("foo")) return this-&gt;get_override("foo")();
+ // no override in python; happens if Base(Wrapper) is instantiated directly
+ else return Base::foo();
+ }
+};
+
+BOOST_PYTHON_MODULE(baz){
+ py::class_&lt;BaseWrapper,boost::noncopyable&gt;("Base")
+ .def("foo",&amp;Base::foo)
+ .def("fooBase",&amp;Base::fooBase)
+ ;
+}
+ 
+ bar.py 
+
+ import sys
+sys.path.append('.')
+import baz
+
+class PyDerived(baz.Base):
+ def foo(self): return 'PyDerived.foo'
+
+base=baz.Base()
+der=PyDerived()
+print base.foo(), base.fooBase()
+print der.foo(), der.fooBase()
+ 
+ Makefile 
+
+ default:
+  g++ -shared -fPIC -o baz.so baz.cpp -lboost_python `pkg-config python --cflags`
+ 
+ 
+
+ And the result is: 
+
+ Base.foo Base.foo
+PyDerived.foo PyDerived.foo
+ 
+
+ where you can see how fooBase() (the non-virtual c++ function) calls virtual foo() , which resolves to the override regardless whether in c++ or python. You could derive a class from Base in c++ and it would work just the same. 
+
+ EDIT (extracting c++ object): 
+
+ PyObject* obj; // given
+py::object pyObj(obj); // wrap as boost::python object (cheap)
+py::extract&lt;Base&gt; ex(pyObj); 
+if(ex.check()){ // types are compatible
+ Base&amp; b=ex(); // get the wrapped object
+ // ...
+} else {
+ // error
+}
+
+// shorter, thrwos when conversion not possible
+Base &amp;b=py::extract&lt;Base&gt;(py::object(obj))();
+ 
+
+ Construct py::object from PyObject* and use py::extract to query whether the python object matches what you are trying to extract: PyObject* obj; py::extract&lt;Base&gt; extractor(py::object(obj)); if(!extractor.check()) /* error */; Base&amp; b=extractor(); 
+ #3 Take a look at Boost Python, that is the most versatile and powerful tool to bridge between C++ and Python. 
+
+ http://www.boost.org/doc/libs/1_48_0/libs/python/doc/ 
+ #4 There's no real way to interface C++ code directly with Python. 
+
+ SWIG does handle this, but it builds its own wrapper. 
+
+ One alternative I prefer over SWIG is ctypes, but to use this you need to create a C wrapper. 
+
+ For the example: 
+
+ // myif.h
+class myif {
+ public:
+  virtual float myfunc(float a);
+};
+ 
+
+ Build a C wrapper like so: 
+
+ extern "C" __declspec(dllexport) float myif_myfunc(myif* m, float a) {
+ return m-&gt;myfunc(a);
+}
+ 
+
+ Since you are building using C++, the extern "C" allows for C linkage so you can call it easily from your dll, and __declspec(dllexport) allows the function to be called from the dll. 
+
+ In Python: 
+
+ from ctypes import *
+from os.path import dirname
+
+dlldir = dirname(__file__)      # this strips it to the directory only
+dlldir.replace( '\\', '\\\\' )     # Replaces \ with \\ in dlldir
+lib = cdll.LoadLibrary(dlldir+'\\myif.dll')  # Loads from the full path to your module.
+
+# Just an alias for the void pointer for your class
+c_myif = c_void_p
+
+# This tells Python how to interpret the return type and arguments
+lib.myif_myfunc.argtypes = [ c_myif, c_float ]
+lib.myif_myfunc.restype = c_float
+
+class MyCl(myif):
+ def __init__:
+  # Assume you wrapped a constructor for myif in C
+  self.obj = lib.myif_newmyif(None)
+
+ def myfunc(a):
+  return lib.myif_myfunc(self.obj, a)
+ 
+
+ While SWIG does all this for you, there's little room for you to modify things as you please without getting frustrated at all the changes you have to redo when you regenerate the SWIG wrapper. 
+
+ One issue with ctypes is that it doesn't handle STL structures, since it's made for C. SWIG does handle this for you, but you may be able to wrap it yourself in the C. It's up to you. 
+
+ Here's the Python doc for ctypes: 
+
+ http://docs.python.org/library/ctypes.html 
+
+ Also, the built dll should be in the same folder as your Python interface (why wouldn't it be?). 
+
+ I am curious though, why would you want to call Python from inside C++ instead of calling the C++ implementation directly? 
+ #5 Based upon the (very helpful) answer by Eudoxos I've taken his code and extended it such that there is now an embedded interpreter, with a built-in module. 
+
+ This answer is the Boost.Python equivalent of my SWIG based answer . 
+
+ The headerfile myif.h: 
+
+ class myif {
+public:
+ virtual float myfunc(float a) const { return 0; }
+ virtual ~myif() {}
+};
+ 
+
+ Is basically as in the question, but with a default implementation of myfunc and a virtual destructor. 
+
+ For the Python implementation, MyCl.py I have basically the same as the question: 
+
+ import myif
+
+class MyCl(myif.myif):
+ def myfunc(self,a): 
+ return a*2.0
+ 
+
+ This then leaves mymain.cc, most of which is based upon the answer from Eudoxos: 
+
+ #include &lt;boost/python.hpp&gt;
+#include &lt;iostream&gt;
+#include "myif.h"
+
+using namespace boost::python;
+
+// This is basically Eudoxos's answer:
+struct MyIfWrapper: myif, wrapper&lt;myif&gt;{
+ float myfunc(float a) const {
+ if(this-&gt;get_override("myfunc")) 
+  return this-&gt;get_override("myfunc")(a);
+ else 
+  return myif::myfunc(a);
+ }
+};
+
+BOOST_PYTHON_MODULE(myif){
+ class_&lt;MyIfWrapper,boost::noncopyable&gt;("myif")
+ .def("myfunc",&amp;myif::myfunc)
+ ;
+}
+// End answer by Eudoxos
+
+int main( int argc, char ** argv ) {
+ try {
+ // Tell python that "myif" is a built-in module
+ PyImport_AppendInittab("myif", initmyif);
+ // Set up embedded Python interpreter:
+ Py_Initialize();
+
+ object main_module = import("__main__");
+ object main_namespace = main_module.attr("__dict__");
+
+ PySys_SetPath(".");
+ main_namespace["mycl"] = import("mycl");
+
+ // Create the Python object with an eval()
+ object obj = eval("mycl.MyCl()", main_namespace);
+
+ // Find the base C++ type for the Python object (from Eudoxos)
+ const myif &amp;b=extract&lt;myif&gt;(obj)();
+ std::cout &lt;&lt; b.myfunc(5) &lt;&lt; std::endl;
+
+ } catch( error_already_set ) {
+ PyErr_Print();
+ }
+}
+ 
+
+ The key part that I've added here, above and beyond the "how do I embed Python using Boost.Python?" and "how do I extend Python using Boost.python?" (which was answered by Eudoxos) is the answer to the question "How do I do both at once in the same program?". The solution to this lies with the PyImport_AppendInittab call, which takes the initialisation function that would normally be called when the module is loaded and registers it as a built-in module. Thus when mycl.py says import myif it ends up importing the built-in Boost.Python module. 
+ #6 I'm pretty sure that this is not possible in an easy way. 
+
+ First of all, if you want to execute Python code from within your C++ application, you will need to embed the python interpreter in your application. Otherwise there's no way to execute the Python code. 
+
+ Then there's the question of how to communicate between Python and C++. I don't think it will be possible to just pop Python classes into your C++ class hierarchy, if only because Python is written in C. 
+
+ However, if you would be willing to create some wrapping code, I think it should be possible to create a wrapper class in your class hierarchy, that internally uses the embedded python interpreter to execute Python code implementing the actual functionality. 
+
+ You might want to check out the relevant parts of the Python docs .

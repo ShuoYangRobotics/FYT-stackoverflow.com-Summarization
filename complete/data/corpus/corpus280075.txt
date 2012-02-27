@@ -1,0 +1,75 @@
+Question (ID-280075): Atomic operations in Django? I'm trying to implement (what I think is) a pretty simple data model for a counter: 
+
+ class VisitorDayTypeCounter(models.Model):
+ visitType = models.CharField(max_length=60)
+ visitDate = models.DateField('Visit Date')
+ counter = models.IntegerField()
+ 
+
+ When someone comes through, it will look for a row that matches the visitType and visitDate; if this row doesn't exist, it will be created with counter=0. 
+
+ Then we increment the counter and save. 
+
+ My concern is that this process is totally a race. Two requests could simultaneously check to see if the entity is there, and both of them could create it. Between reading the counter and saving the result, another request could come through and increment it (resulting in a lost count). 
+
+ So far I haven't really found a good way around this, either in the Django documentation or in the tutorial (in fact, it looks like the tutorial has a race condition in the Vote part of it). 
+
+ How do I do this safely? 
+ Answers (Total-7): #0 As of Django 1.1 you can use the ORM's F() expressions. For more details see the documentation: 
+
+ http://docs.djangoproject.com/en/1.1/ref/models/instances/#updating-attributes-based-on-existing-fields 
+ #1 If you truly want the counter to be accurate you could use a transaction but the amount of concurrency required will really drag your application and database down under any significant load. Instead think of going with a more messaging style approach and just keep dumping count records into a table for each visit where you'd want to increment the counter. Then when you want the total number of visits do a count on the visits table. You could also have a background process that ran any number of times a day that would sum the visits and then store that in the parent table. To save on space it would also delete any records from the child visits table that it summed up. You'll cut down on your concurrency costs a huge amount if you don't have multiple agents vying for the same resources (the counter). 
+ #2 Two suggestions: 
+
+ Add a unique_together to your model, and wrap the creation in an exception handler to catch duplicates: 
+
+ class VisitorDayTypeCounter(models.Model):
+ visitType = models.CharField(max_length=60)
+ visitDate = models.DateField('Visit Date')
+ counter = models.IntegerField()
+ class Meta:
+  unique_together = (('visitType', 'visitDate'))
+ 
+
+ After this, you could stlll have a minor race condition on the counter's update. If you get enough traffic to be concerned about that, I would suggest looking into transactions for finer grained database control. I don't think the ORM has direct support for locking/synchronization. The transaction documentation is available here . 
+ #3 This is a bit of a hack. The raw SQL will make your code less portable, but it'll get rid of the race condition on the counter increment. In theory, this should increment the counter any time you do a query. I haven't tested this, so you should make sure the list gets interpolated in the query properly. 
+
+ class VisitorDayTypeCounterManager(models.Manager):
+ def get_query_set(self):
+  qs = super(VisitorDayTypeCounterManager, self).get_query_set()
+
+  from django.db import connection
+  cursor = connection.cursor()
+
+  pk_list = qs.values_list('id', flat=True)
+  cursor.execute('UPDATE table_name SET counter = counter + 1 WHERE id IN %s', [pk_list])
+
+  return qs
+
+class VisitorDayTypeCounter(models.Model):
+ ...
+
+ objects = VisitorDayTypeCounterManager()
+ 
+ #4 You can use path from http://code.djangoproject.com/ticket/2705 for support database level locking. 
+
+ With path this code will be atomic: 
+
+ visitors = VisitorDayTypeCounter.objects.get(day=curday).for_update()
+visitors.counter += 1
+visitors.save()
+ 
+ #5 Why not use the database as the concurrency layer ? Add a primary key or unique constraint the table to visitType and visitDate. If I'm not mistaken, django does not exactly support this in their database Model class or at least I've not seen an example. 
+
+ Once you've added the constraint/key to the table, then all you have to do is: 
+
+ 
+ check if the row is there. if it is, fetch it. 
+ insert the row. if there's no error you're fine and can move on. 
+ if there's an error (i.e. race condition), re-fetch the row. if there's no row, then it's a genuine error. Otherwise, you're fine. 
+ 
+
+ It's nasty to do it this way, but it seems quick enough and would cover most situations. 
+ #6 Your should use database transactions to avoid this kind of race condition. A transaction lets you perform the whole operation of creating, reading, incrementing and saving the counter on an "all or nothing" base. If anything goes wrong it will roll back the whole thing and you can try again. 
+
+ Check out the Django docs. There is a transaction middle ware, or you can use decorators around views or methods to create transactions.

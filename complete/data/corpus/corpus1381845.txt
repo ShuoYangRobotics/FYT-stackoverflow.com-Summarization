@@ -1,0 +1,179 @@
+Question (ID-1381845): Writing Interpreters in Python. Is isinstance considered harmful? I'm porting over the interpreter for a domain specific language I created from Scala to Python. In the process I tried to find a way that way pythonic to emulate the case class feature of Scala that I used extensively. In the end I resorted to using isinstance, but was left feeling that I was perhaps missing something. 
+
+ Articles such as this one attacking the use of isinstance made me wonder whether there was a better way to solve my problem that doesn't involve some fundamental rewrite. 
+
+ I've built up a number of Python classes that each represent a different type of abstract syntax tree node, such as For, While, Break, Return, Statement etc 
+
+ Scala allows for the handling of operator evaluation like this: 
+
+ case EOp("==",EInt(l),EInt(r)) =&gt; EBool(l==r)
+case EOp("==",EBool(l),EBool(r)) =&gt; EBool(l==r)
+ 
+
+ So far for the port to Python I've made extensive use of elif blocks and isinstance calls to achieve the same effect, much more verbose and un-pythonic. Is there a better way? 
+ Answers (Total-7): #0 Yes. 
+
+ Instead of instance, just use Polymorphism . It's simpler. 
+
+ class Node( object ):
+ def eval( self, context ):
+  raise NotImplementedError
+
+class Add( object ):
+ def eval( self, context ):
+  return self.arg1.eval( context ) + self.arg2.eval( context )
+ 
+
+ This kind of this is very simple, and never requires isinstance . 
+
+ 
+
+ What about something like this where there is coercion required? 
+
+ Add( Double(this), Integer(that) )
+ 
+
+ This is still a polymorphism issue. 
+
+ class MyType( object ):
+ rank= None
+ def coerce( self, another ):
+  return NotImplemented
+
+class Double( object ):
+ rank = 2
+ def coerce( self, another ):
+  return another.toDouble()
+ def toDouble( self ):
+  return self
+ def toInteger( self ):
+  return int(self)
+
+class Integer( object ):
+ rank = 1
+ def coerce( self, another ):
+  return another.toInteger() 
+ def toDouble( self ):
+  return float(self)
+ def toInteger( self ): 
+  return self
+
+ class Operation( Node ):
+ def conform( self, another ):
+  if self.rank &gt; another.rank:
+   this, that = self, self.coerce( another )
+  else:
+   this, that = another.coerce( self ), another
+  return this, that
+ def add( self, another ):
+  this, that = self.coerce( another )
+  return this + that
+ 
+ #1 There's a rule of thumb in python, if you find yourself writing a large block of if/elif statements, with similar conditions (a bunch of isinstance(...) for example) then you're probably solving the problem the wrong way. 
+
+ Better ways involve using classes and polymorphism, visitor pattern, dict lookup, etc. In your case making an Operators class with overloads for different types could work (as noted above), so could a dict with (type, operator) items. 
+ #2 Summary : This is a common way to write compilers, and its just fine here. 
+
+ A very common way to handle this in other languages is by "pattern matching", which is exactly what you've described. I expect that's the name for that case statement in Scala. Its a very common idiom for writing programming language implementations and tools: compilers, interpreters etc. Why is it so good? Because the implementation is completely separated from the data (which is often bad, but generally desirable in compilers). 
+
+ The problem then is that this common idiom for programming language implementation is an anti-pattern in Python. Uh oh. As you can probably tell, this is more a political issue than a language issue. If other Pythonistas saw the code they would scream; if other language implementers saw it, they would understand it immediately. 
+
+ The reason this is an anti-pattern in Python is because Python encourages duck-typed interfaces: you shouldn't have behaviour based on type, but rather they should be defined by the methods that an object has available at run-time. S. Lott's answer works fine if you want it to be idiomatic Python, but it adds little. 
+
+ I suspect that your design isn't really duck-typed - its a compiler after all, and classes defined using a name, with a static structure, are pretty common. If you prefer, you could think of your objects as having a "type" field, and isinstance is used to pattern-match based on that type. 
+
+ Addenum: 
+
+ Pattern-matching is probably the number one reason that people love writing compilers etc in functional languages. 
+ #3 The article does not attack isinstance . It attacks the idea of making your code test for specific classes. 
+
+ And yes, there is a better way. Or several. You can for example make the handling of a type into a function, and then find the correct function by looking up per type. Like this: 
+
+ def int_function(value):
+ # Do what you mean to do here
+
+def str_function(value):
+ # Do what you mean to do here
+
+type_function = {int: int_function, str: str_function, etc, etc}
+
+def handle_value(value):
+ function = type_function[type(value)]
+ result = function(value)
+ print "Oh, lovely", result
+ 
+
+ If you don't want to do this registry yourself, you can look at the Zope Component Architecture, which handles this through interfaces and adapters, and it really cool. But that's probably overkill. 
+
+ Even better is if you can somehow avoid doing any type of type checking, but that may be tricky. 
+ #4 In a DSL I wrote using Python 3, I used the Composite design pattern so the nodes were all polymorphic in their use, as S. Lott is recommending. 
+
+ But, when I was reading in the input to create those nodes in the first place, I did use isinstance checks a lot (against abstract base classes like collections.Iterable, etc., which Python 3 provides, and which are in 2.6 as well I believe), as well as checks for hasattr '__call__' since callables were allowed in my input. This was the cleanest way I found to do it (particulary with recursion involved), rather than just trying operations against input and catching exceptions, which is the alternative that comes to mind. I was raising custom exceptions myself when the input was invalid to give as much precise failure information as possible. 
+
+ Using isinstance for such tests is more general than using type(), since isinstance will catch subclasses - and if you can test against the abstract base classes, that is all the better. See http://www.python.org/dev/peps/pep-3119/ for info on the abstract base classes. 
+ #5 In this particular case, what you seem to be implementing is an operator overloading system that uses the types of the objects as the selection mechanism for the operator you intend to call. Your node types happen to fairly directly correspond to your language's types, but in reality you're writing an interpreter. The type of the node is just a piece of data. 
+
+ I don't know if people can add their own types to your domain specific language. But I would recommend a table driven design regardless. 
+
+ Make a table of data containing (binary_operator, type1, type2, result_type, evalfunc). Search through that table for matches using isinstance and have some criteria for preferring some matches over others. It may be possible to use a somewhat more sophisticated data structure than a table to make searching faster, but right now you're basically using long lists of ifelse statements to do a linear search anyway, so I'm betting a plain old table will be slightly faster than what you're doing now. 
+
+ I do not consider isinstance to be the wrong choice here largely because the type is just a piece of data your interpreter is working with to make a decision. Double dispatch and other techniques of that ilk are just going to obscure the real meat of what your program is doing. 
+
+ One of the neat things in Python is that since operator functions and types are all first class objects, you can just stuff them in the table (or whatever data structure you choose) directly. 
+ #6 If you need Polymorphism on arguments (in addition to the receiver), for example to handle type conversions with binary operators as suggested by your example, you can use the following trick: 
+
+ class EValue(object):
+
+ def __init__(self, v):
+  self.value = v
+
+ def __str__(self):
+  return str(self.value)
+
+ def opequal(self, r):
+  r.opequal_value(self)
+
+ def opequal_int(self, l):
+  print "(int)", l, "==", "(value)", self
+
+ def opequal_bool(self, l):
+  print "(bool)", l, "==", "(value)", self
+
+ def opequal_value(self, l):
+  print "(value)", l, "==", "(value)", self
+
+
+class EInt(EValue):
+
+ def opequal(self, r):
+  r.opequal_int(self)
+
+ def opequal_int(self, l):
+  print "(int)", l, "==", "(int)", self
+
+ def opequal_bool(self, l):
+  print "(bool)", l, "==", "(int)", self
+
+ def opequal_value(self, l):
+  print "(value)", l, "==", "(int)", self
+
+class EBool(EValue):
+
+ def opequal(self, r):
+  r.opequal_bool(self)
+
+ def opequal_int(self, l):
+  print "(int)", l, "==", "(bool)", self
+
+ def opequal_bool(self, l):
+  print "(bool)", l, "==", "(bool)", self
+
+ def opequal_value(self, l):
+  print "(value)", l, "==", "(bool)", self
+
+
+if __name__ == "__main__":
+
+ v1 = EBool("true")
+ v2 = EInt(5)
+ v1.opequal(v2)

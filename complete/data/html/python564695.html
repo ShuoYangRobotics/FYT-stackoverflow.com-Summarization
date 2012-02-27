@@ -1,0 +1,93 @@
+<h3>Question (ID-564695):</h3><h2>Is there a way to change effective process name in Python?</h2><p>Can I change effective process name of a Python script? I want to show a different name instead of the real name of the process when I get the system process list. In C I can set</p>
+
+<pre><code>strcpy(argv[0],"othername");
+</code></pre>
+
+<p>But in Python </p>
+
+<pre><code>argv[0] = "othername"
+</code></pre>
+
+<p>doesn't seem to work. When i get process list (with <code>ps ax</code> in my linux box) the real name doesn't change. I prefer a portable solution (or else one solution for posix and another for windows environments), if it exists.</p>
+
+<p>Thanks in advance</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>I've recently written a Python module to change the process title in a portable way: check <a href="http://code.google.com/p/py-setproctitle/" rel="nofollow">http://code.google.com/p/py-setproctitle/</a></p>
+
+<p>It is a wrapper around the code used by PostgreSQL to perform the title change. It is currently tested against Linux and Mac OS X: Windows (with limited functionality) and BSD portings are on the way.</p>
+
+<p><strong>Edit:</strong> as of July 2010, the module works with BSD and with limited functionality on Windows, and has been ported to Python 3.x.</p>
+<br /><b>#1</b><br /><p>actually you need 2 things on linux: modify <code>argv[0]</code> from <code>C</code> (for <code>ps auxf</code> and friends) and call <code>prctl</code> with <code>PR_SET_NAME</code> flag.</p>
+
+<p>There is absolutely no way to do first piece from python itself. Although, you can just change process name by calling prctl.</p>
+
+<pre><code>def set_proc_name(newname):
+    from ctypes import cdll, byref, create_string_buffer
+    libc = cdll.LoadLibrary('libc.so.6')
+    buff = create_string_buffer(len(newname)+1)
+    buff.value = newname
+    libc.prctl(15, byref(buff), 0, 0, 0)
+
+def get_proc_name():
+    from ctypes import cdll, byref, create_string_buffer
+    libc = cdll.LoadLibrary('libc.so.6')
+    buff = create_string_buffer(128)
+    # 16 == PR_GET_NAME from &lt;linux/prctl.h&gt;
+    libc.prctl(16, byref(buff), 0, 0, 0)
+    return buff.value
+
+import sys
+# sys.argv[0] == 'python'
+
+# outputs 'python'
+get_proc_name()
+
+set_proc_name('testing yeah')
+
+# outputs 'testing yeah'
+get_proc_name()
+</code></pre>
+
+<p><code>ps auxf</code> will show just 'python' after that :(. But <code>top</code> and <code>ps -A</code> will show new 'testing yeah' process name :). Also <code>killall</code> and <code>pkill</code> will work with new name.</p>
+
+<p>btw, procname from googlecode also changes <code>argv[0]</code>, thus, even, changes <code>ps auxf</code> output.</p>
+
+<p><strong>UPDATE</strong>: The solution posted in this answer does not play nice sometimes on FreeBSD. I'm now using <a href="http://code.google.com/p/py-setproctitle/" rel="nofollow">py-setproctitle</a> stated <a href="http://stackoverflow.com/questions/564695/is-there-a-way-to-change-effective-process-name-in-python/1866700#1866700">in this answer</a> for a year or so on various linux and freebsd boxes. No fails so far! Everybody should too! :). It uses almost the same code as <a href="http://www.postgresql.org" rel="nofollow">PostgreSQL</a> <a href="http://git.postgresql.org/gitweb/?p=postgresql.git;a=blob;f=src/backend/utils/misc/ps_status.c;hb=HEAD" rel="nofollow">uses</a> in its main database and child processes.</p>
+<br /><b>#2</b><br /><p>Simply put, there's no portable way.  You'll have to test for the system and use the preferred method for that system.</p>
+
+<p>Further, I'm confused about what you mean by process names on Windows.</p>
+
+<p>Do you mean a service name?  I presume so, because nothing else really makes any sense (at least to my non-Windows using brain).</p>
+
+<p>If so, you need to use <a href="http://timgolden.me.uk/python/wmi.html">Tim Golden's WMI interface</a> and call the .Change method on the service... at least according to his <a href="http://timgolden.me.uk/python/wmi-tutorial.html">tutorial</a>.</p>
+
+<p>For Linux none of the methods I found worked except for <a href="http://code.google.com/p/procname/">this poorly packaged module</a> that sets argv[0] for you.</p>
+
+<p>I don't even know if this will work on BSD variants (which does have a setproctitle system call).  I'm pretty sure argv[0] won't work on Solaris.</p>
+<br /><b>#3</b><br /><p>First, I'm not sure that simply settings <code>argv[0]</code> in a C program portably changes the name shown in <code>ps</code>.  Maybe it does in some unixen, but my understanding is that it's not expected to.</p>
+
+<p>Second, since Windows is specifically non-POSIX compliant, only a few things are "portable" between POSIX and non-POSIX.  Since you specifically say 'ps', I'll assume that POSIX is your priority and Windows may not work.</p>
+
+<p>More importantly, my understanding of changing <code>argv[0]</code> is that it requires a call to <code>exec</code> to make these changes.  Specifically, the <code>exec</code> call has both a path to an executable and a separate <code>argv</code> list.  Making your own call allows you to break the shell convention of putting the executable name in <code>argv[0]</code>.</p>
+
+<p>You have <a href="http://docs.python.org/library/os.html#process-management" rel="nofollow">OS library process management</a> which gives you direct access to the OS library for doing this.  You should consider breaking your script into two parts -- a starter and the "real work".  The starter establishes the run-time environment and exec's the real work with the desired parameters.  </p>
+
+<p>In C, you're replacing your own process with another.  In Python, you're replacing the old Python interpreter with a new one that has a different argv[0].  Hopefully, it won't balk at this.  Some programs check argv[0] to decide what they're doing.</p>
+
+<p>You also have <a href="http://docs.python.org/library/subprocess.html#subprocess.Popen" rel="nofollow">subprocess.popen</a> that you can use to set your desired args and executable.   In this case, however, the parent process should lingers around to collect the child when the child finishes.  The parent may not be doing anything more than a <code>Popen.wait</code></p>
+<br /><b>#4</b><br /><p>Have a look on <a href="http://code.google.com/p/py-setproctitle/" rel="nofollow">setproctitle</a> package</p>
+
+<p>This is quite a portable version and works on many platforms.</p>
+<br /><b>#5</b><br /><p>I have found <a href="http://packages.python.org/python-prctl/" rel="nofollow" title="python-prctl">python-prctl</a> to work very well under Linux. You will have to find something else for Windows.</p>
+<br /><b>#6</b><br /><pre><code>In [1]: import sys
+
+In [2]: print sys.argv[0]
+C:\Python25\scripts\ipython.py
+
+In [3]: sys.argv[0] = 'foo'
+
+In [4]: print sys.argv[0]
+foo
+</code></pre>
+
+<p>Note the single '=' sign</p>
+<br />

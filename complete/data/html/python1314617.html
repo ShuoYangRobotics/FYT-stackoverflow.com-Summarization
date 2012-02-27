@@ -1,0 +1,98 @@
+<h3>Question (ID-1314617):</h3><h2>Python what does it mean "AttributeError: 'unicode' object has no attribute 'has_key' "</h2><p>I would like to ask what does it mean "AttributeError: 'unicode' object has no attribute 'has_key'"
+Here is the full stack trace:</p>
+
+<pre><code>Traceback (most recent call last):
+  File     "D:\Projects\GoogleAppEngine\google_appengine\google\appengine\ext\webapp\__init__.py", line 509, in __call__
+    handler.post(*groups)
+  File "D:\Projects\workspace\foo\src\homepage.py", line 71, in post
+    country=postedcountry
+  File "D:\Projects\GoogleAppEngine\google_appengine\google\appengine\ext\db\__init__.py", line 656, in __init__
+    prop.__set__(self, value)
+  File "D:\Projects\GoogleAppEngine\google_appengine\google\appengine\ext\db\__init__.py", line 2712, in __set__
+    value = self.validate(value)
+  File "D:\Projects\GoogleAppEngine\google_appengine\google\appengine\ext\db\__init__.py", line 2742, in validate
+    if value is not None and not value.has_key():
+AttributeError: 'unicode' object has no attribute 'has_key'
+</code></pre>
+
+<p>Let me describe a little bit more about the situation:</p>
+
+<ul>
+<li><p>First I created the models.py that has the db.Model for CMSRequest which has an attribute country that reference to the CMSCountry class</p>
+
+<pre><code>class CMSRequest(db.Model):
+  country = db.ReferenceProperty(CMSCountry, required=True)
+
+
+class CMSCountry(db.Model):
+  name = db.StringProperty(required=True)
+</code></pre></li>
+<li><p>Then, I created a bulkloader class to import the data into the CMSCountry</p></li>
+<li><p>In the form, user can select the country from the drop down list box, the results are posted back and save to the CMSRequest object</p>
+
+<pre><code>def post(self):
+  postedcountry = self.request.get('country')
+  cmsRequest = models.CMSRequest(postedcountry)
+</code></pre></li>
+</ul>
+
+<p>Maybe I have found the solution to my question, it is because I have not converted the posted key of CMSCountry back to save to the CMSRequest.</p>
+
+<p>Thank you everyone! </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>In this line:</p>
+
+<pre><code>if value is not None and not value.has_key():
+</code></pre>
+
+<p><code>value</code> is a unicode string.  It looks like the code is expecting it to be a <code>db.Model</code>,</p>
+
+<p>(From what I can see, <code>has_key</code> is a method of <code>db.Model</code>, as well as a method of Python dictionaries, but this must be the <code>db.Model</code> one because it's being called with no arguments.)</p>
+
+<p>Are you passing a string to a GAE API that expects a <code>db.Model</code>?</p>
+<br /><b>#1</b><br /><p>Your problem is that postedcountry is a string and not a country object.  Values retrieved from self.request.get are the string values of variables passed by the browser. </p>
+
+<p>You need to look up a country object using some GQL.  Exactly how you do that will depend on what exactly the country field of your HTML form is returning , Object Key?, country name?</p>
+
+<pre><code>def post(self):
+  postedcountry = self.request.get('country')
+
+  # &lt;-------- Need to look up a country here !!!!!
+
+  cmsRequest = models.CMSRequest(country=postedcountry)
+</code></pre>
+<br /><b>#2</b><br /><p>Note: normally "mapping" types in Python (dictionaries and dictionary like classes ... such as various types of dbm (indexed file) and some DBMS/ORM interfaces ... will implement a <code>has_key()</code> method.</p>
+
+<p>Somehow you have gotten a Unicode (string) object into this statement when you were expecting to have some sort of dictionary or other mapping object reference.</p>
+
+<p>In general <strong>AttributeError</strong> means that you have tangled up your object bindings (variable assignments).  You've given a name to some object other than the type that you intended.  (Or sometimes it means you have a typo like ".haskey()" instead of <code>has_key()</code> ... etc).</p>
+
+<p>BTW: the use of <code>has_key()</code> is somewhat dated.  Normally it's better to test your containers with the Python <strong><code>in</code></strong> operator (which implicitly calls <code>__contains__()</code> --- and which works on lists, strings, and other sequences as well as mapping types).</p>
+
+<p>Also <code>value.has_key()</code> would raise an error even if <code>value</code> were a dictionary since the <code>.has_key()</code> method requires an argument.</p>
+
+<p>In your code I would either explicitly test for <code>if postedcountry is not None:</code> ... or I'd supply your <code>.get()</code> with an (optional) default for "postedcountry."  </p>
+
+<p>How do you want to handle the situation where <code>request</code> had no <strong>postedcountry</strong>?  Do you want to assume it's being posted from some particular default?  Force a redirection to some page that requires the user to supply a value for that form element?  Alert the Spanish Inquisition?</p>
+<br /><b>#3</b><br /><p>If you read the traceback, it'll tell you exactly what is going on:</p>
+
+<pre><code>    if value is not None and not value.has_key():
+AttributeError: 'unicode' object has no attribute 'has_key'
+</code></pre>
+
+<p>What this says is the the <code>value</code> variable which you're using doesn't have the <code>has_key</code> attribute.  And, what it's telling you is that your <code>value</code> variable isn't a dictionary, as it looks like you're expecting...instead, it's a unicode object, which is basically a string.</p>
+<br /><b>#4</b><br /><p>You're attempting to set a string to a ReferenceProperty. The 'country' field of CMSCountry is a db.ReferenceProperty, which takes a db.Key or a CMSCountry object, but you're attempting to set it to a string.</p>
+
+<p>You should be doing something like this:</p>
+
+<pre><code>def post(self):
+  postedcountry = self.request.get('country')
+  country = models.CMSCountry.all().filter('name =', postedcountry)
+  if not country:
+    # Couldn't find the country
+  else:
+    cmsRequest = models.CMSRequest(country=country)
+</code></pre>
+
+<p>Please do <a href="http://code.google.com/p/googleappengine/issues/list" rel="nofollow">file a bug</a> about the rather unhelpful error message, though.</p>
+<br /><b>#5</b><br /><p>The dictionary object's has_key() method is deprecated in 3.0 - use the "in" expression instead. If you are using the old library in 3.x, you must make code changes to accommodate it.</p>
+<br />

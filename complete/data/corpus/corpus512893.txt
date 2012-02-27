@@ -1,0 +1,99 @@
+Question (ID-512893): memory use in large data-structures manipulation/processing I have a number of large (~100 Mb) files which I'm regularly processing. While I'm trying to delete unneeded data structures during processing, memory consumption is a bit too high. so, I was wondering is there a way to 'efficiently' manipulate large data, e.g.: 
+
+ def read(self, filename):
+ fc = read_100_mb_file(filename)
+ self.process(fc)
+def process(self, content):
+ # do some processing of file content
+ 
+
+ is there a duplication of data structures? isn't it more memory efficient to use class-wide variable like self.fc? 
+
+ how to garbage-collect? I know about gc module, but do I call it after i del fc for example? does garbage collector called after a del statement at all? when should I use garbage collection? 
+
+ update 
+p.s. 100 Mb is not a problem in itself. but float conversion, further processing add significantly more to both working set and virtual size (i'm on windows). 
+ Answers (Total-6): #0 I'd suggest looking at the presentation by David Beazley on using generators in Python. This technique allows you to handle a lot of data, and do complex processing, quickly and without blowing up your memory use. IMO, the trick isn't holding a huge amount of data in memory as efficiently as possible; the trick is avoiding loading a huge amount of data into memory at the same time. 
+ #1 Before you start tearing your hair out over the garbage collector, you might be able to avoid that 100mb hit of loading the entire file into memory by using a memory-mapped file object. See the mmap module. 
+ #2 Don't read the entire 100 meg file in at a time. Use streams to process a little bit at a time. Check out this blog post that talks about handling large csv and xml files. http://lethain.com/entry/2009/jan/22/handling-very-large-csv-and-xml-files-in-python/ 
+
+ Here is a sample of the code from the article. 
+
+ from __future__ import with_statement # for python 2.5
+
+with open('data.in','r') as fin:
+ with open('data.out','w') as fout:
+  for line in fin:
+   fout.write(','.join(line.split(' ')))
+ 
+ #3 So, from your comments I assume that your file looks something like this: 
+
+ item1,item2,item3,item4,item5,item6,item7,...,itemn
+ 
+
+ which you all reduce to a single value by repeated application of some combination function. As a solution, only read a single value at a time: 
+
+ def read_values(f):
+ buf = []
+ while True:
+  c = f.read(1)
+  if c == ",":
+   yield parse("".join(buf))
+   buf = []
+  elif c == "":
+   yield parse("".join(buf))
+   return
+  else:
+   buf.append(c)
+
+with open("some_file", "r") as f:
+  agg = initial
+  for v in read_values(f):
+   agg = combine(agg, v)
+ 
+
+ This way, memory consumption stays constant, unless agg grows in time. 
+
+ 
+ Provide appropriate implementations of initial , parse and combine 
+ Don't read the file byte-by-byte, but read in a fixed buffer, parse from the buffer and read more as you need it 
+ This is basically what the builtin reduce function does, but I've used an explicit for loop here for clarity. Here's the same thing using reduce : 
+
+ with open("some_file", "r") as f:
+ agg = reduce(combine, read_values(f), initial)
+ 
+ 
+
+ I hope I interpreted your problem correctly. 
+ #4 First of all, don't touch the garbage collector. That's not the problem, nor the solution. 
+
+ It sounds like the real problem you're having is not with the file reading at all, but with the data structures that you're allocating as you process the files.
+Condering using del to remove structures that you no longer need during processing. Also, you might consider using marshal to dump some of the processed data to disk while you work through the next 100mb of input files. 
+
+ For file reading, you have basically two options: unix-style files as streams, or memory mapped files. For streams-based files, the default python file object is already buffered, so the simplest code is also probably the most efficient: 
+
+ 
+ with open("filename", "r") as f:
+ for line in f:
+  # do something with a line of the files
+ 
+
+ Alternately, you can use f.read([size]) to read blocks of the file. However, usually you do this to gain CPU performance, by multithreading the processing part of your script, so that you can read and process at the same time. But it doesn't help with memory usage; in fact, it uses more memory. 
+
+ The other option is mmap, which looks like this: 
+
+ 
+ with open("filename", "r+") as f:
+ map = mmap.mmap(f.fileno(), 0)
+ line = map.readline()
+ while line != '':
+  # process a line
+  line = map.readline()
+ 
+
+ This sometimes outperforms streams, but it also won't improve memory usage. 
+ #5 In your example code, data is being stored in the fc variable. If you don't keep a reference to fc around, your entire file contents will be removed from memory when the read method ends. 
+
+ If they are not, then you are keeping a reference somewhere . Maybe the reference is being created in read_100_mb_file , maybe in process . If there is no reference, CPython implementation will deallocate it almost immediatelly. 
+
+ There are some tools to help you find where this reference is, guppy , dowser , pysizer ...

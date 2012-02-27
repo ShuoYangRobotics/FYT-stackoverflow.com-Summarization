@@ -1,0 +1,337 @@
+<h3>Question (ID-6063755):</h3><h2>Increment a python floating point value by the smallest possible amount</h2><p>I'm using floating point values as dictionary keys.</p>
+
+<p>Occasionally, <em>very</em> occasionally (and perhaps never, but not certainly never), there will be collisions. I would like to resolve these by incrementing the floating point value by as small an amount as possible. How can I do this?</p>
+
+<p>In C, I would twiddle the bits of the mantissa to achieve this, but I assume that isn't possible in python.</p>
+<br /><h3>Answers (Total-14):</h3><b>#0</b><br /><blockquote>
+  <p>Increment a python floating point
+  value by the smallest possible amount</p>
+</blockquote>
+
+<p>You are not crazy and you should be able to do this. It is a current shortcoming of the Python math library, sadly, both in Python 2.X and Python3000. There should be a <code>math.nextafter(x,y)</code> in Python but there isn't. It would be trivial to add since most C compilers have the functions. </p>
+
+<p>The <a href="http://www.kernel.org/doc/man-pages/online/pages/man3/nextafter.3.html" rel="nofollow">nextafter(x,y)</a> functions return the next discretely different representable floating-point value following x in the direction of y. The nextafter() functions are guaranteed to work on the platform or to return a sensible value to indicate that the next value is not possible. </p>
+
+<p>The <code>nextafter()</code> functions are part of <a href="http://pubs.opengroup.org/onlinepubs/9699919799/functions/nextafter.html#" rel="nofollow">POSIX</a> and ISO <a href="http://www.open-std.org/jtc1/sc22/wg14/www/docs/n1124.pdf" rel="nofollow">C99</a> standards and is <a href="http://www.johndcook.com/math_h.html" rel="nofollow">_nextafter() in Visual C</a>. C99 compliant standard math libraries, Visual C, C++, Boost and Java all implement the IEEE recommended nextafter() functions or methods. (I do not honestly know if .NET has nextafter(). Microsoft does not care much about C99 or POSIX.)</p>
+
+<p>Since Python seems to be heading in the direction of supporting most C99 math functions and behaviors for the math module, the exclusion of <code>nextafter()</code> is curious. Luckily there are easy workarounds. </p>
+
+<p><strong>None</strong> of the bit twiddling functions here fully or correctly deal with the edge cases, such as values going though 0.0, negative 0.0, subnormals, infinities, negative values, over or underflows, etc. <a href="http://www.google.com/codesearch/p?hl=en#xQlobzjVCWM/s_nextafter.c&amp;q=nextafter%20lang%3ac&amp;sa=N&amp;cd=1&amp;ct=rc" rel="nofollow">Here is a reference implementation of nextafter() in C</a> to give an idea of how to do the correct bit twiddling if that is your direction. </p>
+
+<p>There are two solid work arounds to get <code>nextafter()</code> or other excluded POSIX math functions in Python:</p>
+
+<p><strong>Use Numpy:</strong></p>
+
+<pre><code>&gt;&gt;&gt; import numpy
+&gt;&gt;&gt; numpy.nextafter(0,1)
+4.9406564584124654e-324
+&gt;&gt;&gt; numpy.nextafter(.1, 1)
+0.10000000000000002
+&gt;&gt;&gt; numpy.nextafter(1e6, -1)
+999999.99999999988
+&gt;&gt;&gt; numpy.nextafter(-.1, 1)
+-0.099999999999999992
+</code></pre>
+
+<p><strong>Link directly to the system math DLL:</strong></p>
+
+<pre><code>import ctypes
+import sys
+from sys import platform as _platform
+
+if _platform == "linux" or _platform == "linux2":
+    _libm = ctypes.cdll.LoadLibrary('libm.so.6')
+    _funcname = 'nextafter'
+elif _platform == "darwin":
+    _libm = ctypes.cdll.LoadLibrary('libSystem.dylib')
+    _funcname = 'nextafter'
+elif _platform == "win32":
+    _libm = ctypes.cdll.LoadLibrary('msvcrt.dll')
+    _funcname = '_nextafter'
+else:
+    # these are the ones I have access to...
+    # fill in library and function name for your system math dll
+    print "Platform", repr(_platform), "is not supported"
+    sys.exit(0)
+
+_nextafter = getattr(_libm, _funcname)
+_nextafter.restype = ctypes.c_double
+_nextafter.argtypes = [ctypes.c_double, ctypes.c_double]
+
+def nextafter(x, y):
+    "Returns the next floating-point number after x in the direction of y."
+    return _nextafter(x, y)
+
+assert nextafter(0, 1) - nextafter(0, 1) == 0
+assert 0.0 + nextafter(0, 1) &gt; 0.0
+</code></pre>
+
+<p><strong>And if you really really want a pure Python solution:</strong></p>
+
+<pre><code># handles edge cases correctly on MY computer 
+# not extensively QA'd...
+import math
+# 'double' means IEEE 754 double precision -- c 'double'
+epsilon  = math.ldexp(1.0, -53) # smallest double that 0.5+epsilon != 0.5
+maxDouble = float(2**1024 - 2**971)  # From the IEEE 754 standard
+minDouble  = math.ldexp(1.0, -1022) # min positive normalized double
+smallEpsilon  = math.ldexp(1.0, -1074) # smallest increment for doubles &lt; minFloat
+infinity = math.ldexp(1.0, 1023) * 2
+
+def nextafter(x,y):    
+    """returns the next IEEE double after x in the direction of y if possible"""
+    if y==x:
+       return y         #if x==y, no increment
+
+    # handle NaN
+    if x!=x or y!=y:
+        return x + y       
+
+    if x &gt;= infinity:
+        return infinity
+
+    if x &lt;= -infinity:
+        return -infinity
+
+    if -minDouble &lt; x &lt; minDouble:
+        if y &gt; x:
+            return x + smallEpsilon
+        else:
+            return x - smallEpsilon  
+
+    m, e = math.frexp(x)        
+    if y &gt; x:
+        m += epsilon
+    else:
+        m -= epsilon
+
+    return math.ldexp(m,e)
+</code></pre>
+
+<p>Obviously the <a href="http://numpy.scipy.org/" rel="nofollow">Numpy</a> solution is the easiest. </p>
+<br /><b>#1</b><br /><pre><code>import sys
+&gt;&gt;&gt; sys.float_info.epsilon
+2.220446049250313e-16
+</code></pre>
+<br /><b>#2</b><br /><p>Insead of incrementing the value, just use a tuple for the colliding key. If you need to keep them in order, every key should be a tuple, not just the duplicates.</p>
+<br /><b>#3</b><br /><p>First, this "respond to a collision" is a pretty bad idea.</p>
+
+<p>If they collide, the values in the dictionary should have been lists of items with a common key, not individual items.</p>
+
+<p>Your "hash probing" algorithm will have to loop through more than one "tiny increments" to resolve collisions.</p>
+
+<p>And sequential hash probes are known to be inefficient.</p>
+
+<p>Read this: <a href="http://en.wikipedia.org/wiki/Quadratic_probing" rel="nofollow">http://en.wikipedia.org/wiki/Quadratic_probing</a></p>
+
+<p>Second, use <code>math.frexp</code> and <code>sys.float_info.epsilon</code> to fiddle with mantissa and exponent separately.</p>
+
+<pre><code>&gt;&gt;&gt; m, e = math.frexp(4.0)
+&gt;&gt;&gt; (m+sys.float_info.epsilon)*2**e
+4.0000000000000018
+</code></pre>
+<br /><b>#4</b><br /><p>I recommend against assuming that floats (or timestamps) will be unique if at all possible.  Use a counting iterator, database sequence or other service to issue unique identifiers.</p>
+<br /><b>#5</b><br /><p>Instead of modifying your float timestamp, use a tuple for every key as <a href="http://stackoverflow.com/questions/6063755/increment-a-python-floating-point-value-by-the-smallest-possible-amount/6063831#6063831">Mark Ransom suggests</a> where the tuple <code>(x,y)</code> is composed of <code>x=your_unmodified_time_stamp</code> and <code>y=(extremely unlikely to be a same value twice)</code>. </p>
+
+<p>So: </p>
+
+<ol>
+<li><code>x</code> just is the unmodified timestamp and can be the same value many times;</li>
+<li><code>y</code> you can use: 
+<ol>
+<li>a random integer number from a large range,  </li>
+<li>serial integer (0,1,2,etc), </li>
+<li><a href="http://docs.python.org/library/uuid.html" rel="nofollow">UUID</a>.</li>
+</ol></li>
+</ol>
+
+<p>While 2.1 (random int from a large range) there works great for ethernet, I would use 2.2 (serializer) or 2.3 (UUID). Easy, fast, bulletproof. For 2.2 and 2.3 you don't even need collision detection (you might want to still have it for 2.1 as ethernet does.)</p>
+
+<p>The advantage of 2.2 is that you can also tell, and sort, data elements that have the same float time stamp. </p>
+
+<p>Then just extract <code>x</code> from the tuple for any sorting type operations and the tuple itself is a collision free key for the hash / dictionary. </p>
+
+<p><strong>Edit</strong></p>
+
+<p>I guess example code will help:</p>
+
+<pre><code>#!/usr/bin/env python
+
+import time
+import sys
+import random
+
+#generator for ints from 0 to maxinteger on system:
+serializer=(sn for sn in xrange(0,sys.maxint))
+
+#a list with guranteed collisions:
+times=[]
+for c in range(0,35):
+   t=time.clock()
+   for i in range(0,random.choice(range(0,4))):
+      times.append(t)
+
+print len(set(times)), "unique items in a list of",len(times)      
+
+#dictionary of tuples; no possibilities of collisions:
+di={}   
+for time in times:
+    sn=serializer.next()
+    di[(time,sn)]='Element {}'.format(sn)
+
+#for tuples of multiple numbers, Python sorts
+# as you expect: first by t[0] then t[1], until t[n]
+for key in sorted(di.keys()):
+    print "{:&gt;15}:{}".format(key, di[key]) 
+</code></pre>
+
+<p>Output:</p>
+
+<pre><code>26 unique items in a list of 55
+  (0.042289, 0):Element 0
+  (0.042289, 1):Element 1
+  (0.042289, 2):Element 2
+  (0.042305, 3):Element 3
+  (0.042305, 4):Element 4
+  (0.042317, 5):Element 5
+  # and so on until Element n...
+</code></pre>
+<br /><b>#6</b><br /><p>Forgetting about <em>why</em> we would want to increment a floating point value for a moment, I would have to say I think Autopulated's own answer is probably correct.</p>
+
+<p>But for the problem domain, I share the misgivings of most of the responders to the idea of using floats as dictionary keys.  If the objection to using Decimal (as proposed in the main comments) is that it is a "heavyweight" solution, I suggest a do-it-yourself compromise:  Figure out what the practical resolution is on the timestamps, pick a number of digits to adequately cover it, then multiply all the timestamps by the necessary amount so that you can use integers as the keys.  If you can afford an extra digit or two beyond the timer precision, then you can be even more confident that there will be no or fewer collisions, and that if there are collisions, you can just add 1 (instead of some rigamarole to find the next floating point value).</p>
+<br /><b>#7</b><br /><p>I think you mean "by as small an amount possible to avoid a hash collision", since for example the next-highest-float may already be a key! =)</p>
+
+<pre><code>while toInsert.key in myDict: # assumed to be positive
+    toInsert.key *= 1.000000000001
+myDict[toInsert.key] = toInsert
+</code></pre>
+
+<p>That said you probably don't want to be using timestamps as keys.</p>
+<br /><b>#8</b><br /><p>Instead of resolving the collisions by changing the key, how about <em>collecting</em> the collisions?  IE: </p>
+
+<pre><code>bag = {}
+bag[1234.] = 'something'
+</code></pre>
+
+<p>becomes</p>
+
+<pre><code>bag = collections.defaultdict(list)
+bag[1234.].append('something')
+</code></pre>
+
+<p>would that work?</p>
+<br /><b>#9</b><br /><p>Here it part of it.  This is dirty and slow, but maybe that is how you like it.  It is missing several corner cases, but maybe this gets someone else close.</p>
+
+<p>The idea is to get the hex string of a floating point number.  That gives you a string with the mantissa and exponent bits to twiddle.  The twiddling is a pain since you have to do all it manually and keep converting to/from strings.  Anyway, you add(subtract) 1 to(from) the last digit for positive(negative) numbers.  Make sure you carry through to the exponent if you overflow.  Negative numbers are a little more tricky to make you don't waste any bits.</p>
+
+<pre><code>def increment(f):
+    h = f.hex()
+    # decide if we need to increment up or down
+    if f &gt; 0:
+        sign = '+'
+        inc = 1
+    else:
+        sign = '-'
+        inc = -1
+    # pull the string apart
+    h = h.split('0x')[-1]
+    h,e = h.split('p')
+    h = ''.join(h.split('.'))
+    h2 = shift(h, inc)
+    # increase the exponent if we added a digit
+    h2 = '%s0x%s.%sp%s' % (sign, h2[0], h2[1:], e)
+    return float.fromhex(h2)
+
+def shift(s, num):
+    if not s:
+        return ''
+    right = s[-1]
+    right = int(right, 16) + num
+    if right &gt; 15:
+        num = right // 16
+        right = right%16
+    elif right &lt; 0:
+        right = 0
+        num = -1
+    else:
+        num = 0
+    # drop the leading 0x
+    right = hex(right)[2:]
+    return shift(s[:-1], num) + right
+
+a = 1.4e4
+print increment(a) - a
+a = -1.4e4
+print increment(a) - a
+
+a = 1.4
+print increment(a) - a
+</code></pre>
+<br /><b>#10</b><br /><h2>For colliding key <em>k</em>, add:  <em>k / 2<sup>50</sup></em></h2>
+
+<hr>
+
+<p>Interesting problem. The amount you need to add obviously depends on the magnitude of the colliding value, so that a normalized add will affect only the least significant bits.</p>
+
+<p>It's not necessary to determine the smallest value that can be added. All you need to do is approximate it.  The FPU format provides 52 mantissa bits plus a hidden bit for 53 bits of precision. <em>No physical constant is known to anywhere near this level of precision. No sensor is able measure anything near it.</em> So you don't have a hard problem.</p>
+
+<p>In most cases, for key <em>k</em>, you would be able to add <em>k/2<sup>53</sup>,</em> because of that 52-bit fraction plus the hidden bit.</p>
+
+<p>But it's not necessary to risk triggering library bugs or exploring rounding issues by shooting for the very last bit or anything near it.</p>
+
+<h3>So I would say, for colliding key <em>k</em>, just add <em>k / 2<sup>50</sup></em> and call it a day.<sup>1</sup></h3>
+
+<hr>
+
+<p><sup>1. Possibly more than once until it doesn't collide any more, at least to foil any diabolical unit test authors.</sup></p>
+<br /><b>#11</b><br /><p>A better answer (now I'm just doing this for fun...), motivated by twiddling the bits. Handling the carry and overflows between parts of the number of negative values is somewhat tricky.</p>
+
+<pre><code>import struct
+
+def floatToieee754Bits(f):
+    return struct.unpack('&lt;Q', struct.pack('&lt;d', f))[0]
+
+def ieee754BitsToFloat(i):
+    return struct.unpack('&lt;d', struct.pack('&lt;Q', i))[0]
+
+def incrementFloat(f):
+    i = floatToieee754Bits(f)
+    if f &gt;= 0:
+        return ieee754BitsToFloat(i+1)
+    else:
+        raise Exception('f not &gt;= 0: unsolved problem!')
+</code></pre>
+<br /><b>#12</b><br /><p>After Looking at Autopopulated's answer I came up with a slightly different answer:</p>
+
+<pre><code>import math, sys
+
+def incrementFloatValue(value):
+    if value == 0:
+        return sys.float_info.min                                
+    mant, exponent = math.frexp(value)                                                   
+    epsilonAtValue = math.ldexp(1, exponent - sys.float_info.mant_dig)                
+    return math.fsum([value, epsilonAtValue])
+</code></pre>
+
+<p><em>Disclaimer: I'm really not as great at maths as I think I am ;)  Please verify this is correct before using it. Also I'm not sure about performance</em></p>
+
+<p><em>some notes:</em></p>
+
+<ul>
+<li><code>epsilonAtValue</code> calculates how many bits are used for the mantissa (the maximum minus what is used for the exponent).</li>
+<li>I'm not sure if the <code>math.fsum()</code> is needed but hey it doesn't seem to hurt.</li>
+</ul>
+<br /><b>#13</b><br /><p>It turns out that this is actually quite complicated (maybe why seven people have answered without actually providing an answer yet...).</p>
+
+<p>I think this is the right solution, it certainly seems to handle 0 and positive values correctly:</p>
+
+<pre><code>import math
+import sys
+
+def incrementFloat(f):
+    if f == 0.0:
+        return sys.float_info.min
+    m, e = math.frexp(f)
+    return math.ldexp(m + sys.float_info.epsilon / 2, e)
+</code></pre>
+<br />

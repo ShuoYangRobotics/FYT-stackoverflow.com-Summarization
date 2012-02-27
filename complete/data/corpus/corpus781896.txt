@@ -1,0 +1,91 @@
+Question (ID-781896): Penalties of a script constantly looping in the background I know this topic has been discussed in the past , but I am a tiny bit paranoid about resource usage. 
+
+ I am looking into writing a daemon for queing jobs to archive files into zip files for a web app i am working on. It would behave something like this: 
+
+ while True:
+ while morejobs():
+  zipfile()
+ sleep(15seconds)
+ 
+
+ What sort of resources would be consumed by a process constantly looping away in the background (provided there is nothing to zip)? Is there anything i should be aware of or careful of?
+ 
+ Edit: It looks like most of the answers are concerned about the duration of the sleep. I blindly set it to sleep (in the code example) for 15 milliseconds at a time. I actually intended it to be 15 seconds, and i have 'updated' the code to reflect that. 
+
+ Edit Again: What would be the lowest reasonable time for the script to be sleeping? Is 5 seconds to low? I have no idea what the load of this app would be or how often new jobs would be added to the queue. 
+ Answers (Total-8): #0 Sleep involves no overhead. The Linux OS uses a very simple signal to wake a sleeping process. 
+
+ What you're showing is the "busy-waiting" design pattern. 
+
+ To eliminate overhead, you want to be woken ONLY when there's work to do. 
+
+ Ways to do this. 
+
+ 
+ Wait on read. 
+ Wait on a select function call. See http://docs.python.org/library/select.html 
+ Wait for a lock to be released. See http://docs.python.org/library/posixfile.html . 
+ 
+
+ Of these, waiting on a read is perhaps easiest. Reading from a pipe or a socket is what you want to do. 
+
+ I'm guessing that you have a "multiple-writers-single-reader" design pattern. In this case, there are two candidate solutions. 
+
+ 
+ Multiple requests per socket. This is the FTP-like solution where you write a simple server that listens for connections on one socket and opens a dedicated connection for each client. Then you use select to determine which client is sending a file. 
+ Single request per socket. This is the HTTP-like solution where you receive requests in some socket and the request is a big flood of data. When the request is all finished, the socket is closed so another client can get it. 
+ 
+
+ In these two cases, you're not sleeping -- you're waiting for I/O's to complete. 
+ #1 Instead of sleeping for 15 seconds, it might be better to have a callback which restarts your job when new files arrive. 
+
+ 
+ Process available files 
+ Check for new files every 60 seconds or whatever interval you choose 
+ When a new file arrives, process it and any others which may have arrived since the last interval 
+ 
+ #2 Why not just use a cron job to run a script every minute or so? At least you are not depending on your own loop to be continuously running in the background. 
+ #3 If it takes (and these figures are examples) 20 seconds for a file to arrive and 5 seconds for you to process it, what is the harm in your process waiting for, on average, another 7.5 seconds before it even detects that the file is there? 
+
+ A sleeping process should have as close to zero impact on the CPU as it is possible to get. 
+
+ So no, I would not be concerned about this aspect at all. 
+
+ The one thing you should be concerned about is how to restart the process automatically if it fails. I would run a cron job every 5 minutes (your choice of actual frequency) to kill off the old copy (politely, and only if it's running) and then start a new one. That way, there'll only be a 5-minute downtime at most if something goes wrong. 
+
+ I say politely because the old one may be in the middle of processing files and you should not interrupt that unless it's recoverable. 
+ #4 As an alternative you can lower the priority of your process.
+(I'm only familiar with the windows method) 
+
+ On Windows: 
+
+ def setpriority(pid=None,priority=1):
+ """ Set The Priority of a Windows Process. Priority is a value between 0-5 where
+  2 is normal priority. Default sets the priority of the current
+  python process but can take any valid process ID. """
+
+ import win32api,win32process,win32con
+
+ priorityclasses = [win32process.IDLE_PRIORITY_CLASS,
+      win32process.BELOW_NORMAL_PRIORITY_CLASS,
+      win32process.NORMAL_PRIORITY_CLASS,
+      win32process.ABOVE_NORMAL_PRIORITY_CLASS,
+      win32process.HIGH_PRIORITY_CLASS,
+      win32process.REALTIME_PRIORITY_CLASS]
+ if pid == None:
+  pid = win32api.GetCurrentProcessId()
+ handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
+ win32process.SetPriorityClass(handle, priorityclasses[priority])
+ 
+
+ from:
+ http://code.activestate.com/recipes/496767/ 
+ #5 This has the potential to hammer your CPU, even when there is nothing to process. 
+
+ Edit: Actually sleep() takes an argument as a number of seconds, not milliseconds so I don't think the CPU is going to be a problem. Still, perhaps you could use a cron job to schedule something like this. 
+ #6 Besides the cost of hammering your cpu, there is the cost of the morejobs() call. You can mitigate by using a higher value for sleep() , or you can use some sort of mailbox that receives requests and then fires the zipfile() operation. 
+
+ It is normal for some operations to have a background thread scheduled that temporarily checks for something. In this case the best is to use sensible values for sleep() . 
+ #7 "A thousand reasoned opinions are worth one measurement". 
+
+ Just try it.

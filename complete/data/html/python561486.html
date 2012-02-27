@@ -1,0 +1,238 @@
+<h3>Question (ID-561486):</h3><h2>How to convert an integer to the shortest url-safe string in Python?</h2><p>I want the shortest possible way of representing an integer in a URL. For example, 11234 can be shortened to '2be2' using hexadecimal. Since base64 uses is a 64 character encoding, it should be possible to represent an integer in base64 using even less characters than hexadecimal. The problem is I can't figure out the cleanest way to convert an integer to base64 (and back again) using Python.</p>
+
+<p>The base64 module has methods for dealing with bytestrings - so maybe one solution would be to convert an integer to its binary representation as a Python string... but I'm not sure how to do that either.</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>This answer is similar in spirit to Douglas Leeder's, with the following changes:</p>
+
+<ul>
+<li>It doesn't use actual Base64, so there's no padding characters</li>
+<li><p>Instead of converting the number first to a byte-string (base 256), it converts it directly to base 64, which has the advantage of letting you represent negative numbers using a sign character.</p>
+
+<pre><code>import string
+ALPHABET = string.ascii_uppercase + string.ascii_lowercase + \
+           string.digits + '-_'
+ALPHABET_REVERSE = dict((c, i) for (i, c) in enumerate(ALPHABET))
+BASE = len(ALPHABET)
+SIGN_CHARACTER = '$'
+
+def num_encode(n):
+    if n &lt; 0:
+        return SIGN_CHARACTER + num_encode(-n)
+    s = []
+    while True:
+        n, r = divmod(n, BASE)
+        s.append(ALPHABET[r])
+        if n == 0: break
+    return ''.join(reversed(s))
+
+def num_decode(s):
+    if s[0] == SIGN_CHARACTER:
+        return -num_decode(s[1:])
+    n = 0
+    for c in s:
+        n = n * BASE + ALPHABET_REVERSE[c]
+    return n
+</code></pre></li>
+</ul>
+
+<hr>
+
+<pre><code>    &gt;&gt;&gt; num_encode(0)
+    'A'
+    &gt;&gt;&gt; num_encode(64)
+    'BA'
+    &gt;&gt;&gt; num_encode(-(64**5-1))
+    '$_____'
+</code></pre>
+
+<hr>
+
+<p>A few side notes:</p>
+
+<ul>
+<li>You could (<em>marginally</em>) increase the human-readibility of the base-64 numbers by putting string.digits first in the alphabet (and making the sign character '-'); I chose the order that I did based on Python's urlsafe_b64encode.</li>
+<li>If you're encoding a lot of negative numbers, you could increase the efficiency by using a sign bit or one's/two's complement instead of a sign character.</li>
+<li>You should be able to easily adapt this code to different bases by changing the alphabet, either to restrict it to only alphanumeric characters or to add additional "URL-safe" characters.</li>
+<li>I would recommend <em>against</em> using a representation other than base 10 in URIs in most cases—it adds complexity and makes debugging harder without significant savings compared to the overhead of HTTP—unless you're going for something TinyURL-esque.</li>
+</ul>
+<br /><b>#1</b><br /><p>You probably do not want real base64 encoding for this - it will add padding etc, potentially even resulting in larger strings than hex would for small numbers.  If there's no need to interoperate with anything else, just use your own encoding.  Eg. here's a function that will encode to any base (note the digits are actually stored least-significant first to avoid extra reverse() calls:</p>
+
+<pre><code>def make_encoder(baseString):
+    size = len(baseString)
+    d = dict((ch, i) for (i, ch) in enumerate(baseString)) # Map from char -&gt; value
+    if len(d) != size:
+        raise Exception("Duplicate characters in encoding string")
+
+    def encode(x):
+        if x==0: return baseString[0]  # Only needed if don't want '' for 0
+        l=[]
+        while x&gt;0:
+            l.append(baseString[x % size])
+            x //= size
+        return ''.join(l)
+
+    def decode(s):
+        return sum(d[ch] * size**i for (i,ch) in enumerate(s))
+
+    return encode, decode
+
+# Base 64 version:
+encode,decode = make_encoder("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+
+assert decode(encode(435346456456)) == 435346456456
+</code></pre>
+
+<p>This has the advantage that you can use whatever base you want, just by adding appropriate
+characters to the encoder's base string.</p>
+
+<p>Note that the gains for larger bases are not going to be that big however.  base 64 will only reduce the size to 2/3rds of base 16 (6 bits/char instead of 4).  Each doubling only adds one more bit per character.  Unless you've a real need to compact things, just using hex will probably be the simplest and fastest option.</p>
+<br /><b>#2</b><br /><p>You don't want base64 encoding, you want to represent a base 10 numeral in numeral base X.</p>
+
+<p>If you want your base 10 numeral represented in the 26 letters available you could use:  <a href="http://en.wikipedia.org/wiki/Hexavigesimal" rel="nofollow">http://en.wikipedia.org/wiki/Hexavigesimal</a>.
+(You can extend that example for a much larger base by using all the legal url characters)</p>
+
+<p>You should atleast be able to get base 38 (26 letters, 10 numbers, +, _)</p>
+<br /><b>#3</b><br /><p>The easy bit is converting the byte string to web-safe base64:</p>
+
+<pre><code>import base64
+output = base64.urlsafe_b64encode(s)
+</code></pre>
+
+<p>The tricky bit is the first step - convert the integer to a byte string.</p>
+
+<p>If your integers are small you're better off hex encoding them - see <a href="http://stackoverflow.com/questions/561486/how-do-you-base64-encode-an-integer-in-python/561534#561534">saua</a></p>
+
+<p>Otherwise (hacky recursive version):</p>
+
+<pre><code>def convertIntToByteString(i):
+    if i == 0:
+        return ""
+    else:
+        return convertIntToByteString(i &gt;&gt; 8) + chr(i &amp; 255)
+</code></pre>
+<br /><b>#4</b><br /><p>To encode <code>n</code>:</p>
+
+<pre><code>data = ''
+while n &gt; 0:
+    data = chr(n &amp; 255) + data
+    n = n &gt;&gt; 8
+encoded = base64.urlsafe_b64encode(data).rstrip('=')
+</code></pre>
+
+<p>To decode <code>s</code>:</p>
+
+<pre><code>data = base64.urlsafe_b64decode(s + '===')
+decoded = 0
+while len(data) &gt; 0:
+    decoded = (decoded &lt;&lt; 8) | ord(data[0])
+    data = data[1:]
+</code></pre>
+
+<p>In the same spirit as other for some “optimal” encoding, you can use <strong>73</strong> characters according to RFC 1738 (actually 74 if you count “+” as usable):</p>
+
+<pre><code>alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_`\"!$'()*,-."
+encoded = ''
+while n &gt; 0:
+    n, r = divmod(n, len(alphabet))
+    encoded = alphabet[r] + encoded
+</code></pre>
+
+<p>and the decoding:</p>
+
+<pre><code>decoded = 0
+while len(s) &gt; 0:
+    decoded = decoded * len(alphabet) + alphabet.find(s[0])
+    s = s[1:]
+</code></pre>
+<br /><b>#5</b><br /><p>a little hacky, but it works:</p>
+
+<pre><code>def b64num(num_to_encode):
+  h = hex(num_to_encode)[2:]     # hex(n) returns 0xhh, strip off the 0x
+  h = len(h) &amp; 1 and '0'+h or h  # if odd number of digits, prepend '0' which hex codec requires
+  return h.decode('hex').encode('base64')
+</code></pre>
+
+<p>you could replace the call to .encode('base64') with something in the base64 module, such as  urlsafe_b64encode()</p>
+<br /><b>#6</b><br /><p>I maintain a little library named zbase62: <a href="http://pypi.python.org/pypi/zbase62" rel="nofollow">http://pypi.python.org/pypi/zbase62</a></p>
+
+<p>With it you can convert from a Python 2 str object to a base-62 encoded string and vice versa:</p>
+
+<pre><code>Python 2.7.1+ (r271:86832, Apr 11 2011, 18:13:53) 
+[GCC 4.5.2] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import os
+&gt;&gt;&gt; d = os.urandom(32)
+&gt;&gt;&gt; d
+'C$\x8f\xf9\x92NV\x97\x13H\xc7F\x0c\x0f\x8d9}\xf5.u\xeeOr\xc2V\x92f\x1b=:\xc3\xbc'
+&gt;&gt;&gt; from zbase62 import zbase62
+&gt;&gt;&gt; encoded = zbase62.b2a(d)
+&gt;&gt;&gt; encoded
+'Fv8kTvGhIrJvqQ2oTojUGlaVIxFE1b6BCLpH8JfYNRs'
+&gt;&gt;&gt; zbase62.a2b(encoded)
+'C$\x8f\xf9\x92NV\x97\x13H\xc7F\x0c\x0f\x8d9}\xf5.u\xeeOr\xc2V\x92f\x1b=:\xc3\xbc'
+</code></pre>
+
+<p>However, you still need to convert from integer to str. This comes built-in to Python 3:</p>
+
+<pre><code>Python 3.2 (r32:88445, Mar 25 2011, 19:56:22)
+[GCC 4.5.2] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import os
+&gt;&gt;&gt; d = os.urandom(32)
+&gt;&gt;&gt; d
+b'\xe4\x0b\x94|\xb6o\x08\xe9oR\x1f\xaa\xa8\xe8qS3\x86\x82\t\x15\xf2"\x1dL%?\xda\xcc3\xe3\xba'
+&gt;&gt;&gt; int.from_bytes(d, 'big')
+103147789615402524662804907510279354159900773934860106838120923694590497907642
+&gt;&gt;&gt; x= _ 
+&gt;&gt;&gt; x.to_bytes(32, 'big')
+b'\xe4\x0b\x94|\xb6o\x08\xe9oR\x1f\xaa\xa8\xe8qS3\x86\x82\t\x15\xf2"\x1dL%?\xda\xcc3\xe3\xba'
+</code></pre>
+
+<p>To convert from int to bytes and vice versa in Python 2, there is not a convenient, standard way as far as I know. I guess maybe I should copy some implementation, such as this one: <a href="https://github.com/warner/foolscap/blob/46e3a041167950fa93e48f65dcf106a576ed110e/foolscap/banana.py#L41" rel="nofollow">https://github.com/warner/foolscap/blob/46e3a041167950fa93e48f65dcf106a576ed110e/foolscap/banana.py#L41</a> into zbase62 for your convenience.</p>
+<br /><b>#7</b><br /><p>Base64 takes 4 bytes/characters to encode 3 bytes and can only encode multiples of 3 bytes (and adds padding otherwise).</p>
+
+<p>So representing 4 bytes (your average int) in Base64 would take 8 bytes. Encoding the same 4 bytes in hex would also take 8 bytes. So you wouldn't gain anything for a single int.</p>
+<br /><b>#8</b><br /><p>I'd go the 'encode integer as binary string, then base64 encode that' method you suggest, and I'd do it using struct:</p>
+
+<pre><code>&gt;&gt;&gt; import struct, base64
+&gt;&gt;&gt; base64.b64encode(struct.pack('l', 47))
+'LwAAAA=='
+&gt;&gt;&gt; struct.unpack('l', base64.b64decode(_))
+(47,)
+</code></pre>
+
+<p>Edit again:
+To strip out the extra 0s on numbers that are too small to need full 32-bit precision, try this:</p>
+
+<pre><code>def pad(str, l=4):
+    while len(str) &lt; l:
+        str = '\x00' + str
+    return str
+
+&gt;&gt;&gt; base64.b64encode(struct.pack('!l', 47).replace('\x00', ''))
+'Lw=='
+&gt;&gt;&gt; struct.unpack('!l', pad(base64.b64decode('Lw==')))
+(47,)
+</code></pre>
+<br /><b>#9</b><br /><p>If you are looking for a way to <em>shorten</em> the integer representation using base64, I think you need to look elsewhere. When you encode something with base64 it doesn't get shorter, in fact it gets longer. </p>
+
+<p>E.g. 11234 encoded with base64 would yield MTEyMzQ=</p>
+
+<p>When using base64 you have overlooked the fact that you are not converting just the digits (0-9) to a 64 character encoding. You are converting 3 bytes into 4 bytes so you are guaranteed your base64 encoded string would be 33.33% longer.</p>
+<br /><b>#10</b><br /><p>I needed a signed integer, so I ended up going with:</p>
+
+<pre><code>import struct, base64
+
+def b64encode_integer(i):
+   return base64.urlsafe_b64encode(struct.pack('i', i)).rstrip('=\n')
+</code></pre>
+
+<p>Example:</p>
+
+<pre><code>&gt;&gt;&gt; b64encode_integer(1)
+'AQAAAA'
+&gt;&gt;&gt; b64encode_integer(-1)
+'_____w'
+&gt;&gt;&gt; b64encode_integer(256)
+'AAEAAA'
+</code></pre>
+<br />

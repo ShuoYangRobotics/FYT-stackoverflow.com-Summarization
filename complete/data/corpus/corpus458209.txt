@@ -1,0 +1,225 @@
+Question (ID-458209): Is there a way to detach matplotlib plots so that the computation can continue? After these instructions in the Python interpreter one gets a window with a plot 
+
+ from matplotlib.pyplot import *
+plot([1,2,3])
+show()
+# other code
+ 
+
+ Unfortunately, I don't know how to continue to interactively explore the figure created by show() while the program does further calculations. 
+
+ Is it possible at all? Sometimes calculations are long and it would help if they would proceed during examination of intermediate results. 
+
+ Any help appreciated, 
+
+ meteore. 
+ Answers (Total-6): #0 Use matplotlib 's calls that won't block: 
+
+ Using draw() : 
+
+ from matplotlib import plot, draw, show
+plot([1,2,3])
+draw()
+print 'continue computation'
+
+# at the end call show to ensure window won't close.
+show()
+ 
+
+ Using interactive mode: 
+
+ from matplotlib import plot, ion, show
+ion() # enables interactive mode
+plot([1,2,3]) # result shows immediatelly (implicit draw())
+
+print 'continue computation'
+
+# at the end call show to ensure window won't close.
+show()
+ 
+ #1 It is better to always check with the library you are using if it supports usage in a non-blocking way. 
+
+ But if you want a more generic solution, or if there is no other way, you can run anything that blocks in a separated process by using the multprocessing module included in python. Computation will continue: 
+
+ from multiprocessing import Process
+from matplotlib import plot, show
+
+def plot_graph(*args):
+ for data in args:
+  plot(data)
+ show()
+
+p = Process(target=plot_graph, args=([1, 2, 3],))
+p.start()
+
+print 'yay'
+print 'computation continues...'
+print 'that rocks.'
+
+print 'Now lets wait for the graph be closed to continue...:'
+p.join()
+ 
+
+ That has the overhead of launching a new process, and is sometimes harder to debug on complex scenarios, so I'd prefer the other solution (using matplotlib 's nonblocking API calls ) 
+ #2 You may want to read this document in matplotlib 's documentation, titled: 
+
+ Using matplotlib in a python shell 
+ #3 In my case, I wanted to have several windows pop up as they are being computed. For reference, this is the way: 
+
+ from matplotlib.pyplot import draw, figure, show
+f1, f2 = figure(), figure()
+af1 = f1.add_subplot(111)
+af2 = f2.add_subplot(111)
+af1.plot([1,2,3])
+af2.plot([6,5,4])
+draw() 
+print 'continuing computation'
+show()
+ 
+
+ PS. A quite useful guide to matplotlib's OO interface . 
+ #4 Well, I had great trouble figuring out the non-blocking commands... But finally, I managed to rework the " Cookbook/Matplotlib/Animations - Animating selected plot elements " example, so it works with threads ( and passes data between threads either via global variables, or through a multiprocess Pipe ) on Python 2.6.5 on Ubuntu 10.04. 
+
+ The script can be found here: Animating_selected_plot_elements-thread.py - otherwise pasted below ( with fewer comments ) for reference: 
+
+ import sys
+import gtk, gobject
+import matplotlib
+matplotlib.use('GTKAgg')
+import pylab as p
+import numpy as nx 
+import time
+
+import threading 
+
+
+
+ax = p.subplot(111)
+canvas = ax.figure.canvas
+
+# for profiling
+tstart = time.time()
+
+# create the initial line
+x = nx.arange(0,2*nx.pi,0.01)
+line, = ax.plot(x, nx.sin(x), animated=True)
+
+# save the clean slate background -- everything but the animated line
+# is drawn and saved in the pixel buffer background
+background = canvas.copy_from_bbox(ax.bbox)
+
+
+# just a plain global var to pass data (from main, to plot update thread)
+global mypass
+
+# http://docs.python.org/library/multiprocessing.html#pipes-and-queues
+from multiprocessing import Pipe
+global pipe1main, pipe1upd
+pipe1main, pipe1upd = Pipe()
+
+
+# the kind of processing we might want to do in a main() function,
+# will now be done in a "main thread" - so it can run in
+# parallel with gobject.idle_add(update_line)
+def threadMainTest():
+ global mypass
+ global runthread
+ global pipe1main
+
+ print "tt"
+
+ interncount = 1
+
+ while runthread: 
+  mypass += 1
+  if mypass &gt; 100: # start "speeding up" animation, only after 100 counts have passed
+   interncount *= 1.03
+  pipe1main.send(interncount)
+  time.sleep(0.01)
+ return
+
+
+# main plot / GUI update
+def update_line(*args):
+ global mypass
+ global t0
+ global runthread
+ global pipe1upd
+
+ if not runthread:
+  return False 
+
+ if pipe1upd.poll(): # check first if there is anything to receive
+  myinterncount = pipe1upd.recv()
+
+ update_line.cnt = mypass
+
+ # restore the clean slate background
+ canvas.restore_region(background)
+ # update the data
+ line.set_ydata(nx.sin(x+(update_line.cnt+myinterncount)/10.0))
+ # just draw the animated artist
+ ax.draw_artist(line)
+ # just redraw the axes rectangle
+ canvas.blit(ax.bbox)
+
+ if update_line.cnt&gt;=500:
+  # print the timing info and quit
+  print 'FPS:' , update_line.cnt/(time.time()-tstart)
+
+  runthread=0
+  t0.join(1) 
+  print "exiting"
+  sys.exit(0)
+
+ return True
+
+
+
+global runthread
+
+update_line.cnt = 0
+mypass = 0
+
+runthread=1
+
+gobject.idle_add(update_line)
+
+global t0
+t0 = threading.Thread(target=threadMainTest)
+t0.start() 
+
+# start the graphics update thread
+p.show()
+
+print "out" # will never print - show() blocks indefinitely! 
+ 
+
+ Hope this helps someone, 
+Cheers! 
+ #5 On my system show() does not block, although I wanted the script to wait for the user to interact with the graph (and collect data using 'pick_event' callbacks) before continuing. 
+
+ In order to block execution until the plot window is closed, I used the following: 
+
+ fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
+ax.plot(x,y)
+
+# set processing to continue when window closed
+def onclose(event):
+ fig.canvas.stop_event_loop()
+fig.canvas.mpl_connect('close_event', onclose)
+
+fig.show() # this call does not block on my system
+fig.canvas.start_event_loop_default() # block here until window closed
+
+# continue with further processing, perhaps using result from callbacks
+ 
+
+ Note, however, that canvas.start_event_loop_default() produced the following warning: 
+
+ C:\Python26\lib\site-packages\matplotlib\backend_bases.py:2051: DeprecationWarning: Using default event loop until function specific to this GUI is implemented
+ warnings.warn(str,DeprecationWarning)
+ 
+
+ although the script still ran.

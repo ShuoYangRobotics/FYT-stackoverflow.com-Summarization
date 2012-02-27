@@ -1,0 +1,130 @@
+Question (ID-639962): Unzipping directory structure with python I have a zip file which contains the following directory structure: 
+
+ dir1\dir2\dir3a
+dir1\dir2\dir3b
+ 
+
+ I'm trying to unzip it and maintain the directory structure however I get the error: 
+
+ IOError: [Errno 2] No such file or directory: 'C:\\\projects\\\testFolder\\\subdir\\\unzip.exe'
+ 
+
+ where testFolder is dir1 above and subdir is dir2. 
+
+ Is there a quick way of unzipping the file and maintaining the directory structure? 
+ Answers (Total-7): #0 The extract and extractall methods are great if you're on Python 2.6. I have to use Python 2.5 for now, so I just need to create the directories if they don't exist. You can get a listing of directories with the namelist() method. The directories will always end with a forward slash (even on Windows) e.g., 
+
+ import os, zipfile
+
+z = zipfile.ZipFile('myfile.zip')
+for f in z.namelist():
+ if f.endswith('/'):
+  os.makedirs(f)
+ 
+
+ You probably don't want to do it exactly like that (i.e., you'd probably want to extract the contents of the zip file as you iterate over the namelist), but you get the idea. 
+ #1 Don't trust extract() or extractall(). 
+
+ These methods blindly extract files to the paths given in their filenames. But ZIP filenames can be anything at all, including dangerous strings like “x/../../../etc/passwd”. Extract such files and you could have just compromised your entire server. 
+
+ Maybe this should be considered a reportable security hole in Python's zipfile module, but any number of zip-dearchivers have exhibited the exact same behaviour in the past. To unarchive a ZIP file with folder structure safely you need in-depth checking of each file path. 
+ #2 I tried this out, and can reproduce it. The extractall method, as suggested by other answers, does not solve the problem. This seems like a bug in the zipfile module to me (perhaps Windows-only?), unless I'm misunderstanding how zipfiles are structured. 
+
+ testa\
+testa\testb\
+testa\testb\test.log
+&gt; test.zip
+
+&gt;&gt;&gt; from zipfile import ZipFile
+&gt;&gt;&gt; zipTest = ZipFile("C:\\...\\test.zip")
+&gt;&gt;&gt; zipTest.extractall("C:\\...\\")
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "...\zipfile.py", line 940, in extractall
+ File "...\zipfile.py", line 928, in extract
+ File "...\zipfile.py", line 965, in _extract_member
+IOError: [Errno 2] No such file or directory: 'C:\\...\\testa\\testb\\test.log'
+ 
+
+ If I do a printdir() , I get this (first column): 
+
+ &gt;&gt;&gt; zipTest.printdir()
+File Name
+testa/testb/
+testa/testb/test.log
+ 
+
+ If I try to extract just the first entry, like this: 
+
+ &gt;&gt;&gt; zipTest.extract("testa/testb/")
+'C:\\...\\testa\\testb'
+ 
+
+ On disk, this results in the creation of a folder testa , with a file testb inside. This is apparently the reason why the subsequent attempt to extract test.log fails; testa\testb is a file, not a folder. 
+
+ Edit #1: If you extract just the file, then it works: 
+
+ &gt;&gt;&gt; zipTest.extract("testa/testb/test.log")
+'C:\\...\\testa\\testb\\test.log'
+ 
+
+ Edit #2: Jeff's code is the way to go; iterate through namelist ; if it's a directory, create the directory. Otherwise, extract the file. 
+ #3 There's a very easy way if you're using Python 2.6: the extractall method. 
+
+ However, since the zipfile module is implemented completely in Python without any C extensions, you can probably copy it out of a 2.6 installation and use it with an older version of Python; you may find this easier than having to reimplement the functionality yourself. However, the function itself is quite short: 
+
+ def extractall(self, path=None, members=None, pwd=None):
+ """Extract all members from the archive to the current working
+  directory. `path' specifies a different directory to extract to.
+  `members' is optional and must be a subset of the list returned
+  by namelist().
+ """
+ if members is None:
+  members = self.namelist()
+
+ for zipinfo in members:
+  self.extract(zipinfo, path, pwd)
+ 
+ #4 I know it may be a little late to say this but Jeff is right.
+It's as simple as: 
+
+ import os
+from zipfile import ZipFile as zip
+
+def extractAll(zipName):
+ z = zip(zipName)
+ for f in z.namelist():
+  if f.endswith('/'):
+   os.makedirs(f)
+  else:
+   z.extract(f)
+
+if __name__ == '__main__':
+ zipList = ['one.zip', 'two.zip', 'three.zip']
+ for zip in zipList:
+  extractAll(zipName)
+ 
+
+ So thanks Jeff you helped me heaps :) 
+ #5 It sounds like you are trying to run unzip to extract the zip. 
+
+ It would be better to use the python zipfile module, and therefore do the extraction in python. 
+
+ import zipfile
+
+def extract(zipfilepath, extractiondir):
+ zip = zipfile.ZipFile(zipfilepath)
+ zip.extractall(path=extractiondir)
+ 
+ #6 Note that zip files can have entries for directories as well as files. When creating archives with the zip command, pass the -D option to disable adding directory entries explicitly to the archive. When Python 2.6's ZipFile.extractall method runs across a directory entry, it seems to create a file in its place. Since archive entries aren't necessarily in order, this causes ZipFile.extractall to fail quite often, as it tries to create a file in a subdirectory of a file. If you've got an archive that you want to use with the Python module, simply extract it and re-zip it with the -D option. Here's a little snippet I've been using for a while to do exactly that: 
+
+ P=`pwd` &amp;&amp; 
+Z=`mktemp -d -t zip` &amp;&amp; 
+pushd $Z &amp;&amp; 
+unzip $P/&lt;busted&gt;.zip &amp;&amp; 
+zip -r -D $P/&lt;new&gt;.zip . &amp;&amp; 
+popd &amp;&amp; 
+rm -rf $Z
+ 
+
+ Replace &lt;busted&gt;.zip and &lt;new&gt;.zip with real filenames relative to the current directory. Then just copy the whole thing and paste it into a command shell, and it will create a new archive that's ready to rock with Python 2.6. There is a zip command that will remove these directory entries without unzipping but IIRC it behaved oddly in different shell environments or zip configurations.

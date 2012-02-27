@@ -1,0 +1,151 @@
+<h3>Question ( ID-2326797 ) : </h3><h2>How to set target hosts in Fabric file </h2><p>I want to use Fabric to <span style="background-color:yellow;">deploy</span> my web app code to development , staging and <span style="background-color:yellow;">production</span> <span style="background-color:yellow;">servers.</span> My fabfile : </p>
+<pre><code>def deploy_2_dev():
+  deploy('dev')
+
+def deploy_2_staging():
+  deploy('staging')
+
+def deploy_2_prod():
+  deploy('prod')
+
+def deploy(server):
+  print 'env.hosts:', env.hosts
+  env.hosts = [server]
+  print 'env.hosts:', env.hosts
+</code></pre>
+<p>Sample output : </p>
+<pre><code>host:folder user$ fab deploy_2_dev
+env.hosts: []
+env.hosts: ['dev']
+No hosts found. Please specify (single) host string for connection:
+</code></pre>
+<p>When I create a set_hosts ( ) task as shown in the Fabric docs , env.hosts is set properly. However , this is not a viable option , neither is a decorator. Passing hosts on the command line would ultimately result in some kind of shell script that calls the fabfile , I would prefer having one <span style="background-color:yellow;">single</span> tool do the job properly . </p>
+<p>It says in the Fabric docs that 'env.hosts is simply a Python list object'. From my observations , this is simply not true . </p>
+<p>Can anyone explain what is going on here ? How can I set the host to <span style="background-color:yellow;">deploy</span> to ? </p>
+<br /><h3>Answers ( Total-10 ) : </h3><b># 0 </b><br /><p>I do this by declaring an actual function for each environment. For example : </p>
+<pre><code>def test():
+    env.user = 'testuser'
+    env.hosts = ['test.server.com']
+
+def prod():
+    env.user = 'produser'
+    env.hosts = ['prod.server.com']
+
+def deploy():
+    ...
+</code></pre>
+<p>Using the above functions , I would type the following to <span style="background-color:yellow;">deploy</span> to my <span style="background-color:yellow;">test</span> environment : </p>
+<pre><code>fab test deploy
+</code></pre>
+<p>...and the following to <span style="background-color:yellow;">deploy</span> to <span style="background-color:yellow;">production</span> : </p>
+<pre><code>fab prod deploy
+</code></pre>
+<p>The nice thing about doing it this way is that the <span style="background-color:yellow;">test</span> and <span style="background-color:yellow;">prod</span> functions can be used before any fab function , not just <span style="background-color:yellow;">deploy.</span> It is incredibly useful . </p>
+<br /><b># 1 </b><br /><p>Here 's a simpler version of Server Horror 's answer : </p>
+<pre><code>from fabric.api import settings
+
+def mystuff():
+    with settings(host_string='12.34.56.78'):
+        run("hostname -f")
+</code></pre>
+<br /><b># 2 </b><br /><p>Was stuck on this myself , but finally figured it out. You simply ca n't set the env.hosts configuration from within a task. Each task is executed N times , once for each Host specified , so the setting is fundamentally outside of task scope . </p>
+<p>Looking at your code above , you could simply do this : </p>
+<pre><code>@hosts('dev')
+def deploy_dev():
+    deploy()
+
+@hosts('staging')
+def deploy_staging():
+    deploy()
+
+def deploy():
+    # do stuff...
+</code></pre>
+<p>Which seems like it would do what you 're intending . </p>
+<p>Or you can write some custom code in the global scope that parses the arguments manually , and sets env.hosts before your task function is defined. For a few reasons , that 's actually how I 've set mine up . </p>
+<br /><b># 3 </b><br /><p>You need to set host_string an example would be : </p>
+<pre><code>from fabric.context_managers import settings as _settings
+
+def _get_hardware_node(virtualized):
+    return "localhost"
+
+def mystuff(virtualized):
+    real_host = _get_hardware_node(virtualized)
+    with _settings(
+        host_string=real_host):
+        run("echo I run on the host %s :: `hostname -f`" % (real_host, ))
+</code></pre>
+<br /><b># 4 </b><br /><p>Use roledefs </p>
+<pre><code>from fabric.api import env, run
+
+env.roledefs = {
+    'test': ['localhost'],
+    'dev': ['user@dev.example.com'],
+    'staging': ['user@staging.example.com'],
+    'production': ['user@production.example.com']
+} 
+
+def deploy():
+    run('echo test')
+</code></pre>
+<p>Choose role with -R : </p>
+<pre><code>$ fab -R test deploy
+[localhost] Executing task 'deploy'
+...
+</code></pre>
+<br /><b># 5 </b><br /><p>You can assign to env.hoststring before executing a subtask. Assign to this global variable in a loop if you want to iterate over multiple hosts . </p>
+<p>Unfortunately for you and me , <span style="background-color:yellow;">fabric</span> is not designed for this use case. Check out the main function at http : //github.com/bitprophet/fabric/blob/master/fabric/main.py to see how it works . </p>
+<br /><b># 6 </b><br /><p>To explain why it 's even an issue. The command fab is leveraging <span style="background-color:yellow;">fabric</span> the library to run the tasks on the host lists. If you try and change the host list inside a task , you 're esentially attempting to change a list while iterating over it. Or in the case where you have no hosts defined , loop over an empty list where the code where you set the list to loop over is never executed . </p>
+<p>The use of env.host_string is a work around for this behavior only in that it 's specifying directly to the functions what hosts to connect with. This causes some issues in that you 'll be remaking the execution loop if you want to have a number of hosts to execute on . </p>
+<p>The simplest way the people make the ability to set hosts at run time , is to keep the env populatiing as a distinct task , that sets up all the host strings , users , etc. Then they run the <span style="background-color:yellow;">deploy</span> task. It looks like this : </p>
+<pre><code>fab production deploy
+</code></pre>
+<p>or </p>
+<pre><code>fab staging deploy
+</code></pre>
+<p>Where staging and <span style="background-color:yellow;">production</span> are like the tasks you have given , but they do not call the next task themselves. The reason it has to work like this , is that the task has to finish , and break out of the loop ( of hosts , in the env case None , but it 's a loop of one at that point ) , and then have the loop over the hosts ( now defined by the preceding task ) anew . </p>
+<br /><b># 7 </b><br /><p>You need to modify env.hosts at the module level , not within a task function. I made the same mistake . </p>
+<pre><code>from fabric.api import *
+
+def _get_hosts():
+    hosts = []
+    ... populate 'hosts' list ...
+    return hosts
+
+env.hosts = _get_hosts()
+
+def your_task():
+    ... your task ...
+</code></pre>
+<br /><b># 8 </b><br /><p>It 's very simple. Just initialize the env.host_string variable and all of the following commands will be executed on this host . </p>
+<pre><code>from fabric.api import env, run
+
+env.host_string = 'user@exmaple.com'
+
+def foo:
+    run("hostname -f")
+</code></pre>
+<br /><b># 9 </b><br /><p>Using roles is currently considered to be the " proper " and " correct " way of doing this and is what you " should " do it . </p>
+<p>That said , if you are like most of what you " would like " or " desire " is the ability to perform a " twisted syster " or switching target systems on the fly . </p>
+<p>So for entertainment purposes only ( ! ) the following example illustrates what many might consider to a risky , and yet somehow thoroughly satisfying , manoeuvre that goes something like this : </p>
+<pre><code>env.remote_hosts       = env.hosts = ['10.0.1.6']
+env.remote_user        = env.user = 'bob'
+env.remote_password    = env.password = 'password1'
+env.remote_host_string = env.host_string
+
+env.local_hosts        = ['127.0.0.1']
+env.local_user         = 'mark'
+env.local_password     = 'password2'
+
+def perform_sumersault():
+    env_local_host_string = env.host_string = env.local_user + '@' + env.local_hosts[0]
+    env.password = env.local_password
+    run("hostname -f")
+    env.host_string = env.remote_host_string
+    env.remote_password = env.password
+    run("hostname -f")
+</code></pre>
+<p>Then running : </p>
+<pre><code>fab perform_sumersault
+</code></pre>
+<br />

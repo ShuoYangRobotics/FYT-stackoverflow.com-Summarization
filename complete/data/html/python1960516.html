@@ -1,0 +1,104 @@
+<h3>Question (ID-1960516):</h3><h2>Python JSON serialize a Decimal object</h2><p>I have a <code>Decimal('3.9')</code> as part of an object, and wish to encode this to a JSON string which should look like <code>{'x': 3.9}</code>. I don't care about precision on the client side, so a float is fine.</p>
+
+<p>Is there a good way to serialize this? JSONDecoder doesn't accept Decimal objects, and converting to a float beforehand yields <code>{'x': 3.8999999999999999}</code> which is wrong, and will be a big waste of bandwidth.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>How about subclassing <code>json.JSONEncoder</code>?</p>
+
+<pre><code>class DecimalEncoder(json.JSONEncoder):
+    def _iterencode(self, o, markers=None):
+        if isinstance(o, decimal.Decimal):
+            # wanted a simple yield str(o) in the next line,
+            # but that would mean a yield on the line with super(...),
+            # which wouldn't work (see my comment below), so...
+            return (str(o) for o in [o])
+        return super(DecimalEncoder, self)._iterencode(o, markers)
+</code></pre>
+
+<p>Then use it like so:</p>
+
+<pre><code>json.dumps({'x': decimal.Decimal('5.5')}, cls=DecimalEncoder)
+</code></pre>
+<br /><b>#1</b><br /><p><a href="http://code.google.com/p/simplejson/" rel="nofollow">Simplejson 2.1</a> and higher has native support for Decimal type:</p>
+
+<pre><code>&gt;&gt;&gt; json.dumps(Decimal('3.9'), use_decimal=True)
+'3.9'
+</code></pre>
+
+<p>Hopefully, this feature will be included in standard library.</p>
+<br /><b>#2</b><br /><p>I would like to let everyone know that I tried Michał Marczyk's answer on my web server that was running Python 2.6.5 and it worked fine. However, I upgraded to Python 2.7 and it stopped working. I tried to think of some sort of way to encode Decimal objects and this is what I came up with:</p>
+
+<pre><code>class DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, decimal.Decimal):
+            return float(o)
+        return super(DecimalEncoder, self).default(o)
+</code></pre>
+
+<p>This should hopefully help anyone who is having problems with Python 2.7. I tested it and it seems to work fine. If anyone notices any bugs in my solution or comes up with a better way, please let me know.</p>
+<br /><b>#3</b><br /><p>3.9 can not be exactly represented in IEEE floats, it will always come as 3.8999999999999999, e.g. try  print repr(3.9), read more at<br>
+<a href="http://en.wikipedia.org/wiki/Floating_point" rel="nofollow">http://en.wikipedia.org/wiki/Floating_point</a><br>
+<a href="http://docs.sun.com/source/806-3568/ncg_goldberg.html" rel="nofollow">http://docs.sun.com/source/806-3568/ncg_goldberg.html</a>  </p>
+
+<p>So if you don't want float, only option you have to send it as string, and to allow automatic dumping of decimal objects do something like this</p>
+
+<pre><code>import decimal
+from django.utils import simplejson
+
+def json_encode_decimal(obj):
+    if isinstance(obj, decimal.Decimal):
+        return str(obj)
+    raise TypeError(repr(obj) + " is not JSON serializable")
+
+d = decimal.Decimal('3.5')
+print simplejson.dumps([d], default=json_encode_decimal)
+</code></pre>
+<br /><b>#4</b><br /><p>this can be done by adding </p>
+
+<pre><code>    elif isinstance(o, decimal.Decimal):
+        yield str(o)
+</code></pre>
+
+<p>in <code>\Lib\json\encoder.py:JSONEncoder._iterencode</code>, but I was hoping for a better solution</p>
+<br /><b>#5</b><br /><p>Here is my solution:</p>
+
+<pre><code>import json
+def decimal_dumps(d):
+    def fix_dict(d):
+        fixed = {}
+        for k,v in d.iteritems():
+            if isinstance(v, decimal.Decimal):
+                # convert decimal to string
+                fixed.update({k: str(v)})
+            elif isinstance(v, dict):
+                # recurse
+                fixed.update({k: fix_dict(v)})
+            else:
+                # no conversion needed, replace
+                fixed.update({k: v})
+        return fixed
+    return json.dumps(fixed)
+</code></pre>
+
+<p>So instead of <code>json.dumps(d)</code> you just do <code>decimal_dumps(d)</code></p>
+<br /><b>#6</b><br /><p>I tried switching from simplejson to builtin json for GAE 2.7, and had issues with the decimal. If default returned str(o) there were quotes (because _iterencode calls _iterencode on the results of default), and float(o) would remove trailing 0.</p>
+
+<p>If default returns an object of a class that inherits from float (or anything that calls repr without additional formatting) and has a custom __repr__ method, it seems to work like I want it to.</p>
+
+<pre><code>import json
+from decimal import Decimal
+
+class fakefloat(float):
+    def __init__(self, value):
+        self._value = value
+    def __repr__(self):
+        return str(self._value)
+
+def defaultencode(o):
+    if isinstance(o, Decimal):
+        # Subclass float with custom repr?
+        return fakefloat(o)
+    raise TypeError(repr(o) + " is not JSON serializable")
+
+json.dumps([10.20, "10.20", Decimal('10.20')], default=defaultencode)
+'[10.2, "10.20", 10.20]'
+</code></pre>
+<br />

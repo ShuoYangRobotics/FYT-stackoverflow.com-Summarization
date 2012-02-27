@@ -1,0 +1,311 @@
+<h3>Question (ID-4608968):</h3><h2>How to access a superclass's class attributes in Python?</h2><p>Have a look at the following code:</p>
+
+<pre><code>class A(object):
+    defaults = {'a': 1}
+
+    def __getattr__(self, name):
+        print('A.__getattr__')
+        return self.get_default(name)
+
+    @classmethod
+    def get_default(cls, name):
+        # some debug output
+        print('A.get_default({}) - {}'.format(name, cls))
+        try:
+            print(super(cls, cls).defaults) # as expected
+        except AttributeError: #except for the base object class, of course
+            pass
+
+        # the actual function body
+        try:
+            return cls.defaults[name]
+        except KeyError:
+            return super(cls, cls).get_default(name) # infinite recursion
+            #return cls.__mro__[1].get_default(name) # this works, though
+
+class B(A):
+    defaults = {'b': 2}
+
+class C(B):
+    defaults = {'c': 3}
+
+
+c = C()
+print('c.a =', c.a)
+</code></pre>
+
+<p>I have a hierarchy of classes each with its own dictionary containing some default values. If an instance of a class doesn't have a particular attribute, a default value for it should be returned instead. If no default value for the attribute is contained in the current class's <code>defaults</code> dictionary, the superclass's <code>defaults</code> dictionary should be searched.</p>
+
+<p>I'm trying to implement this using the recursive class method <code>get_default</code>. The program gets stuck in an infinite recursion, unfortunately. My understanding of <code>super()</code> is obviously lacking. By accessing <code>__mro__</code>, I can get it to work properly though, but I'm not sure this is a proper solution.</p>
+
+<p>I have the feeling the answer is somewhere in <a href="http://www.artima.com/weblogs/viewpost.jsp?thread=236275" rel="nofollow">this article</a>, but I haven't been able to find it yet. Perhaps I need to resort to using a metaclass?</p>
+
+<p><strong>edit:</strong> In my application, <code>__getattr__</code> first checks <code>self.base</code>. If it is not <code>None</code>, the attribute needs to be fetched from there. Only in the other case, a default value must be returned. I could probably override <code>__getattribute__</code>. Would that be the better solution?</p>
+
+<p><strong>edit 2:</strong> Below is an extended example of the functionality that I'm looking for. It is currently implemented using <code>__mro__</code> (unutbu's earlier suggestion, as opposed to my original recursive method). Unless someone can suggest a more elegant solution, I'm happy using this implementation. I hope this clears things up.</p>
+
+<pre><code>class A(object):
+    defaults = {'a': 1}
+
+    def __init__(self, name, base=None):
+        self.name = name
+        self.base = base
+
+    def __repr__(self):
+        return self.name
+
+    def __getattr__(self, name):
+        print(" '{}' attribute not present in '{}'".format(name, self))
+        if self.base is not None:
+            print("  getting '{}' from base ({})".format(name, self.base))
+            return getattr(self.base, name)
+        else:
+            print("  base = None; returning default value")
+            return self.get_default(name)
+
+    def get_default(self, name):
+        for cls in self.__class__.__mro__:
+            try:
+                return cls.defaults[name]
+            except KeyError:
+                pass
+        raise KeyError
+
+class B(A):
+    defaults = {'b': 2}
+
+class C(B):
+    defaults = {'c': 3}
+
+
+c1 = C('c1')
+c1.b = 55
+
+print('c1.a = ...'); print('   ...', c1.a) # 1
+print(); print('c1.b = ...'); print('   ...', c1.b) # 55
+print(); print('c1.c = ...'); print('   ...', c1.c) # 3
+
+c2 = C('c2', base=c1)
+c2.c = 99
+
+print(); print('c2.a = ...'); print('   ...', c2.a) # 1
+print(); print('c2.b = ...'); print('   ...', c2.b) # 55
+print(); print('c2.c = ...'); print('   ...', c2.c) # 99
+</code></pre>
+
+<p>The output:</p>
+
+<pre><code>c1.a = ...
+ 'a' attribute not present in 'c1'
+  base = None; returning default value
+   ... 1
+
+c1.b = ...
+   ... 55
+
+c1.c = ...
+ 'c' attribute not present in 'c1'
+  base = None; returning default value
+   ... 3
+
+c2.a = ...
+ 'a' attribute not present in 'c2'
+  getting 'a' from base (c1)
+ 'a' attribute not present in 'c1'
+  base = None; returning default value
+   ... 1
+
+c2.b = ...
+ 'b' attribute not present in 'c2'
+  getting 'b' from base (c1)
+   ... 55
+
+c2.c = ...
+   ... 99
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Not really an answer but an observation:</p>
+
+<p>This looks overengineered to me, a common trap when looking for excuses to use python magic.</p>
+
+<p>If you can be bothered to define a <code>defaults</code> dict for a class why not just define the attributes instead? the effect is the same.</p>
+
+<pre><code>class A:
+    a = 1
+
+class B(A):
+    b = 2
+
+class C(B):
+    c = 3
+
+
+c = C()
+print('c.a =', c.a)
+</code></pre>
+
+<p><strong>EDIT:</strong></p>
+
+<p>As for answering the question, I would probably use <code>__getattribute__</code> in combination with my suggestion like this:</p>
+
+<pre><code>def __getattribute__(self, name):
+    try:
+        return object.__getattribute__(self.base, name)
+    except AttributeError:
+        return object.__getattribute__(self, name)
+</code></pre>
+<br /><b>#1</b><br /><p>To be more clear about your "base" vs "default" case. </p>
+
+<pre><code>&gt;&gt;&gt; class A(object):
+...     a = 1
+... 
+&gt;&gt;&gt; class B(A):
+...     b = 2
+... 
+&gt;&gt;&gt; class C(B):
+...     c = 3
+... 
+&gt;&gt;&gt; a = A()
+&gt;&gt;&gt; b = B()
+&gt;&gt;&gt; c = C()
+&gt;&gt;&gt; 
+&gt;&gt;&gt; b.b = 23
+&gt;&gt;&gt; b.a
+1
+&gt;&gt;&gt; b.b
+23
+&gt;&gt;&gt; c.a
+1
+&gt;&gt;&gt; c.b
+2
+&gt;&gt;&gt; c.c
+3
+&gt;&gt;&gt; c.c = 45
+&gt;&gt;&gt; c.c
+45
+</code></pre>
+
+<p>This covers your stated use case. You need no magick at all. If your usecase is somewhat different, explain what it is, and we'll tell you how to do that with no magick. ;)</p>
+<br /><b>#2</b><br /><p>How about:</p>
+
+<pre><code>class A(object):
+    def __init__(self,base=None):
+        self.a=1
+        if base is not None:
+            self.set_base(base)
+        super(A,self).__init__() 
+    def set_base(self,base):
+        for key in ('a b c'.split()):
+            setattr(self,key,getattr(base,key))
+class B(A): 
+    def __init__(self,base=None):
+        self.b=2
+        super(B,self).__init__(base)        
+class C(B): 
+    def __init__(self,base=None):
+        self.c=3
+        super(C,self).__init__(base)
+
+c1=C()
+c1.b=55
+print(c1.a)
+print(c1.b)
+print(c1.c)
+# 1
+# 55
+# 3
+
+c2=C(c1)
+c2.c=99
+print(c2.a)
+print(c2.b)
+print(c2.c)
+# 1
+# 55
+# 99
+
+c1.set_base(c2)
+print(c1.a)
+print(c1.b)
+print(c1.c)
+# 1
+# 55
+# 99
+</code></pre>
+<br /><b>#3</b><br /><p>I think the trouble results from misunderstanding the purpose of <code>super()</code>. </p>
+
+<p><a href="http://docs.python.org/library/functions.html#super" rel="nofollow">http://docs.python.org/library/functions.html#super</a></p>
+
+<p>Essentially, wrapping your object (or class) in super() makes Python skip the most-recently-inherited class when doing attribute lookup. In your code, this results in class C being skipped when looking for get_default, but this doesn't really do anything, since C doesn't define a get_default anyway. Naturally, this results in an infinite loop.</p>
+
+<p>The solution is to define this function in each class that derives from A.
+This can be done using a metaclass:</p>
+
+<pre><code>class DefaultsClass(type):
+    def __init__(cls, name, bases, dct):
+
+        def get_default(self, name):
+            # some debug output
+            print('A.get_default(%s) - %s' % (name, cls))
+            try:
+                print(cls.defaults) # as expected
+            except AttributeError: #except for the base object class, of course
+                pass
+
+            # the actual function body
+            try:
+                return cls.defaults[name]
+            except KeyError:
+                return super(cls, self).get_default(name) # cooperative superclass
+
+        cls.get_default = get_default
+        return super(DefaultsClass, cls).__init__(name, bases, dct)
+
+class A(object):
+    defaults = {'a': 1}
+    __metaclass__ = DefaultsClass
+
+    def __getattr__(self, name):
+        return self.get_default(name)
+
+
+
+class B(A):
+    defaults = {'b': 2}
+
+class C(B):
+    defaults = {'c': 3}
+
+
+c = C()
+print('c.a =', c.a)
+print('c.b =', c.b)
+print('c.c =', c.c)
+</code></pre>
+
+<p>results:</p>
+
+<pre><code>A.get_default(c) - &lt;class '__main__.C'&gt;
+{'c': 3}
+('c.c =', 3)
+A.get_default(b) - &lt;class '__main__.C'&gt;
+{'c': 3}
+A.get_default(b) - &lt;class '__main__.B'&gt;
+{'b': 2}
+('c.b =', 2)
+A.get_default(a) - &lt;class '__main__.C'&gt;
+{'c': 3}
+A.get_default(a) - &lt;class '__main__.B'&gt;
+{'b': 2}
+A.get_default(a) - &lt;class '__main__.A'&gt;
+{'a': 1}
+('c.a =', 1)
+</code></pre>
+
+<p>I should note that most Python people will consider this a very bizarre solution, and you should only use this if you <em>really</em> need to, maybe to support legacy code.</p>
+<br /><b>#4</b><br /><p>You should use <a href="http://docs.python.org/tutorial/classes.html#private-variables" rel="nofollow">name mangling</a> here.</p>
+
+<p>Rename <code>defaults</code> to <code>__defaults</code></p>
+
+<p>That gives each class an unambiguous attribute so they are not confused with each other</p>
+<br /><b>#5</b><br /><p>The solution proposed in the second edit of the question is still the only one that provides everything my application requires. While unutbu's code might be simpler to understand, the <code>__mro__</code> solution provides some advantages IMO (see comments).</p>
+<br />

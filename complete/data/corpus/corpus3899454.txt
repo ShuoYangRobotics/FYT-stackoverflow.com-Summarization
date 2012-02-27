@@ -1,0 +1,229 @@
+Question (ID-3899454): Restore Python class to original state I have a class where I add some attributes dynamically and at some point I want to restore the class to it's pristine condition without the added attributes. 
+
+ The sistuation: 
+
+ class Foo(object):
+ pass
+
+Foo.x = 1
+# &lt;insert python magic here&gt;
+o = Foo() # o should not have any of the previously added attributes
+print o.x # Should raise exception
+ 
+
+ My initial thought was to create a copy of the original class: 
+
+ class _Foo(object):
+ pass
+
+Foo = _Foo
+Foo.x = 1
+Foo = _Foo # Clear added attributes
+o = Foo()
+print o.x # Should raise exception
+ 
+
+ But since Foo is just a reference to _Foo any attributes get added to the original _Foo as well. I also tried 
+
+ Foo = copy.deepcopy(_Foo)
+ 
+
+ in case that would help but apparently it does not. 
+
+ clarification : 
+
+ The user should not need to care about how the class is implemented. It should, therefore, have the same features of a "normally defined" class, i.e. introspection, built-in help, subclassing, etc. This pretty much rules out anything based on __getattr__ 
+ Answers (Total-10): #0 You have to record the original state and restore it explicitly. If the value existed before you changed it, restore that value; otherwise delete the value you set. 
+
+ class Foo(object):
+ pass
+
+try:
+ original_value = getattr(Foo, 'x')
+ originally_existed = True
+except AttributeError:
+ originally_existed = False
+
+Foo.x = 1
+
+if originally_existed:
+ Foo.x = original_value
+else:
+ del Foo.x
+
+o = Foo() # o should not have any of the previously added attributes
+print o.x # Should raise exception
+ 
+
+ You probably don't want to be doing this. There are valid cases for monkey patching, but you generally don't want to try to monkey unpatch . For example, if two independent bits of code monkey patch the same class, one of them trying to reverse the action without being aware of the other is likely to break things. For an example of a case where this is actually useful, see http://stackoverflow.com/questions/3829742#3829849 . 
+ #1 I agree with Glenn that this is a horribly broken idea. Anyways, here how you'd do it with a decorator. Thanks to Glenn's post as well for reminding me that you can delete items from a class's dictionary, just not directly. Here's the code. 
+
+ def resetable(cls):
+ cls._resetable_cache_ = cls.__dict__.copy()
+ return cls
+
+def reset(cls):
+ cache = cls._resetable_cache_ # raises AttributeError on class without decorator
+ for key in [key for key in cls.__dict__ if key not in cache]:
+  delattr(cls, key)
+ for key, value in cache.items(): # reset the items to original values
+  try:
+   setattr(cls, key, value)
+  except AttributeError:
+   pass
+ 
+
+ I'm torn on whether to reset the values by catching attempts to update non-assignable attributes with a try as I've shown or building a list of such attributes. I'll leave it up to you. 
+
+ And here's a use: 
+
+ @resetable # use resetable on a class that you want to do this with
+class Foo(object):
+ pass
+
+Foo.x = 1
+print Foo.x
+reset(Foo)
+o = Foo() 
+print o.x # raises AttributeError as expected
+ 
+ #2 I don't fully understand why you need this, but I'll have a go. Ordinary inheritance probably won't do because you want to 'reset' to the old state. How about a proxy pattern ? 
+
+ class FooProxy(object):
+ def __init__(self, f):
+  self.f = foo
+  self.magic = {}
+
+ def set_magic(self, k, v):
+  self.magic[k] = v
+
+ def get_magic(self, k):
+  return self.magic.get(k)
+
+ def __getattr__(self, k):
+  return getattr(self.f, k)
+
+ def __setattr__(self, k, v):
+  setattr(self.f, k, v)
+
+ f = Foo() 
+ p = FooProxy(f)
+ p.set_magic('m_bla', 123)
+ 
+
+ use f for ordinary, 'original' access, use p for proxied access, it should behave mostly like Foo. Re-proxy f with new configuration if you need to 
+ #3 I don't know if you can accept an additional module file for class, if you can: 
+
+ my_class.py 
+
+ class Foo(object):
+ pass
+ 
+
+ You main script: 
+
+ import my_class 
+Foo = my_class.Foo
+Foo.x = 1
+p = Foo()
+print p.x # Printing '1'
+
+# Some code....
+
+reload(my_class) # reload to reset
+Foo = my_class.Foo
+o = Foo()
+print p.x # Printing '1'
+print o.__class__ == p.__class__ # Printing 'False'
+print o.x # Raising exception
+ 
+
+ I am not sure if there is any side-effect. It seems to do what OP wants, though this is really unusal. 
+ #4 In your second example you're making a reference to the class rather than an instance. 
+
+ Foo = _Foo # Reference 
+
+ If you instead made an instance copy, what you want to do is exactly the way it will work. You can modify the instance all you want and 'revert' it by creating a new instance. 
+
+ Foo = _Foo() 
+
+ #!/usr/bin/python 
+
+ class FooClass(object):
+  pass 
+
+ FooInstance = FooClass() # Create an instance 
+
+ FooInstance.x = 100  # Modify the instance 
+
+ print dir(FooClass)  # Verify FooClass doesn't have an 'x' attribute 
+
+ FooInstance = FooClass() # Creates a new instance 
+
+ print FooInstance.x # Exception 
+ #5 I don't understand what you are trying to do, but keep in mind that you don't have to add attributes to the class in order to make it look like you added attributes to the class. 
+
+ You can give the class a __getattr__ method that will be invoked for any missing attribute. Where it gets the value from is up to you: 
+
+ class MyTrickyClass(object):
+ self.magic_prefix = "m_"
+ self.other_attribute_source = SomeOtherObject()
+
+ def __getattr__(self, name):
+  if name.startswith(self.magic_prefix):
+   stripped = name[len(self.magic_prefix):]
+   return getattr(self.other_attribute_source, stripped)
+  raise AttributeError
+
+m = MyTrickyClass()
+assert hasattr(m, "m_other")
+MyTrickyClass.magic_prefix = "f_"
+assert hasattr(m, "f_other")
+ 
+ #6 If all the stuff you added starts with a given distinctive prefix, you could search the object's __dict__ for members with that prefix, and delete them, when it's time to restore. 
+ #7 You can use inspect and maintain an original list of members and than delete all members that are not in the original list 
+
+ import inspect
+orig_members = []
+for name, ref in inspect.getmembers(o):
+ orig_members.append(name)
+...
+ 
+
+ Now, when you need to restore back to original 
+
+ for name, ref in inspect.getmembers(o):
+ if name in orig_members:
+ pass
+ else:
+ #delete ref here
+ 
+ #8 The simplest way I found was this: 
+
+ def foo_maker():
+ class Foo(object):
+  pass
+ return Foo
+Foo = foo_maker()
+Foo.x = 1
+Foo = foo_maker() # Foo is now clean again
+o = Foo() # Does not have any of the previously added attributes
+print o.x # Raises exception
+ 
+
+ edit : As pointed out in comments, does not actually reset class but has the same effect in practice. 
+ #9 To create a deep copy of a class you can use the new.classobj function 
+
+ class Foo:
+ pass
+
+import new, copy
+FooSaved = new.classobj(Foo.__name__, Foo.__bases__, copy.deepcopy(Foo.__dict__))
+
+# ...play with original class Foo...
+
+# revert changes
+Foo = FooSaved
+ 
+
+ UPD: module new is deprecated. Instead you should use types.ClassType with the same args

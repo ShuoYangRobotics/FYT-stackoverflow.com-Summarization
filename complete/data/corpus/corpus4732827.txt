@@ -1,0 +1,185 @@
+Question (ID-4732827): Continuing in Python's unittest when an assertion fails EDIT: switched to a better example, and clarified why this is a real problem. 
+
+ I'd like to write unit tests in Python that continue executing when an assertion fails, so that I can see multiple failures in a single test. For example: 
+
+ class Car(object):
+ def __init__(self, make, model):
+ self.make = make
+ self.model = make # Copy and paste error: should be model.
+ self.has_seats = True
+ self.wheel_count = 3 # Typo: should be 4.
+
+class CarTest(unittest.TestCase):
+ def test_init(self):
+ make = "Ford"
+ model = "Model T"
+ car = Car(make=make, model=model)
+ self.assertEqual(car.make, make)
+ self.assertEqual(car.model, model) # Failure!
+ self.assertTrue(car.has_seats)
+ self.assertEqual(car.wheel_count, 4) # Failure!
+ 
+
+ Here, the purpose of the test is to ensure that Car's __init__ sets its fields correctly. I could break it up into four methods (and that's often a great idea), but in this case I think it's more readable to keep it as a single method that tests a single concept ("the object is initialized correctly"). 
+
+ If we assume that it's best here to not break up the method, then I have a new problem: I can't see all of the errors at once. When I fix the model error and re-run the test, then the wheel_count error appears. It would save me time to see both errors when I first run the test. 
+
+ For comparison, Google's C++ unit testing framework distinguishes between between non-fatal EXPECT_* assertions and fatal ASSERT_* assertions: 
+
+ 
+ The assertions come in pairs that test the same thing but have different effects on the current function. ASSERT_* versions generate fatal failures when they fail, and abort the current function. EXPECT_* versions generate nonfatal failures, which don't abort the current function. Usually EXPECT_* are preferred, as they allow more than one failures to be reported in a test. However, you should use ASSERT_* if it doesn't make sense to continue when the assertion in question fails. 
+ 
+
+ Is there a way to get EXPECT_* -like behavior in Python's unittest ? If not in unittest , then is there another Python unit test framework that does support this behavior? 
+
+ 
+
+ Incidentally, I was curious about how many real-life tests might benefit from non-fatal assertions, so I looked at some code examples that I found with Google Code Search. Out of the first 10 results, 9 were unit tests (one was part of a mock framework), and 7 of the 9 used multiple independent assertions in the same test method. All 7 would benefit from non-fatal assertions. 
+ Answers (Total-6): #0 It is considered an anti-pattern to have multiple asserts in a single unit test. A single unit test is expected to test only one thing. Perhaps you are testing too much. Consider splitting this test up into multiple tests. This way you can name each test properly. 
+
+ Sometimes however, it is okay to check multiple things at the same time. Fo5r instance when you are asserting properties of the same object. In that case you are in fact asserting whether that object is correct. A way to do this is to write a custom helper method that knows how to assert on that object. You can write that method in such a way that it shows all failing properties or for instance shows the complete state of the expected object and the complete state of the actual object when an assert fails. 
+ #1 Do each assert in a separate method. 
+
+ class MathTest(unittest.TestCase):
+ def test_addition1(self):
+ self.assertEqual(1 + 0, 1)
+
+ def test_addition2(self):
+ self.assertEqual(1 + 1, 3)
+
+ def test_addition3(self):
+ self.assertEqual(1 + (-1), 0)
+
+ def test_addition4(self):
+ self.assertEqaul(-1 + (-1), -1)
+ 
+ #2 What you'll probably want to do is derive unittest.TestCase since that's the class that throws when an assertion fails. You will have to re-architect your TestCase to not throw (maybe keep a list of failures instead). Re-architecting stuff can cause other issues that you would have to resolve. For example you may end up needing to derive TestSuite to make changes in support of the changes made to your TestCase . 
+ #3 Another way to have non-fatal assertions is to capture the assertion exception and store the exceptions in a list. Then assert that that list is empty as part of the tearDown. 
+
+ import unittest
+
+class Car(object):
+ def __init__(self, make, model):
+ self.make = make
+ self.model = make # Copy and paste error: should be model.
+ self.has_seats = True
+ self.wheel_count = 3 # Typo: should be 4.
+
+class CarTest(unittest.TestCase):
+ def setUp(self):
+ self.verificationErrors = []
+
+ def tearDown(self):
+ self.assertEqual([], self.verificationErrors)
+
+ def test_init(self):
+ make = "Ford"
+ model = "Model T"
+ car = Car(make=make, model=model)
+ try: self.assertEqual(car.make, make)
+ except AssertionError, e: self.verificationErrors.append(str(e))
+ try: self.assertEqual(car.model, model) # Failure!
+ except AssertionError, e: self.verificationErrors.append(str(e))
+ try: self.assertTrue(car.has_seats)
+ except AssertionError, e: self.verificationErrors.append(str(e))
+ try: self.assertEqual(car.wheel_count, 4) # Failure!
+ except AssertionError, e: self.verificationErrors.append(str(e))
+
+if __name__ == "__main__":
+ unittest.main()
+ 
+ #4 I don't think there is a way to do this with PyUnit and wouldn't want to see PyUnit extended in this way. 
+
+ I prefer to stick to one assertion per test function ( or more specifically asserting one concept per test ) and would rewrite test_addition() as four separate test functions. This would give more useful information on failure, viz : 
+
+ .FF.
+======================================================================
+FAIL: test_addition_with_two_negatives (__main__.MathTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+ File "test_addition.py", line 10, in test_addition_with_two_negatives
+ self.assertEqual(-1 + (-1), -1)
+AssertionError: -2 != -1
+
+======================================================================
+FAIL: test_addition_with_two_positives (__main__.MathTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+ File "test_addition.py", line 6, in test_addition_with_two_positives
+ self.assertEqual(1 + 1, 3) # Failure!
+AssertionError: 2 != 3
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.000s
+
+FAILED (failures=2)
+ 
+
+ If you decide that this approach isn't for you, you may find this answer helpful. 
+
+ Update 
+
+ It looks like you are testing two concepts with your updated question and I would split these into two unit tests. The first being that the parameters are being stored on the creation of a new object. This would have two assertions, one for make and one for model . If the first fails, the that clearly needs to be fixed, whether the second passes or fails is irrelevant at this juncture. 
+
+ The second concept is more questionable... You're testing whether some default values are initialised. Why ? It would be more useful to test these values at the point that they are actually used (and if they are not used, then why are they there?). 
+
+ Both of these tests fail, and both should. When I am unit-testing, I am far more interested in failure than I am in success as that is where I need to concentrate. 
+
+ FF
+======================================================================
+FAIL: test_creation_defaults (__main__.CarTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+ File "test_car.py", line 25, in test_creation_defaults
+ self.assertEqual(self.car.wheel_count, 4) # Failure!
+AssertionError: 3 != 4
+
+======================================================================
+FAIL: test_creation_parameters (__main__.CarTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+ File "test_car.py", line 20, in test_creation_parameters
+ self.assertEqual(self.car.model, self.model) # Failure!
+AssertionError: 'Ford' != 'Model T'
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.000s
+
+FAILED (failures=2)
+ 
+ #5 One option is assert on all the values at once as a tuple. 
+
+ For example: 
+
+ class CarTest(unittest.TestCase):
+ def test_init(self):
+ make = "Ford"
+ model = "Model T"
+ car = Car(make=make, model=model)
+ self.assertEqual(
+   (car.make, car.model, car.has_seats, car.wheel_count),
+   (make, model, True, 4))
+ 
+
+ The output from this tests would be: 
+
+ ======================================================================
+FAIL: test_init (test.CarTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+ File "C:\temp\py_mult_assert\test.py", line 17, in test_init
+ (make, model, True, 4))
+AssertionError: Tuples differ: ('Ford', 'Ford', True, 3) != ('Ford', 'Model T', True, 4)
+
+First differing element 1:
+Ford
+Model T
+
+- ('Ford', 'Ford', True, 3)
+?   ^ -   ^
+
++ ('Ford', 'Model T', True, 4)
+?   ^ ++++   ^
+ 
+
+ This shows that both the model and the wheel count are incorrect.

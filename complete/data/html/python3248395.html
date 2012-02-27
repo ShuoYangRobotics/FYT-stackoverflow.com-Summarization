@@ -1,0 +1,200 @@
+<h3>Question (ID-3248395):</h3><h2>Extract specific text lines?</h2><p>I have a large several hudred thousand lines text file. I have to extract 30,000 specific lines that are all in the text file in random spots. This is the program I have to extract one line at a time:</p>
+
+<pre><code>big_file = open('C:\\gbigfile.txt', 'r')
+small_file3 = open('C:\\small_file3.txt', 'w')
+for line in big_file:
+   if 'S0414' in line:
+      small_file3.write(line)
+gbigfile.close()
+small_file3.close()
+</code></pre>
+
+<p>How can I speed this up for 30,000 lines that I need to look up>?</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>Aha! So your real problem is how to test many conditions per line and if one of them is satisfied, to output that line. Easiest will be using regular expression, me thinks:</p>
+
+<pre><code>import re
+keywords = ['S0414', 'GT213', 'AT3423', 'PR342'] # etc - you probably get those from some source
+pattern = re.compile('|'.join(keywords))
+
+for line in inf:
+    if pattern.search(ln):
+        outf.write(line)
+</code></pre>
+<br /><b>#1</b><br /><p>Testing many conditions per line is generally slow when using a naive algorithm.  There are various superior algorithms (e.g. using <a href="http://en.wikipedia.org/wiki/Trie" rel="nofollow">Tries</a>) which can do much better.  I suggest you give the <a href="http://en.wikipedia.org/wiki/Aho%2dCorasick_string_matching_algorithm" rel="nofollow">Aho–Corasick string matching algorithm</a> a shot.  See <a href="http://hkn.eecs.berkeley.edu/~dyoo/python/ahocorasick/" rel="nofollow">here</a> for a python implementation.  It should be considerably faster than the naive approach of using a nested loop and testing every string individually.</p>
+<br /><b>#2</b><br /><p>According to Python's documentation of <a href="http://docs.python.org/library/stdtypes.html#file-objects" rel="nofollow">file objects</a>, iteration you're doing should not be especially slow, and search for substrings should also be fine speed-wise.</p>
+
+<p>I don't see any reason why your code should be slow, so if you need it to go faster you might have to rewrite it in C and use <code>mmap()</code> for fast access to the source file.</p>
+<br /><b>#3</b><br /><p>You could try reading in big blocks, and avoiding the overhead of line-splitting except for the specific lines of interest.  E.g., assuming none of your lines is longer than a megabyte:</p>
+
+<pre><code>BLOCKSIZE = 1024 * 1024
+
+def byblock_fullines(f):
+    tail = ''
+    while True:
+        block = f.read(BLOCKSIZE)
+        if not block: break
+        linend = block.rindex('\n')
+        newtail = block[linend + 1:]
+        block = tail + block[:linend + 1]
+        tail = newtail
+        yield block
+    if tail: yield tail + '\n'
+</code></pre>
+
+<p>this takes an open file argument and yields blocks of about 1MB guaranteed to end with a newline.  To identify (iterator-wise) all occurrences of a needle string within a haystack string:</p>
+
+<pre><code>def haystack_in_needle(haystack, needle):
+    start = 0
+    while True:
+        where = haystack.find(needle, start)
+        if where == -1: return
+        yield where
+        start = where + 1
+</code></pre>
+
+<p>To identify all relevant lines from within such a block:</p>
+
+<pre><code>def wantlines_inblock(s, block):
+    last_yielded = None
+    for where in haystack_in_needle(block, s):
+        prevend = block.rfind('\n', where)  # could be -1, that's OK
+        if prevend == last_yielded: continue  # no double-yields
+        linend = block.find('\n', where)
+        if linend == -1: linend = len(block)
+        yield block[prevend + 1: linend]
+        last_yielded = prevend
+</code></pre>
+
+<p>How this all fits together:</p>
+
+<pre><code>def main():
+    with open('bigfile.txt') as f:
+        with open('smallfile.txt', 'w') as g:
+            for block in byblock_fulllines(f):
+                for line in wantlines_inblock('S0414', block)
+                    f.write(line)
+</code></pre>
+
+<p>In 2.7 you could fold both <code>with</code> statements into one, just to reduce nesting a bit.</p>
+
+<p>Note: this code is untested so there might be (hopefully small;-) errors such as off-by-one's.  Performance needs tuning of the block size and must be calibrated by measurement on your specific machine and data.  Your mileage may vary.  Void where prohibited by law.</p>
+<br /><b>#4</b><br /><p>If the line begins with S0414, then you could use the <code>.startswith</code> method:</p>
+
+<pre><code>if line.startswith('S0414'): small_file3.write(line)
+</code></pre>
+
+<p>You could also strip left whitespace, if there is any:</p>
+
+<pre><code>line.lstrip().startswith('S0414')
+</code></pre>
+
+<p>If <code>'S0414'</code> always appears after a certain point, for example, it is always at least 10 characters in and never in the last 5 characters, you could do:</p>
+
+<pre><code>'S0414' in line[10:-5]
+</code></pre>
+
+<p>Otherwise, you will have to search through each line, like you are. </p>
+<br /><b>#5</b><br /><p><strong>1. Try to read whole file</strong></p>
+
+<p>One speed up you can do is read whole file in memory if that is possible, else read in chunks. You said 'several hudred thousand lines' lets say 1 million lines with each line 100 char i.e. around 100 MB, if you have that much free memory (I assume you have) just do this</p>
+
+<pre><code>big_file = open('C:\\gbigfile.txt', 'r')
+big_file_lines = big_file.read_lines()
+big_file.close()
+small_file3 = open('C:\\small_file3.txt', 'w')
+for line in big_file_lines:
+   if 'S0414' in line:
+      small_file3.write(line)
+small_file3.close()
+</code></pre>
+
+<p>Time this with orginal version and see if it makes difference, I think it will.</p>
+
+<p>But if your file is really big in GBs, then you can read it in chunks e.g. 100 MB chunks, split it into lines and search but don't forget to join lines at each 100MB interval (I can elaborate more if this is the case)</p>
+
+<p><a href="http://docs.python.org/tutorial/inputoutput.html#methods-of-file-objects" rel="nofollow">file.readlines</a> returns a list containing all the lines of data in the file. If given an optional parameter sizehint, it reads that many bytes from the file and enough more to complete a line, and returns the lines from that. <strong>This is often used to allow efficient reading of a large file by lines, but without having to load the entire file in memory. Only complete lines will be returned.</strong></p>
+
+<p>Also see following link for speed difference between line by line vs entire file reading.
+<a href="http://handyfloss.wordpress.com/2008/02/15/python-speed-vs-memory-tradeoff-reading-files/" rel="nofollow">http://handyfloss.wordpress.com/2008/02/15/python-speed-vs-memory-tradeoff-reading-files/</a></p>
+
+<p><strong>2. Try to write whole file</strong></p>
+
+<p>You can also store line and write them at once at end, though I am not sure if it will help much</p>
+
+<pre><code>big_file = open('C:\\gbigfile.txt', 'r')
+big_file_lines = big_file.read_lines()
+small_file_lines = []
+for line in big_file_lines:
+   if 'S0414' in line:
+      small_file_lines.append(line)
+small_file3 = open('C:\\small_file3.txt', 'w')
+small_file3.write("".join(small_file_lines))
+small_file3.close()
+</code></pre>
+
+<p><strong>3. Try filter</strong></p>
+
+<p>You can also try to use filter, instead of loop see if it makes difference</p>
+
+<pre><code>small_file_lines= filter(lambda line:line.find('S0414') &gt;= 0, big_file_lines)
+</code></pre>
+<br /><b>#6</b><br /><p>What are the criteria that define the 30000 lines you want to extract? The more information you give, the more likely you are to get a useful answer.</p>
+
+<p>If you want all the lines containing a certain string, or more generally containing any of a given set of strings, or an occurrence of a regular expression, use <code>grep</code>. It's likely to be significantly faster for large data sets.</p>
+<br /><b>#7</b><br /><p>This reminds me of a problem described by <a href="http://www.tbray.org/ongoing/misc/Tim" rel="nofollow">Tim Bray</a>, who attempted to extract data from web server log files using multi-core machines. The results are described in <a href="http://www.tbray.org/ongoing/When/200x/2007/09/20/Wide-Finder" rel="nofollow">The Wide Finder Project</a> and <a href="http://www.tbray.org/ongoing/When/200x/2008/05/01/Wide-Finder-2" rel="nofollow">Wide Finder 2</a>. So, if serial optimizations don't go fast enough for you, this may be a place to start. There are examples of this sort of problem contributed in many languages, <a href="http://effbot.org/zone/wide-finder.htm" rel="nofollow">including python</a>. Key quote from that last link:</p>
+
+<blockquote>
+  <p>Summary </p>
+  
+  <p>In this article, we took a relatively fast Python implementation and optimized it, using a 
+  number of tricks:</p>
+  
+  <ul>
+  <li>Pre-compiled RE patterns</li>
+  <li>Fast filtering of candidate lines</li>
+  <li>Chunked reading</li>
+  <li>Multiple processes</li>
+  <li>Memory mapping, combined with support for RE operations on mapped buffers</li>
+  </ul>
+  
+  <p>This reduced the time needed to parse 200 megabytes of log data from 6.7 seconds to 0.8 
+  seconds on the test machine. Or in other words, the final version is over 8 times faster 
+  than the original Python version, and (potentially) 600 times faster than Tim’s original 
+  Erlang version.</p>
+</blockquote>
+
+<p>Having said this, 30,000 lines isn't <em>that</em> many so you may want to at least start by investigating your disk read/write performance. Does it help if you write the output to something other than the disk that you are reading the input from or read the whole file in one go before processing?</p>
+<br /><b>#8</b><br /><p>The best bet to speed it up would be if the specific string <code>S0414</code> always appears at the same character position, so instead of having to make several failed comparisons per line (you said they start with different names) it could just do one and done.</p>
+
+<p>e.g. if you're file has lines like</p>
+
+<pre><code>GLY S0414 GCT
+ASP S0435 AGG
+LEU S0432 CCT
+</code></pre>
+
+<p>do an <code>if line[4:9] == 'S0414': small.write(line)</code>.</p>
+<br /><b>#9</b><br /><p>This method assumes the special values appear in the same position on the line in <code>gbigfile</code></p>
+
+<pre><code>def mydict(iterable):
+    d = {}
+    for k, v in iterable:
+        if k in d:
+            d[k].append(v)
+        else:
+            d[k] = [v]
+    return d
+
+with open("C:\\to_find.txt", "r") as t:
+    tofind = mydict([(x[0], x) for x in t.readlines()])
+
+with open("C:\\gbigfile.txt", "r") as bigfile:
+    with open("C:\\outfile.txt", "w") as outfile:
+        for line in bigfile:
+            seq = line[4:9]
+            if seq in tofind[seq[0]]:
+                outfile.write(line)
+</code></pre>
+
+<p>Depending on what the distribution of the starting letter in those targets you can cut your comparisons down by a significant amount. If you don't know where the values will appear you're talking about a LONG operation because you'll have to compare hundreds of thousands - let's say 300,000 -- 30,000 times. That's 9 million comparisons which is going to take a <em>long</em> time.</p>
+<br />

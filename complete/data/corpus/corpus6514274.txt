@@ -1,0 +1,254 @@
+Question (ID-6514274): How do you escape strings for SQLite table/column names in Python? The standard approach for using variable values in SQLite queries is the "question mark style", like this: 
+
+ import sqlite3
+with sqlite3.connect(":memory:") as connection:
+ connection.execute("CREATE TABLE foo(bar)")
+ connection.execute("INSERT INTO foo(bar) VALUES (?)", ("cow",))
+
+ print(list(connection.execute("SELECT * from foo")))
+ # prints [(u'cow',)]
+ 
+
+ However, this only works for substituting values into queries. It fails when used for table or column names: 
+
+ import sqlite3
+with sqlite3.connect(":memory:") as connection:
+ connection.execute("CREATE TABLE foo(?)", ("bar",))
+ # raises sqlite3.OperationalError: near "?": syntax error
+ 
+
+ Neither the sqlite3 module nor PEP 249 mention a function for escaping names or values. Presumably this is to discourage users from assembling their queries with strings, but it leaves me at a loss. 
+
+ What function or technique is most appropriate for using variable names for columns or tables in SQLite? I'd would strongly prefer to do able to do this without any other dependencies, since I'll be using it in my own wrapper. 
+
+ I looked for but couldn't find a clear and complete description of the relevant part of SQLite's syntax, to use to write my own function. I want to be sure this will work for any identifier permitted by SQLite, so a trial-and-error solution is too uncertain for me. 
+
+ SQLite uses " to quote identifiers but I'm not sure that just escaping them is sufficient. PHP's sqlite_escape_string function's documentation suggests that certain binary data may need to be escaped as well, but that may be a quirk of the PHP library. 
+ Answers (Total-7): #0 The psycopg2 documentation explicitly recommends using normal python % or {} formatting to substitute in table and column names (or other bits of dynamic syntax), and then using the parameter mechanism to substitute values into the query. 
+
+ I disagree with everyone who is saying "don't ever use dynamic table/column names, you're doing something wrong if you need to". I write programs to automate stuff with databases every day, and I do it all the time. We have lots of databases with lots of tables, but they are all built on repeated patterns, so generic code to handle them is extremely useful. Hand-writing the queries every time would be far more error prone and dangerous. 
+
+ It comes down to what "safe" means. The conventional wisdom is that using normal python string manipulation to put values into your queries is not "safe". This is because there are all sorts of things that can go wrong if you do that, and such data very often comes from the user and is not in your control. You need a 100% reliable way of escaping these values properly so that a user cannot inject SQL in a data value and have the database execute it. So the library writers do this job; you never should. 
+
+ If, however, you're writing generic helper code to operate on things in databases, then these considerations don't apply as much. You are implicitly giving anyone who can call such code access to everything in the database; that's the point of the helper code . So now the safety concern is making sure that user-generated data can never be used in such code. This is a general security issue in coding, and is just the same problem as blindly exec ing a user-input string. It's a distinct issue from inserting values into your queries, because there you want to be able to safely handle user-input data. 
+
+ So my recommendation is: do whatever you want to dynamically assemble your queries. Use normal python string templating to sub in table and column names, glue on where clauses and joins, all the good (and horrible to debug) stuff. But make sure you're aware that whatever values such code touches has to come from you , not your users[1]. Then you use SQLite's parameter substitution functionality to safely insert user-input values into your queries as values. 
+
+ [1] If (as is the case for a lot of the code I write) your users are the people who have full access to databases anyway and the code is to simplify their work, then this consideration doesn't really apply; you probably are assembling queries on user-specified tables. But you should still use SQLite's parameter substitution to save yourself from the inevitable genuine value that eventually contains quotes or percent signs. 
+ #1 If you're quite certain that you need to specify column names dynamically, you should use a library that can do so safely (and complains about things that are wrong). SQLAlchemy is very good at that. 
+
+ &gt;&gt;&gt; import sqlalchemy
+&gt;&gt;&gt; from sqlalchemy import *
+&gt;&gt;&gt; metadata = MetaData()
+&gt;&gt;&gt; dynamic_column = "cow"
+&gt;&gt;&gt; foo_table = Table('foo', metadata,
+...  Column(dynamic_column, Integer))
+&gt;&gt;&gt; 
+ 
+
+ foo_table now represents the table with the dynamic schema, but you can only use it in the context of an actual database connection (so that sqlalchemy knows the dialect, and what to do with the generated sql). 
+
+ &gt;&gt;&gt; metadata.bind = create_engine('sqlite:///:memory:', echo=True)
+ 
+
+ You can then issue the CREATE TABLE ... . with echo=True , sqlalchemy will log the generated sql, but in general, sqlalchemy goes out of its way to keep the generated sql out of your hands (lest you consider using it for evil purposes). 
+
+ &gt;&gt;&gt; foo_table.create()
+2011-06-28 21:54:54,040 INFO sqlalchemy.engine.base.Engine.0x...2f4c 
+CREATE TABLE foo (
+ cow INTEGER
+)
+2011-06-28 21:54:54,040 INFO sqlalchemy.engine.base.Engine.0x...2f4c ()
+2011-06-28 21:54:54,041 INFO sqlalchemy.engine.base.Engine.0x...2f4c COMMIT
+&gt;&gt;&gt; 
+ 
+
+ and yes, sqlalchemy will take care of any column names that need special handling, like when the column name is a sql reserved word 
+
+ &gt;&gt;&gt; dynamic_column = "order"
+&gt;&gt;&gt; metadata = MetaData()
+&gt;&gt;&gt; foo_table = Table('foo', metadata,
+...  Column(dynamic_column, Integer))
+&gt;&gt;&gt; metadata.bind = create_engine('sqlite:///:memory:', echo=True)
+&gt;&gt;&gt; foo_table.create()
+2011-06-28 22:00:56,267 INFO sqlalchemy.engine.base.Engine.0x...aa8c 
+CREATE TABLE foo (
+ "order" INTEGER
+)
+2011-06-28 22:00:56,267 INFO sqlalchemy.engine.base.Engine.0x...aa8c ()
+2011-06-28 22:00:56,268 INFO sqlalchemy.engine.base.Engine.0x...aa8c COMMIT
+&gt;&gt;&gt; 
+ 
+
+ and can save you from possible badness: 
+
+ &gt;&gt;&gt; dynamic_column = "); drop table users; -- the evil bobby tables!"
+&gt;&gt;&gt; metadata = MetaData()
+&gt;&gt;&gt; foo_table = Table('foo', metadata,
+...  Column(dynamic_column, Integer))
+&gt;&gt;&gt; metadata.bind = create_engine('sqlite:///:memory:', echo=True)
+&gt;&gt;&gt; foo_table.create()
+2011-06-28 22:04:22,051 INFO sqlalchemy.engine.base.Engine.0x...05ec 
+CREATE TABLE foo (
+ "); drop table users; -- the evil bobby tables!" INTEGER
+)
+2011-06-28 22:04:22,051 INFO sqlalchemy.engine.base.Engine.0x...05ec ()
+2011-06-28 22:04:22,051 INFO sqlalchemy.engine.base.Engine.0x...05ec COMMIT
+&gt;&gt;&gt; 
+ 
+
+ (apparently, some strange things are perfectly legal identifiers in sqlite) 
+ #2 Putting up a bounty didn't produce a solution to this, so I've spent a while figuring out the best one I could. I don't have any source confirming that this is the correct way to do it, so use at your own risk. 
+
+ Solution 
+
+ To convert any string into a SQLite identifier: 
+
+ 
+ Ensure the string can be encoded as UTF-8. 
+ Ensure the string does not include any NUL characters. 
+ Replace all " with "" . 
+ Wrap the entire thing in double quotes. 
+ 
+
+ My implementation: 
+
+ import codecs
+
+def quote_identifier(s, errors="strict"):
+ encodable = s.encode("utf-8", errors).decode("utf-8")
+
+ nul_index = encodable.find("\x00")
+
+ if nul_index &gt;= 0:
+  error = UnicodeEncodeError("NUL-terminated utf-8", encodable,
+         nul_index, nul_index + 1, "NUL not allowed")
+  error_handler = codecs.lookup_error(errors)
+  replacement, _ = error_handler(error)
+  encodable = encodable.replace("\x00", replacement)
+
+ return "\"" + encodable.replace("\"", "\"\"") + "\""
+ 
+
+ Given a string single argument, it will escape and quote it correctly or raise an exception. The second argument can be used to specify any error handler registered in the codecs module . The built-in ones are: 
+
+ 
+ 
+ 'strict' : raise an exception in case of an encoding error 
+ 'replace' : replace malformed data with a suitable replacement marker, such as '?' or '\ufffd' 
+ 'ignore' : ignore malformed data and continue without further notice 
+ 'xmlcharrefreplace' : replace with the appropriate XML character reference (for encoding only) 
+ 'backslashreplace' : replace with backslashed escape sequences (for encoding only) 
+ 
+ 
+
+ This doesn't check for reserved identifiers, so if you try to create a new SQLITE_MASTER table it won't stop you. 
+
+ Example Usage 
+
+ import sqlite3
+
+def test_identifier(identifier):
+ "Tests an identifier to ensure it's handled properly."
+
+ with sqlite3.connect(":memory:") as c:
+  c.execute("CREATE TABLE " + quote_identifier(identifier) + " (foo)")
+  assert identifier == c.execute("SELECT name FROM SQLITE_MASTER").fetchone()[0]
+
+test_identifier("'Héllo?'\\\n\r\t\"Hello!\" -☃") # works
+test_identifier("北方话") # works
+test_identifier(chr(0x20000)) # works
+
+print(quote_identifier("Fo\x00o!", "replace")) # prints "Fo?o!"
+print(quote_identifier("Fo\x00o!", "ignore")) # prints "Foo!"
+print(quote_identifier("Fo\x00o!")) # raises UnicodeEncodeError
+print(quote_identifier(chr(0xD800))) # raises UnicodeEncodeError
+ 
+
+ Relevant Observations 
+
+ 
+ SQLite identifiers are TEXT , not binary.
+ 
+ Reference: SQLITE_MASTER schema in the FAQ . 
+ Reference: Python 2 SQLite API yelling at me when I gave it bytes it couldn't decode as text. 
+ Reference: Python 3 SQLite API requires queries be str s, not bytes . 
+ 
+ SQLite identifiers are quoted using double-quotes.
+ 
+ Reference: SQL as Understood by SQLite . 
+ 
+ Double-quotes in SQLite identifiers are escaped as two double quotes. 
+ SQLite identifiers preserve case, but they are case-insensitive towards ASCII letters. It is possible to enable unicode-aware case-insensitivity.
+ 
+ Source: SQLite FAQ Question #18 
+ 
+ SQLite stops reading queries at the NUL character, but does not have any way to escape it.
+ 
+ Reference: PHP came up with their own binary encoding to handle NUL; presumably if they could just store it directly they would. 
+ 
+ sqlite3 can handle any other unicode string as long as it can be properly encoded to UTF-8. Invalid strings could cause crashes between Python 3.0 and Python 3.1.2 or thereabouts. Python 2 accepted these invalid strings, but this is considered a bug.
+ 
+ Reference: Python Issue #12569 
+ Reference: Modules/_sqlite/cursor.c 
+ Reference: I tested it a bunch. 
+ 
+ 
+ #3 The first thing to understand is that table/column names cannot be escaped in the same sense than you can escape strings stored as database values. 
+
+ The reason is that you either have to: 
+
+ 
+ accept/reject the potential table/column name, i.e. it is not guaranteed that a string is an acceptable column/table name, contrarily to a string to be stored in some database; or, 
+ sanitize the string which will have the same effect as creating a digest: the function used is surjective , not bijective (once again, the inverse is true for a string that is to be stored in some database); so not only can't you be certain of going from the sanitized name back to the original name, but you are at risk of unintentionally trying to create two columns or tables with the same name. 
+ 
+
+ Having understood that, the second thing to understand is that how you will end up "escaping" table/column names depends on your specific context, and so there is more than one way to do this, but whatever the way, you'll need to dig up to figure out exactly what is or is not an acceptable column/table name in sqlite. 
+
+ To get you started, here is one condition: 
+
+ 
+ Table names that begin with "sqlite_" are reserved for internal use. It is an error to attempt to create a table with a name that starts with "sqlite_". 
+ 
+
+ Even better, using certain column names can have unintended side effects: 
+
+ 
+ Every row of every SQLite table has a 64-bit signed integer key that
+ uniquely identifies the row within its table. This integer is usually
+ called the "rowid". The rowid value can be accessed using one of the
+ special case-independent names "rowid", "oid", or " rowid " in place
+ of a column name. If a table contains a user defined column named
+ "rowid", "oid" or " rowid ", then that name always refers the
+ explicitly declared column and cannot be used to retrieve the integer
+ rowid value. 
+ 
+
+ Both quoted texts are from http://www.sqlite.org/lang_createtable.html 
+ #4 From the sqlite faq, question 24 (the formulation of the question of course does not give a clue that the answer may be useful to your question): 
+
+ 
+ SQL uses double-quotes around identifiers (column or table names) that contains special characters or which are keywords. So double-quotes are a way of escaping identifier names. 
+ 
+
+ If the name itself contains double quotes, escape that double quote with another one. 
+ #5 Placeholders are only for values. Column and table names are structural, and are akin to variable names; you can't use placeholders to fill them in. 
+
+ You have three options: 
+
+ 
+ Appropriately escape/quote the column name everywhere you use it. This is fragile and dangerous. 
+ Use an ORM like SQLAlchemy , which will take care of escaping/quoting for you. 
+ Ideally, just don't have dynamic column names. Tables and columns are for structure ; anything dynamic is data and should be in the table rather than part of it. 
+ 
+ #6 If you find that you need a variable entity name (either relvar or field) then you probably are doing something wrong . an alternative pattern would be to use a property map, something like: 
+
+ CREATE TABLE foo_properties(
+ id INTEGER NOT NULL,
+ name VARCHAR NOT NULL,
+ value VARCHAR,
+ PRIMARY KEY(id, name)
+);
+ 
+
+ Then, you just specify the name dynamically when doing an insert instead of a column.

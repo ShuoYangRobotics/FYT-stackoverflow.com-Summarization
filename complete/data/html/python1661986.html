@@ -1,0 +1,74 @@
+<h3>Question (ID-1661986):</h3><h2>Why doesn't Python's mmap work with large files?</h2><p>I am writing a module that amongst other things allows bitwise read access to files. The files can potentially be large (hundreds of GB) so I wrote a simple class that lets me treat the file like a string and hides all the seeking and reading.</p>
+
+<p>At the time I wrote my wrapper class I didn't know about the <a href="http://docs.python.org/library/mmap.html" rel="nofollow">mmap module</a>. On reading the documentation for mmap I thought <em>"great - this is just what I needed, I'll take out my code and replace it with an mmap. It's probably much more efficient and it's always good to delete code."</em></p>
+
+<p>The problem is that mmap doesn't work for large files! This is very surprising to me as I thought it was perhaps the most obvious application. If the file is above a few gigabytes then I get an <code>EnvironmentError: [Errno 12] Cannot allocate memory</code>. This only happens with a 32-bit Python build so it seems it is running out of address space, but I can't find any documentation on this.</p>
+
+<p>My code is just</p>
+
+<pre><code>f = open('somelargefile', 'rb')
+map = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+</code></pre>
+
+<p>So my question is <strong>am I missing something obvious here?</strong> Is there a way to get mmap to work portably on large files or should I go back to my naïve file wrapper?</p>
+
+<p><hr /></p>
+
+<p>Update: There seems to be a feeling that the Python mmap should have the same restrictions as the POSIX mmap. To better express my frustration here is a simple class that has a small part of the functionality of mmap.</p>
+
+<pre><code>import os
+
+class Mmap(object):
+    def __init__(self, f):
+        """Initialise with a file object."""
+        self.source = f
+
+    def __getitem__(self, key):
+        try:
+            # A slice
+            self.source.seek(key.start, os.SEEK_SET)
+            return self.source.read(key.stop - key.start)
+        except AttributeError:
+            # single element
+            self.source.seek(key, os.SEEK_SET)
+            return self.source.read(1)
+</code></pre>
+
+<p>It's read-only and doesn't do anything fancy, but I can do this just the same as with an mmap:</p>
+
+<pre><code>map2 = Mmap(f)
+print map2[0:10]
+print map2[10000000000:10000000010]
+</code></pre>
+
+<p>except that there are no restrictions on filesize. Not too difficult really...</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>From IEEE 1003.1:</p>
+
+<blockquote>
+  <p>The mmap() function shall establish a
+  mapping between a process' address
+  space and a file, shared memory
+  object, or [TYM]   typed memory
+  object.</p>
+</blockquote>
+
+<p>It needs all the virtual address space because that's exactly what <code>mmap()</code> <em>does</em>.</p>
+
+<p>The fact that it isn't <em>really</em> running out of memory doesn't matter - you can't map more address space than you have available.  Since you then take the result and access as if it <em>were</em> memory, how exactly do you propose to access more than 2^32 bytes into the file?  Even if <code>mmap()</code> didn't fail, you could still only read the first 4GB before you ran out of space in a 32-bit address space.  You can, of course, <code>mmap()</code> a sliding 32-bit window over the file, but that won't necessarily net you any benefit unless you can optimize your access pattern such that you limit how many times you have to visit previous windows.</p>
+<br /><b>#1</b><br /><p>A 32-bit program and operating system can only address a maximum of 32 bits of memory i.e. 4GB. There are other factors that make the total even smaller; for example, Windows reserves between 0.5 and 2GB for hardware access, and of course your program is going to take some space as well.</p>
+
+<p><strong>Edit:</strong> The obvious thing you're missing is an understanding of the mechanics of mmap, on any operating system. It allows you to map a portion of a file to a range of memory - once you've done that, any access to that portion of the file happens with the least possible overhead. It's low overhead because the mapping is done once, and doesn't have to change every time you access a different range. The drawback is that you need an open address range sufficient for the portion you're trying to map. If you're mapping the whole file at once, you'll need a hole in the memory map large enough to fit the entire file. If such a hole doesn't exist, or is bigger than your entire address space, it fails.</p>
+<br /><b>#2</b><br /><p>Sorry to answer my own question, but I think the real problem I had was not realising that mmap was a standard POSIX system call with particular characterisatations and limitations and that the Python mmap is supposed just to expose its functionality.</p>
+
+<p>The Python documentation doesn't mention the POSIX mmap and so if you come at it as a Python programmer without much knowledge of POSIX (as I did) then the address space problem appears quite arbitrary and badly designed!</p>
+
+<p>Thanks to the other posters for teaching me the true meaning of mmap. Unfortunately no one has suggested a better alternative to my hand-crafted class for treating large files as strings, so I shall have to stick with it for now. Perhaps I will clean it up and make it part of my module's public interface when I get the chance.</p>
+<br /><b>#3</b><br /><p>The point you are missing is that mmap is a memory mapping function that maps a file into memory for arbitrary access across the requested data range by any means.</p>
+
+<p>What you are looking for sounds more like some sort of a data window class that presents an api allowing you to look at small windows of a large data structure at anyone time.  Access beyond the bounds of this window would not be possible other than by calling the data window's own api.</p>
+
+<p>This is fine, but it is not a memory map, it is something that offers the advantage of a wider data range at the cost of a more restrictive api.</p>
+<br /><b>#4</b><br /><p>the mmap module provides all the tools you need to poke around in your large file, but due to the limitations other folks have mentioned, you can't map it <strong><em>all at once</em></strong>.  You can map a good sized chunk at once, do some processing and then unmap that and map another.  the key arguments to the <code>mmap</code> class are <code>length</code> and <code>offset</code>, which do exactly what they sound like, allowing you to map <code>length</code> bytes, starting at byte <code>offset</code> in the mapped file.  Any time you wish to read a section of memory that is outside the mapped window, you have to map in a new window.</p>
+<br /><b>#5</b><br /><p>You're setting the length parameter to zero, which means map in the entire file. On a 32 bit build, this won't be possible if the file length is more than 2GB (possibly 4GB).</p>
+<br /><b>#6</b><br /><p>You ask the OS to map the entire file in a memory range. It won't be read until you trigger page faults by reading/writing, but it still needs to make sure the entire range is available to your process, and if that range is too big, there will be difficulties.</p>
+<br />

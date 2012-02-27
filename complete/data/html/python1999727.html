@@ -1,0 +1,205 @@
+<h3>Question (ID-1999727):</h3><h2>Find the type of an attribute in a class</h2><p>I want determine the type of an attribute in a class.  I am using <code>setattr</code> to set the value, and I would like to check the type that is expected, so that I can properly convert a string value before calling <code>setattr</code>.</p>
+
+<p>How do you do this in python?</p>
+
+<p>EDIT 1-
+Some additional information based on the answers so far:</p>
+
+<p>I only know the name of the property that I want the type for, here is some code:</p>
+
+<pre><code>def populate_object_properties(values_as_strings, 
+                               object_to_populate, 
+                               properties_to_populate):
+    for k in properties_to_populate:        
+        value = values_as_strings.get(k)
+        if value:
+            setattr(object_to_populate, k, value)
+        else:
+            setattr(object_to_populate, k, None)
+</code></pre>
+
+<p>I want to be able test that <code>value</code> is the right type before I call <code>setattr</code>.</p>
+
+<p>Edit 2- The reason why I need to validate the type, is that I'm using Google AppEngine's db.Model as the base type for the <code>object_to_populate</code>, and it doesn't like when a put a string into an <code>int</code> type.  I was trying to keep the question as simple as possible, but maybe that piece of information makes a difference in how someone would answer.(?)</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>You seem to misunderstand how Python (the language) is designed. Attributes have no a-priori type (the language is dynamically typed), and therefore it makes, most of the time, little sense to try to coerce attributes explicitly when setting them.</p>
+<br /><b>#1</b><br /><p>In AppEngine, each model has a <code>properties()</code> class method, which returns the dict of properties you declared in your model. You can use it to check the types your model expects for each attribute:</p>
+
+<pre><code>def populate_object_properties(values_as_strings, 
+                               object_to_populate, 
+                               properties_to_populate):
+    model_properties = object_to_populate.properties()
+    for k in properties_to_populate:        
+        value = values_as_strings.get(k)
+        model_property = model_properties.get(k)
+        if value:
+            if isinstance(model_property, StringProperty):
+                setattr(object_to_populate, k, str(value))
+            elif isinstance(model_property, IntegerProperty):
+                setattr(object_to_populate, k, int(value))
+        else:
+            setattr(object_to_populate, k, None)
+</code></pre>
+<br /><b>#2</b><br /><p>Check a.<code>__class__</code> , or maybe isinstance(obj, class) if you want to check if the type is as expected.</p>
+
+<pre><code>&gt;&gt;&gt; a = 1
+&gt;&gt;&gt; a.__class__
+&lt;type 'int'&gt;
+&gt;&gt;&gt; isinstance(a, int)
+True
+</code></pre>
+
+<p>more to the point for you is probably:</p>
+
+<pre><code>&gt;&gt;&gt; b = "10"
+&gt;&gt;&gt; isinstance(b, str)
+True
+&gt;&gt;&gt; isinstance(b, int)
+False
+&gt;&gt;&gt; int(b)
+10
+</code></pre>
+
+<p>If your only goal is to set an attribute if the given argument can be expressed as an integer you could also use something like:</p>
+
+<pre><code>def convert(x):
+    try:
+      return int(x) # Or do something else with it
+    except ValueError, e: 
+      print "The value", x, "is not an integer"
+      raise
+
+convert(123) # =&gt; 123 
+convert("123") # =&gt; 123
+convert("abc") # =&gt; ValueError
+</code></pre>
+
+<p>Some extra text in the question makes me think of changing:</p>
+
+<pre><code>value = values_as_strings.get(k)
+</code></pre>
+
+<p>to</p>
+
+<pre><code>try:
+  value = int( values_as_strings.get(k) )
+except ValueError, e:
+  # It's not an int or string with int contents, what to do?
+  raise
+</code></pre>
+
+<p>resulting in:</p>
+
+<pre><code>try:
+  setattr(object_to_populate, k, int( values_as_strings.get(k) ))
+except:
+  setattr(object_to_populate, k, None)
+</code></pre>
+<br /><b>#3</b><br /><p>you can use <code>type(a.v)</code> to check it, but if it doesn't have a default value, it could as well be None or undefined.</p>
+
+<pre><code>&gt;&gt; class A:
+&gt;&gt;    v=10
+&gt;&gt;    u=None
+&gt;&gt; a=A()
+&gt;&gt; print type(a.v)
+&lt;type 'int'&gt;
+&gt;&gt; print type(a.u)
+&lt;type 'NoneType'&gt;
+&gt;&gt; print type(a.w)
+AttributeError
+&gt;&gt; a.w=20
+&gt;&gt; print type(a.w)
+&lt;type 'int'&gt;
+</code></pre>
+
+<p>Python builtin tools for introspecion are not utterly useful here. I wouldn't rely on them in this case. For example xmlrpc libs provide more helpful ways for doing that.</p>
+
+<p>If you only know the name use a.getattr('v') instead of a.v in the code above.</p>
+
+<pre><code>if type(getattr(object_to_populate, k))==type('a'):
+    setattr(object_to_populate, k, value)
+</code></pre>
+
+<p>or use isinstance as suggested by extraneon, it's just the same.</p>
+<br /><b>#4</b><br /><p>Since python does not do type checking in this case you have to implement this feature by hand (or use existing libraries; see Alex Martellis answer).</p>
+
+<p>One approach: Check if the value is an instance of the desired type, via <code>isinstance</code>.</p>
+
+<p>Here is a modified version of your code, I'd start with ...</p>
+
+<pre><code># 'pdict' is a dictionary of property-value pairs { 'property' : 'value', ... }
+def populate_object_properties(object_to_populate, pdict):
+    for p, v in pdict.items():
+        setattr(object_to_populate, p, v)
+</code></pre>
+
+<p>Then we add the typecheck, for this example, we just want to populate the attributes of the object with objects of the same type as the currently used values ....</p>
+
+<pre><code>def populate_object_properties(object_to_populate, pdict):
+    for p, v in pdict.items():
+
+        current_value = getattr(p, v, None)
+        klass = type(current_value)
+
+        # allow setting the attribute, when 
+        # 
+        #    - the attribute did not exist before,
+        #    - the attribute value was 'None',
+        #    - the value to be inserted is of the same type as the current value
+
+        if not current_value or isinstance(v, klass): 
+            setattr(object_to_populate, p, v)
+</code></pre>
+
+<hr>
+
+<p>A couple of sidenotes:</p>
+
+<pre><code># why don't you just take two parameters? 1) the object, 2) a dict with 
+# property-value pairs?
+
+def populate_object_properties(values_as_strings, 
+                               object_to_populate, 
+                               properties_to_populate):
+
+    for k in properties_to_populate:        
+        value = values_as_strings.get(k)
+
+        # here you are branching on 'value', just to populate 
+        # property 'k' with whah might have been 'value' before ..
+        # it's nothing serious, though, just a bit too much to read
+
+        if value:
+            setattr(object_to_populate, k, value)
+        else:
+            setattr(object_to_populate, k, None)
+
+        # you could simply write:
+        # setattr(object_to_populate, k, value)
+</code></pre>
+
+<hr>
+
+<p>Further reading: </p>
+
+<ul>
+<li><a href="http://www.canonical.org/~kragen/isinstance/" rel="nofollow">isinstance() considered harmful</a></li>
+</ul>
+<br /><b>#5</b><br /><p>Normally, a Python class (or instance thereof) carries no information regarding what types it "expects" any given attribute to have, because it has no such "expectation".</p>
+
+<p>When you need to encode such metadata, rather than "rolling your own", you can use existing third party extensions like Enthought's <a href="http://code.enthought.com/projects/traits/" rel="nofollow">Traits</a> -- in Traits, among other features, you get:</p>
+
+<blockquote>
+  <p><strong>Validation</strong>: A trait attribute's type
+  is explicitly declared . The type is
+  evident in the code, and only values
+  that meet a programmer-specified set
+  of criteria (i.e., the trait
+  definition) can be assigned to that
+  attribute. Note that the default value
+  need not meet the criteria defined for
+  assignment of values.</p>
+</blockquote>
+<br /><b>#6</b><br /><p>Since explicit type-checking is so un-pythonic, consider just wrapping the value in <code>int()</code>.  Then, if the value (whatever it is) can be coerced into an <code>int</code>, it will be.  If it cannot be coerced into an <code>int</code>, then you need to throw an error anyway (which it will do automatically).</p>
+
+<p>This is an example of the fundamental difference between "look before you leap" and "it's easier to ask forgiveness than to ask permission".  Python isn't a "look before you leap" language, it's an "it's easier to ask forgiveness than ask permission" language. :)</p>
+<br />

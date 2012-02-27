@@ -1,0 +1,119 @@
+<h3>Question ( ID-5161164 ) : </h3><h2>Python : in-memory object <span style="background-color:yellow;">database</span> which supports indexing ? </h2><p>I 'm <span style="background-color:yellow;">doing</span> some <span style="background-color:yellow;">data</span> munging which would be quite a bit simpler if I could stick a bunch of <span style="background-color:yellow;">dictionaries</span> in an in-memory <span style="background-color:yellow;">database</span> , then run simply queries against it . </p>
+<p>For example , something like : </p>
+<pre><code>people = db([
+    {"name": "Joe", "age": 16},
+    {"name": "Jane", "favourite_color": "red"},
+])
+over_16 = db.filter(age__gt=16)
+with_favorite_colors = db.filter(favorite_color__exists=True)
+</code></pre>
+<p>There are three confounding factors , though : </p>
+<ul>
+<li>Some of the values will be Python objects, and serializing them is out of the question (too slow, breaks identity). Of course, I could work around this (eg, by storing all the items in a big list, then serializing their indexes in that listâ€Ś But that could take a fair bit of fiddling).</li>
+<li>There will be thousands of data, and I will be running lookup-heavy operations (like graph traversals) against them, so it <em>must</em> be possible to perform efficient (ie, indexed) queries.</li>
+<li>As in the example, the data is <em>unstructured</em>, so systems which require me to predefine a schema would be tricky.</li>
+</ul>
+<p>So , <span style="background-color:yellow;">does</span> such a thing exist ? Or will I need to kludge something together ? </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>What about using an in-memory SQLite <span style="background-color:yellow;">database</span> via the sqlite3 standard library module , using the special value : memory : for the connection ? If you <span style="background-color:yellow;">do</span> n't want to write your on SQL statements , you can always use an ORM , like SQLAlchemy , to access an in-memory SQLite <span style="background-color:yellow;">database</span> . </p>
+<p>EDIT : I noticed you stated that the values may be Python objects , and also that you require avoiding serialization. Requiring arbitrary Python objects be stored in a <span style="background-color:yellow;">database</span> also necessitates serialization . </p>
+<p>Can I propose a practical solution if you must keep those two requirements ? Why not just use Python <span style="background-color:yellow;">dictionaries</span> as indices into your collection of Python <span style="background-color:yellow;">dictionaries</span> ? It sounds like you will have idiosyncratic needs for building each of your indices ; figure out what values you 're going to query on , then write a function to generate and index for each. The possible values for one key in your <span style="background-color:yellow;">list</span> of <span style="background-color:yellow;">dicts</span> will be the keys for an index ; the values of the index will be a <span style="background-color:yellow;">list</span> of <span style="background-color:yellow;">dictionaries.</span> Query the index by giving the value you 're looking for as the key . </p>
+<pre><code>import collections
+import itertools
+
+def make_indices(dicts):
+    color_index = collections.defaultdict(list)
+    age_index = collections.defaultdict(list)
+    for d in dicts:
+        if 'favorite_color' in d:
+            color_index[d['favorite_color']].append(d)
+        if 'age' in d:
+            age_index[d['age']].append(d)
+    return color_index, age_index
+
+
+def make_data_dicts():
+    ...
+
+
+data_dicts = make_data_dicts()
+color_index, age_index = make_indices(data_dicts)
+# Query for those with a favorite color is simply values
+with_color_dicts = list(
+        itertools.chain.from_iterable(color_index.values()))
+# Query for people over 16
+over_16 = list(
+        itertools.chain.from_iterable(
+            v for k, v in age_index.items() if age > 16)
+)
+</code></pre>
+<br /><b># 1 </b><br /><p>If the in memory <span style="background-color:yellow;">database</span> solution ends up being too much work , here is a method for filtering it yourself that you may find useful . </p>
+<p>The <span style="background-color:yellow;">get_filter</span> function takes in arguments to <span style="background-color:yellow;">define</span> how you want to filter a <span style="background-color:yellow;">dictionary</span> , and returns a function that can be passed into the built in filter function to filter a <span style="background-color:yellow;">list</span> of <span style="background-color:yellow;">dictionaries</span> . </p>
+<pre><code>import operator
+
+def get_filter(key, op=None, comp=None, inverse=False):
+    # This will invert the boolean returned by the function 'op' if 'inverse == True'
+    result = lambda x: not x if inverse else x
+    if op is None:
+        # Without any function, just see if the key is in the dictionary
+        return lambda d: result(key in d)
+
+    if comp is None:
+        # If 'comp' is None, assume the function takes one argument
+        return lambda d: result(op(d[key])) if key in d else False
+
+    # Use 'comp' as the second argument to the function provided
+    return lambda d: result(op(d[key], comp)) if key in d else False
+
+people = [{'age': 16, 'name': 'Joe'}, {'name': 'Jane', 'favourite_color': 'red'}]
+
+print filter(get_filter("age", operator.gt, 15), people)
+# [{'age': 16, 'name': 'Joe'}]
+print filter(get_filter("name", operator.eq, "Jane"), people)
+# [{'name': 'Jane', 'favourite_color': 'red'}]
+print filter(get_filter("favourite_color", inverse=True), people)
+# [{'age': 16, 'name': 'Joe'}]
+</code></pre>
+<p>This is pretty easily extensible to more complex filtering , for example to filter based on whether or not a value is matched by a regex : </p>
+<pre><code>p = re.compile("[aeiou]{2}") # matches two lowercase vowels in a row
+print filter(get_filter("name", p.search), people)
+# [{'age': 16, 'name': 'Joe'}]
+</code></pre>
+<br /><b># 2 </b><br /><p>The only solution I know is a package I stumbled across a few years ago on PyPI , <span style="background-color:yellow;">PyDbLite</span> . It 's okay , but there are few issues : </p>
+<ol>It still wants to serialize everything to <span style="background-color:yellow;">disk</span> , as a pickle file. But that was simple enough for me to rip out. ( It 's also unnecessary. If the objects <span style="background-color:yellow;">inserted</span> are serializable , so is the collection as a whole. ) The basic record type is a <span style="background-color:yellow;">dictionary</span> , into which it <span style="background-color:yellow;">inserts</span> its own metadata , two ints under keys __id__ and __version__ . The indexing is very simple , based only on value of the record <span style="background-color:yellow;">dictionary.</span> If you want something more complicated , like based on a the attribute of a object in the record , you 'll have to code it yourself. ( Something I 've meant to <span style="background-color:yellow;">do</span> myself , but never got around to. ) </ol>
+<p>The author <span style="background-color:yellow;">does</span> seem to be working on it occasionally. There 's some new features from when I used it , including some nice syntax for complex queries . </p>
+<p>Assuming you rip out the pickling ( and I can tell you what I <span style="background-color:yellow;">did</span> ) , your example would be ( untested code ) : </p>
+<pre><code>from PyDbLite import Base
+
+db = Base()
+db.create("name", "age", "favourite_color")
+
+# You can insert records as either named parameters
+# or in the order of the fields
+db.insert(name="Joe", age=16, favourite_color=None)
+db.insert("Jane", None, "red")
+
+# These should return an object you can iterate over
+# to get the matching records.  These are unindexed queries.
+#
+# The first might throw because of the None in the second record
+over_16 = db("age") > 16
+with_favourite_colors = db("favourite_color") != None
+
+# Or you can make an index for faster queries
+db.create_index("favourite_color")
+with_favourite_color_red = db._favourite_color["red"]
+</code></pre>
+<p>Hopefully it will be enough to get you started . </p>
+<br /><b># 3 </b><br /><p>As far as " identity " anything that is hashable you should be able to compare , to keep track of object identity . </p>
+<p>Zope Object Database ( ZODB ) : http : //www.zodb.org/ </p>
+<p>PyTables works well : http : //www.pytables.org/moin </p>
+<p>Also Metakit for Python works well : http : //equi4.com/metakit/python.html supports columns , and sub-columns but not unstructured <span style="background-color:yellow;">data</span> </p>
+<p>Research " Stream Processing " , if your <span style="background-color:yellow;">data</span> sets are extremely large this may be useful : http : //www.trinhhaianh.com/stream.py/ </p>
+<p>Any in-memory <span style="background-color:yellow;">database</span> , that can be serialized ( written to <span style="background-color:yellow;">disk</span> ) is going to have your identity problem. I would suggest representing the <span style="background-color:yellow;">data</span> you want to store as native types ( <span style="background-color:yellow;">list</span> , <span style="background-color:yellow;">dict</span> ) instead of objects if at all possible . </p>
+<p>Keep in mind NumPy was <span style="background-color:yellow;">designed</span> to perform complex operations on in-memory <span style="background-color:yellow;">data</span> structures , and could possibly be apart of your solution if you <span style="background-color:yellow;">decide</span> to roll your own . </p>
+<br /><b># 4 </b><br /><p>If you are willing to work around serializing , MongoDB could work for you. PyMongo provides an interface almost identical to what you <span style="background-color:yellow;">describe.</span> If you <span style="background-color:yellow;">decide</span> to serialize , the hit wo n't be as bad since Mongodb is memory mapped . </p>
+<br /><b># 5 </b><br /><p>It should be possible to <span style="background-color:yellow;">do</span> what you are wanting to <span style="background-color:yellow;">do</span> with just isinstance ( ) , hasattr ( ) , getattr ( ) and setattr ( ) . </p>
+<p>However , things are going to get fairly complicated before you are <span style="background-color:yellow;">done</span> ! </p>
+<p>I suppose one could store all the objects in a big <span style="background-color:yellow;">list</span> , then run a query on each object , <span style="background-color:yellow;">determining</span> what it is and looking for a given attribute or value , then return the value and the object as a <span style="background-color:yellow;">list</span> of tuples. Then you could sort on your return values pretty easily. copy.deepcopy will be your best friend and your worst enemy . </p>
+<p>Sounds like fun ! Good luck ! </p>
+<br />

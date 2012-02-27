@@ -1,0 +1,117 @@
+Question (ID-3803673): Optimizing mean in python I have a function which updates the centroid (mean) in a K-means algoritm.
+I ran a profiler and noticed that this function uses a lot of computing time. 
+
+ It looks like: 
+
+ def updateCentroid(self, label):
+ X=[]; Y=[]
+ for point in self.clusters[label].points:
+  X.append(point.x)
+  Y.append(point.y)
+ self.clusters[label].centroid.x = numpy.mean(X)
+ self.clusters[label].centroid.y = numpy.mean(Y)
+ 
+
+ So I ponder, is there a more efficient way to calculate the mean of these points?
+If not, is there a more elegant way to formulate it? ;) 
+
+ EDIT: 
+
+ Thanks for all great responses!
+I was thinking that perhaps I can calculate the mean cumulativly, using something like:
+ 
+
+ where x_bar(t) is the new mean and x_bar(t-1) is the old mean. 
+
+ Which would result in a function similar to this: 
+
+ def updateCentroid(self, label):
+ cluster = self.clusters[label]
+ n = len(cluster.points)
+ cluster.centroid.x *= (n-1) / n
+ cluster.centroid.x += cluster.points[n-1].x / n
+ cluster.centroid.y *= (n-1) / n
+ cluster.centroid.y += cluster.points[n-1].y / n
+ 
+
+ Its not really working but do you think this could work with some tweeking? 
+ Answers (Total-9): #0 A K-means algorithm is already implemented in scipy.cluster.vq . If there is something about that implementation that you are trying to change, then I'd suggest start by studying the code there: 
+
+ In [62]: import scipy.cluster.vq as scv
+In [64]: scv.__file__
+Out[64]: '/usr/lib/python2.6/dist-packages/scipy/cluster/vq.pyc'
+ 
+
+ PS. Because the algorithm you posted holds the data behind a dict ( self.clusters ) and attribute lookup ( .points ) you are forced to use slow Python looping just to get at your data. A major speed gain could be achieved by sticking with numpy arrays. See the scipy implementation of k-means clustering for ideas on a better data structure. 
+ #1 Why not avoid constructing the extra arrays? 
+
+ def updateCentroid(self, label):
+ sumX=0; sumY=0
+ N = len( self.clusters[label].points)
+ for point in self.clusters[label].points:
+ sumX += point.x
+ sumY += point.y
+ self.clusters[label].centroid.x = sumX/N
+ self.clusters[label].centroid.y = sumY/N
+ 
+ #2 The costly part of your function is most certainly the iteration over the points. Avoid it altogether by making self.clusters[label].points a numpy array itself, and then compute the mean directly on it. For example if points contains X and Y coordinates concatenated in a 1D array: 
+
+ points = self.clusters[label].points
+x_mean = numpy.mean(points[0::2])
+y_mean = numpy.mean(points[1::2])
+ 
+ #3 Without extra lists: 
+
+ def updateCentroid(self, label):
+ self.clusters[label].centroid.x = numpy.fromiter(point.x for point in self.clusters[label].points, dtype = np.float).mean()
+ self.clusters[label].centroid.y = numpy.fromiter(point.y for point in self.clusters[label].points, dtype = np.float).mean()
+ 
+ #4 Perhaps the added features of numpy's mean are adding a bit of overhead. 
+
+ &gt;&gt;&gt; def myMean(itr):
+... c = t = 0
+... for item in itr:
+...  c += 1
+...  t += item
+... return t / c
+...
+&gt;&gt;&gt; import timeit
+&gt;&gt;&gt; a = range(20)
+&gt;&gt;&gt; t1 = timeit.Timer("myMean(a)","from __main__ import myMean, a")
+&gt;&gt;&gt; t1.timeit()
+6.8293311595916748
+&gt;&gt;&gt; t2 = timeit.Timer("average(a)","from __main__ import a; from numpy import average")
+&gt;&gt;&gt; t2.timeit()
+69.697283029556274
+&gt;&gt;&gt; t3 = timeit.Timer("average(array(a))","from __main__ import a; from numpy import average, array")
+&gt;&gt;&gt; t3.timeit()
+51.65147590637207
+&gt;&gt;&gt; t4 = timeit.Timer("fromiter(a,npfloat).mean()","from __main__ import a; from numpy import average, fromiter,float as npfloat")
+&gt;&gt;&gt; t4.timeit()
+18.513712167739868
+ 
+
+ Looks like numpy's best performance came when using fromiter . 
+ #5 Ok, I figured out a moving average solution which is fast without changing the data structures: 
+
+ def updateCentroid(self, label):
+ cluster = self.clusters[label]
+ n = len(cluster.points)
+ cluster.centroid.x = ((n-1)*cluster.centroid.x + cluster.points[n-1].x)/n
+ cluster.centroid.y = ((n-1)*cluster.centroid.y + cluster.points[n-1].y)/n
+ 
+
+ This lowered computation time (for the whole k means algorithm) to 13% of original. =) 
+
+ Thank you all for some great insight! 
+ #6 Try this: 
+
+ def updateCentroid(self, label):
+
+ self.clusters[label].centroid.x = numpy.array([point.x for point in self.clusters[label].points]).mean()
+ self.clusters[label].centroid.y = numpy.array([point.y for point in self.clusters[label].points]).mean()
+ 
+ #7 That's the problem with profilers that only tell you about functions. This is the method I use , and it pinpoints costly lines of code, including points where functions are called. 
+
+ That said, there's a general idea that data structure is free. As @Michael-Anderson asked, why not avoid making an array? That's the first thing I saw in your code, that you're building arrays by appending. You don't need to. 
+ #8 One way to go is add an x_sum and y_sum to your "clusters" object and sum the coordinates as points are added. If things are moving around, you can also update the sum as points move. Then getting the centroid is just a matter of dividing the x_sum and y_sum by the number of points. If your points are numpy vectors that can be added, then you don't even need to sum the components, just maintain a sum of all the vectors and multiply be 1/len at the end.

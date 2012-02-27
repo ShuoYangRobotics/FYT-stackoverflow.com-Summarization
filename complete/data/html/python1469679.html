@@ -1,0 +1,143 @@
+<h3>Question (ID-1469679):</h3><h2>Understanding Python profile output</h2><p>I'm trying to use the Python profiler to speed up my code.  I've been able to identify the specific function where nearly all of the time is spent, but I can't figure out where in that function the time is being spent.</p>
+
+<p>Below I have the profile output, which shows that "appendBallot" is the primary culprit and consumes nearly 116 seconds.  Further below, I have the code for "appendBallot".  </p>
+
+<p>I cannot figure out from the profile output, which part of "appendBallot" I need to optimize as the next highest time entry is less than a second.  I'm sure many of you could tell me just from my code, but I'd like to understand how to get that information from the profile output.  Any help would be greatly appreciated.</p>
+
+<p>Profile output:</p>
+
+<pre><code>  ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       1    0.000    0.000  116.168  116.168 &lt;string&gt;:1(&lt;module&gt;)
+       1    0.001    0.001  116.168  116.168 {execfile}
+       1    0.003    0.003  116.167  116.167 foo.py:1(&lt;module&gt;)
+       1    0.000    0.000  116.139  116.139 ballots.py:330(loadKnown)
+       1    0.000    0.000  116.109  116.109 plugins.py:148(load)
+       1    0.196    0.196  116.108  116.108 BltBallotLoader.py:37(loadFile)
+  100000  114.937    0.001  115.912    0.001 ballots.py:133(appendBallot)
+  100000    0.480    0.000    0.790    0.000 ballots.py:117(newBallot)
+  316668    0.227    0.000    0.310    0.000 ballots.py:107(getNumCandidates)
+417310/417273    0.111    0.000    0.111    0.000 {len}
+  200510    0.071    0.000    0.071    0.000 {method 'append' of 'list' objects}
+   99996    0.045    0.000    0.045    0.000 {method 'add' of 'set' objects}
+  100000    0.042    0.000    0.042    0.000 {method 'has_key' of 'dict' objects}
+       1    0.000    0.000    0.030    0.030 plugins.py:202(getLoaderPluginClasses)
+       1    0.000    0.000    0.030    0.030 plugins.py:179(getPluginClasses)
+       1    0.000    0.000    0.030    0.030 plugins.py:205(getLoaderPluginClass)
+       3    0.016    0.005    0.029    0.010 {__import__}
+       1    0.022    0.022    0.025    0.025 ballots.py:1(&lt;module&gt;)
+       1    0.010    0.010    0.013    0.013 BltBallotLoader.py:1(&lt;module&gt;)
+       7    0.000    0.000    0.003    0.000 re.py:227(_compile)
+</code></pre>
+
+<p>Code:</p>
+
+<pre><code>  def appendBallot(self, ballot, ballotID=None):
+    "Append a ballot to this Ballots object."
+
+    # String representation of ballot for determining whether ballot is unique
+    ballotString = str(list(ballot))
+
+    # Ballot as the appropriate array to conserve memory
+    ballot = self.newBallot(ballot)
+
+    # Assign a ballot ID if one has not been given
+    if ballotID is None:
+      ballotID = len(self.ballotIDs)
+    assert(ballotID not in self.ballotIDs)
+    self.ballotIDs.append(ballotID)
+
+    # Check to see if we have seen this ballot before
+    if self.uniqueBallotsLookup.has_key(ballotString):
+      i = self.uniqueBallotsLookup[ballotString]
+      self.uniqueBallotIDs[i].add(ballotID)
+    else:
+      i = len(self.uniqueBallots)
+      self.uniqueBallotsLookup[ballotString] = i
+      self.uniqueBallots.append(ballot)
+      self.uniqueBallotIDs.append(set([ballotID]))
+    self.ballotOrder.append(i)
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I've had a look at your code, and it looks like you make a lot of function calls and attribute lookups as part of your 'checking' or looking ahead before leaping. You also have a lot of code dedicated to track the same condition, i.e many bits of code looking at creating 'unique' IDs. </p>
+
+<p>instead of trying to assign some kind of unique string to each ballot, couldn't you just
+use the ballotID (an integer number?)</p>
+
+<p>now you could have a dictionary (uniqueBallotIDs) mapping ballotID and the actual ballot object.</p>
+
+<p>the process might be something like this:</p>
+
+<pre><code>def appendBallot(self, ballot, ballotID=None):
+   if ballotID is None:
+       ballotID = self._getuniqueid() # maybe just has a counter? up to you.
+   # check to see if we have seen this ballot before.
+   if not self._isunique(ballotID):
+       # code for non-unique ballot ids.
+   else:
+       # code for unique ballot ids.
+
+   self.ballotOrder.append(i)
+</code></pre>
+
+<p>You might be able to handle some of your worries about the dictionary missing a given key
+by using a defaultdict (from the collections module). <a href="http://docs.python.org/library/collections.html" rel="nofollow">collection docs</a></p>
+
+<p><strong>Edit</strong> for completeness I will include a sample usage of the defaultdict:</p>
+
+<pre><code>&gt;&gt;&gt; from collections import defaultdict            
+
+&gt;&gt;&gt; ballotIDmap = defaultdict(list)
+&gt;&gt;&gt; ballotID, ballot = 1, object() # some nominal ballotID and object.
+&gt;&gt;&gt; # I will now try to save my ballotID.
+&gt;&gt;&gt; ballotIDmap[ballotID].append(ballot)
+&gt;&gt;&gt; ballotIDmap.items()
+[(1, [&lt;object object at 0x009BB950&gt;])]
+</code></pre>
+<br /><b>#1</b><br /><p>Yeah I came across that same problem as well.</p>
+
+<p>The only way I know to work around this is to wrap your large function into several smaller function calls. This will allow the profiler to take into account each of the smaller function calls.</p>
+
+<p>Interesting enough, the process of doing this (for me, anyway) made it obvious where the inefficiencies were, so I didn't even have to run the profiler.</p>
+<br /><b>#2</b><br /><p>I have used <a href="http://mg.pov.lt/blog/profiling.html" rel="nofollow" title="Profiling decorator">this decorator</a> in my code, and it helped me with my pyparsing tuning work.</p>
+
+<p>-- Paul</p>
+<br /><b>#3</b><br /><p>Profilers can be like that. The method I use is <a href="http://stackoverflow.com/questions/375913/what-can-i-use-to-profile-c-code-in-linux/378024#378024">this</a>. It gets right to the heart of the problem in no time.</p>
+<br /><b>#4</b><br /><p>I'll support Fragsworth by saying that you'll want to split up your function into smaller ones.</p>
+
+<p>Having said that, you are reading the output correctly: the tottime is the one to watch.  </p>
+
+<p>Now for where your slowdown is likely to be:</p>
+
+<p>Since there seem to be 100000 calls to appendBallot, and there aren't any obvious loops, I'd suggest it is in your assert.  Because you are executing:</p>
+
+<pre><code>assert(ballotID not in self.ballotIDs)
+</code></pre>
+
+<p>This will actually act as a loop.  Thus, the first time you call this function, it will iterate through a (probably empty) array, and then assert if the value was found.  The 100000th time it will iterate through the entire array.</p>
+
+<p>And there is actually a possible bug here: if a ballot is deleted, then the next ballot added would have the same id as the last added one (unless that were the one deleted).  I think you would be better off using a simple counter.  That way you can just increment it each time you add a ballot.  Alternatively, you could use a UUID to get unique ids.</p>
+
+<p>Alternatively, if you are looking at some level of persistence, use an ORM, and get it to do the ID generation, and unique checking for you.</p>
+<br /><b>#5</b><br /><p>You have two problems in this little slice of code:</p>
+
+<pre><code># Assign a ballot ID if one has not been given
+if ballotID is None:
+    ballotID = len(self.ballotIDs)
+assert(ballotID not in self.ballotIDs)
+self.ballotIDs.append(ballotID)
+</code></pre>
+
+<p>Firstly it appears that self.ballotIDs is a list, so the assert statement will cause quadratic behaviour. As you didn't give any documentation at all for your data structures, it's not possible to be prescriptive, but if the order of appearance doesn't matter, you could use a set instead of a list.</p>
+
+<p>Secondly, the logic (in the absence of documentation on what a ballotID is all about, and what a not-None ballotID arg means) seems seriously bugged:</p>
+
+<pre><code>obj.appendBallot(ballota, 2) # self.ballotIDs -&gt; [2]
+obj.appendBallot(ballotb)    # self.ballotIDs -&gt; [2, 1]
+obj.appendBallot(ballotc)    # wants to add 2 but triggers assertion
+</code></pre>
+
+<p>Other comments:</p>
+
+<p>Instead of <code>adict.has_key(key)</code>, use <code>key in adict</code> -- it's faster and looks better.</p>
+
+<p>You may like to consider reviewing your data structures ... they appear to be slightly baroque; there may be a fair bit of CPU time involved in building them.</p>
+<br />

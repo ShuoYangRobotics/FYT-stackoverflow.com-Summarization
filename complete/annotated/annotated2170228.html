@@ -1,0 +1,264 @@
+<h3>Question ( ID-2170228 ) : </h3><h2>Django - Iterate over model instance field names and values in <span style="background-color:yellow;">template</span> </h2><p>I 'm trying to create a basic <span style="background-color:yellow;">template</span> to display the selected instance 's field values , along with their names. Think of it as <span style="background-color:yellow;">just</span> a standard output of the values of that instance in table format , with the field name ( verbose_name specifically if specified on the field ) in the first column and the value of that field in the second column . </p>
+<p>For example , let 's say we have the following model definition : </p>
+<pre><code>class Client(Model):
+    name = CharField(max_length=150)
+    email = EmailField(max_length=100, verbose_name="E-mail")
+</code></pre>
+<p>I would want it to be output in the <span style="background-color:yellow;">template</span> like so ( assume an instance with the given values ) : </p>
+<pre><code>Field Name      Field Value
+----------      -----------
+Name            Wayne Koorts
+E-mail          waynes@email.com
+</code></pre>
+<p>What I 'm trying to achieve is being able to pass an instance of the model to a <span style="background-color:yellow;">template</span> and be able to iterate over it dynamically in the <span style="background-color:yellow;">template</span> , something like this : </p>
+<pre><code><table>
+    {% for field in fields %}
+        <tr>
+            <td>{{ field.name }}</td>
+            <td>{{ field.value }}</td>
+        </tr>
+    {% endfor %}
+</table>
+</code></pre>
+<p>Is there a neat , " Django-approved " way to do this ? It seems like a very common task , and I will need to do it often for this particular project . </p>
+<br /><h3>Answers ( Total-10 ) : </h3><b># 0 </b><br /><p>model._meta.get_all_field_names ( ) will give you all the model 's field names , then you can use model._meta.get_field ( ) to work your way to the verbose name , and getattr ( ) to get the value from the model . </p>
+<br /><b># 1 </b><br /><p>You can use Django 's to-python queryset serializer . </p>
+<p>Just put the following code in your view : </p>
+<pre><code>from django.core import serializers
+data = serializers.serialize( "python", SomeModel.objects.all() )
+</code></pre>
+<p>And then in the <span style="background-color:yellow;">template</span> : </p>
+<pre><code>{% for instance in data %}
+    {% for field, value in instance.fields.items %}
+        {{ field }}: {{ value }}
+    {% endfor %}
+{% endfor %}
+</code></pre>
+<p>Its great advantage is the fact that it handles relation fields . </p>
+<p>For the subset of fields try : </p>
+<pre><code>data = serializers.serialize('python', SomeModel.objects.all(), fields=('name','size'))
+</code></pre>
+<br /><b># 2 </b><br /><p>Finally found a good solution to this on the dev mailing list ( http : //groups.google.com/group/django-developers/browse_thread/thread/44cd834438cfda77/557f53697658ab04 ? lnk = gst&amp ; q = <span style="background-color:yellow;">template</span> + model # 557f53697658ab04 ) : </p>
+<p>In the view add : </p>
+<pre><code>from django.forms.models import model_to_dict
+
+def show(request, object_id):
+    object = FooForm(data=model_to_dict(Foo.objects.get(pk=object_id)))
+    return render_to_response('foo/foo_detail.html', {'object': object})
+</code></pre>
+<p>in the <span style="background-color:yellow;">template</span> add : </p>
+<pre><code>{% for field in object %}
+    <li><b>{{ field.label }}:</b> {{ field.data }}</li>
+{% endfor %}
+</code></pre>
+<br /><b># 3 </b><br /><p>There should really be a built-in way to do this. I wrote this utility <span style="background-color:yellow;">build_pretty_data_view</span> that takes a model <span style="background-color:yellow;">object</span> and form instance ( a form based on your model ) and returns a SortedDict . </p>
+<p>Benefits to this solution include : </p>
+<ul>It preserves order using Django 's built-in SortedDict . When tries to get the label/verbose_name , but falls back to the field name if one is not defined . It will also optionally take an <span style="background-color:yellow;">exclude</span> ( ) list of field names to <span style="background-color:yellow;">exclude</span> certain fields . If your form class includes a Meta : <span style="background-color:yellow;">exclude</span> ( ) , but you still want to return the values , then add those fields to the optional append ( ) list . </ul>
+<p>To use this solution , first add this file/function somewhere , then import it into your views.py . </p>
+<p><span style="background-color:yellow;">utils.py</span> </p>
+<pre><code>#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# vim: ai ts=4 sts=4 et sw=4
+from django.utils.datastructures import SortedDict
+
+
+def build_pretty_data_view(form_instance, model_object, exclude=(), append=()):
+    i=0
+    sd=SortedDict()
+
+    for j in append:
+        try:
+            sdvalue={'label':j.capitalize(),
+                     'fieldvalue':model_object.__getattribute__(j)}
+            sd.insert(i, j, sdvalue)
+            i+=1
+        except(AttributeError):
+            pass
+
+    for k,v in form_instance.fields.items():
+        sdvalue={'label':"", 'fieldvalue':""}
+        if not exclude.__contains__(k):
+            if v.label is not None:
+                sdvalue = {'label':v.label,
+                           'fieldvalue': model_object.__getattribute__(k)}
+            else:
+                sdvalue = {'label':k,
+                           'fieldvalue': model_object.__getattribute__(k)}
+            sd.insert(i, k, sdvalue)
+            i+=1
+    return sd
+</code></pre>
+<p>So now in your views.py you might do something like this </p>
+<pre><code>from django.shortcuts import render_to_response
+from django.template import RequestContext
+from utils import build_pretty_data_view
+from models import Blog
+from forms import BlogForm
+.
+.
+def my_view(request):
+   b=Blog.objects.get(pk=1)
+   bf=BlogForm(instance=b)
+   data=build_pretty_data_view(form_instance=bf, model_object=b,
+                        exclude=('number_of_comments', 'number_of_likes'),
+                        append=('user',))
+
+   return render_to_response('my-template.html',
+                          RequestContext(request,
+                                         {'data':data,}))
+</code></pre>
+<p>Now in your my-template.html <span style="background-color:yellow;">template</span> you can iterate over the data like so.. . </p>
+<pre><code>{% for field,value in data.items %}
+
+    <p>{{ field }} : {{value.label}}: {{value.fieldvalue}}</p>
+
+{% endfor %}
+</code></pre>
+<p>Good Luck. Hope this helps someone ! </p>
+<br /><b># 4 </b><br /><p>Here 's another approach using a model method. This version resolves picklist/choice fields , skips empty fields , and lets you <span style="background-color:yellow;">exclude</span> specific fields . </p>
+<pre><code>def get_all_fields(self):
+    """Returns a list of all field names on the instance."""
+    fields = []
+    for f in self._meta.fields:
+
+        fname = f.name        
+        # resolve picklists/choices, with get_xyz_display() function
+        get_choice = 'get_'+fname+'_display'
+        if hasattr( self, get_choice):
+            value = getattr( self, get_choice)()
+        else:
+            try :
+                value = getattr(self, fname)
+            except User.DoesNotExist:
+                value = None
+
+        # only display fields with values and skip some fields entirely
+        if f.editable and value and f.name not in ('id', 'status', 'workshop', 'user', 'complete') :
+
+            fields.append(
+              {
+               'label':f.verbose_name, 
+               'name':f.name, 
+               'value':value,
+              }
+            )
+    return fields
+</code></pre>
+<p>Then in your <span style="background-color:yellow;">template</span> : </p>
+<pre><code>{% for f in app.get_all_fields %}
+    <dt>{{f.label|capfirst}}</dt>
+    <dd>
+    {{f.value|escape|urlize|linebreaks}}
+    </dd>
+{% endfor %}
+</code></pre>
+<br /><b># 5 </b><br /><p>Yeah it 's not pretty , you 'll have to make your own wrapper. Take a look at builtin databrowse app , which has all the functionality you need really . </p>
+<br /><b># 6 </b><br /><p>Instead of editing every model I would recommend to write one <span style="background-color:yellow;">template</span> tag which will return all field of any model given . Every <span style="background-color:yellow;">object</span> has list of fields ._meta.fields . Every field <span style="background-color:yellow;">object</span> has attribute name that will return it 's name and method value_to_string ( ) that supplied with your model <span style="background-color:yellow;">object</span> will return its value . The rest is as simple as it 's said in Django documentation . </p>
+<p>Here is my example how this <span style="background-color:yellow;">templatetag</span> might look like : </p>
+<pre><code>    from django.conf import settings
+    from django import template
+
+    if not getattr(settings, 'DEBUG', False):
+        raise template.TemplateSyntaxError('get_fields is available only when DEBUG = True')
+
+
+    register = template.Library()
+
+    class GetFieldsNode(template.Node):
+        def __init__(self, object, context_name=None):
+            self.object = template.Variable(object)
+            self.context_name = context_name
+
+        def render(self, context):
+            object = self.object.resolve(context)
+            fields = [(field.name, field.value_to_string(object)) for field in object._meta.fields]
+
+            if self.context_name:
+                context[self.context_name] = fields
+                return ''
+            else:
+                return fields
+
+
+    @register.tag
+    def get_fields(parser, token):
+        bits = token.split_contents()
+
+        if len(bits) == 4 and bits[2] == 'as':
+            return GetFieldsNode(bits[1], context_name=bits[3])
+        elif len(bits) == 2:
+            return GetFieldsNode(bits[1])
+        else:
+            raise template.TemplateSyntaxError("get_fields expects a syntax of "
+                           "{% get_fields <object> [as <context_name>] %}")
+</code></pre>
+<br /><b># 7 </b><br /><p>I 've come up with the following method , which works for me because in every case the model will have a <span style="background-color:yellow;">ModelForm</span> associated with it . </p>
+<pre><code>def GetModelData(form, fields):
+    """
+    Extract data from the bound form model instance and return a
+    dictionary that is easily usable in templates with the actual
+    field verbose name as the label, e.g.
+
+    model_data{"Address line 1": "32 Memory lane",
+               "Address line 2": "Brainville",
+               "Phone": "0212378492"}
+
+    This way, the template has an ordered list that can be easily
+    presented in tabular form.
+    """
+    model_data = {}
+    for field in fields:
+        model_data[form[field].label] = eval("form.data.%s" % form[field].name)
+    return model_data
+
+@login_required
+def clients_view(request, client_id):
+    client = Client.objects.get(id=client_id)
+    form = AddClientForm(client)
+
+    fields = ("address1", "address2", "address3", "address4",
+              "phone", "fax", "mobile", "email")
+    model_data = GetModelData(form, fields)
+
+    template_vars = RequestContext(request,
+        {
+            "client": client,
+            "model_data": model_data
+        }
+    )
+    return render_to_response("clients-view.html", template_vars)
+</code></pre>
+<p>Here is an extract from the <span style="background-color:yellow;">template</span> I am using for this particular view : </p>
+<pre><code><table class="client-view">
+    <tbody>
+    {% for field, value in model_data.items %}
+        <tr>
+            <td class="field-name">{{ field }}</td><td>{{ value }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</code></pre>
+<p>The nice thing about this method is that I can choose on a <span style="background-color:yellow;">template-by-template</span> basis the order in which I would like to display the field labels , using the tuple passed in to <span style="background-color:yellow;">GetModelData</span> and specifying the field names. This also allows me to <span style="background-color:yellow;">exclude</span> certain fields ( e.g. a User foreign <span style="background-color:yellow;">key</span> ) as only the field names passed in via the tuple are built into the final dictionary . </p>
+<p>I 'm not going to accept this as the answer because I 'm sure someone can come up with something more " Djangonic " : - ) </p>
+<p>Update : I 'm choosing this as the final answer because it is the simplest out of those given that does what I need. Thanks to everyone who contributed answers . </p>
+<br /><b># 8 </b><br /><p>This may be considered a hack but I 've done this before using modelform_factory to turn a model instance into a form . </p>
+<p>The Form class has a lot more information inside that 's super easy to iterate over and it will serve the same purpose at the expense of slightly more overhead. If your set sizes are relatively small I think the performance impact would be negligible . </p>
+<p>The one advantage besides convenience of course is that you can easily turn the table into an editable datagrid at a later date . </p>
+<br /><b># 9 </b><br /><p>I 'm using this , https : //github.com/miracle2k/django-tables . </p>
+<pre><code><table>
+<tr>
+    {% for column in table.columns %}
+    <th><a href="?sort={{ column.name_toggled }}">{{ column }}</a></th>
+    {% endfor %}
+</tr>
+{% for row in table.rows %}
+    <tr>
+    {% for value in row %}
+        <td>{{ value }}</td>
+    {% endfor %}
+    </tr>
+{% endfor %}
+</table>
+</code></pre>
+<br />

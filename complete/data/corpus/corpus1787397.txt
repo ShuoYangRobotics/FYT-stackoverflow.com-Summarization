@@ -1,0 +1,72 @@
+Question (ID-1787397): How do I limit the number of active threads in python? Am new to python and making some headway with threading - am doing some music file conversion and want to be able to utilize the multiple cores on my machine (one active conversion thread per core). 
+
+ class EncodeThread(threading.Thread):
+ # this is hacked together a bit, but should give you an idea
+ def run(self):
+  decode = subprocess.Popen(["flac","--decode","--stdout",self.src],
+       stdout=subprocess.PIPE)
+  encode = subprocess.Popen(["lame","--quiet","-",self.dest],
+        stdin=decode.stdout)
+  encode.communicate()
+
+# some other code puts these threads with various src/dest pairs in a list
+
+for proc in threads: # `threads` is my list of `threading.Thread` objects
+ proc.start()
+ 
+
+ Everything works, all the files get encoded, bravo! ... however, all the processes spawn immediately, yet I only want to run two at a time (one for each core). As soon as one is finished, I want it to move on to the next on the list until it is finished, then continue with the program. 
+
+ How do I do this? 
+
+ (I've looked at the thread pool and queue functions but I can't find a simple answer.) 
+
+ Edit: maybe I should add that each of my threads is using subprocess.Popen to run a separate command line decoder (flac) piped to stdout which is fed into a command line encoder (lame/mp3). 
+ Answers (Total-6): #0 "Each of my threads is using subprocess.Popen to run a separate command line [process]". 
+
+ Why have a bunch of threads manage a bunch of processes? That's exactly what an OS does that for you. Why micro-manage what the OS already manages? 
+
+ Rather than fool around with threads overseeing processes, just fork off processes. Your process table probably can't handle 2000 processes, but it can handle a few dozen (maybe a few hundred) pretty easily. 
+
+ You want to have more work than your CPU's can possibly handle queued up. The real question is one of memory -- not processes or threads. If the sum of all the active data for all the processes exceeds physical memory, then data has to be swapped, and that will slow you down. 
+
+ If your processes have a fairly small memory footprint, you can have lots and lots running. If your processes have a large memory footprint, you can't have very many running. 
+ #1 If you're using the default "cpython" version then this won't help you, because only one thread can execute at a time; look up Global Interpreter Lock . Instead, I'd suggest looking at the multiprocessing module in Python 2.6 -- it makes parallel programming a cinch. You can create a Pool object with 2*num_threads processes, and give it a bunch of tasks to do. It will execute up to 2*num_threads tasks at a time, until all are done. 
+
+ At work I have recently migrated a bunch of Python XML tools (a differ, xpath grepper, and bulk xslt transformer) to use this, and have had very nice results with two processes per processor. 
+ #2 It looks to me that what you want is a pool of some sort, and in that pool you would like the have n threads where n == the number of processors on your system. You would then have another thread whose only job was to feed jobs into a queue which the worker threads could pick up and process as they became free (so for a dual code machine, you'd have three threads but the main thread would be doing very little). 
+
+ As you are new to Python though I'll assume you don't know about the GIL and it's side-effects with regard to threading. If you read the article I linked you will soon understand why traditional multithreading solutions are not always the best in the Python world. Instead you should consider using the multiprocessing module (new in Python 2.6, in 2.5 you can use this backport ) to achieve the same effect. It side-steps the issue of the GIL by using multiple processes as if they were threads within the same application. There are some restrictions about how you share data (you are working in different memory spaces) but actually this is no bad thing: they just encourage good practice such as minimising the contact points between threads (or processes in this case). 
+
+ In your case you are probably intersted in using a pool as specified here . 
+ #3 Short answer: don't use threads. 
+
+ For a working example, you can look at something I've recently tossed together at work. It's a little wrapper around ssh which runs a configurable number of Popen() subprocesses. I've posted it at: Bitbucket: classh (Cluster Admin's ssh Wrapper) . 
+
+ As noted, I don't use threads; I just spawn off the children, loop over them calling their .poll() methods and checking for timeouts (also configurable) and replenish the pool as I gather the results. I've played with different sleep() values and in the past I've written a version (before the subprocess module was added to Python) which used the signal module (SIGCHLD and SIGALRM) and the os.fork() and os.execve() functions --- which my on pipe and file descriptor plumbing, etc). 
+
+ In my case I'm incrementally printing results as I gather them ... and remembering all of them to summarize at the end (when all the jobs have completed or been killed for exceeding the timeout). 
+
+ I ran that, as posted, on a list of 25,000 internal hosts (many of which are down, retired, located internationally, not accessible to my test account etc). It completed the job in just over two hours and had no issues. (There were about 60 of them that were timeouts due to systems in degenerate/thrashing states -- proving that my timeout handling works correctly). 
+
+ So I know this model works reliably. Running 100 current ssh processes with this code doesn't seem to cause any noticeable impact. (It's a moderately old FreeBSD box). I used to run the old (pre- subprocess ) version with 100 concurrent processes on my old 512MB laptop without problems, too). 
+
+ (BTW: I plan to clean this up and add features to it; feel free to contribute or to clone off your own branch of it; that's what Bitbucket.org is for). 
+ #4 I am not an expert in this, but I have read something about "Lock"s. This article might help you out 
+
+ Hope this helps 
+ #5 If you want to limit the number of parallel threads, use a semaphore : 
+
+ threadLimiter = threading.BoundedSemaphore(maximumNumberOfThreads)
+
+class EncodeThread(threading.Thread):
+
+ def run(self):
+  threadLimiter.acquire()
+  try:
+   &lt;your code here&gt;
+  finally:
+   threadLimiter.release()
+ 
+
+ Start all threads at once. All but maximumNumberOfThreads will wait in threadLimiter.acquire() and a waiting thread will only continue once another thread goes through threadLimiter.release() .

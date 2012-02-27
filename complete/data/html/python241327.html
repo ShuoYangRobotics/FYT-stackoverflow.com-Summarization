@@ -1,0 +1,207 @@
+<h3>Question (ID-241327):</h3><h2>Python snippet to remove C and C++ comments</h2><p>I'm looking for Python code that removes C and C++ comments from a string. (Assume the string contains an entire C source file.)</p>
+
+<p>I realize that I could .match() substrings with a Regex, but that doesn't solve nesting <code>/*</code>, or having a <code>//</code> inside a <code>/* */</code>.</p>
+
+<p>Ideally, I would prefer a non-naive implementation that properly handles awkward cases.</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>C (and C++) comments cannot be nested. Regular expressions work well:</p>
+
+<pre><code>//.*?\n|/\*.*?\*/
+</code></pre>
+
+<p>This requires the “Single line” flag (<code>Re.S</code>) because a C comment can span multiple lines.</p>
+
+<pre><code>def stripcomments(text):
+    return re.sub('//.*?\n|/\*.*?\*/', '', text, re.S)
+</code></pre>
+
+<p>This code should work.</p>
+
+<p>/EDIT: Notice that my above code actually makes an assumption about line endings! This code won't work on a Mac text file. However, this can be amended relatively easily:</p>
+
+<pre><code>//.*?(\r\n?|\n)|/\*.*?\*/
+</code></pre>
+
+<p>This regular expression should work on all text files, regardless of their line endings (covers Windows, Unix and Mac line endings).</p>
+
+<p>/EDIT: MizardX and Brian (in the comments) made a valid remark about the handling of strings. I completely forgot about that because the above regex is plucked from a parsing module that has additional handling for strings. MizardX's solution should work very well but it only handles double-quoted strings.</p>
+<br /><b>#1</b><br /><p>This handles C++-style comments, C-style comments, strings and simple nesting thereof.</p>
+
+<pre><code>def comment_remover(text):
+    def replacer(match):
+        s = match.group(0)
+        if s.startswith('/'):
+            return ""
+        else:
+            return s
+    pattern = re.compile(
+        r'//.*?$|/\*.*?\*/|\'(?:\\.|[^\\\'])*\'|"(?:\\.|[^\\"])*"',
+        re.DOTALL | re.MULTILINE
+    )
+    return re.sub(pattern, replacer, text)
+</code></pre>
+
+<p>Strings needs to be included, because comment-markers inside them does not start a comment.</p>
+
+<p><strong>Edit:</strong> re.sub didn't take any flags, so had to compile the pattern first.</p>
+
+<p><strong>Edit2:</strong> Added character literals, since they could contain quotes that would otherwise be recognized as string delimiters.</p>
+<br /><b>#2</b><br /><p>I don't know if you're familiar with <code>sed</code>, the UNIX-based (but Windows-available) text parsing program, but I've found a sed script <a href="http://sed.sourceforge.net/grabbag/scripts/remccoms3.sed" rel="nofollow">here</a> which will remove C/C++ comments from a file. It's very smart; for example, it will ignore '//' and '/*' if found in a string declaration, etc. From within Python, it can be used using the following code:</p>
+
+<pre><code>import subprocess
+from cStringIO import StringIO
+
+input = StringIO(source_code) # source_code is a string with the source code.
+output = StringIO()
+
+process = subprocess.Popen(['sed', '/path/to/remccoms3.sed'],
+    input=input, output=output)
+return_code = process.wait()
+
+stripped_code = output.getvalue()
+</code></pre>
+
+<p>In this program, <code>source_code</code> is the variable holding the C/C++ source code, and eventually <code>stripped_code</code> will hold C/C++ code with the comments removed. Of course, if you have the file on disk, you could have the <code>input</code> and <code>output</code> variables be file handles pointing to those files (<code>input</code> in read-mode, <code>output</code> in write-mode). <code>remccoms3.sed</code> is the file from the above link, and it should be saved in a readable location on disk. <code>sed</code> is also available on Windows, and comes installed by default on most GNU/Linux distros and Mac OS X.</p>
+
+<p>This will probably be better than a pure Python solution; no need to reinvent the wheel.</p>
+<br /><b>#3</b><br /><p>Don't forget that in C, backslash-newline is eliminated before comments are processed, and trigraphs are processed before that (because ??/ is the trigraph for backslash).  I have a C program called SCC (strip C/C++ comments), and here is part of the test code...</p>
+
+<pre><code>" */ /* SCC has been trained to know about strings /* */ */"!
+"\"Double quotes embedded in strings, \\\" too\'!"
+"And \
+newlines in them"
+
+"And escaped double quotes at the end of a string\""
+
+aa '\\
+n' OK
+aa "\""
+aa "\
+\n"
+
+This is followed by C++/C99 comment number 1.
+// C++/C99 comment with \
+continuation character \
+on three source lines (this should not be seen with the -C fla
+The C++/C99 comment number 1 has finished.
+
+This is followed by C++/C99 comment number 2.
+/\
+/\
+C++/C99 comment (this should not be seen with the -C flag)
+The C++/C99 comment number 2 has finished.
+
+This is followed by regular C comment number 1.
+/\
+*\
+Regular
+comment
+*\
+/
+The regular C comment number 1 has finished.
+
+/\
+\/ This is not a C++/C99 comment!
+
+This is followed by C++/C99 comment number 3.
+/\
+\
+\
+/ But this is a C++/C99 comment!
+The C++/C99 comment number 3 has finished.
+
+/\
+\* This is not a C or C++  comment!
+
+This is followed by regular C comment number 2.
+/\
+*/ This is a regular C comment *\
+but this is just a routine continuation *\
+and that was not the end either - but this is *\
+\
+/
+The regular C comment number 2 has finished.
+
+This is followed by regular C comment number 3.
+/\
+\
+\
+\
+* C comment */
+</code></pre>
+
+<p>This does not illustrate trigraphs.  Note that you can have multiple backslashes at the end of a line, but the line splicing doesn't care about how many there are, but the subsequent processing might.  Etc.  Writing a single regex to handle all these cases will be non-trivial (but that is different from impossible).</p>
+<br /><b>#4</b><br /><p>The regular expression cases will fall down in some situations, like where a string literal contains a subsequence which matches the comment syntax.  You really need a parse tree to deal with this.</p>
+<br /><b>#5</b><br /><p>you may be able to leverage <a href="http://www.language-binding.net/pyplusplus/pyplusplus.html" rel="nofollow">py++</a> to parse the C++ source with GCC.</p>
+
+<blockquote>
+  <p>Py++ does not reinvent the wheel. It
+  uses GCC C++ compiler to parse C++
+  source files. To be more precise, the
+  tool chain looks like this:</p>
+  
+  <p>source code is passed to GCC-XML
+  GCC-XML passes it to GCC C++ compiler
+  GCC-XML generates an XML description
+  of a C++ program from GCC's internal
+  representation. Py++ uses pygccxml
+  package to read GCC-XML generated
+  file. The bottom line - you can be
+  sure, that all your declarations are
+  read correctly.</p>
+</blockquote>
+
+<p>or, maybe not.  regardless, this is not a trivial parse.</p>
+
+<p>@ RE based solutions - you are unlikely to find a RE that handles all possible 'awkward' cases correctly, unless you constrain input (e.g. no macros).  for a bulletproof solution, you really have no choice than leveraging the real grammar.</p>
+<br /><b>#6</b><br /><p>You may find some of the discussion in <a href="http://stackoverflow.com/questions/54047/regexs-for-developers">this Q &amp; A</a> helpful and especially this particular <a href="http://stackoverflow.com/questions/54047/regexs-for-developers#54056">reply</a> (mainly from the standpoint of pitfalls to watch out for). </p>
+<br /><b>#7</b><br /><p>You don't really need a parse tree to do this perfectly, but you do in effect need the token stream equivalent to what is produced by the compiler's front end.  Such a token stream must necessarilyy take care of all the weirdness such as line-continued comment start, comment start in string, trigraph normalization, etc.   If you have the token stream, deleting the comments is easy.  (I have a tool that produces exactly such token streams, as, guess what, the front end of a real parser that produces a real parse tree :).  </p>
+
+<p>The fact that the tokens are individually recognized by regular expressions suggests that you can, in principle, write a regular expression that will pick out the comment lexemes.   The real complexity of the set regular expressions for the tokenizer (at least the one we wrote) suggests you can't do this in practice; writing them individually was hard enough.  If you don't want to do it perfectly, well, then, most of the RE solutions above are just fine.</p>
+
+<p>Now, <em>why</em> you would want strip comments is beyond me, unless you are building a code obfuscator.  In this case, you have to have it perfectly right.</p>
+<br /><b>#8</b><br /><p>I'm sorry this not a Python solution, but you could also use a tool that understands how to remove comments, like your C/C++ preprocessor. Here's how GNU CPP <a href="http://gcc.gnu.org/onlinedocs/cpp/Invocation.html#index-fpreprocessed-171" rel="nofollow">does it</a>.</p>
+
+<pre><code>cpp -fpreprocessed foo.c
+</code></pre>
+<br /><b>#9</b><br /><p>There is also a non-python answer: use the program <a href="http://www.bdc.cx/software/stripcmt/" rel="nofollow">stripcmt</a>:</p>
+
+<blockquote>
+  <p>StripCmt is a simple utility written
+  in C to remove comments from C, C++,
+  and Java source files. In the grand
+  tradition of Unix text processing
+  programs, it can function either as a
+  FIFO (First In - First Out) filter or
+  accept arguments on the commandline.</p>
+</blockquote>
+<br /><b>#10</b><br /><p>I ran across this problem recently when I took a class where the professor required us to strip javadoc from our source code before submitting it to him for a code review.  We had to do this several times, but we couldn't just remove the javadoc permanently because we were required to generate javadoc html files as well.  Here is a little python script I made to do the trick.  Since javadoc starts with /** and ends with */, the script looks for these tokens, but the script can be modified to suite your needs.  It also handles single line block comments and cases where a block comment ends but there is still non-commented code on the same line as the block comment ending. I hope this helps!</p>
+
+<p><em>WARNING: This scripts modifies the contents of files passed in and saves them to the original files.  It would be wise to have a backup somewhere else</em></p>
+
+<pre><code>#!/usr/bin/python
+"""
+ A simple script to remove block comments of the form /** */ from files
+ Use example: ./strip_comments.py *.java
+ Author: holdtotherod
+ Created: 3/6/11
+"""
+import sys
+import fileinput
+
+for file in sys.argv[1:]:
+    inBlockComment = False
+    for line in fileinput.input(file, inplace = 1):
+        if "/**" in line:
+            inBlockComment = True
+        if inBlockComment and "*/" in line:
+            inBlockComment = False
+            # If the */ isn't last, remove through the */
+            if line.find("*/") != len(line) - 3:
+                line = line[line.find("*/")+2:]
+            else:
+                continue
+        if inBlockComment:
+            continue
+        sys.stdout.write(line)
+</code></pre>
+<br />

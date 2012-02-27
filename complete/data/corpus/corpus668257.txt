@@ -1,0 +1,111 @@
+Question (ID-668257): Python: simple async download of url content? I have a web.py server that responds to various user requests. One of these requests involves downloading and analyzing a series of web pages. 
+
+ Is there a simple way to setup an async / callback based url download mechanism in web.py? Low resource usage is particularly important as each user initiated request could result in download of multiple pages. 
+
+ The flow would look like: 
+
+ User request -> web.py -> Download 10 pages in parallel or asynchronously -> Analyze contents, return results 
+
+ I recognize that Twisted would be a nice way to do this, but I'm already in web.py so I'm particularly interested in something that can fit within web.py . 
+ Answers (Total-10): #0 One option would be to post the work onto a queue of some sort (you could use something Enterprisey like ActiveMQ with pyactivemq or STOMP as a connector or you could use something lightweight like Kestrel which is written in Scala and speaks the same protocl as memcache so you can just use the python memcache client to talk to it). 
+
+ Once you have the queueing mechanism set up, you can create as many or as few worker tasks that are subscribed to the queue and do the actual downloading work as you want. You can even have them live on other machines so they don't interfere with the speed of serving yourwebsite at all. When the workers are done, they post the results back to the database or another queue where the webserver can pick them up. 
+
+ If you don't want to have to manage external worker processes then you could make the workers threads in the same python process that is running the webserver, but then obviously it will have greater potential to impact your web page serving performance. 
+ #1 You might be able to use urllib to download the files and the Queue module to manage a number of worker threads. e.g: 
+
+ import urllib
+from threading import Thread
+from Queue import Queue
+
+NUM_WORKERS = 20
+
+class Dnld:
+ def __init__(self):
+  self.Q = Queue()
+  for i in xrange(NUM_WORKERS):
+   t = Thread(target=self.worker)
+   t.setDaemon(True)
+   t.start()
+
+ def worker(self):
+  while 1:
+   url, Q = self.Q.get()
+   try:
+    f = urllib.urlopen(url)
+    Q.put(('ok', url, f.read()))
+    f.close()
+   except Exception, e:
+    Q.put(('error', url, e))
+    try: f.close() # clean up
+    except: pass
+
+ def download_urls(self, L):
+  Q = Queue() # Create a second queue so the worker 
+     # threads can send the data back again
+  for url in L:
+   # Add the URLs in `L` to be downloaded asynchronously
+   self.Q.put((url, Q))
+
+  rtn = []
+  for i in xrange(len(L)):
+   # Get the data as it arrives, raising 
+   # any exceptions if they occur
+   status, url, data = Q.get()
+   if status == 'ok':
+    rtn.append((url, data))
+   else:
+    raise data
+  return rtn
+
+inst = Dnld()
+for url, data in inst.download_urls(['http://www.google.com']*2):
+ print url, data
+ 
+ #2 Here is an interesting piece of code. I didn't use it myself, but it looks nice ;) 
+
+ https://github.com/facebook/tornado/blob/master/tornado/httpclient.py 
+
+ Low level AsyncHTTPClient: 
+
+ "An non-blocking HTTP client backed with pycurl. Example usage:" 
+
+ import ioloop
+
+def handle_request(response):
+ if response.error:
+  print "Error:", response.error
+ else:
+  print response.body
+ ioloop.IOLoop.instance().stop()
+
+http_client = httpclient.AsyncHTTPClient()
+http_client.fetch("http://www.google.com/", handle_request)
+ioloop.IOLoop.instance().start()
+ 
+
+ "
+fetch() can take a string URL or an HTTPRequest instance, which offers more options, like executing POST/PUT/DELETE requests. 
+
+ The keyword argument max_clients to the AsyncHTTPClient constructor determines the maximum number of simultaneous fetch() operations that can execute in parallel on each IOLoop.
+" 
+
+ There is also new implementation in progress:
+ https://github.com/facebook/tornado/blob/master/tornado/simple_httpclient.py 
+"Non-blocking HTTP client with no external dependencies. ... This class is still in development and not yet recommended for production use." 
+ #3 I'd just build a service in twisted that did that concurrent fetch and analysis and access that from web.py as a simple http request. 
+ #4 Use the async http client which uses asynchat and asyncore.
+ http://sourceforge.net/projects/asynchttp/files/asynchttp-production/asynchttp.py-1.0/asynchttp.py/download 
+ #5 I'm not sure I'm understanding your question, so I'll give multiple partial answers to start with. 
+
+ 
+ If your concern is that web.py is having to download data from somewhere and analyze the results before responding, and you fear the request may time out before the results are ready, you could use ajax to split the work up. Return immediately with a container page (to hold the results) and a bit of javascript to poll the sever for the results until the client has them all. Thus the client never waits for the server, though the user still has to wait for the results. 
+ If your concern is tying up the server waiting for the client to get the results, I doubt if that will actually be a problem. Your networking layers should not require you to wait-on-write 
+ If you are worrying about the server waiting while the client downloads static content from elsewhere, either ajax or clever use of redirects should solve your problem 
+ 
+ #6 I don't know if this will exactly work, but it looks like it might: EvServer: Python Asynchronous WSGI Server has a web.py interface and can do comet style push to the browser client. 
+
+ If that isn't right, maybe you can use the Concurrence HTTP client for async download of the pages and figure out how to serve them to browser via ajax or comet. 
+ #7 Along the lines of MarkusQ's answer, MochiKit is a nice JavaScript library, with robust async methods inspired by Twisted. 
+ #8 Actually you can integrate twisted with web.py. I'm not really sure how as I've only done it with django (used twisted with it). 
+ #9 Nowadays there are excellent Python libs you might want to use - urllib3 (uses thread pools) and requests (uses thread pools through urllib3 or non blocking IO through gevent )

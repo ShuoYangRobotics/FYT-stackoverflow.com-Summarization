@@ -1,0 +1,127 @@
+<h3>Question (ID-1229146):</h3><h2>Parsing empty options in Python</h2><p>I have an application that allows you to send event data to a custom script. You simply lay out the command line arguments and assign what event data goes with what argument. The problem is that there is no real flexibility here. Every option you map out is going to be used, but not every option will necessarily have data. So when the application builds the string to send to the script, some of the arguments are blank and python's OptionParser errors out with "error: --someargument option requires an argument"</p>
+
+<p>Being that there are over 200 points of data, it's not like I can write separate scripts to handle each combination of possible arguments (it would take 2^200 scripts). Is there a way to handle empty arguments in python's optionparser?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Sorry, misunderstood the question with my first answer.  You can accomplish the ability to have optional arguments to command line flags use the <em>callback</em> action type when you define an option.  Use the following function as a call back (you will likely wish to tailor to your needs) and configure it for each of the flags that can optionally receive an argument:</p>
+
+<pre><code>import optparse
+
+def optional_arg(arg_default):
+    def func(option,opt_str,value,parser):
+        if parser.rargs and not parser.rargs[0].startswith('-'):
+            val=parser.rargs[0]
+            parser.rargs.pop(0)
+        else:
+            val=arg_default
+        setattr(parser.values,option.dest,val)
+    return func
+
+def main(args):
+    parser=optparse.OptionParser()
+    parser.add_option('--foo',action='callback',callback=optional_arg('empty'),dest='foo')
+    parser.add_option('--file',action='store_true',default=False)
+    return parser.parse_args(args)
+
+if __name__=='__main__':
+    import sys
+    print main(sys.argv)
+</code></pre>
+
+<p><br><br></p>
+
+<p>Running from the command line you'll see this:</p>
+
+<pre><code># python parser.py
+(&lt;Values at 0x8e42d8: {'foo': None, 'file': False}&gt;, [])
+
+# python parser.py --foo
+(&lt;Values at 0x8e42d8: {'foo': 'empty', 'file': False}&gt;, [])
+
+# python parser.py --foo bar
+(&lt;Values at 0x8e42d8: {'foo': 'bar', 'file': False}&gt;, [])
+</code></pre>
+<br /><b>#1</b><br /><p>I don't think <code>optparse</code> can do this. <a href="http://argparse.googlecode.com/" rel="nofollow"><code>argparse</code></a> is a different (non-standard) module that can <a href="http://argparse.googlecode.com/svn/trunk/doc/argparse-vs-optparse.html#more-nargs-options" rel="nofollow">handle situations like this</a> where the options have optional values.</p>
+
+<p>With <code>optparse</code> you have to either have to specify the option including it's value or leave out both.</p>
+<br /><b>#2</b><br /><p>Yes, there is an argument to do so when you add the option:</p>
+
+<pre><code>from optparse import OptionParser
+parser = OptionParser()
+parser.add_option("--SomeData",action="store", dest="TheData", default='')
+</code></pre>
+
+<p>Give the <em>default</em> argument the value you want the option to have it is to be specified but optionally have an argument.</p>
+<br /><b>#3</b><br /><p>Optparse already allows you to pass the empty string as an option argument.  So if possible, treat the empty string as "no value".  For long options, any of the following work:</p>
+
+<pre><code>my_script --opt=   --anotheroption
+my_script --opt='' --anotheroption
+my_script --opt="" --anotheroption
+my_script --opt '' --anotheroption
+my_script --opt "" --anotheroption
+</code></pre>
+
+<p>For short-style options, you can use either of:</p>
+
+<pre><code>my_script -o '' --anotheroption
+my_script -o "" --anotheroption
+</code></pre>
+
+<p>Caveat: this has been tested under Linux and should work the same under other Unixlike systems; Windows handles command line quoting differently and might not accept all of the variants listed above.</p>
+<br /><b>#4</b><br /><p>Great response from Mark Roddy. One change I made to make things a bit cleaner for me was to change the first callback definition line from:</p>
+
+<pre><code>def optional_arg(arg_default):
+</code></pre>
+
+<p>to:</p>
+
+<pre><code>def optional_arg(arg_default="None"):
+</code></pre>
+
+<p>Having the function argument set with a default allows it to be called with just "optional_arg()", which saves quite a bit of typing if you have a large number of arguments that use it.</p>
+<br /><b>#5</b><br /><p>Mark Roddy's solution would work, but it requires attribute modification of a parser object during runtime, and has no support for alternative option formattings other than - or --.
+A slightly less involved solution is to modify the sys.argv array before running optparse and insert an empty string ("") after a switch which doesn't need to have arguments.
+The only constraint of this method is that you have your options default to a predictable value other than the one you are inserting into sys.argv (I chose None for the example below, but it really doesn't matter).</p>
+
+<p>The following code creates an example parser and set of options, extracts an array of allowed switches from the parser (using a little bit of instance variable magic), and then iterates through sys.argv, and every time it finds an
+allowed switch, it checks to see if it was given without any arguments following it . If there is no argument after a switch, the empty string will be inserted on the command
+line. After altering sys.argv, the parser is invoked, and you can check for options whose values are "", and act accordingly. </p>
+
+<pre><code>#Instantiate the parser, and add some options; set the options' default values to None, or something predictable that
+#can be checked later.
+PARSER_DEFAULTVAL = None
+parser = OptionParser(usage="%prog -[MODE] INPUT [options]")
+#This method doesn't work if interspersed switches and arguments are allowed.
+parser.allow_interspersed_args = False
+parser.add_option("-d", "--delete", action="store", type="string", dest="to_delete", default=PARSER_DEFAULTVAL)
+parser.add_option("-a", "--add", action="store", type="string", dest="to_add", default=PARSER_DEFAULTVAL)
+
+#Build a list of allowed switches, in this case ['-d', '--delete', '-a', '--add'] so that you can check if something
+#found on sys.argv is indeed a valid switch. This is trivial to make by hand in a short example, but if a program has
+#a lot of options, or if you want an idiot-proof way of getting all added options without modifying a list yourself,
+#this way is durable. If you are using OptionGroups, simply run the loop below with each group's option_list field.
+allowed_switches = []
+for opt in parser.option_list:
+    #Add the short (-a) and long (--add) form of each switch to the list.
+    allowed_switches.extend(opt._short_opts + opt._long_opts)
+
+#Insert empty-string values into sys.argv whenever a switch without arguments is found.
+for a in range(len(sys.argv)):
+    arg = sys.argv[a]
+    #Check if the sys.argv value is a switch
+    if arg in allowed_switches:
+        #Check if it doesn't have an accompanying argument (i.e. if it is followed by another switch, or if it is last
+        #on the command line)
+        if a == len(sys.argv) - 1 or argv[a + 1] in allowed_switches:
+            sys.argv.insert(a + 1, "")
+
+options, args = parser.parse_args()
+
+#If the option is present (i.e. wasn't set to the default value)
+if not (options.to_delete == PARSER_DEFAULTVAL):
+    if options.droptables_ids_csv == "":
+        #The switch was not used with any arguments.
+        ...
+    else:
+        #The switch had arguments.
+        ...
+</code></pre>
+<br />

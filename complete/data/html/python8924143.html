@@ -1,0 +1,343 @@
+<h3>Question (ID-8924143):</h3><h2>Efficient hunting for words in scrambled letters</h2><p>I guess you could classify this as a Scrabble style problem, but it started out due to a friend mentioning the UK TV quiz show Countdown.  Various rounds in the show involve the contestants being presented a scrambled set of letters and they have to come up with the longest word they can.  The one my friend mentioned was "RAEPKWAEN".</p>
+
+<p>In fairly short order I whipped up something in Python to handle this problem, using PyEnchant to handle the dictionary look-ups, however I'm noticing that it really can't scale all that well.</p>
+
+<p>Here's what I have currently:</p>
+
+<pre><code>#!/usr/bin/python
+
+from itertools import permutations
+import enchant
+from sys import argv
+
+def find_longest(origin):
+    s = enchant.Dict("en_US")
+    for i in range(len(origin),0,-1):
+        print "Checking against words of length %d" % i
+        pool = permutations(origin,i)
+        for comb in pool:
+            word = ''.join(comb)
+            if s.check(word):
+                return word
+    return ""
+
+if (__name__)== '__main__':
+    result = find_longest(argv[1])
+    print result
+</code></pre>
+
+<p>That's fine on a 9 letter example like they use in the show, 9 factorial = 362,880  and 8 factorial = 40,320.  On that scale even if it would have to check all possible permutations and word lengths it's not that many.</p>
+
+<p>However once you reach 14 characters that's 87,178,291,200 possibly combinations, meaning you're reliant on luck that a 14 character word is quickly found.</p>
+
+<p>With the example word above it's taking my machine about 12 1/2 seconds to find "reawaken".  With 14 character scrambled words we could be talking on the scale of 23 days just to check all possible 14 character permutations.</p>
+
+<p>Is there any more efficient way to handle this?</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>You want to avoid doing the permutation. You could count how many times a character appears in both strings ( the original string and the one from the dictionary). Dismiss all the words from the dictionary where the frequency of characters isn't the same. </p>
+
+<p>So to check one word from the dictionary you will need to count the characters at most MAX (26, n) time. </p>
+<br /><b>#1</b><br /><p>Implementation of <a href="http://stackoverflow.com/users/840372/jeroen-coupe">Jeroen Coupé</a> idea from <a href="http://stackoverflow.com/a/8924228/1052325">his answer</a> with letters count:</p>
+
+<pre><code>from collections import defaultdict, Counter
+
+
+def find_longest(origin, known_words):
+    return iter_longest(origin, known_words).next()
+
+def iter_longest(origin, known_words, min_length=1):
+    origin_map = Counter(origin)
+    for i in xrange(len(origin) + 1, min_length - 1, -1):
+        for word in known_words[i]:
+            if check_same_letters(origin_map, word):
+               yield word
+
+def check_same_letters(origin_map, word):
+    new_map = Counter(word)
+    return all(new_map[let] &lt;= origin_map[let] for let in word)
+
+def load_words_from(file_path):
+    known_words =  defaultdict(list)
+    with open(file_path) as f:
+        for line in f:
+            word = line.strip()
+            known_words[len(word)].append(word)
+    return known_words
+
+if __name__ == '__main__':
+    known_words = load_words_from('words_list.txt')
+    origin = 'raepkwaen'
+    big_origin = 'raepkwaenaqwertyuiopasdfghjklzxcvbnmqwertyuiopasdfghjklzxcvbnmqwertyuiopasdfghjklzxcvbnmqwertyuiopasdfghjklzxcvbnm'
+    print find_longest(big_origin, known_words)
+    print list(iter_longest(origin, known_words, 5))
+</code></pre>
+
+<p>Output (for my small 58000 words dict):</p>
+
+<pre><code>counterrevolutionaries
+['reawaken', 'awaken', 'enwrap', 'weaken', 'weaker', 'apnea', 'arena', 'awake',
+ 'aware', 'newer', 'paean', 'parka', 'pekan', 'prank', 'prawn', 'preen', 'renew',
+ 'waken', 'wreak']
+</code></pre>
+
+<p>Notes:</p>
+
+<ul>
+<li><p>It's simple implementation without optimizations.</p></li>
+<li><p><code>words_list.txt</code> - can be <code>/usr/share/dict/words</code> on Linux.</p></li>
+</ul>
+
+<p><strong>UPDATE</strong></p>
+
+<p>In case we need to find word only once, and we have dictionary with words sorted by length, e.g. by this script:</p>
+
+<pre><code>with open('words_list.txt') as f:
+    words = f.readlines()
+with open('words_by_len.txt', 'w') as f:
+    for word in sorted(words, key=lambda w: len(w), reverse=True):
+        f.write(word)
+</code></pre>
+
+<p>We can find longest word without loading full dict to memory:</p>
+
+<pre><code>from collections import Counter
+import sys
+
+
+def check_same_letters(origin_map, word):
+    new_map = Counter(word)
+    return all(new_map[let] &lt;= origin_map[let] for let in word)
+
+def iter_longest_from_file(origin, file_path, min_length=1):
+    origin_map = Counter(origin)
+    origin_len = len(origin)
+    with open(file_path) as f:
+        for line in f:
+            word = line.strip()
+            if len(word) &gt; origin_len:
+                continue
+            if len(word) &lt; min_length:
+                return
+            if check_same_letters(origin_map, word):
+                yield word
+
+def find_longest_from_file(origin, file_path):
+    return iter_longest_from_file(origin, file_path).next()
+
+if __name__ == '__main__':
+    origin = sys.argv[1] if len(sys.argv) &gt; 1 else 'abcdefghijklmnopqrstuvwxyz'
+    print find_longest_from_file(origin, 'words_by_len.txt')
+</code></pre>
+<br /><b>#2</b><br /><ol>
+<li>Pre-parse the dictionary as sorted(word), word pairs. (e.g. giilnstu, linguist)</li>
+<li>Sort the dictionary file.</li>
+</ol>
+
+<p>Then, when you are searching for a given set of letters:</p>
+
+<ol>
+<li>Binary search the dictionary for the letters you have, sorting the letters first.</li>
+</ol>
+
+<p>You'd need to do this separately for each word length.</p>
+
+<p>EDIT: should say that you're searching for all unique combinations of the sorted letters of the target word length (<code>range(len(letters), 0, -1)</code>)</p>
+<br /><b>#3</b><br /><p>This is similar to an anagram problem I've worked on before. I solved that by using prime numbers to represent each letter. The product of the letters for each word produces a number. To determine if a given set of input characters are sufficient to make a work, just divide the product of the input character by the product for the number you want to check. If there is no remainder then the input characters are sufficient. I've implemented it below. The output is:</p>
+
+<pre><code>$ python longest.py rasdaddea aosddna raepkwaen
+rasdaddea --&gt;  sadder
+aosddna --&gt;  soda
+raepkwaen --&gt;  reawaken
+</code></pre>
+
+<p>You can find more details and a thorough explanation of the anagrams case at:
+<a href="http://mostlyhighperformance.blogspot.com/2012/01/generating-anagrams-efficient-and-easy.html" rel="nofollow">http://mostlyhighperformance.blogspot.com/2012/01/generating-anagrams-efficient-and-easy.html</a></p>
+
+<p>This algorithm takes a small amount of time to set up a dictionary, and then individual checks are as easy as a single division for every word in the dictionary. There may be faster methods that rely on closing off parts of the dictionary if it lacks a letter, but these may end up performing worse if you have large number of input letters so it is actually not able to close off any part of the dictionary.</p>
+
+<pre><code>import sys
+
+
+def nextprime(x):
+    while True:
+        x += 1
+        for pot_fac in range(2,x):
+            if x % pot_fac == 0:
+                break
+        else:
+            return x
+
+def prime_generator():
+    '''Returns a generator that produces the next largest prime as
+    compared to the one returned from this function the last time
+    it was called. The first time it is called it will return 2.'''
+    lastprime = 1
+    while True:
+        lastprime = nextprime(lastprime)
+        yield lastprime
+
+
+# Assign prime numbers to each lower case letter
+gen = prime_generator()
+primes = dict( [ (chr(x),gen.next()) for x in range(ord('a'),ord('z')+1) ] )
+
+
+product = lambda x: reduce( lambda m,n: m*n, x, 1 )
+make_key = lambda x: product( [ primes[y] for y in x ] )
+
+
+try:
+    words = open('words').readlines()
+    words = [ ''.join( [ c for c in x.lower() \
+                if ord('a') &lt;= ord(c) &lt;= ord('z') ] ) \
+            for x in words ]
+    for x in words:
+        try:
+            make_key(x)
+        except:
+            print x
+            raise
+
+except IOError:
+    words = [ 'reawaken','awaken','enwrap','weaken','weaker', ]
+
+words = dict( ( (make_key(x),x,) for x in words ) )
+
+
+inputs = sys.argv[1:] if sys.argv[1:] else [ 'raepkwaen', ]
+for input in inputs:
+    input_key = make_key(input)
+    results = [ words[x] for x in words if input_key % x == 0 ]
+
+    result = reversed(sorted(results, key=len)).next()
+    print input,'--&gt; ',result
+</code></pre>
+<br /><b>#4</b><br /><p>I started this last night shortly after you asked the question, but didn't get around to polishing it up until just now. This was my solution, which is basically a modified trie, which I didn't know until today!</p>
+
+<pre><code>class Node(object):
+    __slots__ = ('words', 'letter', 'child', 'sib')
+
+    def __init__(self, letter, sib=None):
+        self.words = []
+        self.letter = letter
+        self.child = None
+        self.sib = sib
+
+    def get_child(self, letter, create=False):
+        child = self.child
+        if not child or child.letter &gt; letter:
+            if create:
+                self.child = Node(letter, child)
+                return self.child
+            return None
+        return child.get_sibling(letter, create)
+
+    def get_sibling(self, letter, create=False):
+        node = self
+        while node:
+            if node.letter == letter:
+                return node
+            sib = node.sib
+            if not sib or sib.letter &gt; letter:
+                if create:
+                    node.sib = Node(letter, sib)
+                    node = node.sib
+                    return node
+                return None
+            node = sib
+        return None
+
+    def __repr__(self):
+        return '&lt;Node({}){}{}: {}&gt;'.format(chr(self.letter), 'C' if self.child else '', 'S' if self.sib else '', self.words)
+
+def add_word(root, word):
+    word = word.lower().strip()
+    letters = [ord(c) for c in sorted(word)]
+    node = root
+    for letter in letters:
+        node = node.get_child(letter, True)
+    node.words.append(word)
+
+def find_max_word(root, word):
+    word = word.lower().strip()
+    letters = [ord(c) for c in sorted(word)]
+    words = []
+    def grab_words(root, letters):
+        last = None
+        for idx, letter in enumerate(letters):
+            if letter == last: # prevents duplication
+                continue
+            node = root.get_child(letter)
+            if node:
+                words.extend(node.words)
+                grab_words(node, letters[idx+1:])
+            last = letter
+    grab_words(root, letters)
+    return words
+
+root = Node(0)
+with open('/path/to/dict/file', 'rt') as f:
+    for word in f:
+        add_word(root, word)
+</code></pre>
+
+<p>Testing:</p>
+
+<pre><code>&gt;&gt;&gt; def nonrepeating_words():
+...     return find_max_word(root, 'abcdefghijklmnopqrstuvwxyz')
+... 
+&gt;&gt;&gt; sorted(nonrepeating_words(), key=len)[-10:]
+['ambidextrously', 'troublemakings', 'dermatoglyphic', 'hydromagnetics', 'hydropneumatic', 'pyruvaldoxines', 'hyperabductions', 'uncopyrightable', 'dermatoglyphics', 'endolymphaticus']
+&gt;&gt;&gt; len(nonrepeating_words())
+67590
+</code></pre>
+
+<p>I think I prefer dermatoglyphics to uncopyrightable for longest word, myself. Performance-wise, utilizing a ~500k word dictionary (from <a href="http://codehappy.net/wordlist.htm" rel="nofollow">here</a>),</p>
+
+<pre><code>&gt;&gt;&gt; import timeit
+&gt;&gt;&gt; timeit.timeit(nonrepeating_words, number=100)
+62.8912091255188
+&gt;&gt;&gt; 
+</code></pre>
+
+<p>So, on average, 6/10ths of a second (on my i5-2500) to find all sixty-seven thousand words that contain no repeating letters.</p>
+
+<p>The big differences between this implementation and a trie (which makes it even further from a DAWG in general) is that: words are stored in the trie in relation to their sorted letters. So the word 'dog' is stored under the same path as 'god': d-g-o. The second bit is the the <code>find_max_word</code> algorithm, which makes sure every possible letter combination is visited by continually lopping off its head and re-running the search.</p>
+
+<p>Oh, and just for giggles:</p>
+
+<pre><code>&gt;&gt;&gt; sorted(tree.find_max_word('RAEPKWAEN'), key=len)[-5:]
+['wakener', 'rewaken', 'reawake', 'reawaken', 'awakener']
+</code></pre>
+<br /><b>#5</b><br /><ol>
+<li>Construct a <a href="http://en.wikipedia.org/wiki/Trie" rel="nofollow">trie (prefix tree)</a> from your dictionary. You may want to cache it.</li>
+<li>Walk on this trie and remove whole branches that do not fit your bag of letters.</li>
+</ol>
+
+<p>At this point, your trie is the representation of all words in your dictionary that can be constructed from your bag of letters.</p>
+
+<ol>
+<li>Just take the longer one(s) :-)</li>
+</ol>
+
+<p>Edit: you may also use a <a href="http://en.wikipedia.org/wiki/Directed_acyclic_word_graph" rel="nofollow">DAGW (Directed Acyclic Word Graph)</a> which will have fewer vertices. Although I haven't read it, this wikipedia article have a link about <a href="http://www.cs.cmu.edu/afs/cs/academic/class/15451-s06/www/lectures/scrabble.pdf" rel="nofollow">The World's Fastest Scrabble Program</a>.</p>
+<br /><b>#6</b><br /><p>When looking for words longer than 10 letters you may try to iterate over words (I think there are not so many words with 10 letters) that are longer than 10 letters and check it you have required letters in your set.</p>
+
+<p>Problem is that you have to find all those len(word) >= 10 words first.</p>
+
+<p>So, what I would do:
+When reading the dictionary split the words into 2 categories: shorts and longs. You can process shorts by iterating over every possible permutation. Than you can process longs by iterating over then and checking it they are possible.</p>
+
+<p>Of course there are many optimisations possible to both paths.</p>
+<br /><b>#7</b><br /><p>DAWG (Directed Acyclic Word Graph)
+Mark Wutka was kind enough to provide some pascal code here.</p>
+
+<ul>
+<li><a href="http://www.wutka.com/dawg.html" rel="nofollow">http://www.wutka.com/dawg.html</a></li>
+<li><a href="http://www.wutka.com/DictConvert.ZIP" rel="nofollow">http://www.wutka.com/DictConvert.ZIP</a></li>
+</ul>
+<br /><b>#8</b><br /><p>Another approach, similar to @market's answer, is to precompute a 'bitmask' for each word in the dictionary.  Bit 0 is set if the word contains at least one A, bit 1 is set if it contains at least one B, and so on up to bit 25 for Z.</p>
+
+<p>If you want to search for all words in the dictionary that could be made up from a combination of letters, you start by forming the bitmask for the collection of letters.  You can then filter out all of the words that use other letters by checking whether <code>wordBitmask &amp; ~lettersBitMask</code> is zero.  If this is zero, the word only uses letters available in the collection, and so could be valid.  If this is non-zero, it uses a letter not available in the collection and so is not allowed.</p>
+
+<p>The advantage of this approach is that the bitwise operations are fast.  The vast majority of words in the dictionary will use at least one of the 17 or more letters that aren't in the collection given, and you can speedily discount them all.  However, for the minority of words that make it through the filter, there is one more check that you still have to make.  You still need to check that words aren't using letters more often than they appear in the collection.  For example, the word 'weakener' must be disallowed because it has three 'e's, whereas there are only two in the collection of letters RAEPKWAEN.  The bitwise approach alone will not filter out this word since each letter in the word appears in the collection.</p>
+<br />

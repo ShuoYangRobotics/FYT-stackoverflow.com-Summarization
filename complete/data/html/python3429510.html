@@ -1,0 +1,260 @@
+<h3>Question (ID-3429510):</h3><h2>Pythonic way to convert a list of integers into a string of comma-separated ranges</h2><p>I have a list of integers which I need to parse into a string of ranges.</p>
+
+<p>For example:</p>
+
+<pre><code> [0, 1, 2, 3] -&gt; "0-3"
+ [0, 1, 2, 4, 8] -&gt; "0-2,4,8"
+</code></pre>
+
+<p>And so on.</p>
+
+<p>I'm still learning more pythonic ways of handling lists, and this one is a bit difficult for me.  My latest thought was to create a list of lists which keeps track of paired numbers:</p>
+
+<pre><code>[ [0, 3], [4, 4], [5, 9], [20, 20] ]
+</code></pre>
+
+<p>I could then iterate across this structure, printing each sub-list as either a range, or a single value.</p>
+
+<p>I don't like doing this in two iterations, but I can't seem to keep track of each number within each iteration.  My thought would be to do something like this:</p>
+
+<p>Here's my most recent attempt.  It works, but I'm not fully satisfied; I keep thinking there's a more elegant solution which completely escapes me.  The string-handling iteration isn't the nicest, I know -- it's pretty early in the morning for me :)</p>
+
+<pre><code>def createRangeString(zones):
+        rangeIdx = 0
+        ranges   = [[zones[0], zones[0]]]
+        for zone in list(zones):
+            if ranges[rangeIdx][1] in (zone, zone-1):
+                ranges[rangeIdx][1] = zone
+            else:
+                ranges.append([zone, zone])
+                rangeIdx += 1
+
+        rangeStr = ""
+        for range in ranges:
+            if range[0] != range[1]:
+                rangeStr = "%s,%d-%d" % (rangeStr, range[0], range[1])
+            else:
+                rangeStr = "%s,%d" % (rangeStr, range[0])
+
+        return rangeStr[1:]
+</code></pre>
+
+<p>Is there a straightforward way I can merge this into a single iteration?  What else could I do to make it more Pythonic?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><pre><code>&gt;&gt;&gt; from itertools import count, groupby
+&gt;&gt;&gt; L=[1, 2, 3, 4, 6, 7, 8, 9, 12, 13, 19, 20, 22, 23, 40, 44]
+&gt;&gt;&gt; G=(list(x) for _,x in groupby(L, lambda x,c=count(): next(c)-x))
+&gt;&gt;&gt; print ",".join("-".join(map(str,(g[0],g[-1])[:len(g)])) for g in G)
+1-4,6-9,12-13,19-20,22-23,40,44
+</code></pre>
+
+<p>The idea here is to pair each element with count(). Then the difference between the value and count() is constant for consecutive values. groupby() does the rest of the work</p>
+
+<p>As Jeff suggests, an alternative to <code>count()</code> is to use <code>enumerate()</code>. This adds some extra cruft that needs to be stripped out in the print statement</p>
+
+<pre><code>G=(list(x) for _,x in groupby(enumerate(L), lambda (i,x):i-x))
+print ",".join("-".join(map(str,(g[0][1],g[-1][1])[:len(g)])) for g in G)
+</code></pre>
+
+<p><strong>Update:</strong> for the sample list given here, the version with enumerate runs about 5% slower than the version using count() on my computer</p>
+<br /><b>#1</b><br /><p>Whether this is pythonic is up for debate.  But it is very compact.  The real meat is in the <code>Rangify()</code> function.  There's still room for improvement if you want efficiency or Pythonism.</p>
+
+<pre><code>def CreateRangeString(zones):
+    #assuming sorted and distinct
+    deltas = [a-b for a, b in zip(zones[1:], zones[:-1])]
+    deltas.append(-1)
+    def Rangify((b, p), (z, d)):
+        if p is not None:
+            if d == 1: return (b, p)
+            b.append('%d-%d'%(p,z))
+            return (b, None)
+        else:
+            if d == 1: return (b, z)
+            b.append(str(z))
+            return (b, None)
+    return ','.join(reduce(Rangify, zip(zones, deltas), ([], None))[0])
+</code></pre>
+
+<p>To describe the parameters:</p>
+
+<ul>
+<li><code>deltas</code> is the distance to the next value (inspired from an <a href="http://stackoverflow.com/questions/3428769/finding-the-largest-delta-between-two-integers-in-a-list-in-python">answer</a> here on SO)</li>
+<li><code>Rangify()</code> does the reduction on these parameters
+<ul>
+<li><code>b</code> - base or accumulator</li>
+<li><code>p</code> - previous start range</li>
+<li><code>z</code> - zone number</li>
+<li><code>d</code> - delta</li>
+</ul></li>
+</ul>
+<br /><b>#2</b><br /><p>To concatenate strings you should use <code>','.join</code>. This removes the 2nd loop. </p>
+
+<pre><code>def createRangeString(zones):
+        rangeIdx = 0
+        ranges   = [[zones[0], zones[0]]]
+        for zone in list(zones):
+            if ranges[rangeIdx][1] in (zone, zone-1):
+                ranges[rangeIdx][1] = zone
+            else:
+                ranges.append([zone, zone])
+                rangeIdx += 1
+
+       return ','.join(
+                map(
+                  lambda p: '%s-%s'%tuple(p) if p[0] != p[1] else str(p[0]),
+                  ranges
+                )
+              )
+</code></pre>
+
+<p>Although I prefer a more generic approach:</p>
+
+<pre><code>from itertools import groupby
+
+# auxiliary functor to allow groupby to compare by adjacent elements.
+class cmp_to_groupby_key(object):
+  def __init__(self, f):
+    self.f = f
+    self.uninitialized = True
+  def __call__(self, newv):
+    if self.uninitialized or not self.f(self.oldv, newv):
+      self.curkey = newv
+      self.uninitialized = False
+    self.oldv = newv
+    return self.curkey
+
+# returns the first and last element of an iterable with O(1) memory.
+def first_and_last(iterable):
+  first = next(iterable)
+  last = first
+  for i in iterable:
+    last = i
+  return (first, last)
+
+# convert groups into list of range strings
+def create_range_string_from_groups(groups):
+  for _, g in groups:
+    first, last = first_and_last(g)
+    if first != last:
+      yield "{0}-{1}".format(first, last)
+    else:
+      yield str(first)
+
+def create_range_string(zones):
+  groups = groupby(zones, cmp_to_groupby_key(lambda a,b: b-a&lt;=1))
+  return ','.join(create_range_string_from_groups(groups))
+
+assert create_range_string([0,1,2,3]) == '0-3'
+assert create_range_string([0, 1, 2, 4, 8]) == '0-2,4,8'
+assert create_range_string([1,2,3,4,6,7,8,9,12,13,19,20,22,22,22,23,40,44]) == '1-4,6-9,12-13,19-20,22-23,40,44'
+</code></pre>
+<br /><b>#3</b><br /><p>This is more verbose, mainly because I have used generic functions that I have and that are minor variations of itertools functions and recipes:</p>
+
+<pre><code>from itertools import tee, izip_longest
+def pairwise_longest(iterable):
+    "variation of pairwise in http://docs.python.org/library/itertools.html#recipes"
+    a, b = tee(iterable)
+    next(b, None)
+    return izip_longest(a, b)
+
+def takeuntil(predicate, iterable):
+    """returns all elements before and including the one for which the predicate is true
+    variation of http://docs.python.org/library/itertools.html#itertools.takewhile"""
+    for x in iterable:
+        yield x
+        if predicate(x):
+            break
+
+def get_range(it):
+    "gets a range from a pairwise iterator"
+    rng = list(takeuntil(lambda (a,b): (b is None) or (b-a&gt;1), it))
+    if rng:
+        b, e = rng[0][0], rng[-1][0]
+        return "%d-%d" % (b,e) if b != e else "%d" % b
+
+def create_ranges(zones):
+    it = pairwise_longest(zones)
+    return ",".join(iter(lambda:get_range(it),None))
+
+k=[0,1,2,4,5,7,9,12,13,14,15]
+print create_ranges(k) #0-2,4-5,7,9,12-15
+</code></pre>
+<br /><b>#4</b><br /><p>Here is my solution.  You need to keep track of various pieces of information while you iterate through the list and create the result - this screams generator to me.  So here goes:</p>
+
+<pre><code>def rangeStr(start, end):
+    '''convert two integers into a range start-end, or a single value if they are the same''' 
+    return str(start) if start == end else "%s-%s" %(start, end)
+
+def makeRange(seq):
+    '''take a sequence of ints and return a sequence
+    of strings with the ranges
+    '''
+    # make sure that seq is an iterator
+    seq = iter(seq)
+    start = seq.next()
+    current = start
+    for val in seq:
+        current += 1
+        if val != current:
+            yield rangeStr(start, current-1)
+            start = current = val
+    # make sure the last range is included in the output
+    yield rangeStr(start, current)
+
+def stringifyRanges(seq):
+    return ','.join(makeRange(seq))
+
+&gt;&gt;&gt; l = [1,2,3, 7,8,9, 11, 20,21,22,23]
+&gt;&gt;&gt; l2 = [1,2,3, 7,8,9, 11, 20,21,22,23, 30]
+&gt;&gt;&gt; stringifyRanges(l)
+'1-3,7-9,11,20-23'
+&gt;&gt;&gt; stringifyRanges(l2)
+'1-3,7-9,11,20-23,30'
+</code></pre>
+
+<p>My version will work correctly if given an empty list, which I think some of the others will not.  </p>
+
+<pre><code>&gt;&gt;&gt; stringifyRanges( [] )
+''
+</code></pre>
+
+<p>makeRanges will work on any iterator that returns integers and lazily returns a sequence of strings so can be used on infinite sequences.</p>
+
+<p><strong>edit:</strong> I have updated the code to handle single numbers that are not part of a range.</p>
+
+<p><strong>edit2:</strong> refactored out rangeStr to remove duplication.</p>
+<br /><b>#5</b><br /><pre><code>def createRangeString(zones):
+    """Create a string with integer ranges in the format of '%d-%d'
+    &gt;&gt;&gt; createRangeString([0, 1, 2, 4, 8])
+    "0-2,4,8"
+    &gt;&gt;&gt; createRangeString([1,2,3,4,6,7,8,9,12,13,19,20,22,22,22,23,40,44])
+    "1-4,6-9,12-13,19-20,22-23,40,44"
+    """
+    buffer = []
+
+    try:
+        st = ed = zones[0]
+        for i in zones[1:]:
+            delta = i - ed
+            if delta == 1: ed = i
+            elif not (delta == 0):
+                buffer.append((st, ed))
+                st = ed = i
+        else: buffer.append((st, ed))
+    except IndexError:
+        pass
+
+    return ','.join(
+            "%d" % st if st==ed else "%d-%d" % (st, ed)
+            for st, ed in buffer)
+</code></pre>
+<br /><b>#6</b><br /><p>how  about this mess...</p>
+
+<pre><code>def rangefy(mylist):
+    mylist, mystr, start = mylist + [None], "", 0
+    for i, v in enumerate(mylist[:-1]):
+            if mylist[i+1] != v + 1:
+                    mystr += ["%d,"%v,"%d-%d,"%(start,v)][start!=v]
+                    start = mylist[i+1]
+    return mystr[:-1]
+</code></pre>
+<br />

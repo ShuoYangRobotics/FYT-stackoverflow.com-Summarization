@@ -1,0 +1,126 @@
+<h3>Question (ID-1659659):</h3><h2>How to write a memory efficient Python program?</h2><p>It's said that Python automatically manages memory. I'm confused because I have a Python program consistently uses more than 2GB of memory.</p>
+
+<p>It's a simple multi-thread binary data downloader and unpacker.</p>
+
+<pre><code>def GetData(url):
+    req = urllib2.Request(url)
+    response = urllib2.urlopen(req)
+    data = response.read() // data size is about 15MB
+    response.close()
+    count = struct.unpack("!I", data[:4])
+    for i in range(0, count):
+        UNPACK FIXED LENGTH OF BINARY DATA HERE
+        yield (field1, field2, field3)
+
+class MyThread(threading.Thread):
+    def __init__(self, total, daterange, tickers):
+        threading.Thread.__init__(self)
+
+    def stop(self):
+        self._Thread__stop()
+
+    def run(self):
+        GET URL FOR EACH REQUEST
+        data = []
+        items = GetData(url)
+        for item in items:
+            data.append(';'.join(item))
+        f = open(filename, 'w')
+        f.write(os.linesep.join(data))
+        f.close()
+</code></pre>
+
+<p>There are 15 threads running. Each request gets 15MB of data and unpack it and saved to local text file. How could this program consume more than 2GB of memory? Do I need to do any memory recycling jobs in this case? How can I see how much memory each objects or functions use?</p>
+
+<p>I would appreciate all your advices or tips on how to keep a python program running in a memory efficient mode.</p>
+
+<p><strong>Edit:</strong> Here is the output of "cat /proc/meminfo"</p>
+
+<pre><code>MemTotal:        7975216 kB
+MemFree:          732368 kB
+Buffers:           38032 kB
+Cached:          4365664 kB
+SwapCached:        14016 kB
+Active:          2182264 kB
+Inactive:        4836612 kB
+</code></pre>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>The major culprit here is as mentioned above the range() call. It will create a list with 15 million members, and that will eat up 200 MB of your memory, and with 15 processes, that's 3GB.</p>
+
+<p>But also don't read in the whole 15MB file into data(), read bit by bit from the response. Sticking those 15MB into a variable will use up 15MB of memory more than reading bit by bit from the response.</p>
+
+<p>You might want to consider simply just extracting data until you run out if indata, and comparing the count of data you extracted with what the first bytes said it should be. Then you need neither range() nor xrange(). Seems more pythonic to me. :)</p>
+<br /><b>#1</b><br /><p>Like others have said, you need at least the following two changes:</p>
+
+<ol>
+<li><p>Do not create a huge list of integers with <code>range</code></p>
+
+<pre><code># use xrange
+for i in xrange(0, count):
+    # UNPACK FIXED LENGTH OF BINARY DATA HERE
+    yield (field1, field2, field3)
+</code></pre></li>
+<li><p>do not create a huge string as the full file body to be written at once</p>
+
+<pre><code># use writelines
+f = open(filename, 'w')
+f.writelines((datum + os.linesep) for datum in data)
+f.close()
+</code></pre></li>
+</ol>
+
+<p>Even better, you could write the file as:</p>
+
+<pre><code>    items = GetData(url)
+    f = open(filename, 'w')
+    for item in items:
+        f.write(';'.join(item) + os.linesep)
+    f.close()
+</code></pre>
+<br /><b>#2</b><br /><p>The last line should surely be <code>f.close()</code>? Those trailing parens are kinda important. </p>
+<br /><b>#3</b><br /><p>Consider using xrange() instead of range(), I believe that xrange is a generator whereas range() expands the whole list.</p>
+
+<p>I'd say either don't read the whole file into memory, or don't keep the whole unpacked structure in memory.</p>
+
+<p>Currently you keep both in memory, at the same time, this is going to be quite big. So you've got at least two copies of your data in memory, plus some metadata.</p>
+
+<p>Also the final line </p>
+
+<pre><code>    f.write(os.linesep.join(data))
+</code></pre>
+
+<p>May actually mean you've temporarily got a third copy in memory (a big string with the entire output file).</p>
+
+<p>So I'd say you're doing it in quite an inefficient way, keeping the entire input file, entire output file and a fair amount of intermediate data in memory at once.</p>
+
+<p>Using the generator to parse it is quite a nice idea. Consider writing each record out after you've generated it (it can then be discarded and the memory reused), or if that causes too many write requests, batch them into, say, 100 rows at once.</p>
+
+<p>Likewise, reading the response could be done in chunks. As they're fixed records this should be reasonably easy.</p>
+<br /><b>#4</b><br /><p>You can make this program more memory efficient by not reading all 15MB from the TCP connection, but instead processing each line as it is read. This will make the remote servers wait for you, of course, but that's okay. </p>
+
+<p>Python is just not very memory efficient. It wasn't built for that.</p>
+<br /><b>#5</b><br /><p>You could do more of your work in compiled C code if you convert this to a list comprehension:</p>
+
+<pre><code>data = []
+items = GetData(url)
+for item in items:
+    data.append(';'.join(item))
+</code></pre>
+
+<p>to:</p>
+
+<pre><code>data = [';'.join(items) for items in GetData(url)]
+</code></pre>
+
+<p>This is actually slightly different from your original code.  In your version, GetData returns a 3-tuple, which comes back in items.  You then iterate over this triplet, and append ';'.join(item) for each item in it.  This means that you get 3 entries added to data for every triplet read from GetData, each one ';'.join'ed.  If the items are just strings, then ';'.join will give you back a string with every other character a ';' - that is ';'.join("ABC") will give back "A;B;C".  I think what you actually <em>wanted</em> was to have each triplet saved back to the data list as the 3 values of the triplet, separated by semicolons.  That is what my version generates.</p>
+
+<p>This may also help somewhat with your original memory problem, as you are no longer creating as many Python values.  Remember that a variable in Python has <em>much</em> more overhead than one in a language like C.  Since each value is itself an object, and add the overhead of each name reference to that object, you can easily expand the theoretical storage requirement several-fold.  In your case, reading 15Mb X 15 = 225Mb + the overhead of each item of each triple being stored as a string entry in your data list could quickly grow to your 2Gb observed size.  At minimum, my version of your data list will have only 1/3 the entries in it, plus the separate item references are skipped, plus the iteration is done in compiled code.</p>
+<br /><b>#6</b><br /><p>There are 2 obvious places where you keep large data objects in memory (<code>data</code> variable in <code>GetData()</code> and <code>data</code> in <code>MyThread.run()</code> - these two will take about 500Mb) and probably there are other places in the skipped code. There are both easy to make memory efficient. Use <code>response.read(4)</code> instead of reading whole response at once and do it the same way in code behind <code>UNPACK FIXED LENGTH OF BINARY DATA HERE</code>. Change <code>data.append(...)</code> in <code>MyThread.run()</code> to </p>
+
+<pre><code>if not first:
+    f.write(os.linesep)
+f.write(';'.join(item))
+</code></pre>
+
+<p>These changes will save you a lot of memory.</p>
+<br /><b>#7</b><br /><p>Make sure you delete the threads after they are stopped. (using <code>del</code>)</p>
+<br />

@@ -1,0 +1,202 @@
+<h3>Question (ID-5431613):</h3><h2>The Pythonic way of validating a long chain of conditions in Python</h2><p>So I have a long chain of conditions that should be validated to be true. Instead of chaining a long if condition, I tried to be "innovative" and did it this way, in which I reckon is more readable. But my question is, is this the optimal way of doing it?</p>
+
+<p>Or is there a pythonic way of doing it? PS: Please respond with an alternative instead of answering "No", thanks!</p>
+
+<p>Heres the code chunk:</p>
+
+<pre><code>def site_exists(site):
+    """
+    returns the sitebean if it exists,
+    else returns false
+    """
+    vpadmin_service = _get_vpadmin_service(site)
+    all_sites = VpAdminServiceUtil.getSites(vpadmin_service)
+    for site_listing in all_sites:
+        if site.getId():
+            #condition check
+            try:
+                assert site.getId() == site_listing.getId()
+                assert site.getName() == site_listing.getName()
+                assert site.getCustomer().getId() == site_listing.getCustomer().getId()
+            except AssertionError:
+                continue
+            #pass conditions
+            return site_listing
+        #no id, so just check for name and customer
+        else:
+            #condition check
+            try:
+                assert site.getName() == site_listing.getName()
+                assert site.getCustomer().getId() == site_listing.getCustomer().getId()
+            except AssertionError:
+                continue
+            #pass conditions
+            site.setId(site_listing.getId())
+            return site_listing
+    return False
+</code></pre>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>A simpler approach is to build a tuple of the conditions and compare the tuples:</p>
+
+<pre><code>def site_info(s):
+    return s.getId(), s.getName(), s.getCustomer().getId()
+
+if site_info(site) == site_info(site_listing):
+    return site_listing
+else:
+    continue
+</code></pre>
+
+<p>If you have a lot of conditions, or the conditions are expensive, you can instead create a generator for the conditions, and compare with <code>any</code> or <code>all</code>:</p>
+
+<pre><code>import itertools
+def iter_site_info(s):
+    yield s.getId()
+    yield s.getName()
+    yield s.getCustomer().getId()
+
+if all(x==y for (x, y) in itertools.izip(iter_site_info(site), iter_site_info(site_listing)):
+    return site_listing
+else:
+    continue
+</code></pre>
+
+<p>I'm not sure whether Jython has <code>any</code> and <code>all</code>, but they're trivial functions to write.</p>
+
+<p>EDIT - <code>any</code> and <code>all</code> appeared in Python 2.5, so Jython should have them.</p>
+<br /><b>#1</b><br /><p>Using exception for control flow is bad! And it will also kill your performance. Assuming the condition will be true in one out of 10 cases? So 9 exceptions to handle in the worst case - this comes with a huge performance cost.</p>
+
+<p>If you want readability, try:</p>
+
+<pre><code>        if (
+            condition1 and \
+            condition2 and \
+            condition3
+            ):
+            # do something
+</code></pre>
+
+<p>For the revised version, this should be equivalent:</p>
+
+<pre><code>for site_listing in all_sites:
+    if site.getName() == site_listing.getName() and site.getCustomer().getId() == site_listing.getCustomer().getId():
+        if not site.getId():
+            site.setId(site_listing.getId())
+        if site.getId() == site_listing.getId():
+            return site_listing
+</code></pre>
+<br /><b>#2</b><br /><p>I would implement an <code>is_same</code> method on <code>site</code> and call it in the <code>for</code> loops.</p>
+
+<pre><code>all_sites = VpAdminServiceUtil.getSites(vpadmin_service)
+for site_listing in all_sites:
+    if site_listing.is_same(site, set_id=True):
+        return site_listing
+</code></pre>
+
+<p>As for its implementation (that is your real question), I suggest something like: </p>
+
+<pre><code>...
+if self.getName()     != site.getName():     return False
+if self.getCustomer() != site.getCustomer(): return False
+...
+return True
+</code></pre>
+<br /><b>#3</b><br /><p>Use the <code>__eq__</code> method! If you wrote the class of <code>site</code> yourself, no problem. If it is from a module outside of your control, see <a href="http://stackoverflow.com/questions/3464061/cast-base-class-to-derived-class-python-or-more-pythonic-way-of-extending-classe/4714744#4714744">this solution</a>, or create a somewhat less elegant wrapping class. For the wrap variant, this would be the class:</p>
+
+<pre><code>class WrappedSite(object):
+    def __init__(self, site):
+        self.site = site
+
+    def __eq__(self, other):
+        if site.getId():
+            if self.site.getId() != other.site.getId():
+                return False
+        if self.site.getName() != other.site.getName():
+            return False
+        if self.site.getCustomer().getId() != other.site.getCustomer().getId():
+            return False
+        return True
+</code></pre>
+
+<p>Then your big ugly function is reduced to this:</p>
+
+<pre><code>def site_exists(site):
+    """
+    returns the sitebean if it exists,
+    else returns false
+    """
+    vpadmin_service = _get_vpadmin_service(site)
+    all_sites = VpAdminServiceUtil.getSites(vpadmin_service)
+    wsite = WrappedSite(site)
+    for site_listing in all_sites:
+        if wsite == WrappedSite(site_listing):
+            return site_listing
+    return False
+</code></pre>
+
+<p><strong>EDIT</strong> Fixed <code>site_exists</code> to return sitebean instead of True.</p>
+<br /><b>#4</b><br /><p>That strikes me as a pretty pythonic way to do it. However, it appears you'll be returning <code>True</code> in all cases - is that what you want?</p>
+<br /><b>#5</b><br /><p>Remove some code duplication:</p>
+
+<pre><code>def site_exists(site):
+    """
+    returns the sitebean if it exists,
+    else returns None
+    """
+    vpadmin_service = _get_vpadmin_service(site)
+    all_sites = VpAdminServiceUtil.getSites(vpadmin_service)
+
+    for site_listing in all_sites:
+        if (site.getName() == site_listing.getName() and
+            site.getCustomer().getId() == site_listing.getCustomer().getId()):
+            if site.getId(): # if id is set; it should be the same
+                if site.getId() != site_listing.getId(): continue
+            else: # no id; consider it the same site
+                site.setId(site_listing.getId()) #XXX side-effect
+            return site_listing
+</code></pre>
+
+<p>Note: it is unexpected that <code>site_exists()</code> might modify its argument (via <code>.setId()</code>). Consider to refactor it:</p>
+
+<pre><code>def same_site(site, other):
+    if site.getId() and site.getId() != other.getId(): 
+       # if id is set; it should be the same
+       return False 
+    return (site.getName() == other.getName() and
+            site.getCustomer().getId() == other.getCustomer().getId())
+
+def get_site_listing(site):
+    """
+    returns the sitebean corresponding to `site`,
+    returns None if there is none
+    """
+    vpadmin_service = _get_vpadmin_service(site)
+    all_sites = VpAdminServiceUtil.getSites(vpadmin_service)
+
+    return next((s for s in all_sites if same_site(site, s)), None)
+</code></pre>
+
+<p>Note: the code doesn't modify the <code>site</code> object. Use the return value from <code>get_site_listing()</code> instead.</p>
+
+<p>If <code>next()</code> is unavailable then use:</p>
+
+<pre><code>for site_listing in all_sites:
+    if same_site(site, site_listing):
+       return site_listing
+return None
+</code></pre>
+
+<p>btw, <code>jython</code> should provide <a href="http://docs.python.org/library/functions.html#property" rel="nofollow"><code>property</code></a> wrappers for you; so you could write:</p>
+
+<pre><code>def same_site(site, other):
+    if site.id and site.id != other.id: 
+       # if id is set; it should be the same
+       return False 
+    return site.name == other.name and site.customer.id == other.customer.id
+</code></pre>
+
+<p>and <code>site.id = id</code> instead of <code>site.setId(id)</code>.</p>
+<br /><b>#6</b><br /><p>Using an exception handler as a code target is basically a "goto".  I don't see anything wrong with it really (despite the ancient furor surrounding "goto considered harmful"), but knowing that it's a goto might give you a different perspective.</p>
+<br /><b>#7</b><br /><p>Using exception handling for control flow is pythonic in the sense that "it's easier to ask for forgiveness than for permission". However, that doesn't extend to making rules to break just so that you can ask for forgiveness.</p>
+
+<p>Others have provided excellent alternatives. Just wanted to address the principle aspect.</p>
+<br />

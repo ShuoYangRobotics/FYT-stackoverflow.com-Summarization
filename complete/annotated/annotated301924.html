@@ -1,0 +1,96 @@
+<h3>Question ( ID-301924 ) : </h3><h2>Python : <span style="background-color:yellow;">urllib/urllib2/httplib</span> confusion </h2><p>I 'm trying to test the functionality of a web app <span style="background-color:yellow;">by</span> scripting a login sequence in Python , <span style="background-color:yellow;">but</span> I 'm having some troubles . </p>
+<p>Here 's what I need to do : </p>
+<ol>Do a <span style="background-color:yellow;">POST</span> with a few parameters and headers . Follow a redirect Retrieve the HTML <span style="background-color:yellow;">body</span> . </ol>
+<p>Now , I 'm relatively new to python , <span style="background-color:yellow;">but</span> the two things I 've tested so far have n't worked. First I used httplib , with putrequest ( ) ( passing the parameters within the URL ) , and putheader ( ) . This did n't seem to follow the redirects . </p>
+<p>Then I tried <span style="background-color:yellow;">urllib</span> and <span style="background-color:yellow;">urllib2</span> , passing <span style="background-color:yellow;">both</span> headers and parameters as dicts. This seems to return the login page , instead of the page I 'm trying to login to , I guess it 's <span style="background-color:yellow;">because</span> of lack of <span style="background-color:yellow;">cookies</span> or something . </p>
+<p>Am I missing something simple ? </p>
+<p>Thanks . </p>
+<br /><h3>Answers ( Total-8 ) : </h3><b># 0 </b><br /><p>Focus on <span style="background-color:yellow;">urllib2</span> for this , it works quite well. Do n't mess with httplib , it 's not the top-level API . </p>
+<p>What you 're noting is that <span style="background-color:yellow;">urllib2</span> does n't follow the redirect . </p>
+<p>You need to fold in an instance of HTTPRedirectHandler that will catch and follow the redirects . </p>
+<p>Further , you may want to subclass the default HTTPRedirectHandler to capture information that you 'll then check as part of your unit testing . </p>
+<pre><code>cookie_handler= urllib2.HTTPCookieProcessor( self.cookies )
+redirect_handler= HTTPRedirectHandler()
+opener = urllib2.build_opener(redirect_handler,cookie_handler)
+</code></pre>
+<p>You can then use this opener object to <span style="background-color:yellow;">POST</span> and <span style="background-color:yellow;">GET</span> , handling redirects and <span style="background-color:yellow;">cookies</span> properly . </p>
+<p>You may want to add your own subclass of HTTPHandler to capture and log various error codes , also . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p>I had to do this exact thing myself recently. I only needed classes from the standard library. Here 's an excerpt from my code : </p>
+<pre><code>from urllib import urlencode
+from urllib2 import urlopen, Request
+
+# encode my POST parameters for the login page
+login_qs = urlencode( [("username",USERNAME), ("password",PASSWORD)] )
+
+# extract my session id by loading a page from the site
+set_cookie = urlopen(URL_BASE).headers.getheader("Set-Cookie")
+sess_id = set_cookie[set_cookie.index("=")+1:set_cookie.index(";")]
+
+# construct headers dictionary using the session id
+headers = {"Cookie": "session_id="+sess_id}
+
+# perform login and make sure it worked
+if "Announcements:" not in urlopen(Request(URL_BASE+"login",headers=headers), login_qs).read():
+    print "Didn't log in properly"
+    exit(1)
+
+# here's the function I used after this for loading pages
+def download(page=""):
+    return urlopen(Request(URL_BASE+page, headers=headers)).read()
+
+# for example:
+print download(URL_BASE + "config")
+</code></pre>
+<br /><b># 2 </b><br /><p>@ S.Lott , thank you. Your suggestion worked for me , with some modification. Here 's how I did it . </p>
+<pre><code>data = urllib.urlencode(params)
+url = host+page
+request = urllib2.Request(url, data, headers)
+response = urllib2.urlopen(request)
+
+cookies = CookieJar()
+cookies.extract_cookies(response,request)
+
+cookie_handler= urllib2.HTTPCookieProcessor( cookies )
+redirect_handler= HTTPRedirectHandler()
+opener = urllib2.build_opener(redirect_handler,cookie_handler)
+
+response = opener.open(request)
+</code></pre>
+<br /><b># 3 </b><br /><p>I 'd give Mechanize ( http : //wwwsearch.sourceforge.net/mechanize/ ) a shot. It may well handle your cookie/headers transparently . </p>
+<br /><b># 4 </b><br /><p>Try <span style="background-color:yellow;">twill</span> - a simple language that allows users to <span style="background-color:yellow;">browse</span> the Web from a command-line interface. With <span style="background-color:yellow;">twill</span> , you can navigate through Web sites that use forms , <span style="background-color:yellow;">cookies</span> , and most standard Web features. More to the point , <span style="background-color:yellow;">twill</span> is written in Python and has a python API , e.g : </p>
+<pre><code>from twill import get_browser
+b = get_browser()
+
+b.go("http://www.python.org/")
+b.showforms()
+</code></pre>
+<br /><b># 5 </b><br /><p>Here 's my take on this issue . </p>
+<pre><code>#!/usr/bin/env python
+
+import urllib
+import urllib2
+
+
+class HttpBot:
+    """an HttpBot represents one browser session, with cookies."""
+    def __init__(self):
+        cookie_handler= urllib2.HTTPCookieProcessor()
+        redirect_handler= urllib2.HTTPRedirectHandler()
+        self._opener = urllib2.build_opener(redirect_handler, cookie_handler)
+
+    def GET(self, url):
+        return self._opener.open(url).read()
+
+    def POST(self, url, parameters):
+        return self._opener.open(url, urllib.urlencode(parameters)).read()
+
+
+if __name__ == "__main__":
+    bot = HttpBot()
+    ignored_html = bot.POST('https://example.com/authenticator', {'passwd':'foo'})
+    print bot.GET('https://example.com/interesting/content')
+    ignored_html = bot.POST('https://example.com/deauthenticator',{})
+</code></pre>
+<br /><b># 6 </b><br /><p>Besides the fact that you may <span style="background-color:yellow;">be</span> missing a cookie , there might <span style="background-color:yellow;">be</span> some field ( s ) in the form that you are not <span style="background-color:yellow;">POSTing</span> to the webserver. The <span style="background-color:yellow;">best</span> way would <span style="background-color:yellow;">be</span> to capture the actual <span style="background-color:yellow;">POST</span> from a web <span style="background-color:yellow;">browser.</span> You can use LiveHTTPHeaders or WireShark to snoop the traffic and mimic the same <span style="background-color:yellow;">behaviour</span> in your script . </p>
+<br /><b># 7 </b><br /><p>Funkload is a great web app testing tool also. It wraps webunit to handle the <span style="background-color:yellow;">browser</span> emulation , then gives you <span style="background-color:yellow;">both</span> functional and load testing features on top . </p>
+<br />

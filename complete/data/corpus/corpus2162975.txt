@@ -1,0 +1,104 @@
+Question (ID-2162975): Python order of execution I was wondering if Python has similar issues as C regarding the order of execution of certain elements of code. 
+
+ For example, I know in C there are times say when it's not guaranteed that some variable is initialized before another. Or just because one line of code is above another it's not guaranteed that it is implemented before all the ones below it. 
+
+ Is it the same for Python? Like if I open a file of data, read in the data, close the file, then do other stuff do I know for sure that the file is closed before the lines after I close the file are executed?? 
+
+ The reason I ask is because I'm trying to read in a large file of data (1.6GB) and use this python module specific to the work I do on the data. When I run this module I get this error message: 
+
+  File "/glast01/software/ScienceTools/ScienceTools-v9r15p2-SL4/sane/v3r18p1/python/GtApp.py", line 57, in run
+ input, output = self.runWithOutput(print_command)
+ File "/glast01/software/ScienceTools/ScienceTools-v9r15p2-SL4/sane/v3r18p1/python/GtApp.py", line 77, in runWithOutput
+ return os.popen4(self.command(print_command))
+ File "/Home/eud/jmcohen/.local/lib/python2.5/os.py", line 690, in popen4
+ stdout, stdin = popen2.popen4(cmd, bufsize)
+ File "/Home/eud/jmcohen/.local/lib/python2.5/popen2.py", line 199, in popen4
+ inst = Popen4(cmd, bufsize)
+ File "/Home/eud/jmcohen/.local/lib/python2.5/popen2.py", line 125, in __init__
+ self.pid = os.fork()
+OSError: [Errno 12] Cannot allocate memory
+&gt;&gt;&gt; 
+Exception exceptions.AttributeError: AttributeError("Popen4 instance has no attribute 'pid'",) in &lt;bound method Popen4.__del__ of &lt;popen2.Popen4 instance at 0x9ee6fac&gt;&gt; ignored
+ 
+
+ I assume it's related to the size of the data I read in (it has 17608310 rows and 22 columns). 
+I thought perhaps if I closed the file I opened right after I read in the data this would help, but it didn't. This led me to thinking about the order that lines of code are executed in, hence my question. 
+
+ Thanks 
+ Answers (Total-7): #0 The only thing I can think of that may surprise some people is: 
+
+ def test():
+ try:
+  return True
+ finally:
+  return False
+
+print test()
+ 
+
+ Output: 
+
+ False
+ 
+
+ finally clauses really are executed last, even if a return statement precedes them. However, this is not specific to Python. 
+ #1 Execution of C certainly is sequential, for actual statements. There are even rules that define the sequence points , so you can know how individual expressions evaluate. 
+ #2 CPython itself is written in such a way that any effects like those you mention are minimized; code always executes top to bottom barring literal evaluation during compilation, objects are GCed as soon as their refcount hits 0, etc. 
+ #3 Execution in the cpython vm is very linear. I do not think whatever problem you have has to do with order of execution. 
+
+ One thing you should be careful about in Python but not C: exceptions can be raised everywhere, so just because you see a close() call below the corresponding open() call does not mean that call is actually reached. Use try / finally everywhere (or the with statement in new enough pythons) to make sure opened files are closed (and other kinds of resources that can be freed explicitly are freed). 
+
+ If your problem is with memory usage, not some other kind of resource, debugging it can be harder. Memory cannot be freed explicitly in python. The cpython vm (which you are most likely using) does release memory as soon as the last reference to it goes away, but sometimes cannot free memory trapped in cycles with objects that have a __del__ method. If you have any __del__ methods of your own or use classes that have them this may be part of your problem. 
+
+ Your actual question (the memory one, not the order of execution one) is hard to answer without seeing more code, though. It may be something obvious (or there may at least be some obvious way to reduce the amount of memory you need). 
+ #4 "if I open a file of data, read in the data, close the file, then do other stuff do I know for sure that the file is closed before the lines after I close the file are executed??" 
+
+ Closed yes. 
+
+ Released from memory. No. No guarantees about when garbage collection will occur. 
+
+ Further, closing a file says nothing about all the other variables you've created and the other objects you've left laying around attached to those variables. 
+
+ There's no "order of operations" issue. 
+
+ I'll bet that you have too many global variables with too many copies of the data. 
+ #5 If the data consists of columns and rows, why not use the built in file iterator to fetch one line at a time? 
+
+ f = open('file.txt')
+first_line = f.next()
+ 
+ #6 popen2.py : 
+
+ class Popen4(Popen3):
+ childerr = None
+
+ def __init__(self, cmd, bufsize=-1):
+  _cleanup()
+  self.cmd = cmd
+  p2cread, p2cwrite = os.pipe()
+  c2pread, c2pwrite = os.pipe()
+  self.pid = os.fork()
+  if self.pid == 0:
+   # Child
+   os.dup2(p2cread, 0)
+   os.dup2(c2pwrite, 1)
+   os.dup2(c2pwrite, 2)
+   self._run_child(cmd)
+  os.close(p2cread)
+  self.tochild = os.fdopen(p2cwrite, 'w', bufsize)
+  os.close(c2pwrite)
+  self.fromchild = os.fdopen(c2pread, 'r', bufsize)
+ 
+
+ man 2 fork : 
+
+ 
+ The fork() function may fail if: 
+ 
+ [ENOMEM] 
+   Insufficient storage space is available. 
+ 
+
+ os.popen4 eventually calls open2.Popen4.__init__ , which must fork in order to create the child process that you try to read from/write to. This underlying call is failing, likely due to resource exhaustion. 
+
+ You may be using too much memory elsewhere, causing fork to attempt to use more than the RLIMIT_DATA or RLIMIT_RSS limit given to your user. As recommended by Python memory profiler - Stack Overflow , Heapy can help you determine whether this is the case.

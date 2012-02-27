@@ -1,0 +1,197 @@
+Question (ID-3947654): Python - removing items from lists # I have 3 lists:
+L1 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+L2 = [4, 7, 8]
+L3 = [5, 2, 9]
+# I want to create another that is L1 minus L2's memebers and L3's memebers, so:
+L4 = (L1 - L2) - L3 # Of course this isn't going to work
+ 
+
+ I'm wondering, what is the "correct" way to do this. I can do it many different ways, but Python's style guide says there should be only 1 correct way of doing each thing. I've never known what this was. 
+ Answers (Total-6): #0 Here are some tries: 
+
+ L4 = [ n for n in L1 if (n not in L2) and (n not in L3) ] # parens for clarity
+
+tmpset = set( L2 + L3 )
+L4 = [ n for n in L1 if n not in tmpset ]
+ 
+
+ Now that I have had a moment to think, I realize that the L2 + L3 thing creates a temporary list that immediately gets thrown away. So an even better way is: 
+
+ tmpset = set(L2)
+tmpset.update(L3)
+L4 = [ n for n in L1 if n not in tmpset ]
+ 
+
+ Update: I see some extravagant claims being thrown around about performance, and I want to assert that my solution was already as fast as possible. Creating intermediate results, whether they be intermediate lists or intermediate iterators that then have to be called into repeatedly, will be slower, always, than simply giving L2 and L3 for the set to iterate over directly like I have done here. 
+
+ $ python -m timeit \
+ -s 'L1=range(300);L2=range(30,70,2);L3=range(120,220,2)' \
+ 'ts = set(L2); ts.update(L3); L4 = [ n for n in L1 if n not in ts ]'
+10000 loops, best of 3: 39.7 usec per loop
+ 
+
+ All other alternatives (that I can think of) will necessarily be slower than this. Doing the loops ourselves, for example, rather than letting the set() constructor do them, adds expense: 
+
+ $ python -m timeit \
+ -s 'L1=range(300);L2=range(30,70,2);L3=range(120,220,2)' \
+ 'unwanted = frozenset(item for lst in (L2, L3) for item in lst); L4 = [ n for n in L1 if n not in unwanted ]'
+10000 loops, best of 3: 46.4 usec per loop
+ 
+
+ Using iterators, will all of the state-saving and callbacks they involve, will obviously be even more expensive: 
+
+ $ python -m timeit \
+ -s 'L1=range(300);L2=range(30,70,2);L3=range(120,220,2);from itertools import ifilterfalse, chain' \
+ 'L4 = list(ifilterfalse(frozenset(chain(L2, L3)).__contains__, L1))' 
+10000 loops, best of 3: 47.1 usec per loop
+ 
+
+ So I believe that the answer I gave last night is still far and away (for values of "far and away" greater than around 5µsec, obviously) the best, unless the questioner will have duplicates in L1 and wants them removed once each for every time the duplicate appears in one of the other lists. 
+ #1 update::: post contains a reference to false allegations of inferior performance of sets compared to frozensets. I maintain that it's still sensible to use a frozenset in this instance, even though there's no need to hash the set itself, just because it's more correct semantically. Though, in practice, I might not bother typing the extra 6 characters. I'm not feeling motivated to go through and edit the post, so just be advised that the "allegations" link links to some incorrectly run tests. The gory details are hashed out in the comments. :::update 
+
+ The second chunk of code posted by Brandon Craig Rhodes is quite good, but as he didn't respond to my suggestion about using a frozenset (well, not when I started writing this, anyway), I'm going to go ahead and post it myself. 
+
+ The whole basis of the undertaking at hand is to check if each of a series of values ( L1 ) are in another set of values; that set of values is the contents of L2 and L3 . The use of the word "set" in that sentence is telling: even though L2 and L3 are list s, we don't really care about their list-like properties, like the order that their values are in or how many of each they contain. We just care about the set (there it is again) of values they collectively contain. 
+
+ If that set of values is stored as a list, you have to go through the list elements one by one, checking each one. It's relatively time-consuming, and it's bad semantics: again, it's a "set" of values, not a list. So Python has these neat set types that hold a bunch of unique values, and can quickly tell you if some value is in them or not. This works in pretty much the same way that python's dict types work when you're looking up a key. 
+
+ The difference between sets and frozensets is that sets are mutable, meaning that they can be modified after creation. Documentation on both types is here . 
+
+ Since the set we need to create, the union of the values stored in L2 and L3 , is not going to be modified once created, it's semantically appropriate to use an immutable data type. This also allegedly has some performance benefits. Well, it makes sense that it would have some advantage; otherwise, why would Python have frozenset as a builtin? 
+
+ update ... 
+
+ Brandon has answered this question: the real advantage of frozen sets is that their immutability makes it possible for them to be hashable , allowing them to be dictionary keys or members of other sets. 
+
+ I ran some informal timing tests comparing the speed for creation of and lookup on relatively large (3000-element) frozen and mutable sets; there wasn't much difference. This conflicts with the above link, but supports what Brandon says about them being identical but for the aspect of mutability. 
+
+ ... update 
+
+ Now, because frozensets are immutable, they don't have an update method. Brandon used the set.update method to avoid creating and then discarding a temporary list en route to set creation; I'm going to take a different approach. 
+
+ items = (item for lst in (L2, L3) for item in lst)
+ 
+
+ This generator expression makes items an iterator over, consecutively, the contents of L2 and L3 . Not only that, but it does it without creating a whole list-full of intermediate objects. Using nested for expressions in generators is a bit confusing, but I manage to keep it sorted out by remembering that they nest in the same order that they would if you wrote actual for loops, e.g. 
+
+ def get_items(lists):
+ for lst in lists:
+  for item in lst:
+   yield item
+ 
+
+ That generator function is equivalent to the generator expression that we assigned to items . Well, except that it's a parametrized function definition instead of a direct assignment to a variable. 
+
+ Anyway, enough digression. The big deal with generators is that they don't actually do anything. Well, at least not right away: they just set up work to be done later, when the generator expression is iterated . This is formally referred to as being lazy . We're going to do that (well, I am, anyway) by passing items to the frozenset function, which iterates over it and returns a frosty cold frozenset. 
+
+ unwanted = frozenset(items)
+ 
+
+ You could actually combine the last two lines, by putting the generator expression right inside the call to frozenset : 
+
+ unwanted = frozenset(item for lst in (L2, L3) for item in lst)
+ 
+
+ This neat syntactical trick works as long as the iterator created by the generator expression is the only parameter to the function you're calling. Otherwise you have to write it in its usual separate set of parentheses, just like you were passing a tuple as an argument to the function. 
+
+ Now we can build a new list in the same way that Brandon did, with a list comprehension . These use the same syntax as generator expressions, and do basically the same thing, except that they are eager instead of lazy (again, these are actual technical terms), so they get right to work iterating over the items and creating a list from them. 
+
+ L4 = [item for item in L1 if item not in unwanted]
+ 
+
+ This is equivalent to passing a generator expression to list , e.g. 
+
+ L4 = list(item for item in L1 if item not in unwanted)
+ 
+
+ but more idiomatic. 
+
+ So this will create the list L4 , containing the elements of L1 which weren't in either L2 or L3 , maintaining the order that they were originally in and the number of them that there were. 
+
+ 
+
+ If you just want to know which values are in L1 but not in L2 or L3 , it's much easier: you just create that set: 
+
+ L1_unique_values = set(L1) - unwanted
+ 
+
+ You can make a list out of it, as does st0le , but that might not really be what you want. If you really do want the set of values that are only found in L1 , you might have a very good reason to keep that set as a set , or indeed a frozenset : 
+
+ L1_unique_values = frozenset(L1) - unwanted
+ 
+
+ 
+
+ ...Annnnd , now for something completely different: 
+
+ from itertools import ifilterfalse, chain
+L4 = list(ifilterfalse(frozenset(chain(L2, L3)).__contains__, L1))
+ 
+ #2 Assuming your individual lists won't contain duplicates....Use Set and Difference 
+
+ L1 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+L2 = [4, 7, 8]
+L3 = [5, 2, 9]
+print(list(set(L1) - set(L2) - set(L3)))
+ 
+ #3 Doing such operations in Lists can hamper your program's performance very soon. What happens is with each remove, List operations do a fresh malloc &amp; move elements around. This can be expensive if you have a very huge list or otherwise. So I would suggest this - 
+
+ I am assuming your list has unique elements. Otherwise you need to maintain a list in your dict having duplicate values. Anyway for the data your provided, here it is- 
+
+ METHOD 1 
+
+ d = dict()
+for x in L1: d[x] = True
+
+# Check if L2 data is in 'd'
+for x in L2:
+ if x in d:
+  d[x] = False
+
+for x in L3:
+ if x in d:
+  d[x] = False
+
+# Finally retrieve all keys with value as True.
+final_list = [x for x in d if d[x]]
+ 
+
+ METHOD 2 
+If all that looks like too much code. Then you could try using set . But this way your list will loose all duplicate elements. 
+
+ final_set = set.difference(set(L1),set(L2),set(L3))
+final_list = list(final_set)
+ 
+ #4 This may be less pythonesque than the list-comprehension answer, but has a simpler look to it: 
+
+ l1 = [ ... ]
+l2 = [ ... ]
+
+diff = list(l1) # this copies the list
+for element in l2:
+ diff.remove(element)
+ 
+
+ The advantage here is that we preserve order of the list, and if there are duplicate elements , we remove only one for each time it appears in l2. 
+ #5 I think intuited's answer is way too long for such a simple problem, and Python already has a builtin function to chain two lists as a generator. 
+
+ The procedure is as follows: 
+
+ 
+ Use itertools.chain to chain L2 and L3 without creating a memory-consuming copy 
+ Create a set from that (in this case, a frozenset will do because we don't change it after creation) 
+ Use list comprehension to filter out elements that are in L1 and also in L2 or L3. As set/frozenset lookup ( x in someset ) is O(1), this will be very fast. 
+ 
+
+ And now the code: 
+
+ L1 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+L2 = [4, 7, 8]
+L3 = [5, 2, 9]
+
+from itertools import chain
+tmp = frozenset(chain(L2, L3))
+L4 = [x for x in L1 if x not in tmp] # [1, 3, 6]
+ 
+
+ This should be one of the fastest, simplest and least memory-consuming solution.

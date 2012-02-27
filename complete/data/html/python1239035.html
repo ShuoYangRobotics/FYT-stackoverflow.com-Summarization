@@ -1,0 +1,177 @@
+<h3>Question (ID-1239035):</h3><h2>Asynchronous method call in Python?</h2><p>I was wondering if there's any library for asynchronous method calls in <a href="http://en.wikipedia.org/wiki/Python%5F%28programming%5Flanguage%29">Python</a>. It would be great if you could do something like</p>
+
+<pre><code>@async
+def longComputation():
+    &lt;code&gt;
+
+
+token = longComputation()
+token.registerCallback(callback_function)
+# alternative, polling
+while not token.finished():
+    doSomethingElse()
+    if token.finished():
+        result = token.result()
+</code></pre>
+
+<p>Or to call a non-async routine asynchronously</p>
+
+<pre><code>def longComputation()
+    &lt;code&gt;
+
+token = asynccall(longComputation())
+</code></pre>
+
+<p>It would be great to have a more refined strategy as native in the language core. Was this considered?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>You can use the <a href="http://docs.python.org/library/multiprocessing.html#module-multiprocessing" rel="nofollow">multiprocessing module</a> added in Python 2.6. You can use pools of processes and then get results asynchronously with: </p>
+
+<pre><code>apply_async(func[, args[, kwds[, callback]]])
+</code></pre>
+
+<p>E.g.:</p>
+
+<pre><code>from multiprocessing import Pool
+
+def f(x):
+    return x*x
+
+if __name__ == '__main__':
+    pool = Pool(processes=1)              # Start a worker processes.
+    result = pool.apply_async(f, [10], callback) # Evaluate "f(10)" asynchronously calling callback when finished.
+</code></pre>
+
+<p>This is only one alternative. This module provides lots of facilities to achieve what you want. Also it will be really easy to make a decorator from this.</p>
+<br /><b>#1</b><br /><p>It's not in the language core, but a very mature library that does what you want is <a href="http://twistedmatrix.com/projects/core/documentation/howto/async.html" rel="nofollow">Twisted</a>. It introduces the Deferred object, which you can attach callbacks or error handlers ("errbacks") to. A Deferred is basically a "promise" that a function will have a result eventually.</p>
+<br /><b>#2</b><br /><p>What about something like (doc at <a href="http://docs.python.org/library/threading.html#module-threading" rel="nofollow">http://docs.python.org/library/threading.html#module-threading</a>)</p>
+
+<pre><code>import threading
+
+thr = threading.Thread(target=foo, [args=(), kwargs={}])
+thr.start() # will run "foo"
+....
+thr.is_alive() # will return whether foo is running currently
+....
+thr.join() # will wait till "foo" is done
+</code></pre>
+<br /><b>#3</b><br /><p>Is there any reason not to use threads? You can use the "threading" class.
+Instead of finished() function use the isAlive(), the result() function could join() the thread and retrieve the result and if you can override the run() and <strong>init</strong> functions to call the function specified in constructor and save the value somewhere to the instance of the class.</p>
+<br /><b>#4</b><br /><p>You can implement a decorator to make your functions asynchronous, though that's a bit tricky. The <code>multiprocessing</code> module is full of little quirks and seemingly arbitrary restrictions – all the more reason to encapsulate it behind a friendly interface, though.</p>
+
+<pre><code>from inspect import getmodule
+from multiprocessing import Pool
+
+
+def async(decorated):
+    r'''Wraps a top-level function around an asynchronous dispatcher.
+
+        when the decorated function is called, a task is submitted to a
+        process pool, and a future object is returned, providing access to an
+        eventual return value.
+
+        The future object has a blocking get() method to access the task
+        result: it will return immediately if the job is already done, or block
+        until it completes.
+
+        This decorator won't work on methods, due to limitations in Python's
+        pickling machinery (in principle methods could be made pickleable, but
+        good luck on that).
+    '''
+    # Keeps the original function visible from the module global namespace,
+    # under a name consistent to its __name__ attribute. This is necessary for
+    # the multiprocessing pickling machinery to work properly.
+    module = getmodule(decorated)
+    decorated.__name__ += '_original'
+    setattr(module, decorated.__name__, decorated)
+
+    def send(*args, **opts):
+        return async.pool.apply_async(decorated, args, opts)
+
+    return send
+</code></pre>
+
+<p>The code below illustrates usage of the decorator:</p>
+
+<pre><code>@async
+def printsum(uid, values):
+    summed = 0
+    for value in values:
+        summed += value
+
+    print("Worker %i: sum value is %i" % (uid, summed))
+
+    return (uid, summed)
+
+
+if __name__ == '__main__':
+    from random import sample
+
+    # The process pool must be created inside __main__.
+    async.pool = Pool(4)
+
+    p = range(0, 1000)
+    results = []
+    for i in range(4):
+        result = printsum(i, sample(p, 100))
+        results.append(result)
+
+    for result in results:
+        print("Worker %i: sum value is %i" % result.get())
+</code></pre>
+
+<p>In a real-world case I would ellaborate a bit more on the decorator, providing some way to turn it off for debugging (while keeping the future interface in place), or maybe a facility for dealing with exceptions; but I think this demonstrates the principle well enough.</p>
+<br /><b>#5</b><br /><p><a href="http://docs.python.org/library/multiprocessing.html" rel="nofollow">http://docs.python.org/library/multiprocessing.html</a></p>
+
+<p>simplest use with django view: <a href="https://gist.github.com/775697" rel="nofollow">https://gist.github.com/775697</a></p>
+<br /><b>#6</b><br /><p>My solution is:</p>
+
+<pre><code>import threading
+
+class TimeoutError(RuntimeError):
+    pass
+
+class AsyncCall(object):
+    def __init__(self, fnc, callback = None):
+        self.Callable = fnc
+        self.Callback = callback
+
+    def __call__(self, *args, **kwargs):
+        self.Thread = threading.Thread(target = self.run, name = self.Callable.__name__, args = args, kwargs = kwargs)
+        self.Thread.start()
+        return self
+
+    def wait(self, timeout = None):
+        self.Thread.join(timeout)
+        if self.Thread.isAlive():
+            raise TimeoutError()
+        else:
+            return self.Result
+
+    def run(self, *args, **kwargs):
+        self.Result = self.Callable(*args, **kwargs)
+        if self.Callback:
+            self.Callback(self.Result)
+
+class AsyncMethod(object):
+    def __init__(self, fnc, callback=None):
+        self.Callable = fnc
+        self.Callback = callback
+
+    def __call__(self, *args, **kwargs):
+        return AsyncCall(self.Callable, self.Callback)(*args, **kwargs)
+
+def Async(fnc = None, callback = None):
+    if fnc == None:
+        def AddAsyncCallback(fnc):
+            return AsyncMethod(fnc, callback)
+        return AddAsyncCallback
+    else:
+        return AsyncMethod(fnc, callback)
+</code></pre>
+
+<p>And works exactly as requested:</p>
+
+<pre><code>@Async
+def fnc():
+    pass
+</code></pre>
+<br />

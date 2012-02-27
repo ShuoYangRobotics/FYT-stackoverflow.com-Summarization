@@ -1,0 +1,109 @@
+Question (ID-4037339): Is there a way to really pickle compiled regular expressions in python? I have a python console application that contains 300+ regular expressions. The set of regular expressions is fixed for each release. When users run the app, the entire set of regular expressions will be applied anywhere from once (a very short job) to thousands of times (a long job). 
+
+ I would like to speed up the shorter jobs by compiling the regular expressions up front, pickle the compiled regular expressions to a file, and then load that file when the application is run. 
+
+ The python re module is efficient and the regex compilation overhead is quite acceptable for long jobs. For short jobs, however, it is a large proportion of the overall run-time. Some users will want to run many small jobs to fit into their existing workflows. Compiling the regular expressions takes about 80ms. A short job might take 20ms-100ms excluding regular expression compilation. So for short jobs, the overhead can be 100% or more. This is with Python27 under both Windows and Linux. 
+
+ The regular expressions must be applied with the DOTALL flag, so need to be compiled prior to use. A large compilation cache clearly doesn't help in this instances. As some have pointed out, the default method to serialise the compiled regular expression doesn't actually do much. 
+
+ The re and sre modules compile the patterns into a little custom language with its own opcodes and some auxiliary data structures (e.g., for charsets used in an expression). The pickle function in re.py takes the easy way out. It is: 
+
+ def _pickle(p):
+ return _compile, (p.pattern, p.flags)
+
+copy_reg.pickle(_pattern_type, _pickle, _compile)
+ 
+
+ I think that a good solution to the problem would be an update to the definition of _pickle in re.py that actually pickled the compiled pattern object. Unfortunately, this goes beyond my python skills. I bet, however, that someone here knows how to do it. 
+
+ I realise that I am not the first person to ask this question - but perhaps you can be the first person to give an accurate and useful response to it! 
+
+ Your advice would be greatly appreciated. 
+ Answers (Total-6): #0 As others have mentioned, you can simply pickle the compiled regex. They will pickle and unpickle just fine, and be usable. However, it doesn't look like the pickle actually contains the result of compilation. I suspect you will incur the compilation overhead again when you use the result of the unpickling. 
+
+ &gt;&gt;&gt; p.dumps(re.compile("a*b+c*"))
+"cre\n_compile\np1\n(S'a*b+c*'\np2\nI0\ntRp3\n."
+&gt;&gt;&gt; p.dumps(re.compile("a*b+c*x+y*"))
+"cre\n_compile\np1\n(S'a*b+c*x+y*'\np2\nI0\ntRp3\n."
+ 
+
+ In these two tests, you can see the only difference between the two pickles is in the string. Apparently compiled regexes don't pickle the compiled bits, just the string needed to compile it again. 
+
+ But I'm wondering about your application overall: compiling a regex is a fast operation, how short are your jobs that compiling the regex is significant? One possibility is that you are compiling all 300 regexes, and then only using one for a short job. In that case, don't compile them all up front. The re module is very good at using cached copies of compiled regexes, so you generally don't have to compile them yourself, just use the string form. The re module will lookup the string in a dictionary of compiled regexes, so grabbing the compiled form yourself only saves you a dictionary look up. I may be totally off-base, sorry if so. 
+ #1 OK, this isn't pretty, but it might be what you want. I looked at the sre_compile.py module from Python 2.6, and ripped out a bit of it, chopped it in half, and used the two pieces to pickle and unpickle compiled regexes: 
+
+ import re, sre_compile, sre_parse, _sre
+import cPickle as pickle
+
+# the first half of sre_compile.compile 
+def raw_compile(p, flags=0):
+ # internal: convert pattern list to internal format
+
+ if sre_compile.isstring(p):
+  pattern = p
+  p = sre_parse.parse(p, flags)
+ else:
+  pattern = None
+
+ code = sre_compile._code(p, flags)
+
+ return p, code
+
+# the second half of sre_compile.compile
+def build_compiled(pattern, p, flags, code):
+ # print code
+
+ # XXX: &lt;fl&gt; get rid of this limitation!
+ if p.pattern.groups &gt; 100:
+  raise AssertionError(
+   "sorry, but this version only supports 100 named groups"
+   )
+
+ # map in either direction
+ groupindex = p.pattern.groupdict
+ indexgroup = [None] * p.pattern.groups
+ for k, i in groupindex.items():
+  indexgroup[i] = k
+
+ return _sre.compile(
+  pattern, flags | p.pattern.flags, code,
+  p.pattern.groups-1,
+  groupindex, indexgroup
+  )
+
+def pickle_regexes(regexes):
+ picklable = []
+ for r in regexes:
+  p, code = raw_compile(r, re.DOTALL)
+  picklable.append((r, p, code))
+ return pickle.dumps(picklable)
+
+def unpickle_regexes(pkl):
+ regexes = []
+ for r, p, code in pickle.loads(pkl):
+  regexes.append(build_compiled(r, p, re.DOTALL, code))
+ return regexes
+
+regexes = [
+ r"^$",
+ r"a*b+c*d+e*f+",
+ ]
+
+pkl = pickle_regexes(regexes)
+print pkl
+print unpickle_regexes(pkl)
+ 
+
+ I don't really know if this works, or if it speeds things up. I know it prints a list of regexes when I try it. It might be very specific to version 2.6, I also don't know that. 
+ #2 Some observations and musings: 
+
+ You don't need to compile to get the effect of the re.DOTALL flag (or any other flag)-- all you need to do is insert (?s) at the start of the pattern string ... re.DOTALL -> re.S -> the s in (?s). Do a Ctrl-F search for sux (sic) in the re syntax docs . 
+
+ 80ms seems a very short time, even when multiplied by "many" (how many??) short jobs. 
+
+ Does each job require a new Python process to be started? If so, isn't 80ms small compared with process startup and shutdown overhead? Otherwise, please explain why it is not possible, when a user wants to run "many" small jobs, to do the re.compiles once per batch of jobs. 
+ #3 Just compile as you go - re module will cache the compiled re's even if you dont. Bump the re._MAXCACHE up to 400 or 500, the short jobs will only compile the re's they need, and the long jobs benefit from a big fat cache of compiled expressions - everybody's happy! 
+ #4 As long as you create them on program start, the pyc file will cache them. You don't need to result to pickling. 
+ #5 In a similar case (where every time some input needs to be run through ALL of the regexes), I had to split the Python script in a master-slave setup using *nix sockets; the first time the script is called, the master —doing all time-expensive regex compilations— starts up and the slave for that and all subsequent invokations exchanges data with the master. The master stays idle maximum N seconds. 
+
+ In my case, this master/slave setup was found to be faster in all occasions than the straightforward way (many invokations against relatively little data every time; also, it had to be a script because it is called from an external application without any Python bindings). I don't know whether this would apply to your situation.

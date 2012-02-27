@@ -1,0 +1,256 @@
+Question (ID-6053974): Python: efficiently check if integer is within *many* ranges I am working on a postage application which is required to check an integer postcode against a number of postcode ranges, and return a different code based on which range the postcode matches against. 
+
+ Each code has more than one postcode range. For example, the M code should be returned if the postcode is within the ranges 1000-2429, 2545-2575, 2640-2686 or is equal to 2890. 
+
+ I could write this as: 
+
+ if 1000 &lt;= postcode &lt;= 2429 or 2545 &lt;= postcode &lt;= 2575 or 2640 &lt;= postcode &lt;= 2686 or postcode == 2890:
+ return 'M'
+ 
+
+ but this seems like a lot of lines of code, given that there are 27 returnable codes and 77 total ranges to check against. Is there a more efficient (and preferably more concise) method of matching an integer to all these ranges using Python? 
+
+ 
+
+ Edit: There's a lot of excellent solutions flying around, so I have implemented all the ones that I could, and benchmarked their performances. 
+
+ The environment for this program is a web service (Django-powered actually) which needs to check postcode region codes one-by-one, on the fly. My preferred implementation, then, would be one that can be quickly used for each request, and does not need any process to be kept in memory, or needs to process many postcodes in bulk. 
+
+ I tested the following solutions using timeit.Timer with default 1000000 repetitions using randomly generated postcodes each time. 
+
+ IF solution (my original) 
+
+ if 1000 &lt;= postcode &lt;= 2249 or 2555 &lt;= postcode &lt;= 2574 or ...:
+ return 'M'
+if 2250 &lt;= postcode &lt;= 2265 or ...:
+ return 'N'
+...
+ 
+
+ Time for 1m reps: 5.11 seconds. 
+
+ Ranges in tuples (Jeff Mercado) 
+
+ Somewhat more elegant to my mind and certainly easier to enter and read the ranges. Particularly good if they change over time, which is possible. But it did end up four times slower in my implementation. 
+
+ if any(lower &lt;= postcode &lt;= upper for (lower, upper) in [(1000, 2249), (2555, 2574), ...]):
+ return 'M'
+if any(lower &lt;= postcode &lt;= upper for (lower, upper) in [(2250, 2265), ...]):
+ return 'N'
+...
+ 
+
+ Time for 1m reps: 19.61 seconds. 
+
+ Set membership (gnibbler) 
+
+ As stated by the author, "it's only better if you are building the set once to check against many postcodes in a loop". But I thought I would test it anyway to see. 
+
+ if postcode in set(chain(*(xrange(start, end+1) for start, end in ((1000, 2249), (2555, 2574), ...)))):
+ return 'M'
+if postcode in set(chain(*(xrange(start, end+1) for start, end in ((2250, 2265), ...)))):
+ return 'N'
+...
+ 
+
+ Time for 1m reps: 339.35 seconds. 
+
+ Bisect (robert king) 
+
+ This one may have been a bit above my intellect level. I learnt a lot reading about the bisect module but just couldn't quite work out which parameters to give find_ge() to make a runnable test. I expect that it would be extremely fast with a loop of many postcodes, but not if it had to do the setup each time. So, with 1m repetitions of filling numbers , edgepairs , edgeanswers etc for just one postal region code (the M code with four ranges), but not actually running the fast_solver : 
+
+ Time for 1m reps: 105.61 seconds. 
+
+ Dict (sentinel) 
+
+ Using one dict per postal region code pre-generated, cPickled in a source file (106 KB), and loaded for each run. I was expecting much better performance from this method, but on my system at least, the IO really destroyed it. The server is a not-quite-blindingly-fast-top-of-the-line Mac Mini. 
+
+ Time for 1m reps: 5895.18 seconds (extrapolated from a 10,000 run). 
+
+ The summary 
+
+ Well, I was expecting someone to just give a simple 'duh' answer that I hadn't considered, but it turns out this is much more complicated (and even a little controversial). 
+
+ If every nanosecond of efficiency counted in this case, I would probably keep a separate process running which implemented one of the binary search or dict solutions and kept the result in memory for an extremely fast lookup. However, since the IF tree takes only five seconds to run a million times, which is plenty fast enough for my small business, that's what I'll end up using in my application. 
+
+ Thank you to everyone for contributing! 
+ Answers (Total-8): #0 You can throw your ranges into tuples and put the tuples in a list. Then use any() to help you find if your value is within these ranges. 
+
+ ranges = [(1000,2429), (2545,2575), (2640,2686), (2890, 2890)]
+if any(lower &lt;= postcode &lt;= upper for (lower, upper) in ranges):
+ print('M')
+ 
+ #1 Probably the fastest will be to check the membership of a set 
+
+ &gt;&gt;&gt; from itertools import chain
+&gt;&gt;&gt; ranges = ((1000, 2429), (2545, 2575), (2640, 2686), (2890, 2890))
+&gt;&gt;&gt; postcodes = set(chain(*(xrange(start, end+1) for start, end in ranges)))
+&gt;&gt;&gt; 1000 in postcodes
+True
+&gt;&gt;&gt; 2500 in postcodes
+False
+ 
+
+ But it does use more memory this way, and building the set takes time, so it's only better if you are building the set once to check against many postcodes in a loop 
+
+ EDIT: seems that different ranges need to map to different letters 
+
+ &gt;&gt;&gt; from itertools import chain
+&gt;&gt;&gt; ranges = {'M':((1000,2429), (2545,2575), (2640,2686), (2890, 2890)),
+    # more ranges
+    }
+&gt;&gt;&gt; postcodemap = dict((k,v) for v in ranges for k in chain(*imap(xrange, *zip(*ranges[v])))) 
+&gt;&gt;&gt; print postcodemap.get(1000)
+M
+&gt;&gt;&gt; print postcodemap.get(2500)
+None
+ 
+ #2 you only have to solve for edge cases and for one number between edge cases when doing inequalities. 
+
+ e.g. if you do the following tests on TEN : 
+
+ 10 &lt; 20, 10 &lt; 15, 10 > 8, 10 >12 
+
+ It will give True True True False 
+
+ but note that the closest numbers to 10 are 8 and 12 
+
+ this means that 9,10,11 will give the answers that ten did.. if you don't have too many initial range numbers and they are sparse then this well help. Otherwise you will need to see if your inequalities are transitive and use a range tree or something. 
+
+ So what you can do is sort all of your boundaries into intervals.
+e.g. if your inequalities had the numbers 12, 50, 192,999 
+
+ you would get the following intervals that ALL have the same answer:
+less than 12, 12, 13-49, 50, 51-191, 192, 193-998, 999, 999+ 
+
+ as you can see from these intervals we only need to solve for 9 cases and we can then quickly solve for anything. 
+
+ Here is an example of how I might carry it out for solving for a new number x using these pre-calculated results: 
+
+ a) is x a boundary? (is it in the set)
+if yes, then return the answer you found for that boundary previously.
+otherwise use case b) 
+
+ b) find the maximum boundary number that is smaller than x, call it maxS 
+find the minimum boundary number that is larger than x call it minL .
+Now just return any previously found solution that was between maxS and minL. 
+
+ see Python binary search-like function to find first number in sorted list greater than a specific value 
+for finding closest numbers. bisect module will help (import it in your code)
+This will help finding maxS and minL 
+
+ You can use bisect and the function i have included in my sample code: 
+
+ def find_ge(a, key):
+ '''Find smallest item greater-than or equal to key.
+ Raise ValueError if no such item exists.
+ If multiple keys are equal, return the leftmost.
+
+ '''
+ i = bisect_left(a, key)
+ if i == len(a):
+  raise ValueError('No item found with key at or above: %r' % (key,))
+ return a[i]
+
+
+
+
+ranges=[(1000,2429), (2545,2575), (2640,2686), (2890, 2890)]
+numbers=[]
+for pair in ranges:
+  numbers+=list(pair)
+
+numbers+=[-999999,999999] #ensure nothing goes outside the range
+numbers.sort()
+edges=set(numbers)
+
+edgepairs={}
+
+for i in range(len(numbers)-1):
+  edgepairs[(numbers[i],numbers[i+1])]=(numbers[i+1]-numbers[i])//2
+
+
+
+def slow_solver(x):
+  return #your answer for postcode x
+
+
+listedges=list(edges)
+edgeanswers=dict(zip(listedges,map(solver,listedges)))
+edgepairsanswers=dict(zip(edgepairs.keys(),map(solver,edgepairs.values())))
+
+#now we are ready for fast solving:
+def fast_solver(x):
+  if x in edges:
+    return edgeanswers[x]
+  else:
+    #find minL and maxS using find_ge and your own similar find_le
+    return edgepairsanswers[(minL,maxS)]
+ 
+ #3 Warning - This is probably premature optimisation. For a large list of ranges it might be worthwhile, but probably not in your case. Also, although dictionary/set solutions will use more memory, they are still probably a better choice. 
+
+ You could do a binary-search into your range end-points. This would be easy if all ranges are non-overlapping, but could still be done (with some tweaks) for overlapping ranges. 
+
+ Do a find-highest-match-less-than binary search. This is the same as a find-lowest-match-greater-than-or-equal (lower bound) binary search, except that you subtract one from the result. 
+
+ Use half-open items in your list of end points - that is if your range is 1000..2429 inclusive, use the values 1000 and 2430. If you get an end-point and a start-point with the same value (two ranges touching, so there is no gap between) exclude the end-point for the lower range from your list. 
+
+ If you find a start-of-range end-point, your goal value is within that range. If you find an end-of-range end-point, your goal value isn't in any range. 
+
+ The binary search algorithm is roughly (don't expect this to run without editing)... 
+
+ while upperbound &gt; lowerbound :
+ testpos = lowerbound + ((upperbound-lowerbound) // 2)
+
+ if item [testpos] &gt; goal :
+ # new best-so-far
+ upperbound = testpos
+ else :
+ lowerbound = testpos + 1
+ 
+
+ Note - the "//" division operator is necessary for integer division in Python 3. In Python 2, the normal "/" will work, but it's best to be ready for Python 3. 
+
+ At the end, both upperbound and lowerbound point to the found item - but for the "upper bound" search. Subtract one to get the required search result. If that gives -1, there is no matching range. 
+
+ There's probably a binary search routine in the library that does the upper-bound search, so prefer that to this if so. To get a better understanding of how the binary search works, see How can I better understand the one-comparison-per-iteration binary search? - no, I'm not above begging for upvotes ;-) 
+ #4 Your benchmarks seem to include setting up the data structure from scratch each for each call. Why? Have you considered a mapping from postcode to region code, loaded from file ONCE at module import time? These look suspiciously like Australian postcodes. If so, there aren't very many of them. 
+ #5 Python has a range(a, b) function which means the range from (and including) a, to (but excluding) b. You can make a list of these ranges and check to see if a number is in any of them. It may be more efficient to use xrange(a, b) which has the same meaning but doesn't actually make a list in memory. 
+
+ list_of_ranges = []
+list_of_ranges.append(xrange(1000, 2430))
+list_of_ranges.append(xrange(2545, 2576))
+for x in [999, 1000, 2429, 2430, 2544, 2545]:
+ result = False
+ for r in list_of_ranges:
+  if x in r:
+   result = True
+   break
+ print x, result
+ 
+ #6 Here is a fast and short solution, using numpy: 
+
+ import numpy as np
+lows = np.array([1, 10, 100]) # the lower bounds
+ups = np.array([3, 15, 130]) # the upper bounds
+
+def in_range(x):
+ return np.any((lows &lt;= x) &amp; (x &lt;= ups))
+ 
+
+ Now for instance 
+
+ in_range(2) # True
+in_range(23) # False
+ 
+ #7 Have you really made benchmarks? Does the performance of this piece of code influence the performance of the overall application? So benchmark first! 
+
+ But you can also use a dict e.g. for storing all keys of the "M" ranges: 
+
+ mhash = {1000: true, 1001: true,..., 2429: true,...}
+
+if postcode in mhash:
+ print 'M'
+ 
+
+ Of course: the hashes require more memory but access time is O(1).

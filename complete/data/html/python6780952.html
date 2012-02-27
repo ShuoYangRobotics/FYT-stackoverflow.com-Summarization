@@ -1,0 +1,207 @@
+<h3>Question (ID-6780952):</h3><h2>How to change behavior of dict() for an instance</h2><p>So I'm writing a class that extends a dictionary which right now uses a method "dictify" to transform itself into a dict. What I would like to do instead though is change it so that calling dict() on the object results in the same behavior, but I don't know which method to override. Is this not possible, or I am I missing something totally obvious? (And yes, I know the code below doesn't work but I hope it illustrates what I'm trying to do.)</p>
+
+<pre><code>from collections import defaultdict
+
+class RecursiveDict(defaultdict):
+    '''
+    A recursive default dict.
+
+    &gt;&gt;&gt; a = RecursiveDict()
+    &gt;&gt;&gt; a[1][2][3] = 4
+    &gt;&gt;&gt; a.dictify()
+    {1: {2: {3: 4}}}
+    '''
+    def __init__(self):
+        super(RecursiveDict, self).__init__(RecursiveDict)
+
+    def dictify(self):
+        '''Get a standard dictionary of the items in the tree.'''
+        return dict([(k, (v.dictify() if isinstance(v, dict) else v))
+                     for (k, v) in self.items()])
+
+    def __dict__(self):
+        '''Get a standard dictionary of the items in the tree.'''
+        print [(k, v) for (k, v) in self.items()]
+        return dict([(k, (dict(v) if isinstance(v, dict) else v))
+                     for (k, v) in self.items()])
+</code></pre>
+
+<p>EDIT: To show the problem more clearly:</p>
+
+<pre><code>&gt;&gt;&gt; b = RecursiveDict()
+&gt;&gt;&gt; b[1][2][3] = 4
+&gt;&gt;&gt; b
+defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {1: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {2: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {3: 4})})})
+&gt;&gt;&gt; dict(b)
+{1: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {2: defaultdict(&lt;class '__main__.RecursiveDict'&gt;, {3: 4})})}
+&gt;&gt;&gt; b.dictify()
+{1: {2: {3: 4}}}
+</code></pre>
+
+<p>I want dict(b) to be same as b.dictify()</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Nothing wrong with your approach, but this is similar to the Autovivification feature of Perl, which has been implemented in Python <a href="http://stackoverflow.com/questions/651794/whats-the-best-way-to-initialize-a-dict-of-dicts-in-python">in this question</a>. Props to @nosklo for this.</p>
+
+<pre><code>class RecursiveDict(dict):
+    """Implementation of perl's autovivification feature."""
+    def __getitem__(self, item):
+        try:
+            return dict.__getitem__(self, item)
+        except KeyError:
+            value = self[item] = type(self)()
+            return value
+
+&gt;&gt;&gt; a = RecursiveDict()
+&gt;&gt;&gt; a[1][2][3] = 4
+&gt;&gt;&gt; dict(a)
+{1: {2: {3: 4}}}
+</code></pre>
+
+<p><strong>EDIT</strong></p>
+
+<p>As suggested by @Rosh Oxymoron, using <code>__missing__</code> results in a more concise implementation. Requires Python >= 2.5</p>
+
+<pre><code>class RecursiveDict(dict):
+    """Implementation of perl's autovivification feature."""
+    def __missing__(self, key):
+        value = self[key] = type(self)()
+        return value
+</code></pre>
+<br /><b>#1</b><br /><p><strong>edit</strong>: As ironchefpython pointed out in comments, this isn't actually doing what I thought it did, as in my example <code>b[1]</code> is still a <code>RecursiveDict</code>.  This may still be useful, as you essentially get an object pretty similar Rob Cowie's answer, but it is built on <code>defaultdict</code>.</p>
+
+<hr>
+
+<p>You can get the behavior you want (or something very similar) by overriding <code>__repr__</code>, check this out:</p>
+
+<pre><code>class RecursiveDict(defaultdict):
+    def __init__(self):
+        super(RecursiveDict, self).__init__(RecursiveDict)
+
+    def __repr__(self):
+        return repr(dict(self))
+
+&gt;&gt;&gt; a = RecursiveDict()
+&gt;&gt;&gt; a[1][2][3] = 4
+&gt;&gt;&gt; a             # a looks like a normal dict since repr is overridden
+{1: {2: {3: 4}}}
+&gt;&gt;&gt; type(a)
+&lt;class '__main__.RecursiveDict'&gt;
+&gt;&gt;&gt; b = dict(a)
+&gt;&gt;&gt; b             # dict(a) gives us a normal dictionary
+{1: {2: {3: 4}}}
+&gt;&gt;&gt; b[5][6] = 7   # obviously this won't work anymore
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+KeyError: 5
+&gt;&gt;&gt; type(b)
+&lt;type 'dict'&gt;
+</code></pre>
+
+<p>There may be a better way to get to a normal dictionary view of the <code>defaultdict</code> than <code>dict(self)</code> but I couldn't find one, comment if you know how.</p>
+<br /><b>#2</b><br /><p>You can't do it.  </p>
+
+<p>I deleted my previous answer, because I found after looking at the source code, that if you call <code>dict(d)</code> on a <code>d</code> that is a subclass of <code>dict</code>, it makes a fast copy of the underlying hash in C, and returns a new dict object.</p>
+
+<p>Sorry.</p>
+
+<p>If you really want this behavior, you'll need to create a <code>RecursiveDict</code> class that doesn't inherit from <code>dict</code>, and implement the <code>__iter__</code> interface.</p>
+<br /><b>#3</b><br /><p>You need to override <code>__iter__</code>.</p>
+
+<pre><code>def __iter__(self): 
+    return iter((k, (v.dictify() if isinstance(v, dict) else v)) 
+                for (k, v) in self.items())
+</code></pre>
+
+<p>Instead of <code>self.items()</code>, you should use <code>self.iteritems()</code> on Python 2.</p>
+
+<p>Edit: OK, This seems to be your problem:</p>
+
+<pre><code>&gt;&gt;&gt; class B(dict): __iter__ = lambda self: iter(((1, 2), (3, 4)))
+... 
+&gt;&gt;&gt; b = B()
+&gt;&gt;&gt; dict(b)
+{}
+&gt;&gt;&gt; class B(list): __iter__ = lambda self: iter(((1, 2), (3, 4)))
+... 
+&gt;&gt;&gt; b = B()
+&gt;&gt;&gt; dict(b)
+{1: 2, 3: 4}
+</code></pre>
+
+<p>So this method doesn't work if the object you're calling <code>dict()</code> on is a subclass of dict.</p>
+
+<p>Edit 2: To be clear, <code>defaultdict</code> is a subclass of <code>dict</code>. dict(a_defaultdict) is still a no-op.</p>
+<br /><b>#4</b><br /><p>Do you want just to <em>print</em> it like a dict ? use this:</p>
+
+<pre><code>from collections import defaultdict
+
+class RecursiveDict(defaultdict):
+    '''
+    A recursive default dict.
+
+    &gt;&gt;&gt; a = RecursiveDict()
+    &gt;&gt;&gt; a[1][2][3] = 4
+    &gt;&gt;&gt; a.dictify()
+    {1: {2: {3: 4}}}
+    &gt;&gt;&gt; dict(a)
+    {1: {2: {3: 4}}}
+
+    '''
+    def __init__(self):
+        super(RecursiveDict, self).__init__(RecursiveDict)
+
+    def dictify(self):
+        '''Get a standard dictionary of the items in the tree.'''
+        return dict([(k, (v.dictify() if isinstance(v, dict) else v))
+                     for (k, v) in self.items()])
+
+    def __dict__(self):
+        '''Get a standard dictionary of the items in the tree.'''
+        print [(k, v) for (k, v) in self.items()]
+        return dict([(k, (dict(v) if isinstance(v, dict) else v))
+                     for (k, v) in self.items()])
+
+    def __repr__(self):
+        return repr(self.dictify())
+</code></pre>
+
+<p>Maybe you are looking for <a href="http://docs.python.org/library/stdtypes.html#dict" rel="nofollow"><code>__missing__</code></a> :</p>
+
+<pre><code>class RecursiveDict(dict):
+    '''
+    A recursive default dict.
+
+    &gt;&gt;&gt; a = RecursiveDict()
+    &gt;&gt;&gt; a[1][2][3] = 4
+    &gt;&gt;&gt; a
+    {1: {2: {3: 4}}}
+    &gt;&gt;&gt; dict(a)
+    {1: {2: {3: 4}}}
+
+    '''
+
+    def __missing__(self, key):
+        self[key] = self.__class__()
+        return self[key]
+</code></pre>
+<br /><b>#5</b><br /><p>Once you have your dictify function working just do</p>
+
+<pre><code>dict = dictify
+</code></pre>
+
+<p>Update:
+Here is a short way to have this recursive dict:</p>
+
+<pre><code>&gt;&gt;&gt; def RecursiveDict():
+...   return defaultdict(RecursiveDict)
+</code></pre>
+
+<p>Then you can:</p>
+
+<pre><code>d[1][2][3] = 5
+d[1][2][4] = 6
+&gt;&gt;&gt; d
+defaultdict(&lt;function ReturnsRecursiveDict at 0x7f3ba453a5f0&gt;, {1: defaultdict(&lt;function ReturnsRecursiveDict at 0x7f3ba453a5f0&gt;, {2: defaultdict(&lt;function ReturnsRecursiveDict at 0x7f3ba453a5f0&gt;, {3: 5, 4: 6})})})
+</code></pre>
+
+<p>I don't see a neat way to implement dictify.</p>
+<br />

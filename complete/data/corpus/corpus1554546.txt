@@ -1,0 +1,98 @@
+Question (ID-1554546): When and how to use the builtin function property() in python It appears to me that except for a little syntactic sugar, property() does nothing good. 
+
+ Sure, it's nice to be able to write a.b=2 instead of a.setB(2) , but hiding the fact that a.b=2 isn't a simple assignment looks like a recipe for trouble, either because some unexpected result can happen, such as a.b=2 actually causes a.b to be 1 . Or an exception is raised. Or a performance problem. Or just being confusing. 
+
+ Can you give me a concrete example for a good usage of it? (using it to patch problematic code doesn't count ;-) 
+ Answers (Total-6): #0 In languages that rely on getters and setters, like Java, they're not supposed nor expected to do anything but what they say -- it would be astonishing if x.getB() did anything but return the current value of logical attribute b , or if x.setB(2) did anything but whatever small amount of internal work is needed to make x.getB() return 2 . 
+
+ However, there are no language-imposed guarantees about this expected behavior, i.e., compiler-enforced constraints on the body of methods whose names start with get or set : rather, it's left up to common sense, social convention, "style guides", and testing. 
+
+ The behavior of x.b accesses, and assignments such as x.b = 2 , in languages which do have properties (a set of languages which includes but is not limited to Python) is exactly the same as for getter and setter methods in, e.g., Java: the same expectations, the same lack of language-enforced guarantees. 
+
+ The first win for properties is syntax and readability. Having to write, e.g., 
+
+ x.setB(x.getB() + 1)
+ 
+
+ instead of the obvious 
+
+ x.b += 1
+ 
+
+ cries out for vengeance to the gods. In languages which support properties, there is absolutely no good reason to force users of the class to go through the gyrations of such Byzantine boilerplate, impacting their code's readability with no upside whatsoever. 
+
+ In Python specifically, there's one more great upside to using properties (or other descriptors) in lieu of getters and setters: if and when you reorganize your class so that the underlying setter and getter are not needed anymore, you can (without breaking the class's published API) simply eliminate those methods and the property that relies on them, making b a normal "stored" attribute of x 's class rather than a "logical" one obtained and set computationally. 
+
+ In Python, doing things directly (when feasible) instead of via methods is an important optimization, and systematically using properties enables you to perform this optimization whenever feasible (always exposing "normal stored attributes" directly, and only ones which do need computation upon access and/or setting via methods and properties). 
+
+ So, if you use getters and setters instead of properties, beyond impacting the readability of your users' code, you are also gratuitously wasting machine cycles (and the energy that goes to their computer during those cycles;-), again for no good reason whatsoever. 
+
+ Your only argument against properties is e.g. that "an outside user wouldn't expect any side effects as a result of an assignment, usually"; but you miss the fact that the same user (in a language such as Java where getters and setters are pervasive) wouldn't expect (observable) "side effects" as a result of calling a setter, either (and even less for a getter;-). They're reasonable expectations and it's up to you, as the class author, to try and accommodate them -- whether your setter and getter are used directly or through a property, makes no difference. If you have methods with important observable side effects, do not name them getThis , setThat , and do not use them via properties. 
+
+ The complaint that properties "hide the implementation" is wholly unjustified: most all of OOP is about implementing information hiding -- making a class responsible for presenting a logical interface to the outside world and implementing it internally as best it can. Getters and setters, exactly like properties, are tools towards this goal. Properties just do a better job at it (in languages that support them;-). 
+ #1 The idea is to allow you to avoid having to write getters and setters until you actually need them. 
+
+ So, to start off you write: 
+
+ class MyClass(object):
+ def __init__(self):
+  self.myval = 4
+ 
+
+ Obviously you can now write myobj.myval = 5 . 
+
+ But later on, you decide that you do need a setter, as you want to do something clever at the same time. But you don't want to have to change all the code that uses your class - so you wrap the setter in the @property decorator, and it all just works. 
+ #2 A basic reason is really simply that it looks better. It is more pythonic. Especially for libraries. something.getValue() looks less nice than something.value 
+
+ In plone (a pretty big CMS), you used to have document.setTitle() which does a lot of things like storing the value, indexing it again and so. Just doing document.title = 'something' is nicer. You know that a lot is happening behind the scenes anyway. 
+ #3 
+ but hiding the fact that a.b=2 isn't a
+ simple assignment looks like a recipe
+ for trouble 
+ 
+
+ You're not hiding that fact though; that fact was never there to begin with. This is python -- a high-level language; not assembly. Few of the "simple" statements in it boil down to single CPU instructions. To read simplicity into an assignment is to read things that aren't there. 
+
+ When you say x.b = c, probably all you should think is that "whatever just happened, x.b should now be c". 
+ #4 Here's an old example of mine. I wrapped a C library which had functions like "void dt_setcharge(int atom_handle, int new_charge)" and "int dt_getcharge(int atom_handle)". I wanted at the Python level to do "atom.charge = atom.charge + 1". 
+
+ The "property" decorator makes that easy. Something like: 
+
+ class Atom(object):
+ def __init__(self, handle):
+  self.handle = handle
+ def _get_charge(self):
+  return dt_getcharge(self.handle)
+ def _set_charge(self, charge):
+  dt_setcharge(self.handle, charge)
+ charge = property(_get_charge, _set_charge)
+ 
+
+ 10 years ago, when I wrote this package, I had to use __getattr__ and __setattr__ which made it possible, but the implementation was a lot more error prone. 
+
+ class Atom:
+ def __init__(self, handle):
+  self.handle = handle
+ def __getattr__(self, name):
+  if name == "charge":
+   return dt_getcharge(self.handle)
+  raise AttributeError(name)
+ def __setattr__(self, name, value):
+  if name == "charge":
+   dt_setcharge(self.handle, value)
+  else:
+   self.__dict__[name] = value
+ 
+ #5 You are correct, it is just syntactic sugar. It may be that there are no good uses of it depending on your definition of problematic code. 
+
+ Consider that you have a class Foo that is widely used in your application. Now this application has got quite large and further lets say it's a webapp that has become very popular. 
+
+ You identify that Foo is causing a bottleneck. Perhaps it is possible to add some caching to Foo to speed it up. Using properties will let you do that without changing any code or tests outside of Foo. 
+
+ Yes of course this is problematic code, but you just saved a lot of $$ fixing it quickly. 
+
+ What if Foo is in a library that you have hundreds or thousands of users for? Well you saved yourself having to tell them to do an expensive refactor when they upgrade to the newest version of Foo. 
+
+ The release notes have a lineitem about Foo instead of a paragraph porting guide. 
+
+ Experienced Python programmers don't expect much from a.b=2 other than a.b==2 , but they know even that may not be true. What happens inside the class is it's own business.

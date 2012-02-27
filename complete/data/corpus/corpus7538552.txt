@@ -1,0 +1,298 @@
+Question (ID-7538552): Efficiently average the second column by intervals defined by the first column There are two numeric columns in a data file. I need to calculate the average of the second column by intervals (such as 100) of the first column. 
+
+ I can program this task in R, but my R code is really slow for a relatively large data file (millions of rows, with the value of first column changing between 1 to 33132539). 
+
+ Here I show my R code. How could I tune it to be faster? Other solutions that are perl, python, awk or shell based are appreciated. 
+
+ Thanks in advance. 
+
+ (1) my data file (tab-delimited, millions of rows) 
+
+ 5380 30.07383\n
+5390 30.87\n
+5393 0.07383\n
+5404 6\n
+5428 30.07383\n
+5437 1\n
+5440 9\n
+5443 30.07383\n
+5459 6\n
+5463 30.07383\n
+5480 7\n
+5521 30.07383\n
+5538 0\n
+5584 20\n
+5673 30.07383\n
+5720 30.07383\n
+5841 3\n
+5880 30.07383\n
+5913 4\n
+5958 30.07383\n
+ 
+
+ (2) what I want to get, here interval = 100 
+
+ intervals_of_first_columns, average_of_2nd column_by_the_interval
+100, 0\n
+200, 0\n
+300, 20.34074\n
+400, 14.90325\n
+.....
+ 
+
+ (3) R code 
+
+ chr1 &lt;- 33132539 # set the limit for the interval
+window &lt;- 100 # set the size of interval
+
+spe &lt;- read.table("my_data_file", header=F) # read my data in
+names(spe) &lt;- c("pos", "rho") # name my data 
+
+interval.chr1 &lt;- data.frame(pos=seq(0, chr1, window)) # setup intervals
+meanrho.chr1 &lt;- NULL # object for the mean I want to get
+
+# real calculation, really slow on my own data.
+for(i in 1:nrow(interval.chr1)){
+ count.sub&lt;-subset(spe, chrom==1 &amp; pos&gt;=interval.chr1$pos[i] &amp; pos&lt;=interval.chr1$pos[i+1])
+ meanrho.chr1[i]&lt;-mean(count.sub$rho)
+}
+ 
+ Answers (Total-7): #0 You don't really need to set up an output data.frame but you can if you want. Here is how I would have coded it, and I guarantee it will be fast. 
+
+ &gt; dat$incrmt &lt;- dat$V1 %/% 100
+&gt; dat
+  V1  V2 incrmt
+1 5380 30.07383  53
+2 5390 30.87000  53
+3 5393 0.07383  53
+4 5404 6.00000  54
+5 5428 30.07383  54
+6 5437 1.00000  54
+7 5440 9.00000  54
+8 5443 30.07383  54
+9 5459 6.00000  54
+10 5463 30.07383  54
+11 5480 7.00000  54
+12 5521 30.07383  55
+13 5538 0.00000  55
+14 5584 20.00000  55
+15 5673 30.07383  56
+16 5720 30.07383  57
+17 5841 3.00000  58
+18 5880 30.07383  58
+19 5913 4.00000  59
+20 5958 30.07383  59
+
+&gt; with(dat, tapply(V2, incrmt, mean, na.rm=TRUE))
+  53  54  55  56  57  58  59 
+20.33922 14.90269 16.69128 30.07383 30.07383 16.53692 17.03692 
+ 
+
+ You could have done even less setup (skip the incrmt variable with this code: 
+
+  &gt; with(dat, tapply(V2, V1 %/% 100, mean, na.rm=TRUE))
+  53  54  55  56  57  58  59 
+20.33922 14.90269 16.69128 30.07383 30.07383 16.53692 17.03692 
+ 
+
+ And if you want the result to be available for something: 
+
+ by100MeanV2 &lt;- with(dat, tapply(V2, V1 %/% 100, mean, na.rm=TRUE))
+ 
+ #1 use strict;
+use warnings;
+
+my $BIN_SIZE = 100;
+my %freq;
+
+while (&lt;&gt;){
+ my ($k, $v) = split;
+ my $bin = $BIN_SIZE * int($k / $BIN_SIZE);
+ $freq{$bin}{n} ++;
+ $freq{$bin}{sum} += $v;
+}
+
+for my $bin (sort { $a &lt;=&gt; $b } keys %freq){
+ my ($n, $sum) = map $freq{$bin}{$_}, qw(n sum);
+ print join("\t", $bin, $n, $sum, $sum / $n), "\n";
+}
+ 
+ #2 Given the size of your problem, you need to use data.table which is lightening fast. 
+
+ require(data.table)
+N = 10^6; M = 33132539
+mydt = data.table(V1 = runif(N, 1, M), V2 = rpois(N, lambda = 10))
+ans = mydt[,list(avg_V2 = mean(V2)),'V1 %/% 100']
+ 
+
+ This took 20 seconds on my Macbook Pro with specs 2.53Ghz 4GB RAM. If you don't have any NA in your second column, you can obtain a 10x speedup by replacing mean with .Internal(mean) . 
+
+ Here is the speed comparison using rbenchmark and 5 replications. Note that data.table with .Internal(mean) is 10x faster. 
+
+ test  replications elapsed relative 
+f_dt()   5   113.752 10.30736 
+f_tapply()  5   147.664 13.38021 
+f_dt_internal() 5   11.036 1.00000 
+ 
+ #3 The first thing that comes in mind is a python generator, which is memory efficient. 
+
+ def cat(data_file): # cat generator
+ f = open(data_file, "r")
+ for line in f:
+  yield line
+ 
+
+ Then put some logic in another function (and supposing that you save the results in a file) 
+
+ def foo(data_file, output_file):
+ f = open(output_file, "w")
+ cnt = 0
+ suma = 0
+ for line in cat(data_file):
+  suma += line.split()[-1]
+  cnt += 1
+  if cnt%100 == 0:
+   f.write("%s\t%s\n" %( cnt, suma/100.0)
+   suma = 0
+ f.close()
+ 
+
+ EDIT : The above solution assumed that the numbers in the first column are ALL numbers from 1 to N. As your case does not follow this pattern ( from the extra details in the comments), here is the correct function: 
+
+ def foo_for_your_case(data_file, output_file):
+ f = open(output_file, "w")
+ interval = 100
+ suma = 0.0
+ cnt = 0 # keep track of number of elements in the interval
+
+ for line in cat(data_file):
+  spl = line.split()
+
+  while int(spl[0]) &gt; interval:
+   if cnt &gt; 0 : f.write("%s\t%s\n" %( interval, suma/cnt)
+   else: f.write("%s\t0\n" %( interval )
+   interval += 100 
+   suma = 0.0
+   cnt = 0
+
+  suma += float(spl[-1])
+  cnt += 1
+
+ f.close()
+ 
+ #4 Based on your code, I would guess that this would work the full data set (depending on your system's memory): 
+
+ chr1 &lt;- 33132539 
+window &lt;- 100 
+
+pos &lt;- cut(1:chr1, seq(0, chr1, window))
+
+meanrho.chr1 &lt;- tapply(spe$rho, INDEX = pos, FUN = mean)
+ 
+
+ I think you want a factor that defines groups of intervals for every 100 within the first column ( rho ), and then you can use the standard apply family of functions to get means within groups. 
+
+ Here is the data you posted in reproducible form. 
+
+ spe &lt;- structure(list(pos = c(5380L, 5390L, 5393L, 5404L, 5428L, 5437L, 
+5440L, 5443L, 5459L, 5463L, 5480L, 5521L, 5538L, 5584L, 5673L, 
+5720L, 5841L, 5880L, 5913L, 5958L), rho = c(30.07383, 30.87, 0.07383, 
+6, 30.07383, 1, 9, 30.07383, 6, 30.07383, 7, 30.07383, 0, 20, 
+30.07383, 30.07383, 3, 30.07383, 4, 30.07383)), .Names = c("pos", 
+"rho"), row.names = c(NA, -20L), class = "data.frame")
+ 
+
+ Define the intervals with cut , we just want every 100th value (but you might want the details tweaked as per your code for your real data set). 
+
+ pos.index &lt;- cut(spe$pos, seq(0, max(spe$pos), by = 100))
+ 
+
+ Now pass the desired function ( mean ) over each group. 
+
+ tapply(spe$rho, INDEX = pos.index, FUN = mean)
+ 
+
+ (Lots of NAs since we didn't start at 0, then) 
+
+ (5.2e+03,5.3e+03] (5.3e+03,5.4e+03] (5.4e+03,5.5e+03] (5.5e+03,5.6e+03] (5.6e+03,5.7e+03] (5.7e+03,5.8e+03] (5.8e+03,5.9e+03] 
+ 20.33922   14.90269   16.69128   30.07383   30.07383   16.53692 
+ 
+
+ (Add other arguments to FUN, such as na.rm as necessary, e.g:) 
+
+ ## tapply(spe$rho, INDEX = pos.index, FUN = mean, na.rm = TRUE)
+ 
+
+ See ?tapply applying over groups in a vector (ragged array), and ?cut for ways to generate grouping factors. 
+ #5 Here is a Perl program that does what I think you want. It assumes the rows are sorted by the first column. 
+
+ #!/usr/bin/perl
+use strict;
+use warnings;
+
+my $input_name  = "t.dat";
+my $output_name  = "t_out.dat";
+my $initial_interval = 1;
+
+my $interval_size = 100;
+my $start_interval = $initial_interval;
+my $end_interval  = $start_interval + $interval_size;
+
+my $interval_total = 0;
+my $interval_count = 0;
+
+open my $DATA, "&lt;", $input_name or die "$input_name: $!";
+open my $AVGS, "&gt;", $output_name or die "$output_name: $!";
+
+my $rows_in = 0;
+my $rows_out = 0;
+$| = 1;
+
+for (&lt;$DATA&gt;) {
+ $rows_in++;
+
+ # progress indicator, nice for big data
+ print "*" unless $rows_in % 1000;
+ print "\n" unless $rows_in % 50000;
+
+ my ($key, $value) = split /\t/;
+
+ # handle possible missing intervals
+ while ($key &gt;= $end_interval) {
+
+  # put your value for an empty interval here...
+  my $interval_avg = "empty";
+
+  if ($interval_count) {
+   $interval_avg = $interval_total/$interval_count;
+  }
+  print $AVGS $start_interval,"\t", $interval_avg, "\n";
+  $rows_out++;
+
+  $interval_count = 0;
+  $interval_total = 0;
+
+  $start_interval = $end_interval;
+  $end_interval += $interval_size;
+ }
+
+ $interval_count++;
+ $interval_total += $value;
+}
+
+# handle the last interval
+if ($interval_count) {
+ my $interval_avg = $interval_total/$interval_count;
+ print $AVGS $start_interval,"\t", $interval_avg, "\n";
+ $rows_out++;
+}
+
+print "\n";
+print "Rows in: $rows_in\n";
+print "Rows out: $rows_out\n";
+
+exit 0;
+ 
+ #6 Oneliner in Perl is simple and efficient as usual: 
+
+ perl -F\\t -lane'BEGIN{$l=33132539;$i=100;$,=", "}sub p(){print$r*$i,$s/$n if$n;$r=int($F[0]/$i);$s=$n=0}last if$F[0]&gt;$l;p if int($F[0]/$i)!=$r;$s+=$F[1];$n++}{p'

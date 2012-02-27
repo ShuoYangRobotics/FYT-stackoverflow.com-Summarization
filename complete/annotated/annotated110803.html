@@ -1,0 +1,123 @@
+<h3>Question ( ID-110803 ) : </h3><h2>Dirty fields in <span style="background-color:yellow;">django</span> </h2><p>In my app i need to <span style="background-color:yellow;">save</span> changed values ( old and new ) when model gets <span style="background-color:yellow;">saved.</span> Any examples or working code ? </p>
+<p>I need this for premoderation of content. For example , if user changes something in model , then administrator can see all changes in separate table and then decide to apply them or not . </p>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>You have n't said very much about your specific use case or needs. In particular , it would be helpful to know what you need to do with the change information ( how long do you need to store it ? ) . If you only need to store it for transient purposes , @ S.Lott 's session solution may be best. If you want a full audit trail of all changes to your <span style="background-color:yellow;">objects</span> stored in the DB , try this AuditTrail solution . </p>
+<p>UPDATE : The AuditTrail code I linked to above is the closest I 've seen to a full solution that would work for your case , though it has some limitations ( does n't work at all for ManyToMany fields ) . It will store all previous versions of your <span style="background-color:yellow;">objects</span> in the DB , so the admin could roll back to any previous version. You 'd have to work with it a bit if you want the change to not take effect until approved . </p>
+<p>You could also build a custom solution based on something like @ Armin Ronacher 's <span style="background-color:yellow;">DiffingMixin.</span> You 'd store the diff dictionary ( maybe pickled ? ) in a table for the admin to review later and apply if desired ( you 'd need to write the code to take the diff dictionary and apply it to an instance ) . </p>
+<br /><b># 1 </b><br /><p>Django is currently sending all columns to the database , even if you just changed one. To change this , some changes in the database system would be necessary. This could be easily implemented on the existing code by adding a set of dirty fields to the model and adding column names to it , each time you __set__ a column value . </p>
+<p>If you need that feature , I would suggest you look at the Django ORM , implement it and put a patch into the Django trac. It should be very easy to add that and it would help other users too. When you do that , add a hook that is called each time a column is set . </p>
+<p>If you do n't want to hack on Django itself , you could copy the dict on <span style="background-color:yellow;">object</span> creation and diff it . </p>
+<p>Maybe with a mixin like this : </p>
+<pre><code>class DiffingMixin(object):
+
+    def __init__(self, *args, **kwargs):
+        super(DiffingMixin, self).__init__(*args, **kwargs)
+        self._original_state = dict(self.__dict__)
+
+    def get_changed_columns(self):
+        missing = object()
+        result = {}
+        for key, value in self._original_state.iteritems():
+            if key != self.__dict__.get(key, missing):
+                result[key] = value
+        return result
+
+ class MyModel(DiffingMixin, models.Model):
+     pass
+</code></pre>
+<p>This code is untested but should work. When you call model.get_changed_columns ( ) you get a dict of all changed values. This of course wo n't work for mutable <span style="background-color:yellow;">objects</span> in columns because the original state is a flat copy of the dict . </p>
+<br /><b># 2 </b><br /><p>I 've found Armin 's idea very useful. Here is my variation ; </p>
+<pre><code>class DirtyFieldsMixin(object):
+    def __init__(self, *args, **kwargs):
+        super(DirtyFieldsMixin, self).__init__(*args, **kwargs)
+        self._original_state = self._as_dict()
+
+    def _as_dict(self):
+        return dict([(f.name, getattr(self, f.name)) for f in self._meta.local_fields if not f.rel])
+
+    def get_dirty_fields(self):
+        new_state = self._as_dict()
+        return dict([(key, value) for key, value in self._original_state.iteritems() if value != new_state[key]])
+</code></pre>
+<p>Edit : I 've tested this BTW . </p>
+<p>Sorry about the long lines. The difference is ( aside from the names ) it only caches local non-relation fields. In other words it does n't cache a parent model 's fields if present . </p>
+<p>And there 's one more thing ; you need to reset _original_state dict after saving. But I did n't want to overwrite <span style="background-color:yellow;">save</span> ( ) method since most of the times we discard model instances after saving . </p>
+<pre><code>def save(self, *args, **kwargs):
+    super(Klass, self).save(*args, **kwargs)
+    self._original_state = self._as_dict()
+</code></pre>
+<br /><b># 3 </b><br /><p>Continuing on Muhuk 's suggestion &amp ; adding Django 's signals and a unique dispatch_uid you could reset the state on <span style="background-color:yellow;">save</span> without overriding <span style="background-color:yellow;">save</span> ( ) : </p>
+<pre><code>from django.db.models.signals import post_save
+
+class DirtyFieldsMixin(object):
+    def __init__(self, *args, **kwargs):
+        super(DirtyFieldsMixin, self).__init__(*args, **kwargs)
+        post_save.connect(self._reset_state, sender=self.__class__, 
+                            dispatch_uid='%s-DirtyFieldsMixin-sweeper' % self.__class__.__name__)
+        self._reset_state()
+
+    def _reset_state(self, *args, **kwargs):
+        self._original_state = self._as_dict()
+
+    def _as_dict(self):
+        return dict([(f.name, getattr(self, f.name)) for f in self._meta.local_fields if not f.rel])
+
+    def get_dirty_fields(self):
+        new_state = self._as_dict()
+        return dict([(key, value) for key, value in self._original_state.iteritems() if value != new_state[key]])
+</code></pre>
+<p>Which would clean the original state once <span style="background-color:yellow;">saved</span> without having to override <span style="background-color:yellow;">save</span> ( ) . The code works but not sure what the performance penalty is of connecting signals at <span style="background-color:yellow;">__init__</span> </p>
+<br /><b># 4 </b><br /><p>I extended muhuk and smn 's solutions to include difference checking on the primary keys for foreign key and one-to-one fields : </p>
+<pre><code>from django.db.models.signals import post_save
+
+class DirtyFieldsMixin(object):
+    def __init__(self, *args, **kwargs):
+        super(DirtyFieldsMixin, self).__init__(*args, **kwargs)
+        post_save.connect(self._reset_state, sender=self.__class__,
+                            dispatch_uid='%s-DirtyFieldsMixin-sweeper' % self.__class__.__name__)
+        self._reset_state()
+
+    def _reset_state(self, *args, **kwargs):
+        self._original_state = self._as_dict()
+
+    def _as_dict(self):
+        return dict([(f.attname, getattr(self, f.attname)) for f in self._meta.local_fields])
+
+    def get_dirty_fields(self):
+        new_state = self._as_dict()
+        return dict([(key, value) for key, value in self._original_state.iteritems() if value != new_state[key]])
+</code></pre>
+<p>The only difference is in as_dirty I changed the last line from </p>
+<pre><code>return dict([
+    (f.name, getattr(self, f.name)) for f in self._meta.local_fields
+    if not f.rel
+])
+</code></pre>
+<p>to </p>
+<pre><code>return dict([
+    (f.attname, getattr(self, f.attname)) for f in self._meta.local_fields
+])
+</code></pre>
+<p>This mixin , like the ones above , can be used like so : </p>
+<pre><code>class MyModel(DirtyFieldsMixin, models.Model):
+    ....
+</code></pre>
+<br /><b># 5 </b><br /><p>If you 're using your own transactions ( not the default admin application ) , you can <span style="background-color:yellow;">save</span> the before and after versions of your <span style="background-color:yellow;">object.</span> You can <span style="background-color:yellow;">save</span> the before version in the session , or you can put it in " hidden " fields in the form. Hidden fields is a security nightmare. Therefore , use the session to retain history of what 's happening with this user . </p>
+<p>Additionally , of course , you do have to fetch the previous <span style="background-color:yellow;">object</span> so you can make changes to it. So you have several ways to monitor the differences . </p>
+<pre><code>def updateSomething( request, object_id ):
+    object= Model.objects.get( id=object_id )
+    if request.method == "GET":
+        request.session['before']= object
+        form= SomethingForm( instance=object )
+    else request.method == "POST"
+        form= SomethingForm( request.POST )
+        if form.is_valid():
+            # You have before in the session
+            # You have the old object
+            # You have after in the form.cleaned_data
+            # Log the changes
+            # Apply the changes to the object
+            object.save()
+</code></pre>
+<br /><b># 6 </b><br /><p>for everyone 's information , muhuk 's solution fails under python2.6 as it raises an exception stating 'object.__ init __ ( ) ' accepts no argument.. . </p>
+<p>edit : ho ! apparently it might 've been me misusing the the mixin... I didnt pay attention and declared it as the last parent and because of that the call to init ended up in the <span style="background-color:yellow;">object</span> parent rather than the next parent as it noramlly would with diamond diagram inheritance ! so please disregard my comment : ) </p>
+<br />

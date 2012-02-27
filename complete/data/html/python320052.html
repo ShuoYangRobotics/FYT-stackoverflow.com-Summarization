@@ -1,0 +1,141 @@
+<h3>Question (ID-320052):</h3><h2>How do you iterate over a tree?</h2><p>What is you preferred method of traversing a tree data structure, since recursive method calls can be pretty inefficient in some circumstances, I am simply using a generator like the one above. Do you have any hints to make it faster ?</p>
+
+<pre><code>def children(self):
+    stack = [self.entities]
+    while stack: 
+        for e in stack.pop():
+            yield e
+            if e.entities:
+                stack.append(e.entities)
+</code></pre>
+
+<p>here is some test data:
+first one is recursive, second uses the generator</p>
+
+<pre><code>s = time.time()
+for i in range(100000):
+    e.inc_counter()
+print time.time() - s
+
+s = time.time()
+for i in range(100000):
+    for e in e.children():
+        e.inc_counter_s()
+print time.time() - s
+</code></pre>
+
+<p>results:</p>
+
+<p>0.416000127792</p>
+
+<p>0.298999786377</p>
+
+<p>test code:</p>
+
+<pre><code>import random
+
+class Entity():
+    def __init__(self, name):
+        self.entities = []
+        self.name = name
+        self.counter = 1
+        self.depth = 0
+
+    def add_entity(self, e):
+        e.depth = self.depth + 1
+        self.entities.append(e)
+
+    def inc_counter_r(self):
+        for e in self.entities:
+            e.counter += 1
+            e.inc_counter_r()
+
+    def children(self):
+        stack = [self.entities]
+        while stack:
+            for e in stack.pop():
+                yield e
+                if e.entities:
+                    stack.append(e.entities)
+
+root = Entity("main")
+def fill_node(root, max_depth):
+    if root.depth &lt;= max_depth:
+        for i in range(random.randint(10, 15)):
+            e = Entity("node_%s_%s" % (root.depth, i))
+            root.add_entity(e)
+            fill_node(e, max_depth)
+fill_node(root, 3)
+
+import time
+s = time.time()
+for i in range(100):
+    root.inc_counter_r()
+print "recursive:", time.time() - s
+
+s = time.time()
+for i in range(100):
+    for e in root.children():
+        e.counter += 1
+print "generator:",  time.time() - s
+</code></pre>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Unless your tree is really large or you have really high (real) requirements for speed, I would choose the recursive method. Easier to read, easier to code.</p>
+<br /><b>#1</b><br /><p>I can't think of any big algorithmic improvements, but a simple microoptimisation you can make is to bind frequently called methods (such as stack.append / stack.pop) to locals (this saves a dictionary lookup)</p>
+
+<pre><code>def children(self):
+    stack = [self.entities]
+    push = stack.append
+    pop = stack.pop
+    while stack: 
+        for e in pop():
+            yield e
+            if e.entities:
+                push(e.entities)
+</code></pre>
+
+<p>This gives a small (~15%) speedup by my tests (using 100 traversals of an 8-deep tree with 4 children at each node gives me the below timings:)</p>
+
+<pre><code>children     :  5.53942348004
+children_bind:  4.77636131253
+</code></pre>
+
+<p>Not huge, but worth doing if speed is important.</p>
+<br /><b>#2</b><br /><p>I'm not sure if you can reduce the overhead much on a <em>full</em> in-order traversal of a tree, if you use recursion the call stack will grow some, otherwise you must manually use a stack to push references of the children while visiting each node. Which way is fastest and uses less memory, depends on the expensiveness of the call stack vs. a normal stack. (I would guess the callstack is faster since it should be optimized for its use, and recursion is much easier to implement)</p>
+
+<p>If you don't care about the order you visit the nodes, some implementations of trees is actually stored in a dynamic array or linked list or stack wich you can traverse linearly if you don't care about the order it's traversed.</p>
+
+<p>But why is it important to have a fast traversal anyway? Trees are good for searching, arrays/linked lists is good for full traversal. If you often need full in-order traversal but few searches and insertions/deletions, an ordered linked list might be best, if searching is what you do most you use a tree. If the data is really massive, so that memory overhead may render recursion impossible, you should use a database.</p>
+<br /><b>#3</b><br /><p>Recursive function calls are not incredibly inefficient, that is an old programming myth. (If they're badly implemented, they may incur a larger overhead than necessary, but calling them "incredibly inefficient" is plain wrong.)</p>
+
+<p>Remember: don't optimize prematurely, and <em>never</em> optimize without benchmarking first.</p>
+<br /><b>#4</b><br /><p>If you have a lot of RAM and the tree doesn't change often, you can cache the result of the call:</p>
+
+<pre><code>def children(self):
+    if self._children_cache is not None:
+        return self._children_cache
+    # Put your code into collectChildren()
+    self._children_cache = self.collectChildren()
+    return self._children_cache
+</code></pre>
+
+<p>Whenever the tree changes, set the cache to None. In this case, using recursive calls might be more effective since the results will accumulate faster.</p>
+<br /><b>#5</b><br /><p>I've written iterative tree-traversal code in the past: it's very ugly, and not fast, unless you know <em>exactly</em> how many children not only each subtree will have, but how many levels there are.</p>
+<br /><b>#6</b><br /><p>I don't know too much about Python internals of function calls, but I really can't imagine that your code snippet is faster than recursively traversing the tree.</p>
+
+<p>The call stack (used for function calls, including recursive ones) is typically very fast. Going to the next object will only cost you a single function call. But in your snippet - where you use a stack object, going to the next object will cost you a stack.append (possibly allocating memory on heap), a stack.push (possibly freeing memory from heap), and a yield.</p>
+
+<p>The main problem with recursive calls is that you might blow the stack if your tree gets too deep. This isn't likely to happen.</p>
+<br /><b>#7</b><br /><p>Here's a pair of small corrections.</p>
+
+<pre><code>def children(self):
+    stack = [self.entities]
+    for e in stack:
+        yield e
+        if e.entities:
+            stack.extend(e.entities)
+</code></pre>
+
+<p>I actually think the generator, using append, isn't visiting all the nodes. I think you mean to <code>extend</code> the stack with all entities, not <code>append</code> a simple list of entities to the stack.</p>
+
+<p>Also, when the <code>for</code> loop terminates, the <code>while</code> loop in your original example will also terminate because there's no change to the empty stack after the <code>for</code> loop.</p>
+<br />

@@ -1,0 +1,167 @@
+<h3>Question (ID-1910744):</h3><h2>More efficient way to count intersections?</h2><p>I have a list of 300000 lists (fiber tracks), where each track is a list of (x,y,z) tuples/coordinates:</p>
+
+<pre><code>tracks=
+[[(1,2,3),(3,2,4),...]
+ [(4,2,1),(5,7,3),...]
+ ...
+]
+</code></pre>
+
+<p>I also have a group of masks, where each mask is defined as a list of (x,y,z) tuples/coordinates: </p>
+
+<pre><code>mask_coords_list=
+[[(1,2,3),(8,13,4),...]
+ [(6,2,2),(5,7,3),...]
+ ...
+]
+</code></pre>
+
+<p>I am trying to find, for all possible pairs of masks:</p>
+
+<ol>
+<li>the number of tracks that intersect each mask-mask pair (to create a connectivity matrix)</li>
+<li>the subset of tracks that intersect each mask, in order to add 1 to each (x,y,z) coordinate for each track in the subset (to create a "density" image)</li>
+</ol>
+
+<p>I'm currently doing part 1 like so:</p>
+
+<pre><code>def mask_connectivity_matrix(tracks,masks,masks_coords_list):
+    connect_mat=zeros((len(masks),len(masks)))
+    for track in tracks:
+        cur=[]
+        for count,mask_coords in enumerate(masks_coords_list):
+            if any(set(track) &amp; set(mask_coords)):
+                cur.append(count)
+            for x,y in list(itertools.combinations(cur,2)):
+                connect_mat[x,y] += 1
+</code></pre>
+
+<p>and part 2 like so:</p>
+
+<pre><code>def mask_tracks(tracks,masks,masks_coords_list):
+    vox_tracks_img=zeros((xdim,ydim,zdim,len(masks)))
+    for track in tracks:
+        for count,mask in enumerate(masks_coords_list):
+            if any(set(track) &amp; set(mask)):
+                for x,y,z in track:
+                    vox_tracks_img[x,y,z,count] += 1
+</code></pre>
+
+<p>Using sets to find intersections has sped this process up significantly but both portions still take over an hour when I have a list of 70 or more masks. Is there a more efficient way to do this than iterating for each track?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Linearize the voxel coordinates, and put them into two scipy.sparse.sparse.csc matrices.  </p>
+
+<p>Let v be the number of voxels, m the number of masks, and t the number of tracks.<br>
+Let M be the mask csc matrix, size (m x v), where a 1 at (i,j) means mask i overlaps voxel j.<br>
+Let T be the track csc matrix, size (t x v), where a 1 at (k,j) means track k overlaps voxel j.  </p>
+
+<pre><code>Overlap = (M * T.transpose() &gt; 0)  # track T overlaps mask M  
+Connected = (Overlap * Overlap.tranpose() &gt; 0) # Connected masks
+Density[mask_idx] = numpy.take(T, nonzero(Overlap[mask_idx, :])[0], axis=0).sum(axis=0)
+</code></pre>
+
+<p>I might be wrong on the last one, and I'm not sure css_matrices can be operated on by nonzero &amp; take.  You might need to pull out each column in a loop and convert it to a full matrix.</p>
+
+<p><hr></p>
+
+<p>I ran some experiments trying to simulate what I thought was a reasonable amount of data.  The code below takes about 2 minutes on a 2-year old MacBook.  If you use csr_matrices, it takes about 4 minutes.  There is probably a tradeoff depending on how long each track is.  </p>
+
+<pre><code>from numpy import *
+from scipy.sparse import csc_matrix
+
+nvox = 1000000
+ntracks = 300000
+nmask = 100
+
+# create about 100 entries per track
+tcoords = random.uniform(0, ntracks, ntracks * 100).astype(int)
+vcoords = random.uniform(0, nvox, ntracks * 100).astype(int)
+d = ones(ntracks * 100)
+T = csc_matrix((d,  vstack((tcoords, vcoords))), shape=(ntracks, nvox), dtype=bool)
+
+# create around 10000 entries per mask
+mcoords = random.uniform(0, nmask, nmask * 10000).astype(int)
+vcoords = random.uniform(0, nvox, nmask * 10000).astype(int)
+d = ones(nmask * 10000)
+M = csc_matrix((d, vstack((mcoords, vcoords))), shape=(nmask, nvox), dtype=bool)
+
+Overlap = (M * T.transpose()).astype(bool) # mask M overlaps track T
+Connected = (Overlap * Overlap.transpose()).astype(bool) # mask M1 and M2 are connected
+Density = Overlap * T.astype(float) # number of tracks overlapping mask M summed across voxels
+</code></pre>
+<br /><b>#1</b><br /><p>OK, I think I finally have something that will reduce the complexity. This code should really fly compared to what you've got.</p>
+
+<p>It seems like first you need to know which tracks coincide with which masks, the <a href="http://en.wikipedia.org/wiki/Incidence%5Fmatrix" rel="nofollow">incidence matrix</a>.</p>
+
+<pre><code>import numpy
+from collections import defaultdict
+
+def by_point(sets):
+    d = defaultdict(list)
+    for i, s in enumerate(sets):
+        for pt in s:
+            d[pt].append(i)
+    return d
+
+def calc(xdim, ydim, zdim, mask_coords_list, tracks):
+    masks_by_point = by_point(mask_coords_list)
+    tracks_by_point = by_point(tracks)
+
+    a = numpy.zeros((len(mask_coords_list), len(tracks)), dtype=int)
+    for pt, maskids in masks_by_point.iteritems():
+        for trackid in tracks_by_point.get(pt, ()):
+            a[maskids, trackid] = 1
+    m = numpy.matrix(a)
+</code></pre>
+
+<p>The <a href="http://en.wikipedia.org/wiki/Adjacency%5Fmatrix" rel="nofollow">adjacency matrix</a> you're looking for is <code>m * m.T</code>.</p>
+
+<p>The code you have so far computes the upper triangle only. You can use <code>triu</code> to grab just that half.</p>
+
+<pre><code>    am = m * m.T  # calculate adjacency matrix
+    am = numpy.triu(am, 1)  # keep only upper triangle
+    am = am.A  # convert matrix back to array
+</code></pre>
+
+<p>The voxel calculation can use the incidence matrix too.</p>
+
+<pre><code>    vox_tracks_img = numpy.zeros((xdim, ydim, zdim, len(mask_coords_list)), dtype=int)
+    for trackid, track in enumerate(tracks):
+        for x, y, z in track:
+            vox_tracks_img[x, y, z, :] += a[:,trackid]
+    return am, vox_tracks_img
+</code></pre>
+
+<p>For me this runs in under a second for data sets having hundreds of masks and tracks.</p>
+
+<p>If you have many points that appear in masks but are not on any tracks, it might be worthwhile to delete the entries for those points from <code>masks_by_point</code> before entering the loop.</p>
+<br /><b>#2</b><br /><p>You can probably start by combining the two functions to create both results at once. Also there's no need to make a list of the combinations before looping, as it is already a generator, and that might save you some time.</p>
+
+<pre><code>def mask_connectivity_matrix_and_tracks(tracks,masks,masks_coords_list):
+    connect_mat=zeros((len(masks),len(masks)))
+    vox_tracks_img=zeros((xdim,ydim,zdim,len(masks)))
+    for track in tracks:
+        cur=[]
+        for count,mask_coords in enumerate(masks_coords_list):
+            if any(set(track) &amp; set(mask_coords)):
+                cur.append(count)
+                for x,y,z in track:
+                    vox_tracks_img[x,y,z,count] += 1
+            for x,y in itertools.combinations(cur,2):
+                connect_mat[x,y] += 1
+</code></pre>
+
+<p>Also, this will probably never be "fast" as in "finished before we die", so the best way is to eventually compile it with Cython as a c module for python.</p>
+<br /><b>#3</b><br /><p>If you stored the each mask set of points:
+(1,2,3), (1,2,4), (1,3,1) as a dictionary like this: <code>{1: [{2: set([3, 4])}, {3: set([1])}]}</code>, you might end up being able to check for matches faster...but maybe not.  </p>
+<br /><b>#4</b><br /><p>A minor optimization (same big-O, sligthly smaller multiplier) can be had by removing redundant operations:</p>
+
+<ol>
+<li>don't call <code>set</code> so many times on each track and mask: call it once per track and once per mask, to set up auxiliary "parallel" lists of sets, then work on those</li>
+<li><code>if any(someset):</code> is semantically the same as <code>if someset:</code> but a bit slower</li>
+</ol>
+
+<p>Won't make a dramatic difference, but might minutely help.</p>
+<br /><b>#5</b><br /><p>Lame to suggest yet another incremental improvement that might be made, I know, but:</p>
+
+<p>Sets of small integers can be modeled as bit-vectors using Python's long ints. Suppose you replace each tuple with a small integer id, then convert each track and each set of mask-coords into a set of those small ids. You could represent those sets as long ints, making the intersection operation a bit faster (but not asymptotically faster).</p>
+<br />

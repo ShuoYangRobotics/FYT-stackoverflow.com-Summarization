@@ -1,0 +1,69 @@
+Question (ID-393554): Python sqlite3 and concurrency I have a Python program that uses the "threading" module. Once every second, my program starts a new thread that fetches some data from the web, and stores this data to my hard drive. I would like to use sqlite3 to store these results, but I can't get it to work. The issue seems to be about the following line: 
+
+ conn = sqlite3.connect("mydatabase.db")
+ 
+
+ 
+ If I put this line of code inside each thread, I get an OperationalError telling me that the database file is locked. I guess this means that another thread has mydatabase.db open through a sqlite3 connection and has locked it. 
+ If I put this line of code in the main program and pass the connection object (conn) to each thread, I get a ProgrammingError, saying that SQLite objects created in a thread can only be used in that same thread. 
+ 
+
+ Previously I was storing all my results in CSV files, and did not have any of these file-locking issues. Hopefully this will be possible with sqlite. Any ideas? 
+ Answers (Total-12): #0 contrary to popular belief, newer versions of sqlite3 do support access from multiple threads. 
+
+ this can be enabled via optional keyword argument check_same_thread 
+
+ e.g 
+
+ sqlite.connect(":memory:", check_same_thread = False)
+ 
+
+ as of the 24th of may 2010, the docs omit this option. the omission is listed as a bug here 
+
+ as of Jan 1, 2012, the docs contains this option. 
+ #1 You can use consumer - producer pattern. For example you can create queue, that is shared between threads. First thread, that fetches data from the web, enqueue this data to the shared queue. Another thread, that owns database connection, dequeue data from the queue and pass it to the database. 
+ #2 You shouldn't be using threads at all for this. This is a trivial task for twisted and that would likely take you significantly further anyway. 
+
+ Use only one thread, and have the completion of the request trigger an event to do the write. 
+
+ twisted will take care of the scheduling, callbacks, etc... for you. It'll hand you the entire result as a string, or you can run it through a stream-processor (I have a twitter API and a friendfeed API that both fire off events to callers as results are still being downloaded). 
+
+ Depending on what you're doing with your data, you could just dump the full result into sqlite as it's complete, cook it and dump it, or cook it while it's being read and dump it at the end. 
+
+ I have a very simple application that does something close to what you're wanting on github. I call it pfetch (parallel fetch). It grabs various pages on a schedule, streams the results to a file, and optionally runs a script upon successful completion of each one. It also does some fancy stuff like conditional GETs, but still could be a good base for whatever you're doing. 
+ #3 Switch to multiprocessing . It is much better, scales good, can go beyond the use of multiple cores by using multiple CPUs, and the interface is the same as using python threading module. 
+
+ Or, as Ali suggested, just use SQLAlchemy's thread pooling mechanism . It will handle everything for you automatically and has many extra features, just to quote some of them: 
+
+ 
+ SQLAlchemy includes dialects for SQLite, Postgres, MySQL, Oracle, MS-SQL, Firebird, MaxDB, MS Access, Sybase and Informix; IBM has also released a DB2 driver. So you don't have to rewrite your application if you decide to move away from SQLite. 
+ The Unit Of Work system, a central part of SQLAlchemy's Object Relational Mapper (ORM), organizes pending create/insert/update/delete operations into queues and flushes them all in one batch. To accomplish this it performs a topological "dependency sort" of all modified items in the queue so as to honor foreign key constraints, and groups redundant statements together where they can sometimes be batched even further. This produces the maxiumum efficiency and transaction safety, and minimizes chances of deadlocks. 
+ 
+ #4 The following found on mail.python.org.pipermail.1239789 
+ 
+I have found the solution. I don't know why python documentation has not a single word about this option. So we have to add a new keyword argument to connection function 
+and we will be able to create cursors out of it in different thread. So use: 
+
+ sqlite.connect(":memory:", check_same_thread = False)
+ 
+
+ works out perfectly for me. Of course from now on I need to take care 
+of safe multithreading access to the db. Anyway thx all for trying to help. 
+ #5 Here is an example of what Evgeny Lazin mentioned above. 
+ #6 I like Evgeny's answer - Queues are generally the best way to implement inter-thread communication. For completeness, here are some other options: 
+
+ 
+ Close the DB connection when the spawned threads have finished using it. This would fix your OperationalError , but opening and closing connections like this is generally a No-No, due to performance overhead. 
+ Don't use child threads. If the once-per-second task is reasonably lightweight, you could get away with doing the fetch and store, then sleeping until the right moment. This is undesirable as fetch and store operations could take >1sec, and you lose the benefit of multiplexed resources you have with a multi-threaded approach. 
+ 
+ #7 Or if you are lazy, like me, you can use SQLAlchemy . It will handle the threading for you, ( using thread local, and some connection pooling ) and the way it does it is even configurable . 
+
+ For added bonus, if/when you realise/decide that using Sqlite for any concurrent application is going to be a disaster, you won't have to change your code to use MySQL, or Postgres, or anything else. You can just switch over. 
+ #8 You need to design the concurrency for your program. SQLite has clear limitations and you need to obey them, see the FAQ (also the following question). 
+ #9 Scrapy seems like a potential answer to my question. Its home page describes my exact task. (Though I'm not sure how stable the code is yet.) 
+ #10 I would take a look at the y_serial Python module for data persistence: http://yserial.sourceforge.net 
+
+ which handles deadlock issues surrounding a single SQLite database. If demand on concurrency gets heavy one can easily set up the class Farm of many databases to diffuse the load over stochastic time. 
+
+ Hope this helps your project... it should be simple enough to implement in 10 minutes. 
+ #11 Use threading.Lock()

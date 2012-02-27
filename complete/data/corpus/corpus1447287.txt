@@ -1,0 +1,197 @@
+Question (ID-1447287): Format floats with standard json module I am using the standard json module in python 2.6 to serialize a list of floats. However, I'm getting results like this: 
+
+ &gt;&gt;&gt; import json
+&gt;&gt;&gt; json.dumps([23.67, 23.97, 23.87])
+'[23.670000000000002, 23.969999999999999, 23.870000000000001]'
+ 
+
+ I want the floats to be formated with only two decimal digits. The output should look like this: 
+
+ &gt;&gt;&gt; json.dumps([23.67, 23.97, 23.87])
+'[23.67, 23.97, 23.87]'
+ 
+
+ I have tried defining my own JSON Encoder class: 
+
+ class MyEncoder(json.JSONEncoder):
+ def encode(self, obj):
+  if isinstance(obj, float):
+   return format(obj, '.2f')
+  return json.JSONEncoder.encode(self, obj)
+ 
+
+ This works for a sole float object: 
+
+ &gt;&gt;&gt; json.dumps(23.67, cls=MyEncoder)
+'23.67'
+ 
+
+ But fails for nested objects: 
+
+ &gt;&gt;&gt; json.dumps([23.67, 23.97, 23.87])
+'[23.670000000000002, 23.969999999999999, 23.870000000000001]'
+ 
+
+ I don't want to have external dependencies, so I prefer to stick with the standard json module. 
+
+ How can I achieve this? 
+ Answers (Total-7): #0 Unfortunately, I believe you have to do this by monkey-patching (which, to my opinion, indicates a design defect in the standard library json package). E.g., this code: 
+
+ import json
+from json import encoder
+encoder.FLOAT_REPR = lambda o: format(o, '.2f')
+
+print json.dumps(23.67)
+print json.dumps([23.67, 23.97, 23.87])
+ 
+
+ emits: 
+
+ 23.67
+[23.67, 23.97, 23.87]
+ 
+
+ as you desire. Obviously, there should be an architected way to override FLOAT_REPR so that EVERY representation of a float is under your control if you wish it to be; but unfortunately that's not how the json package was designed:-(. 
+ #1 import simplejson
+
+class PrettyFloat(float):
+ def __repr__(self):
+  return '%.15g' % self
+
+def pretty_floats(obj):
+ if isinstance(obj, float):
+  return PrettyFloat(obj)
+ elif isinstance(obj, dict):
+  return dict((k, pretty_floats(v)) for k, v in obj.items())
+ elif isinstance(obj, (list, tuple)):
+  return map(pretty_floats, obj)    
+ return obj
+
+print simplejson.dumps(pretty_floats([23.67, 23.97, 23.87]))
+ 
+
+ emits 
+
+ [23.67, 23.97, 23.87]
+ 
+
+ No monkeypatching necessary. 
+ #2 If you're stuck with Python 2.5 or earlier versions: The monkey-patch trick does not seem to work with the original simplejson module if the C speedups are installed: 
+
+ $ python
+Python 2.5.4 (r254:67916, Jan 20 2009, 11:06:13) 
+[GCC 4.2.1 (SUSE Linux)] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import simplejson
+&gt;&gt;&gt; simplejson.__version__
+'2.0.9'
+&gt;&gt;&gt; simplejson._speedups
+&lt;module 'simplejson._speedups' from '/home/carlos/.python-eggs/simplejson-2.0.9-py2.5-linux-i686.egg-tmp/simplejson/_speedups.so'&gt;
+&gt;&gt;&gt; simplejson.encoder.FLOAT_REPR = lambda f: ("%.2f" % f)
+&gt;&gt;&gt; simplejson.dumps([23.67, 23.97, 23.87])
+'[23.670000000000002, 23.969999999999999, 23.870000000000001]'
+&gt;&gt;&gt; simplejson.encoder.c_make_encoder = None
+&gt;&gt;&gt; simplejson.dumps([23.67, 23.97, 23.87])
+'[23.67, 23.97, 23.87]'
+&gt;&gt;&gt;
+ 
+ #3 You can do what you need to do, but it isn't documented: 
+
+ &gt;&gt;&gt; import json
+&gt;&gt;&gt; json.encoder.FLOAT_REPR = lambda f: ("%.2f" % f)
+&gt;&gt;&gt; json.dumps([23.67, 23.97, 23.87])
+'[23.67, 23.97, 23.87]'
+ 
+ #4 If you're using Python 2.7, a simple solution is to simply round your floats explicitly to the desired precision. 
+
+ &gt;&gt;&gt; sys.version
+'2.7.1 (r271:86832, Nov 27 2010, 18:30:46) [MSC v.1500 32 bit (Intel)]'
+&gt;&gt;&gt; json.dumps(1.0/3.0)
+'0.3333333333333333'
+&gt;&gt;&gt; json.dumps(round(1.0/3.0, 2))
+'0.33'
+ 
+
+ This works because Python 2.7 made float rounding more consistent . Unfortunately this does not work in Python 2.6: 
+
+ &gt;&gt;&gt; sys.version
+'2.6.6 (r266:84292, Dec 27 2010, 00:02:40) \n[GCC 4.4.5]'
+&gt;&gt;&gt; json.dumps(round(1.0/3.0, 2))
+'0.33000000000000002'
+ 
+
+ The solutions mentioned above are workarounds for 2.6, but none are entirely adequate. Monkey patching json.encoder.FLOAT_REPR does not work if your Python runtime uses a C version of the JSON module. The PrettyFloat class in Tom Wuttke's answer works, but only if %g encoding works globally for your application. The %.15g is a bit magic, it works because float precision is 17 significant digits and %g does not print trailing zeroes. 
+
+ I spent some time trying to make a PrettyFloat that allowed customization of precision for each number. Ie, a syntax like 
+
+ &gt;&gt;&gt; json.dumps(PrettyFloat(1.0 / 3.0, 4))
+'0.3333'
+ 
+
+ It's not easy to get this right. Inheriting from float is awkward. Inheriting from Object and using a JSONEncoder subclass with its own default() method should work, except the json module seems to assume all custom types should be serialized as strings. Ie: you end up with the Javascript string "0.33" in the output, not the number 0.33. There may be a way yet to make this work, but it's harder than it looks. 
+ #5 Alex Martelli's solution will work for single threaded apps, but may not work for multi-threaded apps that need to control the number of decimal places per thread. Here is a solution that should work in multi threaded apps: 
+
+ import threading
+from json import encoder
+
+def FLOAT_REPR(f):
+ """
+ Serialize a float to a string, with a given number of digits
+ """
+ decimal_places = getattr(encoder.thread_local, 'decimal_places', 0)
+ format_str = '%%.%df' % decimal_places
+ return format_str % f
+
+encoder.thread_local = threading.local()
+encoder.FLOAT_REPR = FLOAT_REPR  
+
+#As an example, call like this:
+import json
+
+encoder.thread_local.decimal_places = 1
+json.dumps([1.56, 1.54]) #Should result in '[1.6, 1.5]'
+ 
+
+ You can merely set encoder.thread_local.decimal_places to the number of decimal places you want, and the next call to json.dumps() in that thread will use that number of decimal places 
+ #6 If you need to do this without overriding the global json.encoder.FLOAT_REPR, here's one way. This works with python 2.6, using pure python implementation of json module. 
+
+ class MyEncoder(json.JSONEncoder):
+ """
+ JSON encoder.
+
+ Notes:
+  - _iterecode and _iterencode_dict are lame overrides to allow for
+  float formatting override. Poor design in STL...
+  http://stackoverflow.com/questions/1447287/
+ """
+
+ FLOAT_FRMT = '{0:.2f}'
+
+ def floatstr(self, obj):
+  return self.FLOAT_FRMT.format(obj)
+
+ def _iterencode(self, obj, markers=None):
+  # stl JSON lame override #1
+  new_obj = obj
+  if isinstance(obj, float):
+   if not math.isnan(obj) and not math.isinf(obj):
+    new_obj = self.floatstr(obj)
+  return super(MyEncoder, self)._iterencode(new_obj, markers=markers)
+
+ def _iterencode_dict(self, dct, markers=None):
+  # stl JSON lame override #2
+  new_dct = {}
+  for key, value in dct.iteritems():
+   if isinstance(key, float):
+    if not math.isnan(key) and not math.isinf(key):
+     key = self.floatstr(key)
+   new_dct[key] = value
+  return super(MyEncoder, self)._iterencode_dict(new_dct, markers=markers)
+ 
+
+ Then: 
+
+ &gt;&gt;&gt; import MyEncoder
+&gt;&gt;&gt; enc = MyEncoder() 
+&gt;&gt;&gt; enc.encode([23.67, 23.97, 23.87])
+'["23.67", "23.97", "23.87"]'

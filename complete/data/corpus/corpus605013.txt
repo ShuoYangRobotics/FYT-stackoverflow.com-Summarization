@@ -1,0 +1,221 @@
+Question (ID-605013): python: how to send packets in multi thread and then the thread kill itself I have a question. I'd like to send a continuous streams of byte to some host for certain amount of time (let's say 1 minute) using python. 
+
+ Here is my code so far: 
+
+ #! /usr/bin/env python               
+
+import socket
+import thread
+import time
+
+IP = "192.168.0.2"
+PADDING = "a" * 1000 #assume the MTU is slighly above 1000
+DATA = PADDING + "this is sentence number = "
+PORT = 14444
+killed = False
+test_time = 60 #60 seconds of testing
+
+def send_data():
+ s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+ s.connect((IP, PORT))
+ count = 1
+ starttime = time.clock()
+ while elapsed &lt; test_time:
+ sent = s.send(DATA + str(count) + "\n")
+ if sent == 0: break # assume that if nothing is sent -&gt; connection died
+ count = count+1
+ elapsed = time.clock() - starttime
+ if killed:
+  break
+ s.close()
+ print str(count) + " has been sent"
+
+print "to quit type quit"
+thread.start_new_thread(send_data, ())
+
+while True:
+ var = raw_input("Enter something: ")
+ if var == "quit":
+ killed = True
+ 
+
+ Few question, is there a better way to let a thread die after 60 seconds other than polling the time.clock every time?
+When I run this program, it sends the bytes correctly but when I typed quit the other thread won't die, even though I set the var killed = True. I wonder why is that? the scope of var Killed should reach the other thread right? 
+
+ Thanks 
+ Answers (Total-7): #0 I recommned using threading module. Even more benefit is to use InterruptableThread for terminating the thread. You do not have to use flag for terminating your thread but exception will occur if you call terminate() on this thread from parent. You can handle exception or not. 
+
+ import threading, ctypes
+
+class InterruptableThread(threading.Thread):
+@classmethod
+def _async_raise(cls, tid, excobj):
+ res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(excobj))
+ if res == 0:
+  raise ValueError("nonexistent thread id")
+ elif res &gt; 1:
+  ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, 0)
+  raise SystemError("PyThreadState_SetAsyncExc failed")
+
+def raise_exc(self, excobj):
+ assert self.isAlive(), "thread must be started"
+ for tid, tobj in threading._active.items():
+  if tobj is self:
+   self._async_raise(tid, excobj)
+   return
+
+def terminate(self):
+ self.raise_exc(SystemExit)
+ 
+
+ EDIT: 
+You can rewrite your code like this using another thread that is waiting 1 minute and then killing your other thread 
+
+ def send_data:
+ IP = ...
+ # other vars
+
+ ...
+ s = socket.socket(.....)
+
+ # no killed checking
+ # no time checking
+ # just do your work here
+ ...
+ s.close()
+
+
+my_thread = InterruptableThread(target=send_data)
+my_thread.start()
+
+def one_minute_kill(who):
+ time.sleep(60)
+ who.terminate()
+
+killer_thread = InterruptableThread(target=one_minute_kill, args=[my_thread])
+killer.start()
+
+print "to quit type quit"
+while my_thread.isAlive():
+ if raw_input("Enter something: ") == "quit":
+ my_thread.terminate()
+ 
+ #1 I don't know how to do this with the "thread" module, but I can do it with the "threading" module. I think this code accomplishes what you want. 
+
+ For documentation on the threading module:
+ http://docs.python.org/library/threading.html 
+
+ #!/usr/bin/python
+
+import time
+from threading import Thread
+import threading
+import sys
+
+test_time = 10
+killed = False
+
+class SillyThread( threading.Thread ):
+ def run(self):
+ 	global killed
+ 	starttime = time.time()
+ 	counter = 0
+ 	while (time.time() - starttime) &lt; test_time:
+ 		if killed:
+ 			break
+ 		counter = counter + 1
+ 		time.sleep(0.1)
+ 	print "I did %d loops" % counter
+
+class ManageThread( threading.Thread ):
+ def run(self):
+ 	global killed
+ 	while True:
+ 		var = raw_input("Enter something: ")
+ 		if var == "quit":
+ 			killed = True
+ 			break
+ 	print "Got var [%s]" % var
+
+silly = SillyThread()
+silly.start()
+ManageThread().start()
+Thread.join(silly)
+print "bye bye"
+sys.exit(0)
+ 
+
+ Note that I use time.time() instead of time.clock(). time.clock() gives elapsed processor time on Unix (see http://docs.python.org/library/time.html ). I think time.clock() should work everywhere. I set my test_time to 10 seconds because I don't have the patience for a minute. 
+
+ Here's what happens if I let it run the full 10 seconds: 
+
+ leif@peacock:~/tmp$ ./test.py
+Enter something: I did 100 loops
+bye bye
+ 
+
+ Here's what happens if I type 'quit': 
+
+ leif@peacock:~/tmp$ ./test.py
+Enter something: quit
+Got var [quit]
+I did 10 loops
+bye bye
+ 
+
+ Hope this helps. 
+ #2 As mentioned above, use the threading module, it is much easier to use and provides several synchronization primitives. It also provides a Timer class that runs after a specified amount of time. 
+
+ If you just want the program to exit, you can simply make the sending thread a daemon. You do this by calling setDaemon(True) before calling start() (2.6 might use a daemon attribute instead). Python won't exit so long as a non-daemon thread is running. 
+ #3 You can do this pretty easily without threads. For example, using Twisted, you just set up a timed call and a producer: 
+
+ from twisted.internet.protocol import ClientFactory, Protocol
+from twisted.internet import reactor
+
+class Noisy(Protocol):
+ def __init__(self, delay, data):
+  self.delay = delay
+  self.data = data
+
+ def stop(self):
+  self.transport.unregisterProducer()
+  self.transport.loseConnection()
+  reactor.stop()
+
+ def resumeProducing(self):
+  self.transport.write(self.data)
+
+ def connectionMade(self):
+  self.transport.registerProducer(self, False)
+  reactor.callLater(self.delay, self.stop)
+
+factory = ClientFactory()
+factory.protocol = lambda: Noisy(60, "hello server")
+reactor.connectTCP(host, port, factory)
+reactor.run()
+ 
+
+ This has various advantages over the threaded approach. It doesn't rely on daemon threads, so you can actually clean up the network connection (eg, to send a close message if necessary) rather than relying on the platform to destroy it. It handles all the actual low level networking code for you (your original example is doing the wrong thing in the case of socket.send returning 0; this code will handle that case properly). You also don't have to rely on ctypes or the obscure CPython API for raising an exception in another thread (so it's portable to more versions of Python and can actually interrupt a blocked send immediately, unlike some of the other suggested approaches). 
+ #4 Ensure that the "quit" is working correctly and add a small print to test that the input is working. 
+
+ if var == "quit":
+ print "Hey we got quit"
+ 
+ #5 The variable elapsed is not initialized. Set it to zero above the while loop. 
+ #6 It's easy to test the scope of killed : 
+
+ &gt;&gt;&gt; import thread
+&gt;&gt;&gt; killed = False
+&gt;&gt;&gt; import time
+&gt;&gt;&gt; def test():
+... while True:
+... time.sleep(1)
+... if killed:
+...  print 'Dead.'
+...  break
+... 
+&gt;&gt;&gt; thread.start_new_thread(test, ())
+25479680
+&gt;&gt;&gt; time.sleep(3)
+&gt;&gt;&gt; killed = True
+&gt;&gt;&gt; Dead.

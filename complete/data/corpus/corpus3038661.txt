@@ -1,0 +1,131 @@
+Question (ID-3038661): Efficiently finding the shortest path in large graphs I'm looking to find a way to in real-time find the shortest path between nodes in a huge graph. It has hundreds of thousands of vertices and millions of edges. I know this question has been asked before and I guess the answer is to use a breadth-first search, but I'm more interested in to know what software you can use to implement it. For example, it would be totally perfect if it already exist a library (with python bindings!) for performing bfs in undirected graphs. 
+ Answers (Total-7): #0 python-graph 
+
+ added: 
+
+ The comments made me curious as to how the performance of pygraph was for a problem on the order of the OP, so I made a toy program to find out. Here's the output for a slightly smaller version of the problem: 
+
+ $ python2.6 biggraph.py 4 6
+biggraph generate 10000 nodes  00:00:00
+biggraph generate 1000000 edges 00:00:00
+biggraph add edges    00:00:05
+biggraph Dijkstra     00:01:32
+biggraph shortest_path done  00:04:15
+step: 1915 2
+step: 0 1
+biggraph walk done    00:04:15
+path: [9999, 1915, 0]
+ 
+
+ Not too bad for 10k nodes and 1M edges. It is important to note that the way Dijkstra's is computed by pygraph yields a dictionary of all spanning trees for each node relative to one target (which was arbitrarily node 0, and holds no privileged position in the graph). Therefore, the solution that took 3.75 minutes to compute actually yielded the answer to "what is the shortest path from all nodes to the target?". Indeed once shortest_path was done, walking the answer was mere dictionary lookups and took essentially no time. It is also worth noting that adding the pre-computed edges to the graph was rather expensive at ~1.5 minutes. These timings are consistent across multiple runs. 
+
+ I'd like to say that the process scales well, but I'm still waiting on biggraph 5 6 on an otherwise idled computer (Athlon 64, 4800 BogoMIPS per processor, all in core) which has been running for over a quarter hour. At least the memory use is stable at about 0.5GB. And the results are in: 
+
+ biggraph generate 100000 nodes 00:00:00
+biggraph generate 1000000 edges 00:00:00
+biggraph add edges    00:00:07
+biggraph Dijkstra     00:01:27
+biggraph shortest_path done  00:23:44
+step: 48437 4
+step: 66200 3
+step: 83824 2
+step: 0 1
+biggraph walk done    00:23:44
+path: [99999, 48437, 66200, 83824, 0]
+ 
+
+ That's a long time, but it was also a heavy computation (and I really wish I'd pickled the result). Here's the code for the curious: 
+
+ #!/usr/bin/python
+
+import pygraph.classes.graph
+import pygraph.algorithms
+import pygraph.algorithms.minmax
+import time
+import random
+import sys
+
+if len(sys.argv) != 3:
+ print ('usage %s: node_exponent edge_exponent' % sys.argv[0])
+ sys.exit(1)
+
+nnodes = 10**int(sys.argv[1])
+nedges = 10**int(sys.argv[2])
+
+start_time = time.clock()
+def timestamp(s):
+ t = time.gmtime(time.clock() - start_time)
+ print 'biggraph', s.ljust(24), time.strftime('%H:%M:%S', t)
+
+timestamp('generate %d nodes' % nnodes)
+bg = pygraph.classes.graph.graph()
+bg.add_nodes(xrange(nnodes))
+
+timestamp('generate %d edges' % nedges)
+edges = set()
+while len(edges) &lt; nedges:
+ left, right = random.randrange(nnodes), random.randrange(nnodes)
+ if left == right:
+  continue
+ elif left &gt; right:
+  left, right = right, left
+ edges.add((left, right))
+
+timestamp('add edges')
+for edge in edges:
+ bg.add_edge(edge)
+
+timestamp("Dijkstra")
+target = 0
+span, dist = pygraph.algorithms.minmax.shortest_path(bg, target)
+timestamp('shortest_path done')
+
+# the paths from any node to target is in dict span, let's
+# pick any arbitrary node (the last one) and walk to the
+# target from there, the associated distance will decrease
+# monotonically
+lastnode = nnodes - 1
+path = []
+while lastnode != target:
+ nextnode = span[lastnode]
+ print 'step:', nextnode, dist[lastnode]
+ assert nextnode in bg.neighbors(lastnode)
+ path.append(lastnode)
+ lastnode = nextnode
+path.append(target)
+timestamp('walk done')
+print 'path:', path
+ 
+ #1 For large graphs, try the Python interface of igraph . Its core is implemented in C, therefore it can cope with graphs with millions of vertices and edges relatively easily. It contains a BFS implementation (among other algorithms) and it also includes Dijkstra's algorithm and the Bellman-Ford algorithm for weighted graphs. 
+
+ As for "realtimeness", I made some quick tests as well: 
+
+ from igraph import *
+from random import randint
+import time
+
+def test_shortest_path(graph, tries=1000):
+ t1 = time.time()
+ for _ in xrange(tries):
+  v1 = randint(0, graph.vcount()-1)
+  v2 = randint(0, graph.vcount()-1)
+  sp = graph.get_shortest_paths(v1, v2)
+ t2 = time.time()
+ return (t2-t1)/tries
+
+&gt;&gt;&gt; print test_shortest_path(Graph.Barabasi(100000, 100))  
+0.010035698396
+&gt;&gt;&gt; print test_shortest_path(Graph.GRG(1000000, 0.002))
+0.413572219742
+ 
+
+ According to the code snippet above, finding a shortest path between two given vertices in a small-world graph having 100K vertices and 10M edges (10M = 100K * 100) takes about 0.01003 seconds on average (averaged from 1000 tries). This was the first test case and it is a reasonable estimate if you are working with social network data or some other network where the diameter is known to be small compared to the size of the network. The second test is a geometric random graph where 1 million points are dropped randomly on a 2D plane and two points are connected if their distance is less than 0.002, resulting in a graph with about 1M vertices and 6.5M edges. In this case, the shortest path calculation takes longer (as the paths themselves are longer), but it is still pretty close to real-time: 0.41357 seconds on average. 
+
+ Disclaimer: I am one of the authors of igraph . 
+ #2 Dijkstra's algorithm 
+ #3 For a graph that large (and with your performance constraints), you probably want the Boost Graph Library since it's written in C++. It has the Python bindings you are looking for. 
+ #4 Well, it depends on how much metadata you have attached to your nodes and edges. If relatively little, that size of graph would fit into memory, and I'd thus recommend the excellent NetworkX package (see especially http://networkx.lanl.gov/reference/generated/networkx.shortest_path.html ), which is pure Python. 
+
+ For a more robust solution that can handle many millions of nodes, large metadata, with transactions, disk storage, etc., I've had great luck with neo4j (http://www.neo4j.org/). It is written in Java but has Python bindings or can be run as a REST server. Traversal with it is a little tricker but not bad. 
+ #5 BFS in an undirected graph is only about 25 lines of code. You don't need a library. Check out the example code in the Wikipedia article . 
+ #6 Depending on what kind of additional information you have, A* may be extremely efficient. In particular, if given a node you can compute an estimate of the cost from that node to the goal, A* is optimally efficient.

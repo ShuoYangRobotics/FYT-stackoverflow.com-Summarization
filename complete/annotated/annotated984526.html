@@ -1,0 +1,290 @@
+<h3>Question ( ID-984526 ) : </h3><h2>Correct way of handling exceptions in Python ? </h2><p>I have searched for other posts , as I felt this is a rather common problem , but all other Python exception questions I have found did n't reflect my problem . </p>
+<p>I will try to be as specific here as I can , so I will give a direct example. And pleeeeease do not post any workarounds for this specific problem. I am not specifically interested how you can <span style="background-color:yellow;">send</span> an email much nicer with xyz . I want to know how you generally deal with dependent , error prone statements . </p>
+<p>My question is , how to handle exceptions nicely , ones that depend on one another , meaning : Only if the first step was successful , try the next , and so on. One more criterion is : All exceptions have to be caught , this code has to be robust . </p>
+<p>For your consideration , an example : </p>
+<pre><code>try:
+    server = smtplib.SMTP(host) #can throw an exception
+except smtplib.socket.gaierror:
+    #actually it can throw a lot more, this is just an example
+    pass
+else: #only if no exception was thrown we may continue
+    try:
+        server.login(username, password)
+    except SMTPAuthenticationError:
+        pass # do some stuff here
+    finally:
+        #we can only run this when the first try...except was successful
+        #else this throws an exception itself!
+        server.quit() 
+    else:
+        try:
+            # this is already the 3rd nested try...except
+            # for such a simple procedure! horrible
+            server.sendmail(addr, [to], msg.as_string())
+            return True
+        except Exception:
+            return False
+        finally:
+            server.quit()
+
+return False
+</code></pre>
+<p>This looks extremely unpythonic to me , and the error handling code is triple the real business code , but on the other hand how can I handle several statements that are dependent on one another , meaning statement1 is prerequisite for statement2 and so on ? </p>
+<p>I am also interested in proper resource cleanup , even Python can manage that for itself . </p>
+<p>Thanks , Tom </p>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>Instead of using the try/except 's else block , you could simply return when it errors : </p>
+<pre><code>def send_message(addr, to, msg):
+    ## Connect to host
+    try:
+        server = smtplib.SMTP(host) #can throw an exception
+    except smtplib.socket.gaierror:
+        return False
+
+    ## Login
+    try:
+        server.login(username, password)
+    except SMTPAuthenticationError:
+        server.quit()
+        return False
+
+    ## Send message
+    try:
+        server.sendmail(addr, [to], msg.as_string())
+        return True
+    except Exception: # try to avoid catching Exception unless you have too
+        return False
+    finally:
+        server.quit()
+</code></pre>
+<p>That 's perfectly readable and Pythonic. . </p>
+<p>Another way of doing this is , rather than worry about the specific implementation , decide how you want your code to look , for example. . </p>
+<pre><code>sender = MyMailer("username", "password") # the except SocketError/AuthError could go here
+try:
+    sender.message("addr..", ["to.."], "message...")
+except SocketError:
+    print "Couldn't connect to server"
+except AuthError:
+    print "Invalid username and/or password!"
+else:
+    print "Message sent!"
+</code></pre>
+<p>Then write the code for the <span style="background-color:yellow;">message</span> ( ) <span style="background-color:yellow;">method</span> , catching any errors you expect , and raising your own custom one , and handle that where it 's relevant. Your class may look something like. . </p>
+<pre><code>class ConnectionError(Exception): pass
+class AuthError(Exception): pass
+class SendError(Exception): pass
+
+class MyMailer:
+    def __init__(self, host, username, password):
+        self.host = host
+        self.username = username
+        self.password = password
+
+    def connect(self):
+        try:
+            self.server = smtp.SMTP(self.host)
+        except smtplib.socket.gaierror:
+            raise ConnectionError("Error connecting to %s" % (self.host))
+
+    def auth(self):
+        try:
+            self.server.login(self.username, self.password)
+        except SMTPAuthenticationError:
+            raise AuthError("Invalid username (%s) and/or password" % (self.username))
+
+    def message(self, addr, to, msg):
+        try:
+            server.sendmail(addr, [to], msg.as_string())
+        except smtplib.something.senderror, errormsg:
+            raise SendError("Couldn't send message: %s" % (errormsg))
+        except smtp.socket.timeout:
+            raise ConnectionError("Socket error while sending message")
+</code></pre>
+<br /><b># 1 </b><br /><p>In general , you want to use as few try blocks as possible , distinguishing failure conditions by the kinds of exceptions they throw. For instance , here 's my refactoring of the code you posted : </p>
+<pre><code>try:
+    server = smtplib.SMTP(host)
+    server.login(username, password) # Only runs if the previous line didn't throw
+    server.sendmail(addr, [to], msg.as_string())
+    return True
+except smtplib.socket.gaierror:
+    pass # Couldn't contact the host
+except SMTPAuthenticationError:
+    pass # Login failed
+except SomeSendMailError:
+    pass # Couldn't send mail
+finally:
+    if server:
+        server.quit()
+return False
+</code></pre>
+<p>Here , we use the fact that smtplib.SMTP ( ) , server.login ( ) , and server.sendmail ( ) all throw different exceptions to flatten the tree of try-catch blocks. In the finally block we test server explicitly to avoid invoking <span style="background-color:yellow;">quit</span> ( ) on the nil object . </p>
+<p>We could also use three sequential try-catch blocks , returning False in the exception conditions , if there are overlapping exception cases that need to be handled separately : </p>
+<pre><code>try:
+    server = smtplib.SMTP(host)
+except smtplib.socket.gaierror:
+    return False # Couldn't contact the host
+
+try:
+    server.login(username, password)
+except SMTPAuthenticationError:
+    server.quit()
+    return False # Login failed
+
+try:
+    server.sendmail(addr, [to], msg.as_string())
+except SomeSendMailError:
+    server.quit()
+    return False # Couldn't send mail
+
+return True
+</code></pre>
+<p>This is n't <span style="background-color:yellow;">quite</span> as nice , as you have to kill the server in more than one place , but now we can handle specific exception types different ways in different places without maintaining any extra state . </p>
+<br /><b># 2 </b><br /><p>If it was me I would probably do something like the following : </p>
+<pre><code>try:
+    server = smtplib.SMTP(host)
+    try:
+        server.login(username, password)
+        server.sendmail(addr, [to], str(msg))
+    finally:
+        server.quit()
+except:
+    debug("sendmail", traceback.format_exc().splitlines()[-1])
+    return True
+</code></pre>
+<p>All errors are caught and debugged , the return value = = True on success , and the server <span style="background-color:yellow;">connection</span> is properly cleaned up if the initial <span style="background-color:yellow;">connection</span> is made . </p>
+<br /><b># 3 </b><br /><p>Just using one try-block is the way to go. This is exactly what they are designed for : only execute the next statement if the previous statement did not throw an exception. As for the resource clean-ups , maybe you can check the resource if it needs to be cleaned up ( e.g. myfile.is_open ( ) , ... ) This does add some extra conditions , but they will only be executed in the exceptional case. To handle the case that the same <span style="background-color:yellow;">Exception</span> can be raised for different reasons , you should be able to retrieve the reason from the <span style="background-color:yellow;">Exception</span> . </p>
+<p>I suggest code like this : </p>
+<pre><code>server = None
+try:
+    server = smtplib.SMTP(host) #can throw an exception
+    server.login(username, password)
+    server.sendmail(addr, [to], msg.as_string())
+    server.quit()
+    return True
+except smtplib.socket.gaierror:
+    pass # do some stuff here
+except SMTPAuthenticationError:
+    pass # do some stuff here
+except Exception, msg:
+    # Exception can have several reasons
+    if msg=='xxx':
+        pass # do some stuff here
+    elif:
+        pass # do some other stuff here
+
+if server:
+    server.quit()
+
+return False
+</code></pre>
+<p>It is no uncommon , that error handling code exceeds business code. Correct error handling can be complex . But to increase maintainability it helps to separate the business code from the error handling code . </p>
+<br /><b># 4 </b><br /><p>I would try something like this : </p>
+<pre><code>class Mailer():
+
+    def send_message(self):
+        exception = None
+        for method in [self.connect, 
+                       self.authenticate, 
+                       self.send, 
+                       self.quit]:
+            try:
+                if not method(): break
+            except Exception, ex:
+                exception = ex
+                break
+
+        if method == quit and exception == None:
+            return True
+
+        if exception:
+            self.handle_exception(method, exception)
+        else:
+            self.handle_failure(method)
+
+    def connect(self):
+        return True
+
+    def authenticate(self):
+        return True
+
+    def send(self):
+        return True
+
+    def quit(self):
+        return True
+
+    def handle_exception(self, method, exception):
+        print "{name} ({msg}) in {method}.".format(
+           name=exception.__class__.__name__, 
+           msg=exception,
+           method=method.__name__)
+
+    def handle_failure(self, method):
+        print "Failure in {0}.".format(method.__name__)
+</code></pre>
+<p>All of the <span style="background-color:yellow;">methods</span> ( including <span style="background-color:yellow;">send_message</span> , really ) follow the same protocol : they return True if they succeeded , and unless they actually handle an exception , they do n't trap it. This protocol also makes it possible to handle the case where a <span style="background-color:yellow;">method</span> needs to indicate that it failed without raising an exception. ( If the only way your <span style="background-color:yellow;">methods</span> fail is by raising an exception , that simplifies the protocol. If you 're having to deal with a lot of non-exception failure states outside of the <span style="background-color:yellow;">method</span> that failed , you probably have a design problem that you have n't worked out yet. ) </p>
+<p>The downside of this approach is that all of the <span style="background-color:yellow;">methods</span> have to use the same arguments. I 've opted for none , with the expectation that the <span style="background-color:yellow;">methods</span> I 've stubbed out will end up manipulating class members . </p>
+<p>The upside of this approach is considerable , though. First , you can add dozens of <span style="background-color:yellow;">methods</span> to the process without <span style="background-color:yellow;">send_message</span> getting any more complex . </p>
+<p>You can also go crazy and do something like this : </p>
+<pre><code>def handle_exception(self, method, exception):
+    custom_handler_name = "handle_{0}_in_{1}".format(\
+                                             exception.__class__.__name__,
+                                             method.__name__)
+    try:
+        custom_handler = self.__dict__[custom_handler_name]
+    except KeyError:
+        print "{name} ({msg}) in {method}.".format(
+           name=exception.__class__.__name__, 
+           msg=exception,
+           method=method.__name__)
+        return
+    custom_handler()
+
+def handle_AuthenticationError_in_authenticate(self):
+   print "Your login credentials are questionable."
+</code></pre>
+<p>...though at that point , I might say to myself , " <span style="background-color:yellow;">self</span> , you 're working the Command pattern pretty hard without creating a Command class. Maybe now is the time. " </p>
+<br /><b># 5 </b><br /><p>Why not one big try : block ? This way , if any exception is caught , you 'll go all the way to the except. And as long as all the exceptions for the different steps are different , you can always tell which part it was that fired the exception . </p>
+<br /><b># 6 </b><br /><p>I like David 's answer but if you are stuck on the server exceptions you can also check for server if is None or states. I flattened out the <span style="background-color:yellow;">method</span> a bit bit it is still a but unpythonic looking but more readable in the logic at the bottom . </p>
+<pre><code>server = None 
+
+def server_obtained(host):
+    try:
+        server = smtplib.SMTP(host) #can throw an exception
+        return True
+    except smtplib.socket.gaierror:
+        #actually it can throw a lot more, this is just an example
+        return False
+
+def server_login(username, password):
+    loggedin = False
+    try:
+        server.login(username, password)
+        loggedin = True
+    except SMTPAuthenticationError:
+        pass # do some stuff here
+    finally:
+        #we can only run this when the first try...except was successful
+        #else this throws an exception itself!
+        if(server is not None):
+            server.quit()
+    return loggedin
+
+def send_mail(addr, to, msg):
+    sent = False
+     try:
+        server.sendmail(addr, to, msg)
+        sent = True
+    except Exception:
+        return False
+    finally:
+        server.quit()
+    return sent
+
+def do_msg_send():
+    if(server_obtained(host)):
+        if(server_login(username, password)):
+            if(send_mail(addr, [to], msg.as_string())):
+                return True
+    return False
+</code></pre>
+<br />

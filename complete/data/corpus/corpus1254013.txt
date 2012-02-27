@@ -1,0 +1,88 @@
+Question (ID-1254013): How to add a custom implicit conversion to a C++ type in Boost::Python? In my C++ code I have a class Foo with many methods taking a Bar type variable as an argument: 
+
+ class Foo {
+public:
+ void do_this(Bar b);
+ void do_that(Bar b);
+ /* ... */
+};
+ 
+
+ Bar has a number of constructors that create a new object from many common types such as int, std::string, float, etc: 
+
+ class Bar {
+public:
+ Bar(int i);
+ Bar(float f);
+ Bar(std::string s);
+ /* ... */
+};
+ 
+
+ I wrapped this with Boost::Python and I'm now able to call my Foo methods using Python literals directly, as they get implicitly converted to Bar objects. 
+
+ f = Foo()
+f.do_this(5)
+f.do_that("hello")
+ 
+
+ Now, I would like to be able to use also other Python types, such as tuples, like this: 
+
+ f.do_that((1,2,3))
+ 
+
+ But I don't want to touch the original Bar definition, and I don't want to pollute my C++ library with Boost::Python stuff. I want to write a wrapper function in my binding code, but I just can't understand if this is possible and what is the correct way for doing this. 
+
+ In other words: can I register a factory function to be used as an automatic conversion in Python? 
+ Answers (Total-6): #0 Subclass Bar near the wrapper code and give your subclass a ctor that takes a bp::object (or a more specific python type) 
+
+ struct Bar_wrapper:Bar,bp::wrapper&lt;Bar&gt;
+{
+ Bar_wrapper(bp::object arg)
+ {
+  //code to build a Bar_wrapper Here
+ }
+}
+ 
+
+ Then export a Bar_wrapper to python instead of a Bar, and call it a Bar as the python name: 
+
+ class&lt;Bar_wrapper&gt;("Bar")
+ ...
+ .def(init&lt;bp::object&gt;())
+ ...
+ 
+ #1 Create some type TupleCollector with overridden "operator ,(int)" so you can write 
+
+ f.do_that((TuppleCollector(), 1, 2, 3))
+ 
+
+ at last create conversion between TupleCollector and expected target 
+ #2 Add a new constructor template &lt;typename T&gt; Bar(T) 
+in your header and implement as template &lt;&gt;
+Bar::Bar(Tupple) {} 
+ #3 You can make a static factory method and then expose it as one of the Python constructors for the class. Just make a converter that will take any Python object and you're free do do whatever your please. 
+
+ using namespace boost::python;
+
+Bar CreateBar(object obj)
+{
+ // Do your thing here
+
+ return Bar;
+}
+
+// ..................
+
+class_&lt;Bar&gt;("Bar")
+ // .....................
+ .def("__init__", make_constructor(&amp;CreateBar))
+ //.............
+ ;
+ 
+ #4 You can register from-python converter which will construct Bar instance from arbitrary object. See here and an exmaple of my own (converts either (Vector3,Quaternion) tuple or 7*double-tuple to 3d transformation Se3 ) here . 
+
+ Note that the logic has two steps, first you determine whether the object is convertible ( convertible ; in your case, you check that it is a sequence, and has the right number of elements), then the construct method is called, which actually returns the instance, allocated with the pointer passed as parameter. 
+
+ The converter must then be registered in BOOST_PYTHON_MODULE . Since the converter registry is global, once registered, it will be subsequently used automatically everywhere. All function argument of type Bar or const Bar&amp; should be handled just fine (nor sure about Bar&amp; from the top of my head). 
+ #5 You can export function do_that which take boost::python::object param, check if param is a python tuple, extract data and pass it to object.

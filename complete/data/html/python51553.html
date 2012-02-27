@@ -1,0 +1,230 @@
+<h3>Question (ID-51553):</h3><h2>Why are SQL aggregate functions so much slower than Python and Java (or Poor Man's OLAP)</h2><p>I need a real DBA's opinion. Postgres 8.3 takes 200 ms to execute this query on my Macbook Pro while Java and Python perform the same calculation in under 20 ms (350,000 rows):</p>
+
+<pre><code>SELECT count(id), avg(a), avg(b), avg(c), avg(d) FROM tuples;
+</code></pre>
+
+<p>Is this normal behaviour when using a SQL database?</p>
+
+<p>The schema (the table holds responses to a survey):</p>
+
+<pre><code>CREATE TABLE tuples (id integer primary key, a integer, b integer, c integer, d integer);
+
+\copy tuples from '350,000 responses.csv' delimiter as ','
+</code></pre>
+
+<p>I wrote some tests in Java and Python for context and they crush SQL (except for pure python):</p>
+
+<pre><code>java   1.5 threads ~ 7 ms    
+java   1.5         ~ 10 ms    
+python 2.5 numpy   ~ 18 ms  
+python 2.5         ~ 370 ms
+</code></pre>
+
+<p>Even sqlite3 is competitive with Postgres despite it assumping all columns are strings (for contrast: even using just switching to numeric columns instead of integers in Postgres results in 10x slowdown)</p>
+
+<p>Tunings i've tried without success include (blindly following some web advice):</p>
+
+<pre><code>increased the shared memory available to Postgres to 256MB    
+increased the working memory to 2MB
+disabled connection and statement logging
+used a stored procedure via CREATE FUNCTION ... LANGUAGE SQL
+</code></pre>
+
+<p>So my question is, is my experience here normal, and this is what I can expect when using a SQL database?  I can understand that ACID must come with costs, but this is kind of crazy in my opinion.  I'm not asking for realtime game speed, but since Java can process millions of doubles in under 20 ms, I feel a bit jealous. </p>
+
+<p>Is there a better way to do simple OLAP on the cheap (both in terms of money and server complexity)?  I've looked into Mondrian and Pig + Hadoop but not super excited about maintaining yet another server application and not sure if they would even help.</p>
+
+<hr>
+
+<p>No the Python code and Java code do all the work in house so to speak.  I just generate 4 arrays with 350,000 random values each, then take the average.  I don't include the generation in the timings, only the averaging step.  The java threads timing uses 4 threads (one per array average), overkill but it's definitely the fastest.</p>
+
+<p>The sqlite3 timing is driven by the Python program and is running from disk (not :memory:)</p>
+
+<p>I realize Postgres is doing much more behind the scenes, but most of that work doesn't matter to me since this is read only data.</p>
+
+<p>The Postgres query doesn't change timing on subsequent runs.</p>
+
+<p>I've rerun the Python tests to include spooling it off the disk.  The timing slows down considerably to nearly 4 secs.  But I'm guessing that Python's file handling code is pretty much in C (though maybe not the csv lib?) so this indicates to me that Postgres isn't streaming from the disk either (or that you are correct and I should bow down before whoever wrote their storage layer!)</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>I would say your test scheme is not really useful. To fulfill the db query, the db server goes through several steps:</p>
+
+<ol>
+<li>parse the SQL</li>
+<li>work up a query plan, i. e. decide on which indices to use (if any), optimize etc.</li>
+<li>if an index is used, search it for the pointers to the actual data, then go to the appropriate location in the data or</li>
+<li>if no index is used, scan <i>the whole table</i> to determine which rows are needed</li>
+<li>load the data from disk into a temporary location (hopefully, but not necessarily, memory)</li>
+<li>perform the count() and avg() calculations</li>
+</ol>
+
+<p>So, creating an array in Python and getting the average basically skips all these steps save the last one. As disk I/O is among the most expensive operations a program has to perform, this is a major flaw in the test (see also the answers to <a href="http://stackoverflow.com/questions/26021/how-is-data-compression-more-effective-than-indexing-for-search-performance">this question</a> I asked here before). Even if you read the data from disk in your other test, the process is completely different and it's hard to tell how relevant the results are.</p>
+
+<p>To obtain more information about where Postgres spends its time, I would suggest the following tests:</p>
+
+<ul>
+<li>Compare the execution time of your query to a SELECT without the aggregating functions (i. e. cut step 5)</li>
+<li>If you find that the aggregation leads to a significant slowdown, try if Python does it faster, obtaining the raw data through the plain SELECT from the comparison.</li>
+</ul>
+
+<p>To speed up your query, reduce disk access first. I doubt very much that it's the aggregation that takes the time.</p>
+
+<p>There's several ways to do that:</p>
+
+<ul>
+<li>Cache data (in memory!) for subsequent access, either via the db engine's own capabilities or with tools like memcached</li>
+<li>Reduce the size of your stored data</li>
+<li>Optimize the use of indices. Sometimes this can mean to skip index use altogether (after all, it's disk access, too). For MySQL, I seem to remember that it's recommended to skip indices if you assume that the query fetches more than 10% of all the data in the table.</li>
+<li>If your query makes good use of indices, I know that for MySQL databases it helps to put indices and data on separate physical disks. However, I don't know whether that's applicable for Postgres.</li>
+<li>There also might be more sophisticated problems such as swapping rows to disk if for some reason the result set can't be completely processed in memory. But I would leave that kind of research until I run into serious performance problems that I can't find another way to fix, as it requires knowledge about a lot of little under-the-hood details in your process.</li>
+</ul>
+
+<p><b>Update:</b></p>
+
+<p><i>I just realized that you seem to have no use for indices for the above query and most likely aren't using any, too, so my advice on indices probably wasn't helpful. Sorry. Still, I'd say that the aggregation is not the problem but disk access is. I'll leave the index stuff in, anyway, it might still have some use.</i></p>
+<br /><b>#1</b><br /><p>Postgres is doing a lot more than it looks like (maintaining data consistency for a start!)</p>
+
+<p>If the values don't have to be 100% spot on, or if the table is updated rarely, but you are running this calculation often, you might want to look into Materialized Views to speed it up.</p>
+
+<p>(Note, I have not used materialized views in Postgres, they look at little hacky, but might suite your situation).</p>
+
+<p><a href="http://jonathangardner.net/tech/w/PostgreSQL/Materialized_Views" rel="nofollow">Materialized Views</a></p>
+
+<p>Also consider the overhead of actually connecting to the server and the round trip required to send the request to the server and back.</p>
+
+<p>I'd consider 200ms for something like this to be pretty good, A quick test on my oracle server, the same table structure with about 500k rows and no indexes, takes about 1 - 1.5 seconds, which is almost all just oracle sucking the data off disk.</p>
+
+<p>The real question is, is 200ms fast enough?</p>
+
+<p>-------------- More --------------------</p>
+
+<p>I was interested in solving this using materialized views, since I've never really played with them. This is in oracle.</p>
+
+<p>First I created a MV which refreshes every minute.</p>
+
+<pre><code>create materialized view mv_so_x 
+build immediate 
+refresh complete 
+START WITH SYSDATE NEXT SYSDATE + 1/24/60
+ as select count(*),avg(a),avg(b),avg(c),avg(d) from so_x;
+</code></pre>
+
+<p>While its refreshing, there is no rows returned</p>
+
+<pre><code>SQL&gt; select * from mv_so_x;
+
+no rows selected
+
+Elapsed: 00:00:00.00
+</code></pre>
+
+<p>Once it refreshes, its MUCH faster than doing the raw query</p>
+
+<pre><code>SQL&gt; select count(*),avg(a),avg(b),avg(c),avg(d) from so_x;
+
+  COUNT(*)     AVG(A)     AVG(B)     AVG(C)     AVG(D)
+---------- ---------- ---------- ---------- ----------
+   1899459 7495.38839 22.2905454 5.00276131 2.13432836
+
+Elapsed: 00:00:05.74
+SQL&gt; select * from mv_so_x;
+
+  COUNT(*)     AVG(A)     AVG(B)     AVG(C)     AVG(D)
+---------- ---------- ---------- ---------- ----------
+   1899459 7495.38839 22.2905454 5.00276131 2.13432836
+
+Elapsed: 00:00:00.00
+SQL&gt;
+</code></pre>
+
+<p>If we insert into the base table, the result is not immediately viewable view the MV.</p>
+
+<pre><code>SQL&gt; insert into so_x values (1,2,3,4,5);
+
+1 row created.
+
+Elapsed: 00:00:00.00
+SQL&gt; commit;
+
+Commit complete.
+
+Elapsed: 00:00:00.00
+SQL&gt; select * from mv_so_x;
+
+  COUNT(*)     AVG(A)     AVG(B)     AVG(C)     AVG(D)
+---------- ---------- ---------- ---------- ----------
+   1899459 7495.38839 22.2905454 5.00276131 2.13432836
+
+Elapsed: 00:00:00.00
+SQL&gt;
+</code></pre>
+
+<p>But wait a minute or so, and the MV will update behind the scenes, and the result is returned fast as you could want.</p>
+
+<pre><code>SQL&gt; /
+
+  COUNT(*)     AVG(A)     AVG(B)     AVG(C)     AVG(D)
+---------- ---------- ---------- ---------- ----------
+   1899460 7495.35823 22.2905352 5.00276078 2.17647059
+
+Elapsed: 00:00:00.00
+SQL&gt;
+</code></pre>
+
+<p>This isn't ideal. for a start, its not realtime, inserts/updates will not be immediately visible. Also, you've got a query running to update the MV whether you need it or not (this can be tune to whatever time frame, or on demand). But, this does show how much faster an MV can make it seem to the end user, if you can live with values which aren't quite upto the second accurate.</p>
+<br /><b>#2</b><br /><p>I retested with MySQL specifying ENGINE = MEMORY and it doesn't change a thing (still 200 ms).  Sqlite3 using an in-memory db gives similar timings as well (250 ms).</p>
+
+<p>The math <a href="http://stackoverflow.com/questions/51553/why-are-sql-aggregate-functions-so-much-slower-than-python-and-java-or-poor-man#53303" rel="nofollow">here</a> looks correct (at least the size, as that's how big the sqlite db is :-)</p>
+
+<p>I'm just not buying the disk-causes-slowness argument as there is every indication the tables are in memory (the postgres guys all warn against trying too hard to pin tables to memory as they swear the OS will do it better than the programmer)</p>
+
+<p>To clarify the timings, the Java code is not reading from disk, making it a totally unfair comparison if Postgres is reading from the disk and calculating a complicated query, but that's really besides the point, the DB should be smart enough to bring a small table into memory and precompile a stored procedure IMHO.</p>
+
+<p>UPDATE (in response to the first comment below):</p>
+
+<p><em>I'm not sure how I'd test the query without using an aggregation function in a way that would be fair, since if i select all of the rows it'll spend tons of time serializing and formatting everything.  I'm not saying that the slowness is due to the aggregation function, it could still be just overhead from concurrency, integrity, and friends.  I just don't know how to isolate the aggregation as the sole independent variable.</em></p>
+<br /><b>#3</b><br /><p>Those are very detailed answers, but they mostly beg the question, how do I get these benefits without leaving Postgres given that the data easily fits into memory, requires concurrent reads but no writes and is queried with the same query over and over again.</p>
+
+<p>Is it possible to precompile the query and optimization plan? I would have thought the stored procedure would do this, but it doesn't really help.</p>
+
+<p>To avoid disk access it's necessary to cache the whole table in memory, can I force Postgres to do that?  I think it's already doing this though, since the query executes in just 200 ms after repeated runs.</p>
+
+<p>Can I tell Postgres that the table is read only, so it can optimize any locking code?</p>
+
+<p>I think it's possible to estimate the query construction costs with an empty table (timings range from 20-60 ms) </p>
+
+<p>I still can't see why the Java/Python tests are invalid.  Postgres just isn't doing that much more work (though I still haven't addressed the concurrency aspect, just the caching and query construction)</p>
+
+<p>UPDATE: 
+I don't think it's fair to compare the SELECTS as suggested by pulling 350,000 through the driver and serialization steps into Python to run the aggregation, nor even to omit the aggregation as the overhead in formatting and displaying is hard to separate from the timing.  If both engines are operating on in memory data, it should be an apples to apples comparison, I'm not sure how to guarantee that's already happening though.</p>
+
+<p>I can't figure out how to add comments, maybe i don't have enough reputation?</p>
+<br /><b>#4</b><br /><p>I'm a MS-SQL guy myself, and we'd use <a href="http://msdn.microsoft.com/en-us/library/ms178015.aspx" rel="nofollow">DBCC PINTABLE</a> to keep a table cached, and <a href="http://msdn.microsoft.com/en-us/library/ms184361.aspx" rel="nofollow">SET STATISTICS IO</a> to see that it's reading from cache, and not disk. </p>
+
+<p>I can't find anything on Postgres to mimic PINTABLE, but <a href="http://www.postgresql.org/docs/current/static/pgbuffercache.html" rel="nofollow">pg_buffercache</a> seems to give details on what is in the cache - you may want to check that, and see if your table is actually being cached.</p>
+
+<p>A quick back of the envelope calculation makes me suspect that you're paging from disk. Assuming Postgres uses 4-byte integers, you have (6 * 4) bytes per row, so your table is a minimum of (24 * 350,000) bytes ~ 8.4MB. Assuming 40 MB/s sustained throughput on your HDD, you're looking at right around 200ms to read the data (which, <a href="http://stackoverflow.com/questions/51553/why-are-sql-aggregate-functions-so-much-slower-than-python-and-java-or-poor-man#51668" rel="nofollow">as pointed out</a>, should be where almost all of the time is being spent). </p>
+
+<p>Unless I screwed up my math somewhere, I don't see how it's possible that you are able to read 8MB into your Java app and process it in the times you're showing - unless that file is already cached by either the drive or your OS.</p>
+<br /><b>#5</b><br /><p>Are you using TCP to access the Postgres? In that case Nagle is messing with your timing.</p>
+<br /><b>#6</b><br /><p>I don't think that your results are all that surprising -- if anything it is that Postgres is so fast.</p>
+
+<p>Does the Postgres query run faster a second time once it has had a chance to cache the data?  To be a little fairer your test for Java and Python should cover the cost of acquiring the data in the first place (ideally loading it off disk).</p>
+
+<p>If this performance level is a problem for your application in practice but you need a RDBMS for other reasons then you could look at <a href="http://www.danga.com/memcached/" rel="nofollow">memcached</a>.  You would then have faster cached access to raw data and could do the calculations in code.</p>
+<br /><b>#7</b><br /><p>One other thing that an RDBMS generally does for you is to provide concurrency by protecting you from simultaneous access by another process.  This is done by placing locks, and there's some overhead from that.</p>
+
+<p>If you're dealing with entirely static data that never changes, and especially if you're in a basically "single user" scenario, then using a relational database doesn't necessarily gain you much benefit.</p>
+<br /><b>#8</b><br /><p>You need to increase postgres' caches to the point where the whole working set fits into memory before you can expect to see perfomance comparable to doing it in-memory with a program.</p>
+<br /><b>#9</b><br /><p>Thanks for the Oracle timings, that's the kind of stuff I'm looking for (disappointing though :-)</p>
+
+<p>Materialized views are probably worth considering as I think I can precompute the most interesting forms of this query for most users.</p>
+
+<p>I don't think query round trip time should be very high as i'm running the the queries on the same machine that runs Postgres, so it can't add much latency?</p>
+
+<p>I've also done some checking into the cache sizes, and it seems Postgres relies on the OS to handle caching, they specifically mention BSD as the ideal OS for this, so I thinking Mac OS ought to be pretty smart about bringing the table into memory.  Unless someone has more specific params in mind I think more specific caching is out of my control.</p>
+
+<p>In the end I can probably put up with 200 ms response times, but knowing that 7 ms is a possible target makes me feel unsatisfied, as even 20-50 ms times would enable more users to have more up to date queries and get rid of a lots of caching and precomputed hacks.</p>
+
+<p>I just checked the timings using MySQL 5 and they are slightly worse than Postgres.  So barring some major caching breakthroughs, I guess this is what I can expect going the relational db route.</p>
+
+<p>I wish I could up vote some of your answers, but I don't have enough points yet.</p>
+<br />

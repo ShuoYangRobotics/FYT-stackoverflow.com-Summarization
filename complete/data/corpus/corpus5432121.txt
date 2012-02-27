@@ -1,0 +1,131 @@
+Question (ID-5432121): Python method that is also a generator function? I'm trying to build a method that also acts like a generator function, at a flip of a switch ( want_gen below). 
+
+ Something like: 
+
+ def optimize(x, want_gen):
+ # ... declaration and validation code
+ for i in range(100):
+  # estimate foo, bar, baz
+  # ... some code here
+
+  x = calculate_next_x(x, foo, bar, baz)
+
+  if want_gen:
+   yield x
+
+ if not want_gen:
+  return x
+ 
+
+ But of course this doesn't work -- Python apparently doesn't allow yield and return in the same method, even though they cannot be executed simultaneously. 
+
+ The code is quite involved, and refactoring the declaration and validation code doesn't make much sense (too many state variables -- I will end up with difficult-to-name helper routines of 7+ parameters, which is decidedly ugly). And of course, I'd like to avoid code duplication as much as possible. 
+
+ Is there some code pattern that would make sense here to achieve the behaviour I want? 
+
+ 
+
+ Why do I need that? 
+
+ I have a rather complicated and time-consuming optimization routine, and I'd like to get feedback about its current state during runtime (to display in e.g. GUI). The old behaviour needs to be there for backwards compatibility. Multithreading and messaging is too much work for too little additional benefit, especially when cross-platform operation is necessary. 
+
+ Edit: 
+Perhaps I should have mentioned that since each optimization step is rather lengthy (there are some numerical simulations involved as well), I'd like to be able to "step in" at a certain iteration and twiddle some parameters, or abort the whole business altogether. The generators seemed like a good idea, since I could launch another iteration at my discretion, fiddling in the meantime with some parameters. 
+ Answers (Total-7): #0 Since all you seem to want is some sort of feedback for a long running function, why not just pass in a reference to a callback procedure that will be called at regular intervals? 
+ #1 It's not completely clear what you want to happen if you switch between generator and function modes. 
+
+ But as a first try: perhaps wrap the generator version in a new method which explicitly throws away the intermediate steps? 
+
+ def gen():
+ for i in range(100):
+  yield i
+
+def wrap():
+ for x in gen():
+  pass
+ return x
+
+print "wrap=", wrap()
+ 
+
+ With this version you could step into gen() by looping over smaller numbers of the range, make adjustments, and then use wrap() only when you want to finish up. 
+ #2 An edit to my answer, why not just always yeild? You can have a function which yields a single value. If you don't want that then just choose to have your function either return a generator itself or the value: 
+
+ def stuff(x, want_gen):
+  if want_gen:
+   def my_gen(x):
+    #code with yield
+   return my_gen
+  else:
+   return x
+ 
+
+ That way you are always returning a value. In Python, functions are objects. 
+ #3 Kind of messy, but I think this does the same as your original code was asking: 
+
+ def optimize(x, want_gen):
+ def optimize_gen(x):
+  # ... declaration and validation code
+  for i in range(100):
+   # estimate foo, bar, baz
+   # ... some code here
+
+   x = calculate_next_x(x, foo, bar, baz)
+
+   if want_gen:
+    yield x
+ if want_gen:
+  return optimize_gen(x)
+
+ for x in optimize_gen(x):
+  pass
+ return x
+ 
+
+ Alternatively the for loop at the end could be written: 
+
+  return list(optimize_gen(x))[-1]
+ 
+
+ Now ask yourself if you really want to do this. Why do you sometimes want the whole sequence and sometimes only want the last element? Smells a bit fishy to me. 
+ #4 Simplest is to write two methods, one the generator and the other calling the generator and just returning the value. If you really want one function with both possibilities, you can always use the want_gen flag to test what sort of return value, returning the iterator produced by the generator function when True and just the value otherwise. 
+ #5 Well...we can always remember that yield wa simplemented in thelanguage as way to facilitate the existence of generator objects, but one can always implet them either from scratch, or getting the best of both worlds: 
+
+ class Optimize(object):
+ def __init__(self, x):
+  self.x = x
+ def __iter__(self):
+  x = self.x
+  # ... declaration and validation code
+  for i in range(100):
+   # estimate foo, bar, baz
+   # ... some code here
+
+   x = calculate_next_x(x, foo, bar, baz)
+   yield x
+ def __call__(self):
+  gen = iter(self)
+  return gen.next()
+
+def optimize(x, wantgen):
+ if wantgen:
+  return iter(Optimize(x))
+ else:
+  return Optimize(x)()
+ 
+
+ Not that you dont even need the "optimize" function wrapper - I just put it in there so it becomes a drop-in replacement for your example (would it work). 
+
+ The way the class is declared, you can do simply: 
+
+ for y in Optimize(x):
+ #code
+ 
+
+ to use it as a generator, or: 
+
+ k = Optimize(x)()
+ 
+
+ to use it as a function. 
+ #6 How about this pattern. Make your 3 line of changes to convert the function to a generator. Rename it to NewFunctionName. Replace the existing function with one that either returns the generator if want_gen is True, or exhausts the generator and returns the final value.

@@ -1,0 +1,143 @@
+<h3>Question (ID-1419470):</h3><h2>Python __init__ setattr on arguments?</h2><p>It seems that often <code>__init__</code> methods are similar to this:</p>
+
+<pre><code>def __init__(self, ivar1, ivar2, ivar3):
+    self.ivar1 = ivar1
+    self.ivar2 = ivar2
+    self.ivar3 = ivar3
+</code></pre>
+
+<p>Is there someway to turn the arguments into a list (without resorting to <code>*args</code> or <code>**kwargs</code>) and then using <code>setattr</code> to set the instance variables, with the name of the parameter and the arugment passed? And maybe slice the list, e.g.  you'd need to at least slice it to <code>[1:]</code> because you don't want <code>self.self</code>.</p>
+
+<p>(actually I guess it would need to be a dictionary to hold the name and value)</p>
+
+<p>like this:</p>
+
+<pre><code>def __init__(self, ivar1, ivar2, ivar3, optional=False):
+    for k, v in makedict(self.__class__.__init__.__args__): # made up __args__
+        setattr(self, k, v)
+</code></pre>
+
+<p>Thanks!</p>
+
+<p>Responding to Unknown's answer, I found this to work:</p>
+
+<pre><code>Class A(object):
+    def __init__(self, length, width, x):
+        self.__dict__.update(dict([(k, v) for k, v in locals().iteritems() if k != 'self']))
+</code></pre>
+
+<p>or</p>
+
+<pre><code>Class A(object):
+    def __init__(self, length, width, x):
+        self.__dict__.update(locals())
+        del self.__dict__['self']
+</code></pre>
+
+<p>Not too bad..</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>There is no good way to get the arguments as a list if they are specified individually in the function signature.  You can probably do something with inspect or frame hacks, but that will be uglier than simply spelling it out as you have done.</p>
+<br /><b>#1</b><br /><p>Here you go. Yes this is an ugly evil hack. Yes the object needs a __dict__ variable. But hey, its a neat little one liner!</p>
+
+<pre><code>def __init__(self):
+    self.__dict__.update(locals())
+</code></pre>
+
+<p>The constructor can take any type of arguments.</p>
+
+<pre><code>class test(object):
+    def __init__(self, a, b, foo, bar=5)...
+
+a = test(1,2,3)
+dir(a)
+
+['__class__', '__delattr__', '__dict__', '__doc__', '__format__', '__getattribute__', '__hash__', '__init__', '__module__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__', '__weakref__', 'a', 'b', 'foo', 'bar', 'self']
+</code></pre>
+
+<p>It will also include self, but you can easily delete that or make your own update function that ignores self.</p>
+<br /><b>#2</b><br /><p>You could use inspect.getargspec and encapsulate it as a decorator. The lookup of optional and keyword arguments is a bit tricky, but this should do it:</p>
+
+<pre><code>def inits_args(func):
+    """Initializes object attributes by the initializer signature"""
+    argspec = inspect.getargspec(func)
+    argnames = argspec.args[1:]
+    defaults = dict(zip(argnames[-len(argspec.defaults):], argspec.defaults))
+    @functools.wraps(func)
+    def __init__(self, *args, **kwargs):
+        args_it = iter(args)
+        for key in argnames:
+            if key in kwargs:
+                value = kwargs[key]
+            else:
+                try:
+                    value = args_it.next()
+                except StopIteration:
+                    value = defaults[key]
+            setattr(self, key, value)
+        func(self, *args, **kwargs)
+    return __init__
+</code></pre>
+
+<p>You can then use it like this:</p>
+
+<pre><code>class Foo(object):
+    @inits_args
+    def __init__(self, spam, eggs=4, ham=5):
+        print "Foo(%r, %r, %r)" % (self.spam, self.eggs, self.ham)
+</code></pre>
+<br /><b>#3</b><br /><p>Try <a href="http://docs.python.org/library/inspect.html#inspect.getargspec" rel="nofollow">inspect.getargspec</a>:</p>
+
+<pre><code>In [31]: inspect.getargspec(C.__init__)
+
+Out[31]: ArgSpec(args=['self', 'ivar1', 'ivar2', 'ivar3', 'optional'],
+
+                 varargs=None, keywords=None, defaults=(False,))
+</code></pre>
+<br /><b>#4</b><br /><p>See if the new namedtuple (new in Python 2.6) from the collections module might work for you.</p>
+<br /><b>#5</b><br /><p>You can do it using introspection of the arguments, but the code is going to be longer than the code you try to replace. Especially if you are handling kw, which you may have to do.</p>
+
+<p>This short code works in most cases (improved from Unknowns example):</p>
+
+<pre><code>&gt;&gt;&gt; class Foo:
+...   def __init__(self, labamba, **kw):
+...       params = locals().copy()
+...       del params['self']
+...       if 'kw' in params:
+...           params.update(params['kw'])
+...           del params['kw']
+...       self.__dict__.update(params)
+</code></pre>
+
+<p>But it's an ugly hack, making code less readable for no particular reason except laziness, so don't do it. And also, how often do you <em>really</em> have classes that have more than 5-6 init parameters?</p>
+<br /><b>#6</b><br /><p>I like that form the most, not too long and both copy-pasteable and sub-classable:</p>
+
+<pre><code>class DynamicInitClass(object):
+      __init_defargs=('x',)
+      def __init__(self,*args,**attrs):
+        for idx,val in enumerate(args): attrs[self.__init_defargs[idx]]=val
+        for key,val in attrs.iteritems(): setattr(self,key,val)
+</code></pre>
+<br /><b>#7</b><br /><p>How about deriving from a special class? I think it's <strong>more explicit and more flexible</strong> this way:</p>
+
+<pre><code>class InitMe:
+    def __init__(self, data):
+        if 'self' in data:
+             data = data.copy()
+             del data['self']
+        self.__dict__.update(data)
+
+
+class MyClassA(InitMe):
+    def __init__(self, ivar1, ivar2, ivar3 = 'default value'):
+        super().__init__(locals())
+
+
+class MyClassB(InitMe):
+    def __init__(self, foo):
+        super().__init__({'xxx': foo, 'yyy': foo, 'zzz': None})
+# or    super().__init__(dict(xxx=foo, yyy=foo, zzz=None))
+
+class MyClassC(InitMe):
+    def __init__(self, foo, **keywords):
+        super().__init__(keywords)
+</code></pre>
+<br />

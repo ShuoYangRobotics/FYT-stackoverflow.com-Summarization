@@ -1,0 +1,370 @@
+<h3>Question (ID-646955):</h3><h2>How to tell whether a file is executable on Windows in Python?</h2><p>I'm writing <a href="http://gist.github.com/79233"><code>grepath</code></a> utility that finds executables in <code>%PATH%</code> that match a pattern.
+I need to define whether given filename in the path is executable (emphasis is on command line scripts).</p>
+
+<p>Based on <a href="http://timgolden.me.uk/python/win32%5Fhow%5Fdo%5Fi/tell-if-a-file-is-executable.html">"Tell if a file is executable"</a> I've got:</p>
+
+<pre><code>import os
+from pywintypes import error
+from win32api   import FindExecutable, GetLongPathName
+
+def is_executable_win(path):
+    try:
+        _, executable = FindExecutable(path)
+        ext = lambda p: os.path.splitext(p)[1].lower()
+        if (ext(path) == ext(executable) # reject *.cmd~, *.bat~ cases
+            and samefile(GetLongPathName(executable), path)):
+            return True
+        # path is a document with assoc. check whether it has extension
+        # from %PATHEXT% 
+        pathexts = os.environ.get('PATHEXT', '').split(os.pathsep)
+        return any(ext(path) == e.lower() for e in pathexts)
+    except error:
+        return None # not an exe or a document with assoc.
+</code></pre>
+
+<p>Where <code>samefile</code> is:</p>
+
+<pre><code>try: samefile = os.path.samefile
+except AttributeError:    
+    def samefile(path1, path2):
+        rp = lambda p: os.path.realpath(os.path.normcase(p))
+        return rp(path1) == rp(path2)
+</code></pre>
+
+<p>How <code>is_executable_win</code> could be improved in the given context? What functions from Win32 API could help?</p>
+
+<p>P.S.</p>
+
+<ul>
+<li>time performance doesn't matter</li>
+<li><code>subst</code> drives and UNC, unicode paths are not under consideration</li>
+<li>C++ answer is OK if it uses functions available on Windows XP</li>
+</ul>
+
+<h3>Examples</h3>
+
+<ul>
+<li><code>notepad.exe</code> is executable (as a rule)</li>
+<li><p><code>which.py</code> is executable if it is associated with some executable (e.g., python.exe) and <code>.PY</code> is in <code>%PATHEXT%</code> i.e., <code>'C:\&gt; which'</code> could start:</p>
+
+<pre><code>some\path\python.exe another\path\in\PATH\which.py
+</code></pre></li>
+<li><p><code>somefile.doc</code> most probably is <em>not</em> executable (when it is associated with Word for example)</p></li>
+<li><code>another_file.txt</code> is <em>not</em> executable (as a rule)</li>
+<li><code>ack.pl</code> is executable if it is associated with some executable (most probably perl.exe) and <code>.PL</code> is in <code>%PATHEXT%</code> (i.e. I can run <code>ack</code> without specifing extension if it is in the path)</li>
+</ul>
+
+<h3>What is "executable" in this question</h3>
+
+<pre><code>def is_executable_win_destructive(path):
+    #NOTE: it assumes `path` &lt;-&gt; `barename` for the sake of example
+    barename = os.path.splitext(os.path.basename(path))[0]
+    p = Popen(barename, stdout=PIPE, stderr=PIPE, shell=True)
+    stdout, stderr = p.communicate()
+    return p.poll() != 1 or stdout != '' or stderr != error_message(barename)
+</code></pre>
+
+<p>Where <code>error_message()</code> depends on language. English version is:</p>
+
+<pre><code>def error_message(barename):
+    return "'%(barename)s' is not recognized as an internal" \
+           " or external\r\ncommand, operable program or batch file.\r\n" \
+           %  dict(barename=barename)
+</code></pre>
+
+<p>If <code>is_executable_win_destructive()</code> returns when it defines whether the path points to an  executable for the purpose of this question.</p>
+
+<p>Example:</p>
+
+<pre><code>&gt;&gt;&gt; path = r"c:\docs\somefile.doc"
+&gt;&gt;&gt; barename = "somefile"
+</code></pre>
+
+<p>After that it executes %COMSPEC% (cmd.exe by default):</p>
+
+<pre><code>c:\cwd&gt; cmd.exe /c somefile
+</code></pre>
+
+<p>If output looks like this:</p>
+
+<pre>
+'somefile' is not recognized as an internal or external
+command, operable program or batch file.
+</pre>
+
+<p>Then the <code>path</code> is not an executable else it is (lets assume there is one-to-one correspondence between <code>path</code> and <code>barename</code> for the sake of example).</p>
+
+<p>Another example:</p>
+
+<pre><code>&gt;&gt;&gt; path = r'c:\bin\grepath.py'
+&gt;&gt;&gt; barename = 'grepath'
+</code></pre>
+
+<p>If <code>.PY</code> in <code>%PATHEXT%</code> and <code>c:\bin</code> is in <code>%PATH%</code> then:</p>
+
+<pre><code>c:\docs&gt; grepath
+Usage:
+  grepath.py [options] PATTERN
+  grepath.py [options] -e PATTERN
+
+grepath.py: error: incorrect number of arguments
+</code></pre>
+
+<p>The above output is not equal to <code>error_message(barename)</code> therefore <code>'c:\bin\grepath.py'</code> is an "executable".</p>
+
+<p>So the question is how to find out whether the <code>path</code> will produce the error without actually running it? What Win32 API function and what conditions used to trigger the 'is not recognized as an internal..' error?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>shoosh beat me to it :)</p>
+
+<p>If I remember correctly, you should try to read the first 2 characters in the file. If you get back "MZ", you have an exe.</p>
+
+<pre><code>
+hnd = open(file,"rb")
+if hnd.read(2) == "MZ":
+  print "exe"
+</code></pre>
+<br /><b>#1</b><br /><p>I think, that this should be sufficient:</p>
+
+<ol>
+<li>check file extension in PATHEXT - whether file is directly executable</li>
+<li>using cmd.exe command "assoc .ext" you can see whether file is associated with some executable (some executable will be launched when you launch this file). You can parse capture output of assoc without arguments and collect all extensions that are associated and check tested file extension.</li>
+<li>other file extensions will trigger error "command is not recognized ..." therefore you can assume that such files are NOT executable.</li>
+</ol>
+
+<p>I don't really understand how you can tell the difference between somefile.py and somefile.txt because association can be really the same. You can configure system to run .txt files the same way as .py files.</p>
+<br /><b>#2</b><br /><p>A windows <a href="http://en.wikipedia.org/wiki/Portable%5FExecutable" rel="nofollow">PE</a> always starts with the characters "MZ". This includes however also any kind of DLLs which are not necessarily executables.<br />
+To check for this however you'll have to open the file and read the header so that's probably not what you're looking for.</p>
+<br /><b>#3</b><br /><p>Here's the <a href="http://gist.github.com/79233/" rel="nofollow">grepath.py</a> that I've linked in my question:</p>
+
+<pre><code>#!/usr/bin/env python
+"""Find executables in %PATH% that match PATTERN.
+
+"""
+#XXX: remove --use-pathext option
+
+import fnmatch, itertools, os, re, sys, warnings
+from optparse import OptionParser
+from stat import S_IMODE, S_ISREG, ST_MODE
+from subprocess import PIPE, Popen
+
+
+def warn_import(*args):
+    """pass '-Wd' option to python interpreter to see these warnings."""
+    warnings.warn("%r" % (args,), ImportWarning, stacklevel=2)
+
+
+class samefile_win:
+    """
+http://timgolden.me.uk/python/win32_how_do_i/see_if_two_files_are_the_same_file.html
+"""
+    @staticmethod
+    def get_read_handle (filename):
+        return win32file.CreateFile (
+            filename,
+            win32file.GENERIC_READ,
+            win32file.FILE_SHARE_READ,
+            None,
+            win32file.OPEN_EXISTING,
+            0,
+            None
+            )
+
+    @staticmethod
+    def get_unique_id (hFile):
+        (attributes,
+         created_at, accessed_at, written_at,
+         volume,
+         file_hi, file_lo,
+         n_links,
+         index_hi, index_lo
+         ) = win32file.GetFileInformationByHandle (hFile)
+        return volume, index_hi, index_lo
+
+    @staticmethod
+    def samefile_win(filename1, filename2):
+        """Whether filename1 and filename2 represent the same file.
+
+It works for subst, ntfs hardlinks, junction points.
+It works unreliably for network drives.
+
+Based on GetFileInformationByHandle() Win32 API call.
+http://timgolden.me.uk/python/win32_how_do_i/see_if_two_files_are_the_same_file.html
+"""
+        if samefile_generic(filename1, filename2): return True
+        try:
+            hFile1 = samefile_win.get_read_handle (filename1)
+            hFile2 = samefile_win.get_read_handle (filename2)
+            are_equal = (samefile_win.get_unique_id (hFile1)
+                         == samefile_win.get_unique_id (hFile2))
+            hFile2.Close ()
+            hFile1.Close ()
+            return are_equal
+        except win32file.error:
+            return None
+
+
+def canonical_path(path):
+    """NOTE: it might return wrong path for paths with symbolic links."""
+    return os.path.realpath(os.path.normcase(path))
+
+
+def samefile_generic(path1, path2):
+    return canonical_path(path1) == canonical_path(path2)
+
+
+class is_executable_destructive:
+    @staticmethod
+    def error_message(barename):
+        r"""
+"'%(barename)s' is not recognized as an internal or external\r\n
+command, operable program or batch file.\r\n"
+
+in Russian:
+"""
+        return '"%(barename)s" \xad\xa5 \xef\xa2\xab\xef\xa5\xe2\xe1\xef \xa2\xad\xe3\xe2\xe0\xa5\xad\xad\xa5\xa9 \xa8\xab\xa8 \xa2\xad\xa5\xe8\xad\xa5\xa9\r\n\xaa\xae\xac\xa0\xad\xa4\xae\xa9, \xa8\xe1\xaf\xae\xab\xad\xef\xa5\xac\xae\xa9 \xaf\xe0\xae\xa3\xe0\xa0\xac\xac\xae\xa9 \xa8\xab\xa8 \xaf\xa0\xaa\xa5\xe2\xad\xeb\xac \xe4\xa0\xa9\xab\xae\xac.\r\n' % dict(barename=barename)
+
+    @staticmethod
+    def is_executable_win_destructive(path):
+        # assume path &lt;-&gt; barename that is false in general
+        barename = os.path.splitext(os.path.basename(path))[0]
+        p = Popen(barename, stdout=PIPE, stderr=PIPE, shell=True)
+        stdout, stderr = p.communicate()
+        return p.poll() != 1 or stdout != '' or stderr != error_message(barename)
+
+
+def is_executable_win(path):
+    """Based on:
+http://timgolden.me.uk/python/win32_how_do_i/tell-if-a-file-is-executable.html
+
+Known bugs: treat some "*~" files as executable, e.g. some "*.bat~" files
+"""
+    try:
+        _, executable = FindExecutable(path)
+        return bool(samefile(GetLongPathName(executable), path))
+    except error:
+        return None # not an exe or a document with assoc.
+
+
+def is_executable_posix(path):
+    """Whether the file is executable.
+
+Based on which.py from stdlib
+"""
+    #XXX it ignores effective uid, guid?
+    try: st = os.stat(path)
+    except os.error:
+        return None
+
+    isregfile = S_ISREG(st[ST_MODE])
+    isexemode = (S_IMODE(st[ST_MODE]) &amp; 0111)
+    return bool(isregfile and isexemode)
+
+try:
+    #XXX replace with ctypes?
+    from win32api import FindExecutable, GetLongPathName, error
+    is_executable = is_executable_win
+except ImportError, e:
+    warn_import("is_executable: fall back on posix variant", e)
+    is_executable = is_executable_posix
+
+try: samefile = os.path.samefile
+except AttributeError, e:
+    warn_import("samefile: fallback to samefile_win", e)
+    try:
+        import win32file
+        samefile = samefile_win.samefile_win
+    except ImportError, e:
+        warn_import("samefile: fallback to generic", e)
+        samefile = samefile_generic
+
+def main():
+    parser = OptionParser(usage="""
+%prog [options] PATTERN
+%prog [options] -e PATTERN""", description=__doc__)
+    opt = parser.add_option
+    opt("-e", "--regex", metavar="PATTERN",
+        help="use PATTERN as a regular expression")
+    opt("--ignore-case", action="store_true", default=True,
+        help="""[default] ignore case when --regex is present; for \
+non-regex PATTERN both FILENAME and PATTERN are first \
+case-normalized if the operating system requires it otherwise \
+unchanged.""")
+    opt("--no-ignore-case", dest="ignore_case", action="store_false")
+    opt("--use-pathext", action="store_true", default=True,
+        help="[default] whether to use %PATHEXT% environment variable")
+    opt("--no-use-pathext", dest="use_pathext", action="store_false")
+    opt("--show-non-executable", action="store_true", default=False,
+        help="show non executable files")
+
+    (options, args) = parser.parse_args()
+
+    if len(args) != 1 and not options.regex:
+       parser.error("incorrect number of arguments")
+    if not options.regex:
+       pattern = args[0]
+    del args
+
+    if options.regex:
+       filepred = re.compile(options.regex, options.ignore_case and re.I).search
+    else:
+       fnmatch_ = fnmatch.fnmatch if options.ignore_case else fnmatch.fnmatchcase
+       for file_pattern_symbol in "*?":
+           if file_pattern_symbol in pattern:
+               break
+       else: # match in any place if no explicit file pattern symbols supplied
+           pattern = "*" + pattern + "*"
+       filepred = lambda fn: fnmatch_(fn, pattern)
+
+    if not options.regex and options.ignore_case:
+       filter_files = lambda files: fnmatch.filter(files, pattern)
+    else:
+       filter_files = lambda files: itertools.ifilter(filepred, files)
+
+    if options.use_pathext:
+       pathexts = frozenset(map(str.upper,
+            os.environ.get('PATHEXT', '').split(os.pathsep)))
+
+    seen = set()
+    for dirpath in os.environ.get('PATH', '').split(os.pathsep):
+        if os.path.isdir(dirpath): # assume no expansion needed
+           # visit "each" directory only once
+           # it is unaware of subst drives, junction points, symlinks, etc
+           rp = canonical_path(dirpath)
+           if rp in seen: continue
+           seen.add(rp); del rp
+
+           for filename in filter_files(os.listdir(dirpath)):
+               path = os.path.join(dirpath, filename)
+               isexe = is_executable(path)
+
+               if isexe == False and is_executable == is_executable_win:
+                  # path is a document with associated program
+                  # check whether it is a script (.pl, .rb, .py, etc)
+                  if not isexe and options.use_pathext:
+                     ext = os.path.splitext(path)[1]
+                     isexe = ext.upper() in pathexts
+
+               if isexe:
+                  print path
+               elif options.show_non_executable:
+                  print "non-executable:", path
+
+
+if __name__=="__main__":
+   main()
+</code></pre>
+<br /><b>#4</b><br /><p>Parse the PE format.</p>
+
+<p><a href="http://code.google.com/p/pefile/" rel="nofollow">http://code.google.com/p/pefile/</a></p>
+
+<p>This is probably the best solution you will get other than using python to actually try to run the program.</p>
+
+<p>Edit: I see you also want files that have associations. This will require mucking in the registry which I don't have the information for.</p>
+
+<p>Edit2: I also see that you differentiate between .doc and .py. This is a rather arbitrary differentiation which must be specified with manual rules, because to windows, they are both file extensions that a program reads.</p>
+<br /><b>#5</b><br /><p><em>> Parse the PE format.</em></p>
+
+<p>No, totally useless.
+Just use buit-in Win32 apis<br />
+(1 api call)</p>
+<br /><b>#6</b><br /><p>Your question can't be answered.  Windows can't tell the difference between a file which is associated with a scripting language vs. some other arbitrary program.  As Windows is concerned, a .PY file is simply a document which is opened by python.exe.</p>
+<br />

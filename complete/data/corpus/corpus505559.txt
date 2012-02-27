@@ -1,0 +1,203 @@
+Question (ID-505559): Closures in Python I've been trying to learn Python, and while I'm enthusiastic about using closures in Python, I've been having trouble getting some code to work properly: 
+
+ def memoize(fn):
+ def get(key):
+  return (False,)
+
+ def vset(key, value):
+  global get
+  oldget = get
+  def newget(ky):
+   if key==ky: return (True, value)
+   return oldget(ky)
+  get = newget
+
+ def mfun(*args):
+  cache = get(args)
+  if (cache[0]): return cache[1]
+
+  val = apply(fn, args)
+  vset(args, val)
+  return val
+
+ return mfun
+
+def fib(x):
+ if x&lt;2: return x
+ return fib(x-1)+fib(x-2)
+
+def fibm(x):
+ if x&lt;2: return x
+ return fibm(x-1)+fibm(x-2)
+
+fibm = memoize(fibm)
+ 
+
+ Basically, what this is supposed to do is use closures to maintain the memoized state of the function. I realize there are probably many faster, easier to read, and in general more 'Pythonic' ways to implement this; however, my goal is to understand exactly how closures work in Python, and how they differ from Lisp, so I'm not interested in alternative solutions, just why my code doesn't work and what I can do (if anything) to fix it. 
+
+ The problem I'm running into is when I try to use fibm - Python insists that get isn't defined: 
+
+ Python 2.6.1 (r261:67515, Feb 1 2009, 11:39:55) 
+[GCC 4.0.1 (Apple Inc. build 5488)] on darwin
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import memoize
+&gt;&gt;&gt; memoize.fibm(35)
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "memoize.py", line 14, in mfun
+ cache = get(args)
+NameError: global name 'get' is not defined
+&gt;&gt;&gt;
+ 
+
+ Seeing as I'm new to Python, I don't know if I've done something wrong, or if this is just a limitation of the language. I'm hoping it's the former. :-) 
+ Answers (Total-6): #0 def memoize(fn):
+ get = [lambda key: (False, None)]
+
+ def vset(args):
+ value = fn(*args)
+ oldget = get[0]
+ def newget(key):
+  if args == key:
+  return (True, value)
+  return oldget(key)
+ get[0] = newget
+ return value
+
+ def mfun(*args):
+ found, value = get[0](args)
+ if found:
+  return value
+ return vset(args)
+
+ return mfun
+
+CALLS = 0
+
+def fib(x):
+ global CALLS
+ CALLS += 1
+ if x&lt;2: return x
+ return fib(x-1)+fib(x-2)
+
+@memoize
+def fibm(x):
+ global CALLS
+ CALLS += 1
+ if x&lt;2: return x
+ return fibm(x-1)+fibm(x-2)
+
+CALLS = 0
+print "fib(35) is", fib(35), "and took", CALLS, "calls"
+CALLS = 0
+print "fibm(35) is", fibm(35), "and took", CALLS, "calls"
+ 
+
+ Output is: 
+
+ fib(35) is 9227465 and took 29860703 calls
+fibm(35) is 9227465 and took 36 calls
+ 
+
+ Similar to other answers, however this one works. :) 
+
+ The important change from the code in the question is assigning to a non-global non-local (get); however, I also made some improvements while trying to maintain your * cough * broken * cough * closure use. Usually the cache is a dict instead of a linked list of closures. 
+ #1 The problem is in your scoping, not in your closures. If you're up for some heavy reading, then you can try http://www.python.org/dev/peps/pep-3104/ . 
+
+ If that's not the case, here's the simple explanation: 
+
+ The problem is in the statement global get . global refers to the outermost scope, and since there isn't any global function get , it throws. 
+
+ What you need, is an access specifier for variables in the enclosing scope, and not the global scope. 
+
+ In python 3.0, as I've tested, the nonlocal keyword is exactly what you need, in the place of global . 
+
+ nonlocal get
+...
+ 
+
+ In python 2.x, I just removed the global get and the oldget references and it works properly. 
+ #2 Get is not global, but local to the surrounding function, that's why the global declaration fails. 
+
+ If you remove the global , it still fails, because you can't assign to the captured variable name. To work around that, you can use an object as the variable captured by your closures and than just change properties of that object: 
+
+ class Memo(object):
+ pass
+
+def memoize(fn):
+ def defaultget(key):
+  return (False,)
+
+ memo = Memo()
+ memo.get = defaultget
+
+ def vset(key, value):
+  oldget = memo.get
+  def newget(ky):
+   if key==ky: return (True, value)
+   return oldget(ky)
+  memo.get = newget
+
+ def mfun(*args):
+  cache = memo.get(args)
+  if cache[0]: return cache[1]
+
+  val = apply(fn, args)
+  vset(args, val)
+  return val
+
+ return mfun
+ 
+
+ This way you don't need to assign to the captured variable names but still get what you wanted. 
+ #3 You want to put global get at the beginning of every function (except get itself). 
+
+ the def get is an assignment to the name get , so you want get to be declared global before that. 
+
+ Putting global get in mfun and vset makes them work. I can't point to the scoping rules that makes this necessary, but it works ;-) 
+
+ Your conses are quite lispy too... :) 
+ #4 Probably because you want the global get while it isn't a global?
+By the way, apply is deprecated, use fn(*args) instead. 
+
+ def memoize(fn):
+ def get(key):
+  return (False,)
+
+ def vset(key, value):
+  def newget(ky):
+   if key==ky: return (True, value)
+   return get(ky)
+  get = newget
+
+ def mfun(*args):
+  cache = get(args)
+  if (cache[0]): return cache[1]
+
+  val = fn(*args)
+  vset(args, val)
+  return val
+
+ return mfun
+
+def fib(x):
+ if x&lt;2: return x
+ return fib(x-1)+fib(x-2)
+
+def fibm(x):
+ if x&lt;2: return x
+ return fibm(x-1)+fibm(x-2)
+
+fibm = memoize(fibm)
+ 
+ #5 I think the best way would be: 
+
+ class Memoized(object):
+ def __init__(self,func):
+  self.cache = {}
+  self.func = func
+ def __call__(self,*args):
+  if args in self.cache: return cache[args]
+  else:
+   self.cache[args] = self.func(*args)
+   return self.cache[args]

@@ -1,0 +1,84 @@
+Question (ID-1475950): tail -f in python with no time.sleep I need to emulate "tail -f" in python, but I don't want to use time.sleep in the reading loop. I want something more elegant like some kind of blocking read, or select.select with timeout, but python 2.6 "select" documentation specifically says: "it cannot be used on regular files to determine whether a file has grown since it was last read."
+Any other way?
+In a few days if no solution is given I will read tail's C source code to try to figure it out. I hope they don't use sleep, hehe
+Thanks. 
+
+ MarioR 
+ Answers (Total-8): #0 (update)
+Either use FS monitors tools 
+
+ 
+ For linux 
+ For Windows 
+ For Mac 
+ 
+
+ Or a single sleep usage (which I would you consider as much more elegant). 
+
+ import time
+def follow(thefile):
+ thefile.seek(0,2)  # Go to the end of the file
+ while True:
+   line = thefile.readline()
+   if not line:
+    time.sleep(0.1) # Sleep briefly
+    continue
+   yield line
+
+logfile = open("access-log")
+loglines = follow(logfile)
+for line in loglines:
+ print line
+ 
+ #1 When reading from a file, your only choice is sleep ( see the source code ). If you read from a pipe, you can simply read since the read will block until there is data ready. 
+
+ The reason for this is that the OS doesn't support the notion "wait for someone to write to a file". Only recently, some filesystems added an API where you can listen for changes made to a file but tail is too old to use this API and it's also not available everywhere. 
+ #2 Why don't you just use subprocess.call on tail itself? 
+
+ subproces.call(['tail', '-f', filename])
+ 
+
+ Edit: Fixed to eliminate extra shell process. 
+
+ Edit2: Fixed to eliminate deprecated os.popen and thus the need to interpolate parameters, escape espaces and other stuff, and then run a shell process. 
+ #3 IMO you should use sleep, it works on all platform and code will be simple 
+
+ Otherwise you can use platform specific APIs which can tell you when file change
+e.g. on window use FindFirstChangeNotification on folder and watch for FILE_NOTIFY_CHANGE_LAST_WRITE events 
+
+ On linux i think you can use i-notify 
+
+ On Mac OSX use FSEvents 
+ #4 If you can use GLib on all platforms, you should use glib.io_add_watch ; then you can use a normal GLib mainloop and process events as they happen, without any polling behavior. 
+
+ http://library.gnome.org/devel/pygobject/stable/glib-functions.html#function-glib--io-add-watch 
+ #5 You can see here how to do a "tail -f" like using inotify. 
+ #6 This solution does not use sleep, but returns None if no new lines are available. The caller needs to check for None coming back, and ignore it plus do something else until it wants to check again (like using sleep() ;) . 
+
+ def follow(some_file):
+ this_file = open(some_file)
+ this_file.seek(0,2)  # Go to the end of the file
+ while True:
+   line = this_file.readline()
+   if line:
+    yield line
+   yield None
+
+logfile = "access-log"
+loglines = follow(logfile)
+for line in loglines:
+ if line is not None:
+  print line
+ 
+ #7 Most implementations I've seen use readlines() / sleep().
+A solution based on inotify or similar might be faster but consider this: 
+
+ 
+ once libinotify tells you a file has changed you would end up using readlines() anyway 
+ calling readlines() against a file which hasn't changed, which is what you would end up doing without libinotify, is already a pretty fast operation: 
+
+ giampaolo@ubuntu:~$ python -m timeit -s "f = open('foo.py', 'r'); f.read()" -c "f.readlines()"
+1000000 loops, best of 3: 0.41 usec per loop 
+ 
+
+ Having said this, considering that any solution similar to libinotify has portability issues, I might reconsider using readlines() / sleep(). See: http://code.activestate.com/recipes/577968-log-watcher-tail-f-log/

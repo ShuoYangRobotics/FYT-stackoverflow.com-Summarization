@@ -1,0 +1,220 @@
+<h3>Question ( ID-7287654 ) : </h3><h2>Python string manipulation -- performance problems </h2><p>I have the following piece of code that I execute around 2 million times in my application to parse that many records. This part seems to be the <span style="background-color:yellow;">bottleneck</span> and I was wondering if anyone could help me by suggesting some nifty tricks that could make these simple string manipulations faster . </p>
+<pre><code>try:
+    data = []
+    start = 0
+    end = 0
+    for info in self.Columns():
+        end = start + (info.columnLength)
+        slice = line[start:end]
+        if slice == '' or len(slice) != info.columnLength:
+            raise 'Wrong Input'
+        if info.hasSignage:
+            if(slice[0:1].strip() != '+' and slice[0:1].strip() != '-'):
+                raise 'Wrong Input'
+        if not info.skipColumn:
+            data.append(slice)
+        start = end 
+    parsedLine = data
+except:
+    parsedLine = False
+</code></pre>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><pre><code>def fubarise(data):
+    try:
+        if nasty(data):
+            raise ValueError("Look, Ma, I'm doing a big fat GOTO ...") # sheesh #1
+        more_of_the_same()
+        parsed_line = data
+    except ValueError:
+        parsed_line = False
+        # so it can be a "data" or False -- sheesh #2
+    return parsed_line
+</code></pre>
+<p>There is no point in having different error messages in the raise statement ; they are never seen. Sheesh # 3 . </p>
+<p>Update : Here is a suggested improvement which uses <span style="background-color:yellow;">struct.unpack</span> to partition input <span style="background-color:yellow;">lines</span> rapidly. It also illustrates better exception handling , under the assumption that the writer of the code is also running it and stopping on the first error is acceptable. A robust implementation which logs all errors in all columns of all <span style="background-color:yellow;">lines</span> for a user audience is another matter. Note that typically the error checking for each column would be much more extensive e.g. checking for a leading sign but not checking whether the column contains a valid number seems a little odd . </p>
+<pre><code>import struct
+
+def unpacked_records(self):
+    cols = self.Columns()
+    unpack_fmt = ""
+    sign_checks = []
+    start = 0
+    for colx, info in enumerate(cols, 1):
+        clen = info.columnLength
+        if clen < 1:
+            raise ValueError("Column %d: Bad columnLength %r" % (colx, clen))
+        if info.skipColumn:
+            unpack_fmt += str(clen) + "x"
+        else:
+            unpack_fmt += str(clen) + "s"
+            if info.hasSignage:
+                sign_checks.append(start)
+        start += clen
+    expected_len = start
+    unpack = struct.Struct(unpack_fmt).unpack
+
+    for linex, line in enumerate(self.whatever_the_list_of_lines_is, 1):
+        if len(line) != expected_len:
+            raise ValueError(
+                "Line %d: Actual length %d, expected %d"
+                % (linex, len(line), expected_len))
+        if not all(line[i] in '+-' for i in sign_checks):
+            raise ValueError("Line %d: At least one column fails sign check" % linex)
+        yield unpack(line) # a tuple
+</code></pre>
+<br /><b># 1 </b><br /><p>what about ( using some classes to have an executable example ) : </p>
+<pre><code>class Info(object):
+    columnLength = 5
+    hasSignage = True
+    skipColumn = False
+
+class Something(object):
+
+    def Columns(self):
+        return [Info()]*4
+
+    def bottleneck(self):
+        try:
+            data = []
+            start = 0
+            end = 0
+            line = '+this-is just a line for testing'
+            for info in self.Columns():
+                start = end
+                collength = info.columnLength
+                end = start + collength
+                if info.skipColumn:  # start with this
+                    continue
+
+                elif collength == 0: 
+                    raise ValueError('Wrong Input')
+
+                slice = line[start:end] # only now slicing, because it
+                                        # is probably most expensive part
+
+                if len(slice) != collength: 
+                    raise ValueError('Wrong Input')
+
+                elif info.hasSignage and slice[0] not in '+-': # bit more compact
+                    raise ValueError('Wrong Input')
+
+                else:
+                    data.append(slice)
+
+            parsedLine = data
+        except:
+            parsedLine = False
+
+Something().bottleneck()
+</code></pre>
+<p>edit : when length of <span style="background-color:yellow;">slice</span> is 0 , <span style="background-color:yellow;">slice</span> [ 0 ] does not exist , so if collength = = 0 has to be checked for first </p>
+<p>edit2 : You are using this bit of code for many many <span style="background-color:yellow;">lines</span> , but the column info does not change , right ? That allows you , to </p>
+<ul>pre-calculate a list of <span style="background-color:yellow;">start</span> points of each colum ( no more need to calculate <span style="background-color:yellow;">start</span> , end ) knowing <span style="background-color:yellow;">start-end</span> in advance , .Columns ( ) only needs to return columns that are not skipped and have a columnlength &gt ; 0 ( or do you really need to raise an input for length = = 0 at each <span style="background-color:yellow;">line</span> ? ? ) the manditory length of each <span style="background-color:yellow;">line</span> is known and equal or each <span style="background-color:yellow;">line</span> and can be checked before looping over the column infos </ul>
+<p>edit3 : I wonder how you will know what <span style="background-color:yellow;">data</span> index belongs to which column if you use 'skipColumn'.. . </p>
+<br /><b># 2 </b><br /><p>Do n't compute <span style="background-color:yellow;">start</span> and end every time through this loop . </p>
+<p>Compute them exactly once prior to using <span style="background-color:yellow;">self.Columns</span> ( ) ( Whatever that is. If 'Columns ` is class with static values , that 's silly. If it 's a function with a name that begins with a capital letter , that 's confusing. ) </p>
+<p>if <span style="background-color:yellow;">slice</span> = = ' ' or len ( <span style="background-color:yellow;">slice</span> ) ! = info.columnLength can only happen if <span style="background-color:yellow;">line</span> is too short compared to the total size required by <span style="background-color:yellow;">Columns</span> . Check once , outside the loop . </p>
+<p><span style="background-color:yellow;">slice</span> [ 0 : 1 ] .strip ( ) ! = ' + ' sure looks like .startswith ( ) . </p>
+<p>if not info.skipColumn . Apply this filter before even <span style="background-color:yellow;">starting</span> the loop. Remove these from <span style="background-color:yellow;">self.Columns</span> ( ) . </p>
+<br /><b># 3 </b><br /><p>First thing I would consider is <span style="background-color:yellow;">slice</span> = <span style="background-color:yellow;">line</span> [ <span style="background-color:yellow;">start</span> : end ] . Slicing creates new instances ; you could try to avoid explicitly constructing <span style="background-color:yellow;">line</span> [ <span style="background-color:yellow;">start</span> : end ] and examine its contents manually . </p>
+<p>Why are you doing <span style="background-color:yellow;">slice</span> [ 0 : 1 ] ? This should yield a subsequence containing a single item of <span style="background-color:yellow;">slice</span> ( should n't it ? ) , thus it can probably be checked more efficiently . </p>
+<br /><b># 4 </b><br /><p>EDIT : I 'm changing this answer a bit. I 'll leave the original answer below . </p>
+<p>In my other answer I commented that the best thing would be to find a built-in Python module that would do the <span style="background-color:yellow;">unpacking.</span> I could n't think of one , but perhaps I should have Google searched for one. @ John Machin provided an answer that showed how to do it : use the Python <span style="background-color:yellow;">struct</span> module. Since that is written in C , it should be faster than my pure Python solution. ( I have n't actually measured anything so it is a guess. ) </p>
+<p>I do agree that the logic in the original code is " un-Pythonic " . Returning a sentinel value is n't best ; it 's better to either return a valid value or raise an exception. The other way to do it is to return a list of valid values , plus another list of invalid values. Since @ John Machin offered code to yield up valid values , I thought I 'd write a version here that returns two lists . </p>
+<p>NOTE : Perhaps the best possible answer would be to take @ John Machin 's answer and modify it to save the invalid values to a file for possible later review. His answer yields up answers one at a time , so there is no need to build a large list of parsed records ; and saving the bad <span style="background-color:yellow;">lines</span> to disk means there is no need to build a possibly-large list of bad <span style="background-color:yellow;">lines</span> . </p>
+<pre><code>import struct
+
+def parse_records(self):
+    """
+    returns a tuple: (good, bad)
+    good is a list of valid records (as tuples)
+    bad is a list of tuples: (line_num, line, err)
+    """
+
+    cols = self.Columns()
+    unpack_fmt = ""
+    sign_checks = []
+    start = 0
+    for colx, info in enumerate(cols, 1):
+        clen = info.columnLength
+        if clen < 1:
+            raise ValueError("Column %d: Bad columnLength %r" % (colx, clen))
+        if info.skipColumn:
+            unpack_fmt += str(clen) + "x"
+        else:
+            unpack_fmt += str(clen) + "s"
+            if info.hasSignage:
+                sign_checks.append(start)
+        start += clen
+    expected_len = start
+    unpack = struct.Struct(unpack_fmt).unpack
+
+    good = []
+    bad = []
+    for line_num, line in enumerate(self.whatever_the_list_of_lines_is, 1):
+        if len(line) != expected_len:
+            bad.append((line_num, line, "bad length"))
+            continue
+        if not all(line[i] in '+-' for i in sign_checks):
+            bad.append((line_num, line, "sign check failed"))
+            continue
+        good.append(unpack(line))
+
+    return good, bad
+</code></pre>
+<p>ORIGINAL ANSWER TEXT : This answer should be a lot faster if the <span style="background-color:yellow;">self.Columns</span> ( ) information is identical over all the records. We do the processing of the <span style="background-color:yellow;">self.Columns</span> ( ) information one time , and build a couple of lists that contain just what we need to process a record . </p>
+<p>This code shows how to compute parsedList but does n't actually yield it up or return it or do anything with it. Obviously you would need to change that . </p>
+<pre><code>def parse_records(self):
+    cols = self.Columns()
+
+    slices = []
+    sign_checks = []
+    start = 0
+    for info in cols:
+        if info.columnLength < 1:
+            raise ValueError, "bad columnLength"
+        end = start + info.columnLength
+        if not info.skipColumn:
+            tup = (start, end)
+            slices.append(tup)   
+            if info.hasSignage:
+                sign_checks.append(start)
+
+    expected_len = end # or use (end - 1) to not count a newline
+
+    try:
+        for line in self.whatever_the_list_of_lines_is:
+            if len(line) != expected_len:
+                raise ValueError, "wrong length"
+            if not all(line[i] in '+-' for i in sign_checks):
+                raise ValueError, "wrong input"
+            parsedLine = [line[s:e] for s, e in slices]
+
+    except ValueError:
+        parsedLine = False
+</code></pre>
+<br /><b># 5 </b><br /><p>I want to tell you to use some sort of built-in Python feature to split the string , but I ca n't think of one. So I 'm left with just trying to reduce the amount of code you have . </p>
+<p>When we are done , end should be pointing at the end of the string ; if this is the case , then all of the .columnLength values must have been okay. ( Unless one was negative or something ! ) </p>
+<p>Since this has a reference to <span style="background-color:yellow;">self</span> it must be a snip from a member function. So , instead of raising exceptions , you could just return False to exit the function early and return an error flag. But I like the debugging potential of changing the except clause to not catch the exception anymore , and getting a stack trace letting you identify where the problem came from . </p>
+<p>@ Remi used <span style="background-color:yellow;">slice</span> [ 0 ] in ' + - ' where I used <span style="background-color:yellow;">slice.startswith</span> ( ( ' + ' , '- ) ) . I think I like @ Remi 's code better there , but I left mine unchanged just to show you a different way. The .startswith ( ) way will work for strings longer than length 1 , but since this is only a string of length 1 the terse solution works . </p>
+<pre><code>try:
+    line = line.strip('\n')
+    data = []
+    start = 0
+    for info in self.Columns():
+        end = start + info.columnLength
+        slice = line[start:end]
+        if info.hasSignage and not slice.startswith(('+', '-')):
+            raise ValueError, "wrong input"
+        if not info.skipColumn:
+            data.append(slice)
+        start = end
+
+    if end - 1 != len(line):
+        raise ValueError, "bad .columnLength"
+
+    parsedLine = data
+
+except ValueError:
+    parsedLine = False
+</code></pre>
+<br />

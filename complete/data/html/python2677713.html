@@ -1,0 +1,201 @@
+<h3>Question (ID-2677713):</h3><h2>Regex for finding valid sphinx fields</h2><p>I'm trying to validate that the fields given to sphinx are valid, but I'm having difficulty.</p>
+
+<p>Imagine that valid fields are cat, mouse, dog, puppy.</p>
+
+<p>Valid searches would then be:</p>
+
+<ul>
+<li>@cat search terms </li>
+<li>@(cat) search terms</li>
+<li>@(cat, dog) search term</li>
+<li>@cat searchterm1 @dog searchterm2 </li>
+<li>@(cat, dog) searchterm1 @mouse searchterm2</li>
+</ul>
+
+<p>So, I want to use a regular expression to find terms such as cat, dog, mouse in the above examples, and check them against a list of valid terms.</p>
+
+<p>Thus, a query such as:
+@(goat)</p>
+
+<p>Would produce an error because goat is not a valid term.</p>
+
+<p>I've gotten so that I can find simple queries such as @cat with this regex: (?:@)([^( ]*)</p>
+
+<p>But I can't figure out how to find the rest.</p>
+
+<p>I'm using python &amp; django, for what that's worth.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>To match all allowed fields, the following rather fearful looking regex works:</p>
+
+<pre>
+@((?:cat|mouse|dog|puppy)\b|\((?:(?:cat|mouse|dog|puppy)(?:, *|(?=\))))+\))
+</pre>
+
+<p>It returns these matches, in order: <code>@cat</code>, <code>@(cat)</code>, <code>@(cat, dog)</code>, <code>@cat</code>, <code>@dog</code>, <code>@(cat, dog)</code>, <code>@mouse</code>.</p>
+
+<p>The regex breaks down as follows:</p>
+
+<pre>
+@                               # the literal character "@"
+(                               # match group 1
+  (?:cat|mouse|dog|puppy)       #  one of your valid search terms (not captured)
+  \b                            #  a word boundary
+  |                             #  or...
+  \(                            #  a literal opening paren
+  (?:                           #  non-capturing group
+    (?:cat|mouse|dog|puppy)     #   one of your valid search terms (not captured)
+    (?:                         #   non-capturing group
+      , *                       #    a comma "," plus any number of spaces
+      |                         #    or...
+      (?=\))                    #    a position followed by a closing paren
+    )                           #   end non-capture group
+  )+                            #  end non-capture group, repeat
+  \)                            #  a literal closing paren
+)                               # end match group one.
+</pre>
+
+<p>Now to identify any <em>invalid</em> search, you would wrap all that in a negative look-ahead:</p>
+
+<pre>
+@(?!(?:cat|mouse|dog|puppy)\b|\((?:(?:cat|mouse|dog|puppy)(?:, *|(?=\))))+\))
+--^^
+</pre>
+
+<p>This would identify any <code>@</code> character after which an invalid search term (or term combination) was attempted. Modifying it so that it also <em>matches</em> the invalid attempt instead of just pointing at it is not that hard anymore.</p>
+
+<p>You would have to prepare <code>(?:cat|mouse|dog|puppy)</code> from your field dynamically and plug it into the static rest of the regex. Should not be too hard to do either.</p>
+<br /><b>#1</b><br /><p>This should work:</p>
+
+<pre><code>@\((cat|dog|mouse|puppy)\b(,\s*(cat|dog|mouse|puppy)\b)*\)|@(cat|dog|mouse|puppy)\b
+</code></pre>
+
+<p>It will either match a single <code>@parameter</code> or a parenthesized <code>@(par1, par2)</code> list containing only allowed words (one or more).</p>
+
+<p>It also makes sure that no partial matches are accepted (<code>@caterpillar</code>).</p>
+<br /><b>#2</b><br /><p>This pyparsing solution follows a similar logic path as your posted answer.  All tags are matched, and then checked against the list of known valid tags, removing them from the reported results.  Only those matches that have values left over after removing the valid ones are reported as matches.</p>
+
+<pre><code>from pyparsing import *
+
+# define the pattern of a tag, setting internal results names for easy validation
+AT,LPAR,RPAR = map(Suppress,"@()")
+term = Word(alphas,alphanums).setResultsName("terms",listAllMatches=True)
+sphxTerm = AT + ~White() + ( term | LPAR + delimitedList(term) + RPAR )
+
+# define tags we consider to be valid
+valid = set("cat mouse dog".split())
+
+# define a parse action to filter out valid terms, and attach to the sphxTerm
+def filterValid(tokens):
+    tokens = [t for t in tokens.terms if t not in valid]
+    if not(tokens):
+        raise ParseException("",0,"")
+    return tokens
+sphxTerm.setParseAction(filterValid)
+
+
+##### Test out the parser #####
+
+test = """@cat search terms @ house
+    @(cat) search terms 
+    @(cat, dog) search term @(goat)
+    @cat searchterm1 @dog searchterm2 @(cat, doggerel)
+    @(cat, dog) searchterm1 @mouse searchterm2 
+    @caterpillar"""
+
+# scan for invalid terms, and print out the terms and their locations
+for t,s,e in sphxTerm.scanString(test):
+    print "Terms:%s Line: %d Col: %d" % (t, lineno(s, test), col(s, test))
+    print line(s, test)
+    print " "*(col(s,test)-1)+"^"
+    print
+</code></pre>
+
+<p>With these lovely results:</p>
+
+<pre><code>Terms:['goat'] Line: 3 Col: 29
+    @(cat, dog) search term @(goat)
+                            ^
+
+Terms:['doggerel'] Line: 4 Col: 39
+    @cat searchterm1 @dog searchterm2 @(cat, doggerel)
+                                      ^
+
+Terms:['caterpillar'] Line: 6 Col: 5
+    @caterpillar
+    ^
+</code></pre>
+
+<p>This last snippet will do all the scanning for you, and just give you the list of found invalid tags:</p>
+
+<pre><code># print out all of the found invalid terms
+print list(set(sum(sphxTerm.searchString(test), ParseResults([]))))
+</code></pre>
+
+<p>Prints:</p>
+
+<pre><code>['caterpillar', 'goat', 'doggerel']
+</code></pre>
+<br /><b>#3</b><br /><p>This will match all fields that are cat, dog, mouse, or puppy and combinations thereof.</p>
+
+<pre><code>import re
+sphinx_term = "@goat some words to search"
+regex = re.compile("@\(?(cat|dog|mouse|puppy)(, ?(cat|dog|mouse|puppy))*\)? ")
+if regex.search(sphinx_term):
+    send the query to sphinx...
+</code></pre>
+<br /><b>#4</b><br /><p>Try this:</p>
+
+<pre><code>field_re = re.compile(r"@(?:([^()\s]+)|\([^()]+\))")
+</code></pre>
+
+<p>A single field name (like <code>cat</code> in <code>@cat</code>) will be captured in group #1, while the names in a parenthesized list like <code>@(cat, dog)</code> will be stored in group #2.  In the latter case you'll need to break the list down with <code>split()</code> or something; there's no way to capture the names individually with a Python regex.</p>
+<br /><b>#5</b><br /><p>I ended up doing this a different way, since none of the above worked. First I found the fields like @cat, with this: </p>
+
+<pre><code>attributes = re.findall('(?:@)([^\( ]*)', query)
+</code></pre>
+
+<p>Next, I found the more complicated ones, with this:</p>
+
+<pre><code>regex0 = re.compile('''
+    @               # at sign
+    (?:             # start non-capturing group
+        \w+             # non-whitespace, one or more
+        \b              # a boundary character (i.e. no more \w)
+        |               # OR
+        (               # capturing group
+            \(              # left paren
+            [^@(),]+        # not an @(),
+            (?:                 # another non-caputing group
+                , *             # a comma, then some spaces
+                [^@(),]+        # not @(),
+            )*              # some quantity of this non-capturing group
+            \)              # a right paren
+        )               # end of non-capuring group
+    )           # end of non-capturing group
+    ''', re.VERBOSE)
+
+# and this puts them into the attributes list.
+groupedAttributes = re.findall(regex0, query)
+for item in groupedAttributes:
+    attributes.extend(item.strip("(").strip(")").split(", "))
+</code></pre>
+
+<p>Next, I checked if the attributes I found were valid, and added them (uniquely to an array):</p>
+
+<pre><code># check if the values are valid.
+validRegex = re.compile(r'^mice$|^mouse$|^cat$|^dog$')
+
+# if they aren't add them to a new list.
+badAttrs = []
+for attribute in attributes:
+    if len(attribute) == 0:
+        # if it's a zero length attribute, we punt
+        continue
+    if validRegex.search(attribute.lower()) == None:
+        # if the attribute from the search isn't in the valid list
+        if attribute not in badAttrs:
+            # and the attribute isn't already in the list
+            badAttrs.append(attribute)
+</code></pre>
+
+<p>Thanks all for the help though. I'm very glad to have had it!</p>
+<br />

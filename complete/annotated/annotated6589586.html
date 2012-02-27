@@ -1,0 +1,87 @@
+<h3>Question ( ID-6589586 ) : </h3><h2>How can I determine a Unicode character from its name in Python , even if that character is a control character ? </h2><p>I 'd like to create an array of the Unicode code points which constitute white space in JavaScript ( minus the Unicode-white-space code points , which I address separately ) . These characters are horizontal tab , vertical tab , form feed , space , non-breaking space , and BOM. I could do this with magic numbers : </p>
+<pre><code>whitespace = [0x9, 0xb, 0xc, 0x20, 0xa0, 0xfeff]
+</code></pre>
+<p>That 's a little bit obscure ; names would be better. The unicodedata.lookup method passed through ord helps some : </p>
+<pre><code>>>> ord(unicodedata.lookup("NO-BREAK SPACE"))
+160
+</code></pre>
+<p>But this does n't work for <span style="background-color:yellow;">0x9</span> , <span style="background-color:yellow;">0xb</span> , or <span style="background-color:yellow;">0xc</span> -- I think because they 're control characters , and the " names " FORM FEED and such are just alias names. Is there any way to map these " names " to the characters , or their code points , in standard Python ? Or am I out of luck ? </p>
+<br /><h3>Answers ( Total-7 ) : </h3><b># <span style="background-color:yellow;">0</span> </b><br /><p>Kerrek SB 's comment is a good one : just put the names in a comment . </p>
+<p>BTW , Python also supports a named unicode literal : </p>
+<pre><code>>>> u"\N{NO-BREAK SPACE}"
+u'\xa0'
+</code></pre>
+<p>But it uses the same unicode name database , and the control characters are not in it . </p>
+<br /><b># 1 </b><br /><p>You could roll your own " database " for the control characters by parsing a few lines of the UCD files in the Unicode public directory . In particular , see the UnicodeData-6.1.0d3 file ( or see the parent directory for earlier versions ) . </p>
+<br /><b># 2 </b><br /><p>I do n't think it can be done in standard Python. The unicodedata module uses the UnicodeData.txt v5.2.0 Unicode database. Notice that the control characters are all assigned the name &lt ; control&gt ; ( the second field , semicolon-delimited ) . </p>
+<p>The script Tools/unicode/makeunicodedata.py in the Python source distribution is used to generate the table used by the Python runtime. The <span style="background-color:yellow;">makeunicodename</span> function looks like this : </p>
+<pre><code>def makeunicodename(unicode, trace):
+
+    FILE = "Modules/unicodename_db.h"
+
+    print "--- Preparing", FILE, "..."
+
+    # collect names
+    names = [None] * len(unicode.chars)
+
+    for char in unicode.chars:
+        record = unicode.table[char]
+        if record:
+            name = record[1].strip()
+            if name and name[0] != "<":
+                names[char] = name + chr(0)
+    ...
+</code></pre>
+<p>Notice that it skips over entries whose name begins with " &lt ; " . Hence , there is no name that can be passed to unicodedata.lookup that will give you back one of those control characters . </p>
+<p>Just hardcode the code points for horizontal tab , line feed , and carriage <span style="background-color:yellow;">return</span> , and leave a descriptive comment. As the Zen of Python goes , " practicality beats purity " . </p>
+<br /><b># 3 </b><br /><p>A few points : </p>
+<p>( 1 ) " BOM " is not a character. BOM is a byte sequence that appears at the start of a file to indicate the byte order of a file that is encoded in UTF-nn. BOM is u ' \ uFEFF'.encode ( 'UTF-nn ' ) . Reading a file with the appropriate codec will slurp up the BOM ; you do n't see it as a Unicode character. A BOM is not data. If you do see u ' \ uFEFF ' in your data , treat it as a ( deprecated ) ZERO-WIDTH NO-BREAK SPACE . </p>
+<p>( 2 ) " minus the Unicode-white-space code points , which I address separately " ? ? Is n't NO-BREAK SPACE a " Unicode-white-space " code point ? </p>
+<p>( 3 ) Your Python appears to be broken ; mine does this : </p>
+<pre><code>>>> ord(unicodedata.lookup("NO-BREAK SPACE"))
+160
+</code></pre>
+<p>( 4 ) You could use escape sequences for the first three . </p>
+<pre><code>>>> map(hex, map(ord, "\t\v\f"))
+['0x9', '0xb', '0xc']
+</code></pre>
+<p>( 5 ) You could use " " for the fourth one . </p>
+<p>( 6 ) Even if you could use names , the <span style="background-color:yellow;">readers</span> of your code would still be applying blind faith that e.g. " FORM FEED " is a whitespace character . </p>
+<p>( 7 ) What happened to to \ r and \ n ? </p>
+<br /><b># 4 </b><br /><p>Assuming you 're working with Unicode strings , the first five items in your list , plus all other Unicode space characters , will be matched by the \ s option when using a <span style="background-color:yellow;">regular</span> expression. Using Python 3.1.2 : </p>
+<pre><code>>>> import re
+>>> s = '\u0009,\u000b,\u000c,\u0020,\u00a0,\ufeff'
+>>> s
+'\t,\x0b,\x0c, ,\xa0,\ufeff'
+>>> re.findall(r'\s', s)
+['\t', '\x0b', '\x0c', ' ', '\xa0']
+</code></pre>
+<p>And as for the byte-order mark , the one given can be <span style="background-color:yellow;">referred</span> to as codecs.BOM_BE or codecs.BOM_UTF16_BE ( though in Python 3 + , it 's <span style="background-color:yellow;">returned</span> as a bytes object rather than str ) . </p>
+<br /><b># 5 </b><br /><p>The official Unicode <span style="background-color:yellow;">recommendation</span> for newlines may or may not be at odds with the way the Python codecs module handles newlines. Since u ' \ n ' is often said to mean " new line " , one might expect based on this <span style="background-color:yellow;">recommendation</span> for the Python string u ' \ n ' to <span style="background-color:yellow;">represent</span> character U + 2028 LINE SEPARATOR and to be encoded as such , rather than as the semantic-less control character U + <span style="background-color:yellow;">000A</span> . But I can only imagine the confusion that would <span style="background-color:yellow;">result</span> if the codecs module actually implemented that policy , and there are valid counter-arguments besides. Ditto for horizontal/vertical tab and form feed , which are probably not <span style="background-color:yellow;">really</span> characters but controls anyway. ( I would certainly consider backspace to be a control , not a character. ) </p>
+<p>Your question seems to assume that treating U + <span style="background-color:yellow;">000A</span> as a control character ( instead of a line separator ) is wrong ; but that is not at all certain. Perhaps it is more wrong for text processing applications everywhere to assume that a legacy printer-platen-scrolling control signal is <span style="background-color:yellow;">really</span> a true " line separator " . </p>
+<br /><b># 6 </b><br /><p>You can extend the lookup function to handle the characters that are n't included . </p>
+<pre><code>def unicode_lookup(x):
+    try:
+        ch = unicodedata.lookup(x)
+    except KeyError:
+        control_chars = {'LINE FEED':unichr(0x0a),'CARRIAGE RETURN':unichr(0x0d)}
+        if x in control_chars:
+            ch = control_chars[x]
+        else:
+            raise
+    return ch
+
+>>> unicode_lookup('SPACE')
+u' '
+>>> unicode_lookup('LINE FEED')
+u'\n'
+>>> unicode_lookup('FORM FEED')
+
+Traceback (most recent call last):
+  File "<pyshell#17>", line 1, in <module>
+    unicode_lookup('FORM FEED')
+  File "<pyshell#13>", line 3, in unicode_lookup
+    ch = unicodedata.lookup(x)
+KeyError: "undefined character name 'FORM FEED'"
+</code></pre>
+<br />

@@ -1,0 +1,115 @@
+Question (ID-1685330): Why we should perfer to store the serialized data not the raw code to DB? If we have some code(a data structure) which should be stored in DB, someone always suggests us to store the serialized data not the raw code string. 
+
+ So I'm not so sure why we should prefer the serialized data. 
+
+ Give a simple instance(in python): 
+
+ we've got a field which will store a dict of python, like 
+
+ { "name" : "BMW", "category":"car", "cost" : "200000"}
+ 
+
+ so we can serialize it using pickle(a python module) and then store the pickled data to db field. 
+
+ Or we can store the dict string directly to DB without serializing. 
+
+ Since we need to convert the string to python data back, two approaches are both easy to do, by using pickle.loads and exec respectively. 
+
+ So which should be preferred? And why? Is it because exec is much slower than pickle? or some other reasons? 
+
+ Thanks. 
+ Answers (Total-9): #0 
+ Or we can store the dict string
+ directly to DB without serializing. 
+ 
+
+ There is no such thing as "the dict string". There are many ways to serialize a dict into a string; you may be thinking of repr , possibly as eval as the way to get the dict back (you mention exec , but that's simply absurd: what statement would you execute...?! I think you probably mean eval ). They're different serialization methods with their tradeoffs, and in many cases the tradeoffs tend to favor pickling ( cPickle , for speed, with protocol -1 meaning "the best you can do", usually). 
+
+ Performance is surely an issue, e.g., in terms of size of what you're storing...: 
+
+ $ python -c 'import cPickle; d=dict.fromkeys(range(99), "banana"); print len(repr(d))'
+1376
+$ python -c 'import cPickle; d=dict.fromkeys(range(99), "banana"); print len(cPickle.dumps(d,-1))'
+412
+ 
+
+ ...why would you want to store 1.4 KB rather than 0.4 KB each time you serialize a dict like this one...?-) 
+
+ Edit : since some suggest Json, it's worth pointing out that json takes 1574 bytes here -- even bulkier than bulky repr! 
+
+ As for speed... 
+
+ $ python -mtimeit -s'import cPickle; d=dict.fromkeys(range(99), "chocolate")' 'eval(repr(d))'
+1000 loops, best of 3: 706 usec per loop
+$ python -mtimeit -s'import cPickle; d=dict.fromkeys(range(99), "chocolate")' 'cPickle.loads(cPickle.dumps(d, -1))'
+10000 loops, best of 3: 70.2 usec per loop
+ 
+
+ ...why take 10 times longer? What's the upside that would justify paying such a hefty price? 
+
+ Edit : json takes 2.7 milli seconds -- almost forty times slower than cPickle. 
+
+ Then there's generality -- not every serializable object can properly round-trip with repr and eval, while pickling is much more general. E.g.: 
+
+ $ python -c'def f(): pass
+d={23:f}
+print d == eval(repr(d))'
+Traceback (most recent call last):
+ File "&lt;string&gt;", line 3, in &lt;module&gt;
+ File "&lt;string&gt;", line 1
+ {23: &lt;function f at 0x241970&gt;}
+   ^
+SyntaxError: invalid syntax
+ 
+
+ vs 
+
+ $ python -c'import cPickle
+def f(): pass
+d={"x":f}
+print d == cPickle.loads(cPickle.dumps(d, -1))'
+True
+ 
+
+ Edit : json is even less general than repr in terms of round-trips. 
+
+ So, comparing the two serialization approaches (pickling vs repr/eval), we see: pickling is way more general, it can be e.g. 10 times faster, and take up e.g. 3 times less space in your database. 
+
+ What compensating advantages do you envisage for repr/eval...? 
+
+ BTW, I see some answers mention security, but that's not a real point: pickling is insecure too (the security issue with eval`ing untrusted strings may be more obvious, but unpickling an untrusted string is also insecure, though in subtler and darker ways). 
+
+ Edit : json is more secure. Whether that's worth the huge cost in size, speed and generality, is a tradeoff worth pondering. In most cases it won't be. 
+ #1 Both storing as a string and using pickle are serialization strategies. Pickle is more flexible in what it can store and can be more compact. Both strategies, eval (which is what you would use over exec in this instance) and pickle.loads are insecure—both of these can run arbitrary Python code. 
+
+ Better would be to use a serialization format like JSON (json module in 2.6, simplejson 3rd party module pre-2.6), which isn't tied specifically to being read by Python and won't execute arbitrary code if there ends up being data you do not expect in your database. Further, while the pickle formats are subject to changing (and your losing data!), a standard like JSON is not going to change on you in a backward-incompatible way. 
+ #2 I've preferred using a standard serialization format like JSON for storing this kind of data in the database. It makes it possible for consumers of the data to be written in other languages than python, it's basically human readable, and it's more easily query-able with SQL than pickled objects. 
+ #3 If I had to choose between serializing the data into something like JSON or storing a pickled data structure, I'd choose the JSON option every time. Other than the security issues everyone else is mentioning, portability is the biggest reason to not store a native python object in the database. There may be a requirement in the future to port your system to some other language, and storing a pickled python object would make that rather difficult. Also, other applications may need to hit the data your storing, but I can't speak to specific instances since I don't know your situation. 
+
+ Also, if your system needed to do any kind of filtering, storing data in a JSON string still wouldn't be your best option. If you can, and there are a set number of fields, I would be very tempted to split them into atomic elements. It would make searching and filtering a lot easier and efficient. 
+ #4 The question is what does serialization gain you?
+I bet the people recommending that you store the serialized data think you will save time because you don't need to mess around with SQL queries to construct Python objects. But there are some significant trade offs in storing you data as serialized blobs, such as: 
+
+ 
+ You lose referential integrity checking 
+ The data format you choose may not work well for different access patterns. How will you get all cars that cost more than $20,000 efficiently, if all of the data is stored inside serialized objects? 
+ What will you do if you object model changes significantly? 
+ You lose interoperability with other languages if you use a native Python serialization format 
+ You have to write code support code to loading data with a non-native Python serialization format 
+ You can't use 3rd party tools for doing reporting on your data 
+ 
+
+ The list goes on and on, make sure you are okay with these trade offs. 
+ #5 There's always a danger in exec that someone will somehow pass in a string with some nasty code. It might never be the case in your application but in general, it's a big problem, and using built-in serialization avoids it. 
+
+ Another reason for using built-in serialization is that it makes it obvious what you're trying to do in your code. If you just fetch and exec, someone might not understand your actual intent. 
+ #6 Serialization means less worrying. When you marshall your data using some known serialization — Pickle, JSON, Google's Protocol Buffers — you can trust that the data you retrieve later is the data you stored earlier. 
+
+ Limit capability. If you're storing static data, why open up the possibility of letting the code be executed? It's unnecessary. Imagine the complication which will occur if, one year from now, another programer starts adding functions and module imports to this "static" data. 
+ #7 If there is any possibility of manipulating this data on DB or creating reports from it; I would seriously consider unpacking it onto a table. A simple table with name , key and value columns would give you all the power of your relational database. Depending on edits it might even perform better than fetch->modify->dump. 
+ #8 Firstly fetch and exec will leave your application vulnerable to code injection.
+If someone entered "System(rm -r /);" in your name field you would lose most of your files on a *nix system when you read in the data. 
+
+ The second reason is portability and upgradability. "pickled" objects will work on any python platform with any python release -- Guido promised! 
+
+ Thirdly "pikling" will automgically handle special characters and wierd code pages. So there will be no problems if your users enter line feeds or semi colons.

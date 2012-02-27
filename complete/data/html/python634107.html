@@ -1,0 +1,68 @@
+<h3>Question (ID-634107):</h3><h2>Writing a socket-based server in Python, recommended strategies?</h2><p>I was recently reading <a href="http://www.kegel.com/c10k.html" rel="nofollow">this document</a> which lists a number of strategies that could be employed to implement a socket server. Namely, they are:</p>
+
+<ol>
+<li>Serve many clients with each thread, and use nonblocking I/O and level-triggered readiness notification</li>
+<li>Serve many clients with each thread, and use nonblocking I/O and readiness change notification</li>
+<li>Serve many clients with each server thread, and use asynchronous I/O</li>
+<li>serve one client with each server thread, and use blocking I/O</li>
+<li>Build the server code into the kernel </li>
+</ol>
+
+<p>Now, I would appreciate a hint on which should be used <strong>in CPython</strong>, which we know has some good points, and some bad points. I am mostly interested in performance under high concurrency, and yes a number of the current implementations are too slow.</p>
+
+<p>So if I may start with the easy one, "5" is out, as I am not going to be hacking anything into the kernel.</p>
+
+<p>"4" Also looks like it must be out because of the GIL. Of course, you could use multiprocessing in place of threads here, and that does give a significant boost. Blocking IO also has the advantage of being easier to understand.</p>
+
+<p>And here my knowledge wanes a bit:</p>
+
+<p>"1" is traditional select or poll which could be trivially combined with multiprocessing.</p>
+
+<p>"2" is the readiness-change notification, used by the newer epoll and kqueue</p>
+
+<p>"3" I am not sure there are any kernel implementations for this that have Python wrappers.</p>
+
+<p>So, in Python we have a bag of great tools like Twisted. Perhaps they are a better approach, though I have benchmarked Twisted and found it too slow on a multiple processor machine. Perhaps having 4 twisteds with a load balancer might do it, I don't know. Any advice would be appreciated.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p><a href="http://docs.python.org/library/asyncore.html" rel="nofollow"><code>asyncore</code></a> is basically "1" - It uses <code>select</code> internally, and you just have one thread handling all requests. According to the docs it can also use <code>poll</code>. (EDIT: Removed Twisted reference, I thought it used asyncore, but I was wrong).</p>
+
+<p>"2" might be implemented with <a href="http://sourceforge.net/projects/pyepoll" rel="nofollow">python-epoll</a> (Just googled it - never seen it before).
+EDIT: (from the comments) In python 2.6 the <a href="http://docs.python.org/library/select.html" rel="nofollow">select module</a> has epoll, kqueue and kevent build-in (on supported platforms). So you don't need any external libraries to do edge-triggered serving.</p>
+
+<p>Don't rule out "4", as the GIL will be dropped when a thread is actually doing or waiting for IO-operations (most of the time probably). It doesn't make sense if you've got huge numbers of connections of course. If you've got lots of processing to do, then python may not make sense with any of these schemes.</p>
+
+<p>For flexibility maybe look at <a href="http://twistedmatrix.com/trac/" rel="nofollow">Twisted</a>?</p>
+
+<p>In practice your problem boils down to how much processing you are going to do for requests. If you've got a lot of processing, and need to take advantage of multi-core parallel operation, then you'll probably need multiple processes. On the other hand if you just need to listen on lots of connections, then select or epoll, with a small number of threads should work.</p>
+<br /><b>#1</b><br /><p>How about "fork"?  (I assume that is what the ForkingMixIn does)  If the requests are handled in a "shared nothing" (other than DB or file system) architecture, fork() starts pretty quickly on most *nixes, and you don't have to worry about all the silly bugs and complications from threading.</p>
+
+<p>Threads are a design illness forced on us by OSes with too-heavy-weight processes, IMHO.  Cloning a page table with copy-on-write attributes seems a small price, especially if you are running an interpreter anyway.</p>
+
+<p>Sorry I can't be more specific, but I'm more of a Perl-transitioning-to-Ruby programmer (when I'm not slaving over masses of Java at work)</p>
+
+<hr>
+
+<p>Update:  I finally did some timings on thread vs fork in my "spare time".  Check it out:</p>
+
+<p><a href="http://roboprogs.com/devel/2009.04.html" rel="nofollow">http://roboprogs.com/devel/2009.04.html</a></p>
+
+<p>Expanded:
+<a href="http://roboprogs.com/devel/2009.12.html" rel="nofollow">http://roboprogs.com/devel/2009.12.html</a></p>
+<br /><b>#2</b><br /><p>Can I suggest additional links?</p>
+
+<p><a href="http://code.google.com/p/cogen/" rel="nofollow">cogen</a> is a crossplatform library for network oriented, coroutine based programming using the enhanced generators from python 2.5. On the main page of cogen project there're links to several projects with similar purpose.</p>
+<br /><b>#3</b><br /><p>One sollution is gevent. <a href="http://www.gevent.org/" rel="nofollow">Gevent</a> maries a libevent based event polling with lightweight cooperative task switching implemented by greenlet.</p>
+
+<p>What you get is all the performance and scalability of an event system with the elegance and straightforward model of blocking IO programing.</p>
+
+<p>(I don't know what the SO convention about answering to realy old questions is, but decided I'd still add my 2 cents)</p>
+<br /><b>#4</b><br /><p><a href="http://docs.python.org/library/socketserver.html#asynchronous-mixins" rel="nofollow">http://docs.python.org/library/socketserver.html#asynchronous-mixins</a></p>
+
+<p>As for multi-processor (multi-core) machines. With CPython due to <a href="http://docs.python.org/glossary.html#term-global-interpreter-lock" rel="nofollow">GIL</a> you'll need at least one process per core, to scale. As you say that you need CPython, you might try to benchmark that with <code>ForkingMixIn</code>. With Linux 2.6 might give some interesting results.</p>
+
+<p>Other way is to use <a href="http://www.stackless.com/" rel="nofollow">Stackless Python</a>. That's <a href="http://www.slideshare.net/Arbow/stackless-python-in-eve" rel="nofollow">how EVE solved it</a>. But I understand that it's not always possible. </p>
+<br /><b>#5</b><br /><p>I like Douglas' answer, but as an aside...</p>
+
+<p>You could use a centralized dispatch thread/process that listens for readiness notifications using <a href="http://docs.python.org/library/select.html?highlight=select#module-select" rel="nofollow"><code>select</code></a> and delegates to a pool of worker threads/<a href="http://docs.python.org/library/multiprocessing.html#module-multiprocessing" rel="nofollow">processes</a> to help accomplish your parallelism goals.</p>
+
+<p>As Douglas mentioned, however, the GIL won't be held during most lengthy I/O operations (since no Python-API things are happening), so if it's response latency you're concerned about you can try moving the critical portions of your code to CPython API.</p>
+<br />

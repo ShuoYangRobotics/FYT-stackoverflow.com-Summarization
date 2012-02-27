@@ -1,0 +1,122 @@
+Question (ID-35948): Django Templates and variable attributes I'm using Google App Engine and Django Templates. 
+I have a table that I want to display the objects look something like: 
+
+ Object Result:
+ Items = [item1,item2]
+ Users = [{name='username',item1=3,item2=4},..]
+ 
+
+ The django template is: 
+
+ &lt;table&gt;
+&lt;tr align="center"&gt;
+	&lt;th&gt;user&lt;/th&gt;
+	{% for item in result.items %}
+		&lt;th&gt;{{item}}&lt;/th&gt;
+	{% endfor %}
+&lt;/tr&gt;
+
+{% for user in result.users %}
+	&lt;tr align="center"&gt; 
+		&lt;td&gt;{{user.name}}&lt;/td&gt;
+		{% for item in result.items %}
+			&lt;td&gt;{{ user.item }}&lt;/td&gt;
+		{% endfor %}
+	&lt;/tr&gt;
+{% endfor %}
+&lt;/table&gt;
+ 
+
+ 
+
+ now the django manual states that when it sees a . in variables 
+it tries several things to get the data, one of which is dictionary lookup which is exactly what I want but doesn't seem to happen... 
+ Answers (Total-6): #0 I found a "nicer"/"better" solution for getting variables inside
+Its not the nicest way, but it works. 
+
+ You install a custom filter into django which gets the key of your dict as a parameter 
+
+ To make it work in google app-engine you need to add a file to your main directory,
+I called mine *django_hack.py* which contains this little piece of code 
+
+ from google.appengine.ext import webapp
+
+register = webapp.template.create_template_register()
+
+def hash(h,key):
+ if key in h:
+  return h[key]
+ else:
+  return None
+
+register.filter(hash)
+ 
+
+ Now that we have this file, all we need to do is tell the app-engine to use it...
+we do that by adding this little line to your main file 
+
+ webapp.template.register_template_library('django_hack')
+ 
+
+ and in your template view add this template instead of the usual code 
+
+ {{ user|hash:item }}
+ 
+
+ And its should work perfectly =) 
+ #1 I'm assuming that the part the doesn't work is {{ user.item }} . 
+
+ Django will be trying a dictionary lookup, but using the string "item" and not the value of the item loop variable. Django did the same thing when it resolved {{ user.name }} to the name attribute of the user object, rather than looking for a variable called name . 
+
+ I think you will need to do some preprocessing of the data in your view before you render it in your template. 
+ #2 Or you can use the default django system which is used to resolve attributes in tempaltes like this : 
+
+ from django.template import Variable, VariableDoesNotExist
+@register.filter
+def hash(object, attr):
+ pseudo_context = { 'object' : object }
+ try:
+  value = Variable('object.%s' % attr).resolve(pseudo_context)
+ except VariableDoesNotExist:
+  value = None
+return value
+ 
+
+ That just works 
+
+ in your template : 
+
+ {{ user|hash:item }}
+ 
+ #3 @Dave Webb (i haven't been rated high enough to comment yet) 
+
+ The dot lookups can be summarized like this: when the template system encounters a dot in a variable name, it tries the following lookups, in this order: 
+
+ * Dictionary lookup (e.e., foo["bar"])
+* Attribute lookup (e.g., foo.bar)
+* Method call (e.g., foo.bar())
+* List-index lookup (e.g., foo[bar])
+ 
+
+ The system uses the first lookup type that works. It’s short-circuit logic. 
+ #4 As a replacement for k,v in user.items on Google App Engine using django templates where user = {'a':1, 'b', 2, 'c', 3} 
+
+ {% for pair in user.items %}
+ {% for keyval in pair %} {{ keyval }}{% endfor %}&lt;br&gt;
+{% endfor %}
+ 
+
+ a 1 
+b 2 
+c 3 
+
+ pair = (key, value) for each dictionary item. 
+ #5 shouldn't this: 
+
+ {{ user.item }} 
+
+ be this? 
+
+ {{ item }} 
+
+ there is no user object in the context within that loop....?

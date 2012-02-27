@@ -1,0 +1,246 @@
+Question (ID-494881): refactor this dictionary-to-xml converter in python It's a small thing, really: I have this function that converts dict objects to xml. 
+
+ Here's the function: 
+
+ def dictToXml(d):
+ from xml.sax.saxutils import escape
+
+ def unicodify(o):
+  if o is None:
+   return u'';
+  return unicode(o)
+
+ lines = []
+ def addDict(node, offset):
+  for name, value in node.iteritems():
+   if isinstance(value, dict):
+    lines.append(offset + u"&lt;%s&gt;" % name)
+    addDict(value, offset + u" " * 4)
+    lines.append(offset + u"&lt;/%s&gt;" % name)
+   elif isinstance(value, list):
+    for item in value:
+     if isinstance(item, dict):
+      lines.append(offset + u"&lt;%s&gt;" % name)
+      addDict(item, offset + u" " * 4)
+      lines.append(offset + u"&lt;/%s&gt;" % name)
+     else:
+      lines.append(offset + u"&lt;%s&gt;%s&lt;/%s&gt;" % (name, escape(unicodify(item)), name))
+   else:
+    lines.append(offset + u"&lt;%s&gt;%s&lt;/%s&gt;" % (name, escape(unicodify(value)), name))
+
+ addDict(d, u"")
+ lines.append(u"")
+ return u"\n".join(lines)
+ 
+
+ For example, it converts this dictionary 
+
+ { 'site': { 'name': 'stackoverflow', 'blogger': [ 'Jeff', 'Joel' ] } }
+ 
+
+ to: 
+
+ &lt;site&gt;
+ &lt;name&gt;stackoverflow&lt;/name&gt;
+ &lt;blogger&gt;jeff&lt;/blogger&gt;
+ &lt;blogger&gt;joel&lt;/blogger&gt;
+&lt;/site&gt;
+ 
+
+ It works, but the addDict function looks a little too repetitive. I'm sure there's a way to refactor it into 3 co-recursive functions named addDict , addList and addElse , but my brain is stuck. Any help? 
+
+ Also, any way to get rid of the offset + thing in every line would be nice. 
+
+ NOTE : I chose these semantics because I'm trying to match the behavior of the json-to-xml converter in org.json , which I use in a different part of my project. If you got to this page just looking for a dictionary to xml converter, there are some really good options in some of the answers. (Especially pyfo ). 
+ Answers (Total-6): #0 &gt;&gt;&gt; from pyfo import pyfo
+&gt;&gt;&gt; d = ('site', { 'name': 'stackoverflow', 'blogger': [ 'Jeff', 'Joel' ] } )
+&gt;&gt;&gt; result = pyfo(d, pretty=True, prolog=True, encoding='ascii')
+&gt;&gt;&gt; print result.encode('ascii', 'xmlcharrefreplace')
+&lt;?xml version="1.0" encoding="ascii"?&gt;
+&lt;site&gt;
+ &lt;blogger&gt;
+ Jeff
+ Joel
+ &lt;/blogger&gt;
+ &lt;name&gt;stackoverflow&lt;/name&gt;
+&lt;/site&gt;
+ 
+
+ To install pyfo : 
+
+ $ easy_install pyfo
+ 
+ #1 I noticed you have commonality in adding items. Using this commonality I would refactor adding an item to a separate function. 
+
+ def addItem(item, name, offset):
+   if isinstance(item, dict):
+    lines.append(offset + u"&lt;%s&gt;" % name)
+    addDict(item, offset + u" " * 4)
+    lines.append(offset + u"&lt;/%s&gt;" % name)
+   else:
+    lines.append(offset + u"&lt;%s&gt;%s&lt;/%s&gt;" % (name, escape(unicodify(item)), name))
+
+def addList(value,name, offset):
+  for item in value:
+   addItem(item, name, offset)
+
+def addDict(node, offset):
+  for name, value in node.iteritems():
+   if isinstance(value, list):
+    addList(value, name, offset)
+   else:
+    addItem(value, name, offset)
+ 
+
+ Advisory warning: this code is not tested or written by anybody who actually uses Python. 
+ #2 To get rid of repeated "offset+": 
+
+ offset = 0
+def addLine(str):
+ lines.append(u" " * (offset * 4) + str
+ 
+
+ then 
+
+ ...
+ addLine(u"&lt;%s&gt;" % name)
+ offset = offset + 1
+ addDict(value)
+ offset = offset - 1
+ addLine(u"&lt;/%s&gt;" % name)
+ 
+
+ Don't have access to an interpreter here, so take this with a grain of salt :( 
+ #3 Your original code produce malformed XML and can produce the same XML for two different dictionaries (is not injective , speaking mathematically). 
+
+ For example, if you have a list as a value of the only key in a dictionary: 
+
+ d = { 'list': [1,2,3] }
+ 
+
+ I expect that your code would produce 
+
+ &lt;list&gt;1&lt;/list&gt;&lt;list&gt;2&lt;/list&gt;&lt;list&gt;3&lt;/list&gt;
+ 
+
+ and there is no root element. Any XML should have one and only one root element. 
+
+ Then given the XML produced by your code, it is impossible to say if this XML 
+
+ &lt;tag&gt;1&lt;/tag&gt;
+ 
+
+ was produced from { 'tag': 1 } or from { 'tag': [1] } . 
+
+ So, I suggest 
+
+ 
+ always start from the root element 
+ represent lists with either two special tags (e.g. &lt;list/&gt; and &lt;item/&gt; ) or mark them as such in attributes 
+ 
+
+ Then, after decisions about these conceptual shortcomings we can generate correct and unambiguous XML. I chose to use attributes to markup lists, and used ElementTree to construct the XML tree automatically. Also, recursion helps ( add_value_to_xml is called recursively): 
+
+ from xml.etree.ElementTree import Element, SubElement, tostring
+
+def is_scalar(v):
+ return isinstance(v,basestring) or isinstance(v,float) \
+  or isinstance(v,int) or isinstance(v,bool)
+
+def add_value_to_xml(root,v):
+ if type(v) == type({}):
+  for k,kv in v.iteritems():
+   vx = SubElement(root,unicode(k))
+   vx = add_value_to_xml(vx,kv)
+ elif type(v) == list:
+  root.set('type','list')
+  for e in v:
+   li = SubElement(root,root.tag)
+   li = add_value_to_xml(li,e)
+   li.set('type','item')
+ elif is_scalar(v):
+  root.text = unicode(v)
+ else:
+  raise Exception("add_value_to_xml: unsuppoted type (%s)"%type(v))
+ return root
+
+def dict_to_xml(d,root='dict'):
+ x = Element(root)
+ x = add_value_to_xml(x,d)
+ return x
+
+d = { 'float': 5194.177, 'str': 'eggs', 'int': 42,
+  'list': [1,2], 'dict': { 'recursion': True } }
+x = dict_to_xml(d)
+print tostring(x)
+ 
+
+ The result of the conversion of the test dict is: 
+
+ &lt;dict&gt;&lt;int&gt;42&lt;/int&gt;&lt;dict&gt;&lt;recursion&gt;True&lt;/recursion&gt;&lt;/dict&gt;&lt;float&gt;5194.177&lt;/float&gt;&lt;list type="list"&gt;&lt;list type="item"&gt;1&lt;/list&gt;&lt;list type="item"&gt;2&lt;/list&gt;&lt;/list&gt;&lt;str&gt;eggs&lt;/str&gt;&lt;/dict&gt;
+ 
+ #4 Here is my short sketch for a solution:
+have a general addSomething() function that dispatches based on the type of the value to addDict() , addList() or addElse() . Those functions recursively call addSomething() again. 
+
+ Basically you are factoring out the parts in the if clause and add a recursive call. 
+ #5 Here's what I find helpful when working with XML. Actually create the XML node structure first, then render this into text second. 
+
+ This separates two unrelated concerns. 
+
+ 
+ How do I transform my Python structure into an XML object model? 
+ How to I format that XML object model? 
+ 
+
+ It's hard when you put these two things together into one function. If, on the other hand, you separate them, then you have two things. First, you have a considerably simpler function to "walk" your Python structure and return an XML node. Your XML Nodes can be rendered into text with some preferred encoding and formatting rules applied. 
+
+ from xml.sax.saxutils import escape
+
+class Node( object ):
+ def __init__( self, name, *children ):
+  self.name= name
+  self.children= children
+ def toXml( self, indent ):
+  if len(self.children) == 0:
+   return u"%s&lt;%s/&gt;" % ( indent*4*u' ', self.name )
+  elif len(self.children) == 1:
+   child= self.children[0].toXml(0)
+   return u"%s&lt;%s&gt;%s&lt;/%s&gt;" % ( indent*4*u' ', self.name, child, self.name )
+  else:
+   items = [ u"%s&lt;%s&gt;" % ( indent*4*u' ', self.name ) ]
+   items.extend( [ c.toXml(indent+1) for c in self.children ] )
+   items.append( u"%s&lt;/%s&gt;" % ( indent*4*u' ', self.name ) )
+   return u"\n".join( items )
+
+class Text( Node ):
+ def __init__( self, value ):
+  self.value= value
+ def toXml( self, indent ):
+  def unicodify(o):
+   if o is None:
+    return u'';
+   return unicode(o)
+  return "%s%s" % ( indent*4*u' ', escape( unicodify(self.value) ), )
+
+def dictToXml(d):
+
+ def dictToNodeList(node):
+  nodes= []
+  for name, value in node.iteritems():
+   if isinstance(value, dict):
+    n= Node( name, *dictToNodeList( value ) )
+    nodes.append( n )
+   elif isinstance(value, list):
+    for item in value:
+     if isinstance(item, dict):
+      n= Node( name, *dictToNodeList( value ) )
+      nodes.append( n )
+     else:
+      n= Node( name, Text( item ) )
+      nodes.append( n )
+   else:
+    n= Node( name, Text( value ) )
+    nodes.append( n )
+  return nodes
+
+ return u"\n".join( [ n.toXml(0) for n in dictToNodeList(d) ] )

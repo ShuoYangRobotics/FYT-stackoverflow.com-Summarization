@@ -1,0 +1,160 @@
+<h3>Question (ID-557199):</h3><h2>Converting a database-driven (non-OO) python script into a non-database driven, OO-script</h2><p>I have some software that is heavily dependent on MySQL, and is written in python without any class definitions. For performance reasons, and because the database is really just being used to store and retrieve large amounts of data, I'd like to convert this to an object-oriented python script that does not use the database at all.</p>
+
+<p>So my plan is to export the database tables to a set of files (not many -- it's a pretty simple database; it's big in that it has a lot of rows, but only a few tables, each of which has just two or three columns).</p>
+
+<p>Then I plan to read the data in, and have a set of functions which provide access to and operations on the data.</p>
+
+<p>My question is this:</p>
+
+<p>is there a preferred way to convert a set of database tables to classes and objects? For example, if I have a table which contains fruit, where each fruit has an id and a name, would I have a "CollectionOfFruit" class which contains a list of "Fruit" objects, or would I just have a "CollectionOfFruit" class which contains a list of tuples? Or would I just have a list of Fruit objects?</p>
+
+<p>I don't want to add any extra frameworks, because I want this code to be easy to transfer to different machines. So I'm really just looking for general advice on how to represent data that might more naturally be stored in database tables, in objects in Python.</p>
+
+<p>Alternatively, is there a good book I should read that would point me in the right direction on this?</p>
+
+<p>Thanks!</p>
+
+<p>Ben</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>If the data is a natural fit for database tables ("rectangular data"), why not convert it to sqlite?  It's portable -- just one file to move the db around, and sqlite is available anywhere you have python (2.5 and above anyway).</p>
+<br /><b>#1</b><br /><p>Generally you want your Objects to absolutely match your "real world entities".</p>
+
+<p>Since you're starting from a database, it's not always the case that the database has any real-world fidelity, either.  Some database designs are simply awful.</p>
+
+<p>If your database has reasonable models for Fruit, that's where you start.  Get that right first.</p>
+
+<p>A "collection" may -- or may not -- be an artificial construct that's part of the solution algorithm, not really a proper part of the problem.  Usually collections <em>are</em> part of the problem, and you should design those classes, also.</p>
+
+<p>Other times, however, the collection is an artifact of having used a database, and a simple Python list is all you need.</p>
+
+<p>Still other times, the collection is actually a proper mapping from some unique key value to an entity, in which case, it's a Python dictionary.</p>
+
+<p>And sometimes, the collection is a proper mapping from some non-unique key value to some collection of entities, in which case it's a Python <code>collections.defaultdict(list)</code>.</p>
+
+<p>Start with the fundamental, real-world-like entities.  Those get class definitions.</p>
+
+<p>Collections may use built-in Python collections or may require their own classes.</p>
+<br /><b>#2</b><br /><p>There's no "one size fits all" answer for this -- it'll depend a lot on the data and how it's used in the application. If the data and usage are simple enough you might want to store your fruit in a dict with id as key and the rest of the data as tuples. Or not. It totally depends. If there's a guiding principle out there then it's to extract the underlying requirements of the app and then write code against those requirements.</p>
+<br /><b>#3</b><br /><p>you could have a fruit class with id and name instance variables. and a function to read/write the information from a file, and maybe a class variable to keep track of the number of fruits (objects) created</p>
+<br /><b>#4</b><br /><p>In the simple case <a href="http://docs.python.org/dev/library/collections.html#collections.namedtuple" rel="nofollow">namedtuples</a> let get you started:</p>
+
+<pre><code>&gt;&gt;&gt; from collections import namedtuple
+&gt;&gt;&gt; Fruit = namedtuple("Fruit", "name weight color")
+&gt;&gt;&gt; fruits = [Fruit(*row) for row in cursor.execute('select * from fruits')]
+</code></pre>
+
+<p><code>Fruit</code> is equivalent to the following class:</p>
+
+<pre><code>&gt;&gt;&gt; Fruit = namedtuple("Fruit", "name weight color", verbose=True)
+class Fruit(tuple):
+        'Fruit(name, weight, color)'
+
+        __slots__ = ()
+
+        _fields = ('name', 'weight', 'color')
+
+        def __new__(cls, name, weight, color):
+            return tuple.__new__(cls, (name, weight, color))
+
+        @classmethod
+        def _make(cls, iterable, new=tuple.__new__, len=len):
+            'Make a new Fruit object from a sequence or iterable'
+            result = new(cls, iterable)
+            if len(result) != 3:
+                raise TypeError('Expected 3 arguments, got %d' % len(result))
+            return result
+
+        def __repr__(self):
+            return 'Fruit(name=%r, weight=%r, color=%r)' % self
+
+        def _asdict(t):
+            'Return a new dict which maps field names to their values'
+            return {'name': t[0], 'weight': t[1], 'color': t[2]}
+
+        def _replace(self, **kwds):
+            'Return a new Fruit object replacing specified fields with new values'
+            result = self._make(map(kwds.pop, ('name', 'weight', 'color'), self))
+            if kwds:
+                raise ValueError('Got unexpected field names: %r' % kwds.keys())
+
+            return result
+
+        def __getnewargs__(self):
+            return tuple(self)
+
+        name = property(itemgetter(0))
+        weight = property(itemgetter(1))
+        color = property(itemgetter(2))
+</code></pre>
+<br /><b>#5</b><br /><p>Another way would be to use the ZODB to directly store objects persistently. The only thing you have to do is to derive your classes from Peristent and everything from the root object up is then automatically stored in that database as an object. The root object comes from the ZODB connection. There are many backends available and the default is simple a file.</p>
+
+<p>A class could then look like this:</p>
+
+<pre><code>class Collection(persistent.Persistent):
+
+  def __init__(self, fruit = []):
+      self.fruit = fruit
+
+class Fruit(peristent.Persistent):
+
+  def __init__(self, name):
+      self.name = name
+</code></pre>
+
+<p>Assuming you have the root object you can then do:</p>
+
+<pre><code>fruit = Fruit("apple")
+root.collection = Collection([fruit])
+</code></pre>
+
+<p>and it's stored in the database automatically. You can find it again by simply looking accessing 'collection' from the root object:</p>
+
+<pre><code>print root.collection.fruit
+</code></pre>
+
+<p>You can also derive subclasses from e.g. Fruit as usual.</p>
+
+<p>Useful links with more information:</p>
+
+<ul>
+<li><a href="http://new.zope.org/projects/zodb" rel="nofollow">The new ZODB homepage</a> </li>
+<li><a href="http://new.zope.org/projects/zodb/tutorial" rel="nofollow">a ZODB tutorial</a></li>
+</ul>
+
+<p>That way you still are able to use the full power of Python objects and there is no need to serialize something e.g. via an ORM but you still have an easy way to store your data.</p>
+<br /><b>#6</b><br /><p>Here are a couple points for you to consider.  If your data is large reading it all into memory may be wasteful.  If you need random access and not just sequential access to your data then you'll either have to scan the at most the entire file each time or read that table into an indexed memory structure like a dictionary.  A list will still require some kind of scan (straight iteration or binary search if sorted).  With that said, if you don't require some of the features of a DB then don't use one but if you just think MySQL is too heavy then +1 on the Sqlite suggestion from earlier.  It gives you most of the features you'd want while using a database without the concurrency overhead.</p>
+<br /><b>#7</b><br /><p>Abstract persistence from the object class.  Put all of the persistence logic in an adapter class, and assign the adapter to the object class.  Something like:</p>
+
+<pre><code>class Fruit(Object):
+
+   @classmethod
+   def get(cls, id):
+      return cls.adapter.get(id)
+
+   def put(self):
+      cls.adapter.put(self)
+
+   def __init__(self, id, name, weight, color):
+      self.id = id
+      self.name = name
+      self.weight = weight
+      self.color = color
+
+
+ class FruitAdapter(Object):
+
+    def get(id):
+       # retrieve attributes from persistent storage here
+       return Fruit(id, name, weight, color)
+
+    def put(fruit):
+       # insert/update fruit in persistent storage here
+
+ Fruit.adapter = FruitAdapter()
+ f = Fruit.get(1)
+ f.name = "lemon"
+ f.put()
+ # and so on...
+</code></pre>
+
+<p>Now you can build different FruitAdapter objects that interoperate with whatever persistence format you settle on (database, flat file, in-memory collection, whatever) and the basic Fruit class will be completely unaffected.</p>
+<br />

@@ -1,0 +1,172 @@
+Question (ID-1264833): Python Class Factory to Produce simple Struct-like classes While investigating Ruby I came across this to create a simple Struct-like class: 
+
+ Person = Struct.new(:forname, :surname)
+person1 = Person.new('John', 'Doe')
+puts person1 #&lt;struct Person forname="John", surname="Doe"&gt;
+ 
+
+ Which raised a few Python questions for me. I have written a [VERY] basic clone of this mechanism in Python: 
+
+ def Struct(*args):
+ class NewStruct:
+  def __init__(self):
+   for arg in args:
+    self.__dict__[arg] = None
+
+ return NewStruct
+
+&gt;&gt;&gt; Person = Struct('forename', 'surname')
+&gt;&gt;&gt; person1 = Person()
+&gt;&gt;&gt; person2 = Person()
+&gt;&gt;&gt; person1.forename, person1.surname = 'John','Doe'
+&gt;&gt;&gt; person2.forename, person2.surname = 'Foo','Bar'
+&gt;&gt;&gt; person1.forename
+'John'
+&gt;&gt;&gt; person2.forename
+'Foo'
+ 
+
+ 
+ Is there already a similar mechanism in Python to handle this? (I usually just use dictionaries). 
+ How would I get the Struct() function to create the correct __init__() arguments. (in this case I would like to perform person1 = Person('John', 'Doe') Named Arguments if possible: person1 = Person(surname='Doe', forename='John') 
+ 
+
+ I Would like, as a matter of interest, to have Question 2 answered even if there is a better Python mechanism to do this. 
+ Answers (Total-6): #0 If you're using Python 2.6, try the standard library namedtuple class. 
+
+ &gt;&gt;&gt; from collections import namedtuple
+&gt;&gt;&gt; Person = namedtuple('Person', ('forename', 'surname'))
+&gt;&gt;&gt; person1 = Person('John', 'Doe')
+&gt;&gt;&gt; person2 = Person(forename='Adam', surname='Monroe')
+&gt;&gt;&gt; person1.forename
+'John'
+&gt;&gt;&gt; person2.surname
+'Monroe'
+ 
+
+ Edit: As per comments, there is a backport for earlier versions of Python 
+ #1 If you're running python &lt;2.6 or would like to extend your class to do more stuff, I would suggest using the type() builtin. This has the advantage over your solution in that the setting up of __dict__ happens at class creation rather than instantiation. It also doesn't define an __init__ method and thus doesn't lead to strange behavior if the class calls __init__ again for some reason. For example: 
+
+ def Struct(*args, **kwargs):
+ name = kwargs.pop("name", "MyStruct")
+ kwargs.update(dict((k, None) for k in args))
+ return type(name, (object,), kwargs)
+ 
+
+ Used like so: 
+
+ &gt;&gt;&gt; MyStruct = Struct("forename", "lastname")
+ 
+
+ Equivalent to: 
+
+ class MyStruct(object):
+ forename = None
+ lastname = None
+ 
+
+ While this: 
+
+ &gt;&gt;&gt; TestStruct = Struct("forename", age=18, name="TestStruct")
+ 
+
+ Is equivalent to: 
+
+ class TestStruct(object):
+ forename = None
+ age = 18
+ 
+
+ Update 
+
+ Additionally, you can edit this code to very easily prevent assignment of other variables than the ones specificed. Just change the Struct() factory to assign __slots__ . 
+
+ def Struct(*args, **kwargs):
+ name = kwargs.pop("name", "MyStruct")
+ kwargs.update(dict((k, None) for k in args))
+ kwargs['__slots__'] = kwargs.keys()
+ return type(name, (object,), kwargs)
+ 
+ #2 As others have said, named tuples in Python 2.6/3.x. With older versions, I usually use the Stuff class: 
+
+ class Stuff(object):
+ def __init__(self, **kwargs):
+  self.__dict__.update(kwargs)
+
+john = Stuff(forename='John', surname='Doe')
+ 
+
+ This doesn't protect you from mispellings though. There's also a recipe for named tuples on ActiveState: 
+
+ http://code.activestate.com/recipes/500261/ 
+ #3 An update of ThomasH's variant: 
+
+ def Struct(*args, **kwargs):
+ def init(self, *iargs, **ikwargs):
+  for k,v in kwargs.items():
+   setattr(self, k, v)
+  for i in range(len(iargs)):
+   setattr(self, args[i], iargs[i])
+  for k,v in ikwargs.items():
+   setattr(self, k, v)
+
+ name = kwargs.pop("name", "MyStruct")
+ kwargs.update(dict((k, None) for k in args))
+ return type(name, (object,), {'__init__': init, '__slots__': kwargs.keys()})
+ 
+
+ This allows parameters (and named parameters) passed into __init__() (without any validation - seems crude): 
+
+ &gt;&gt;&gt; Person = Struct('fname', 'age')
+&gt;&gt;&gt; person1 = Person('Kevin', 25)
+&gt;&gt;&gt; person2 = Person(age=42, fname='Terry')
+&gt;&gt;&gt; person1.age += 10
+&gt;&gt;&gt; person2.age -= 10
+&gt;&gt;&gt; person1.fname, person1.age, person2.fname, person2.age
+('Kevin', 35, 'Terry', 32)
+&gt;&gt;&gt;
+ 
+
+ Update 
+
+ Having a look into how namedtuple() does this in collections.py . The class is created and expanded as a string and evaluated. Also has support for pickling and so on, etc. 
+ #4 There is namedtuple 
+
+ &gt;&gt;&gt; from collections import namedtuple
+&gt;&gt;&gt; Person = namedtuple("Person", ("forename", "surname"))
+&gt;&gt;&gt; john = Person("John", "Doe")
+&gt;&gt;&gt; john.forename 
+'John'
+&gt;&gt;&gt; john.surname 
+'Doe'
+ 
+ #5 This is following up on Cide's answer (and probably only interesting for people who want to dig deeper). 
+
+ I experienced a problem using Cide's updated definition of Struct(), the one using __slots__. The problem is that instances of returned classes have read-only attributes: 
+
+ &gt;&gt;&gt; MS = Struct('forename','lastname')
+&gt;&gt;&gt; m=MS()
+&gt;&gt;&gt; m.forename='Jack'
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: 'MyStruct' object attribute 'forename' is read-only
+ 
+
+ Seems that __slots__ is blocking instance-level attributes when there are class attributes of same names. I've tried to overcome this by providing an __init__ method, so instance attributes can be set at object creation time: 
+
+ def Struct1(*args, **kwargs):
+ def init(self):
+  for k,v in kwargs.items():
+   setattr(self, k, v)
+ name = kwargs.pop("name", "MyStruct")
+ kwargs.update(dict((k, None) for k in args))
+ return type(name, (object,), {'__init__': init, '__slots__': kwargs.keys()})
+ 
+
+ As a net effect the constructed class only sees the __init__ method and the __slots__ member, which is working as desired: 
+
+ &gt;&gt;&gt; MS1 = Struct1('forename','lastname')
+&gt;&gt;&gt; m=MS1()
+&gt;&gt;&gt; m.forename='Jack'
+&gt;&gt;&gt; m.forename
+'Jack'

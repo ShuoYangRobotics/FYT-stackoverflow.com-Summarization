@@ -1,0 +1,359 @@
+<h3>Question (ID-2484156):</h3><h2>Is str.replace(..).replace(..) ad nauseam a standard idiom in Python?</h2><p>For instance, say I wanted a function to escape a string for use in HTML (as in Django's <a href="http://docs.djangoproject.com/en/dev/ref/templates/builtins/#escape" rel="nofollow">escape filter</a>):</p>
+
+<pre><code>    def escape(string):
+        """
+        Returns the given string with ampersands, quotes and angle 
+        brackets encoded.
+        """
+        return string.replace('&amp;', '&amp;amp;').replace('&lt;', '&amp;lt;').replace('&gt;', '&amp;gt;').replace("'", '&amp;#39;').replace('"', '&amp;quot;')
+</code></pre>
+
+<p>This works, but it gets ugly quickly and appears to have poor algorithmic performance (in this example, the string is repeatedly traversed 5 times). What would be better is something like this:</p>
+
+<pre><code>    def escape(string):
+        """
+        Returns the given string with ampersands, quotes and angle 
+        brackets encoded.
+        """
+        # Note that ampersands must be escaped first; the rest can be escaped in 
+        # any order.
+        return replace_multi(string.replace('&amp;', '&amp;amp;'),
+                             {'&lt;': '&amp;lt;', '&gt;': '&amp;gt;', 
+                              "'": '&amp;#39;', '"': '&amp;quot;'})
+</code></pre>
+
+<p>Does such a function exist, or is the standard Python idiom to use what I wrote before?</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>Do you have an application that is running too slow and you provided it to find that a line like this snippet is causing it to be slow? Bottlenecks occur at unexpected places.</p>
+
+<hr>
+
+<p>The current snippet traverses the string 5 times, doing one thing each time. You are suggesting traversing it once, probably doing doing five things each time (or at least doing something each time). It isn't clear that this will automatically do a better job to me. Currently the algorithm used is O(n*m) (assuming the length of the string is longer than the stuff in the rules), where n is the length of the string and m is the number of substitution rules. You could, I think, reduce the algorithmic complexity to something like O(n*log(m)) and in the specific case we're in—where the original things are all only one character (but not in the case of multiple calls to <code>replace</code> in general)—O(n), but this doesn't matter since <em>m is 5</em> but <em>n is unbounded</em>. </p>
+
+<p>If m is held constant, then, the complexity of both solutions really goes to O(n). It is not clear to me that it is going to be a worthy task to try to turn five simple passes into one complex one, the actual time of which I cannot guess at the current moment. If there was something about it that could make it scale better, I would have thought it was much more worthwhile task.</p>
+
+<p>Doing everything on one pass rather than consecutive passes also demands questions be answered about what to do about conflicting rules and how they are applied. The resolution to these questions is clear with a chain of <code>replace</code>.</p>
+<br /><b>#1</b><br /><p>How about we just test various ways of doing this and see which comes out faster (assuming we are only caring about the fastest way to do it).</p>
+
+<pre><code>def escape1(input):
+        return input.replace('&amp;', '&amp;amp;').replace('&lt;', '&amp;lt;').replace('&gt;', '&amp;gt;').replace("'", '&amp;#39;').replace('"', '&amp;quot;')
+
+translation_table = {
+    '&amp;': '&amp;amp;',
+    '&lt;': '&amp;lt;',
+    '&gt;': '&amp;gt;',
+    "'": '&amp;#39;',
+    '"': '&amp;quot;',
+}
+
+def escape2(input):
+        return ''.join(translation_table.get(char, char) for char in input)
+
+import re
+_escape3_re = re.compile(r'[&amp;&lt;&gt;\'"]')
+def _escape3_repl(x):
+    s = x.group(0)
+    return translation_table.get(s, s)
+def escape3(x):
+    return _escape3_re.sub(_escape3_repl, x)
+
+def escape4(x):
+    return unicode(x).translate(translation_table)
+
+test_strings = (
+    'Nothing in there.',
+    '&lt;this is="not" a="tag" /&gt;',
+    'Something &amp; Something else',
+    'This one is pretty long. ' * 50
+)
+
+import time
+
+for test_i, test_string in enumerate(test_strings):
+    print repr(test_string)
+    for func in escape1, escape2, escape3, escape4:
+        start_time = time.time()
+        for i in xrange(1000):
+            x = func(test_string)
+        print '\t%s done in %.3fms' % (func.__name__, (time.time() - start_time))
+    print
+</code></pre>
+
+<p>Running this gives you:</p>
+
+<pre><code>'Nothing in there.'
+    escape1 done in 0.002ms
+    escape2 done in 0.009ms
+    escape3 done in 0.001ms
+    escape4 done in 0.005ms
+
+'&lt;this is="not" a="tag" /&gt;'
+    escape1 done in 0.002ms
+    escape2 done in 0.012ms
+    escape3 done in 0.009ms
+    escape4 done in 0.007ms
+
+'Something &amp; Something else'
+    escape1 done in 0.002ms
+    escape2 done in 0.012ms
+    escape3 done in 0.003ms
+    escape4 done in 0.007ms
+
+'This one is pretty long. &lt;snip&gt;'
+    escape1 done in 0.008ms
+    escape2 done in 0.386ms
+    escape3 done in 0.011ms
+    escape4 done in 0.310ms
+</code></pre>
+
+<p>Looks like just replacing them one after another goes the fastest.</p>
+
+<p><strong>Edit:</strong> Running the tests again with 1000000 iterations gives the following for the first three strings (the fourth would take too long on my machine for me to wait =P):</p>
+
+<pre><code>'Nothing in there.'
+    escape1 done in 0.001ms
+    escape2 done in 0.008ms
+    escape3 done in 0.002ms
+    escape4 done in 0.005ms
+
+'&lt;this is="not" a="tag" /&gt;'
+    escape1 done in 0.002ms
+    escape2 done in 0.011ms
+    escape3 done in 0.009ms
+    escape4 done in 0.007ms
+
+'Something &amp; Something else'
+    escape1 done in 0.002ms
+    escape2 done in 0.011ms
+    escape3 done in 0.003ms
+    escape4 done in 0.007ms
+</code></pre>
+
+<p>The numbers are pretty much the same. In the first case they are actually even more consistent as the direct string replacement is fastest now.</p>
+<br /><b>#2</b><br /><p>I prefer something clean like:</p>
+
+<pre><code>substitutions = [
+    ('&lt;', '&amp;lt;'),
+    ('&gt;', '&amp;gt;'),
+    ...]
+
+for search, replacement in substitutions:
+    string = string.replace(search, replacement)
+</code></pre>
+<br /><b>#3</b><br /><p>That's what <a href="http://www.google.com/codesearch/p?hl=ja#Y-66DYr1B_Q/django/utils/html.py&amp;q=lang%3apy%20escape%20django&amp;sa=N&amp;cd=1&amp;ct=rc&amp;l=30" rel="nofollow">Django does</a>:</p>
+
+<pre><code>def escape(html):
+    """Returns the given HTML with ampersands, quotes and carets encoded."""
+    return mark_safe(force_unicode(html).replace('&amp;', '&amp;amp;').replace('&lt;', '&amp;lt;').replace('&gt;', '&amp;gt;').replace('"', '&amp;quot;').replace("'", '&amp;#39;'))
+</code></pre>
+<br /><b>#4</b><br /><p>In accordance with bebraw's suggestion, here is what I ended up using (in a separate module, of course):</p>
+
+<pre><code>import re
+
+class Subs(object):
+    """
+    A container holding strings to be searched for and replaced in
+    replace_multi().
+
+    Holds little relation to the sandwich.
+    """
+    def __init__(self, needles_and_replacements):
+        """
+        Returns a new instance of the Subs class, given a dictionary holding 
+        the keys to be searched for and the values to be used as replacements.
+        """
+        self.lookup = needles_and_replacements
+        self.regex = re.compile('|'.join(map(re.escape,
+                                             needles_and_replacements)))
+
+def replace_multi(string, subs):
+    """
+    Replaces given items in string efficiently in a single-pass.
+
+    "string" should be the string to be searched.
+    "subs" can be either:
+        A.) a dictionary containing as its keys the items to be
+            searched for and as its values the items to be replaced.
+        or B.) a pre-compiled instance of the Subs class from this module
+               (which may have slightly better performance if this is
+                called often).
+    """
+    if not isinstance(subs, Subs): # Assume dictionary if not our class.
+        subs = Subs(subs)
+    lookup = subs.lookup
+    return subs.regex.sub(lambda match: lookup[match.group(0)], string)
+</code></pre>
+
+<p>Example usage:</p>
+
+<pre><code>def escape(string):
+    """
+    Returns the given string with ampersands, quotes and angle 
+    brackets encoded.
+    """
+    # Note that ampersands must be escaped first; the rest can be escaped in 
+    # any order.
+    escape.subs = Subs({'&lt;': '&amp;lt;', '&gt;': '&amp;gt;', "'": '&amp;#39;', '"': '&amp;quot;'})
+    return replace_multi(string.replace('&amp;', '&amp;amp;'), escape.subs)
+</code></pre>
+
+<p>Much better :). Thanks for the help.</p>
+
+<h2>Edit</h2>
+
+<p>Nevermind, Mike Graham was right. I benchmarked it and the replacement ends up actually being <em>much</em> slower.</p>
+
+<p>Code:</p>
+
+<pre><code>from urllib2 import urlopen
+import timeit
+
+def escape1(string):
+    """
+    Returns the given string with ampersands, quotes and angle
+    brackets encoded.
+    """
+    return string.replace('&amp;', '&amp;amp;').replace('&lt;', '&amp;lt;').replace('&gt;', '&amp;gt;').replace("'", '&amp;#39;').replace('"', '&amp;quot;')
+
+def escape2(string):
+    """
+    Returns the given string with ampersands, quotes and angle
+    brackets encoded.
+    """
+    # Note that ampersands must be escaped first; the rest can be escaped in
+    # any order.
+    escape2.subs = Subs({'&lt;': '&amp;lt;', '&gt;': '&amp;gt;', "'": '&amp;#39;', '"': '&amp;quot;'})
+    return replace_multi(string.replace('&amp;', '&amp;amp;'), escape2.subs)
+
+# An example test on the stackoverflow homepage.
+request = urlopen('http://stackoverflow.com')
+test_string = request.read()
+request.close()
+
+test1 = timeit.Timer('escape1(test_string)',
+                     setup='from __main__ import escape1, test_string')
+test2 = timeit.Timer('escape2(test_string)',
+                     setup='from __main__ import escape2, test_string')
+print 'multi-pass:', test1.timeit(2000)
+print 'single-pass:', test2.timeit(2000)
+</code></pre>
+
+<p>Output: </p>
+
+<pre><code>multi-pass: 15.9897229671
+single-pass: 66.5422530174
+</code></pre>
+
+<p>So much for that.</p>
+<br /><b>#5</b><br /><p>Apparently it's pretty common to implement that via regex. You can find an example of this at <a href="http://aspn.activestate.com/ASPN/Cookbook/Python/Recipe/81330" rel="nofollow">ASPN</a> and <a href="http://rc98.net/multiple_replace" rel="nofollow">here</a>.</p>
+<br /><b>#6</b><br /><p>You can use reduce:</p>
+
+<pre><code>reduce(lambda s,r: s.replace(*r),
+       [('&amp;', '&amp;amp;'),
+        ('&lt;', '&amp;lt;'),
+        ('&gt;', '&amp;gt;'),
+        ("'", '&amp;#39;'),
+        ('"', '&amp;quot;')],
+       string)
+</code></pre>
+<br /><b>#7</b><br /><p>If you work with non-Unicode strings and Python &lt; 3.0, try an alternate <code>translate</code> method:</p>
+
+<pre><code># Python &lt; 3.0
+import itertools
+
+def escape(a_string):
+    replacer= dict( (chr(c),chr(c)) for c in xrange(256))
+    replacer.update(
+        {'&amp;': '&amp;amp;',
+         '&lt;': '&amp;lt;',
+         '&gt;': '&amp;gt;',
+         '"': '&amp;quot;',
+         "'": '&amp;#39;'}
+    )
+    return ''.join(itertools.imap(replacer.__getitem__, a_string))
+
+if __name__ == "__main__":
+    print escape('''"Hello"&lt;i&gt; to George's friend&amp;co.''')
+
+$ python so2484156.py 
+&amp;quot;Hello&amp;quot;&amp;lt;i&amp;gt; to George&amp;#39;s friend&amp;amp;co.
+</code></pre>
+
+<p>This is closer to a "single scan" of the input string, as per your wish.</p>
+
+<h2>EDIT</h2>
+
+<p>My intention was to create a <code>unicode.translate</code> equivalent that was not restricted to single-character replacements, so I came up with the answer above; I got a comment by user "flow" that was almost completely out of context, with a single correct point: the code above, as is, is intended to work with <em>byte strings</em> and not <em>unicode strings</em>. There is an obvious update (i.e. unichr() … xrange(sys.maxunicode+1)) which I strongly dislike, so I came up with another function that works on both unicode and byte strings, given that Python guarantees:</p>
+
+<pre><code>all( (chr(i)==unichr(i) and hash(chr(i))==hash(unichr(i)))
+    for i in xrange(128)) is True
+</code></pre>
+
+<p>The new function follows:</p>
+
+<pre><code>def escape(a_string):
+    replacer= {
+        '&amp;': '&amp;amp;',
+        '&lt;': '&amp;lt;',
+        '&gt;': '&amp;gt;',
+        '"': '&amp;quot;',
+        "'": '&amp;#39;',
+    }
+    return ''.join(
+        itertools.starmap(
+            replacer.get, # .setdefault *might* be faster
+            itertools.izip(a_string, a_string)
+        )
+    )
+</code></pre>
+
+<p>Notice the use of starmap with a sequence of tuples: for any character not in the replacer dict, return said character.</p>
+<br /><b>#8</b><br /><p>ok so i sat down and did the math. pls do not get mad at me i answer specifically discussing ΤΖΩΤΖΙΟΥ’s solution, but this would be somewhat hard to shoehorn inside a comment, so let me do it this way. i will, in fact, also air some considerations that are relevant to the OP’s question. </p>
+
+<p>first up, i have been discussing with ΤΖΩΤΖΙΟΥ the elegance, correctness, and viability of his approach. turns out it looks like the proposal, while it does use an (inherently unordered) dictionary as a register to store the substitution pairs, does in fact consistently return correct results, where i had claimed it wouldn’t. this is because the call to <code>itertools.starmap()</code> in line 11, below, gets as its second argument an iterator over pairs of single characters/bytes (more on that later) that looks like <code>[ ( 'h', 'h', ), ( 'e', 'e', ), ( 'l', 'l', ), ... ]</code>. these pairs of characters/bytes is what the first argument, <code>replacer.get</code>, is repeatedly called with. there is not a chance to run into a situation where first <code>'&gt;'</code> is transformed into <code>'&amp;gt;'</code> and then inadvertently again into <code>'&amp;amp;gt;'</code>, because each character/byte is considered only once for substitution. so this part is in principle fine and algorithmically correct.</p>
+
+<p>the next question is viability, and that would include a look at performance. if a vital task gets correctly completed in 0.01s using an awkward code but 1s using awesome code, then awkward might be considered preferable in practice (but only if the 1 second loss is in fact intolerable). here is the code i used for testing; it includes a number of different implementations. it is written in python 3.1 so we can use unicode greek letters for identifiers which in itself is awesome (<code>zip</code> in py3k returns the same as <code>itertools.izip</code> in py2):</p>
+
+<pre><code>import itertools                                                                  #01
+                                                                                  #02
+_replacements = {                                                                 #03
+  '&amp;': '&amp;amp;',                                                                   #04
+  '&lt;': '&amp;lt;',                                                                    #05
+  '&gt;': '&amp;gt;',                                                                    #06
+  '"': '&amp;quot;',                                                                  #07
+  "'": '&amp;#39;', }                                                                 #08
+                                                                                  #09
+def escape_ΤΖΩΤΖΙΟΥ( a_string ):                                                  #10
+  return ''.join(                                                                 #11
+    itertools.starmap(                                                            #12
+      _replacements.get,                                                          #13
+      zip( a_string, a_string ) ) )                                               #14
+                                                                                  #15
+def escape_SIMPLE( text ):                                                        #16
+  return ''.join( _replacements.get( chr, chr ) for chr in text )                 #17
+                                                                                  #18
+def escape_SIMPLE_optimized( text ):                                              #19
+  get = _replacements.get                                                         #20
+  return ''.join( get( chr, chr ) for chr in text )                               #21
+                                                                                  #22
+def escape_TRADITIONAL( text ):                                                   #23
+  return text.replace('&amp;', '&amp;amp;').replace('&lt;', '&amp;lt;').replace('&gt;', '&amp;gt;')\    #24
+    .replace("'", '&amp;#39;').replace('"', '&amp;quot;')                                 #25
+</code></pre>
+
+<p>these are the timing results:</p>
+
+<pre><code>escaping with SIMPLE            took 5.74664253sec for 100000 items
+escaping with SIMPLE_optimized  took 5.11457801sec for 100000 items
+escaping TRADITIONAL in-situ    took 0.57543013sec for 100000 items
+escaping with TRADITIONAL       took 0.62347413sec for 100000 items
+escaping a la ΤΖΩΤΖΙΟΥ          took 2.66592320sec for 100000 items
+</code></pre>
+
+<p>turns out the original poster’s concern that the ‘traditional’ method gets ‘ugly quickly and appears to have poor algorithmic performance’ appears partially unwarranted when put into this context. it actually performs best; when stashed away into a function call, we do get to see a 8% performance penalty (‘calling methods is expensive’, but in general you should still do it). in comparison, ΤΖΩΤΖΙΟΥ’s implementation takes around 5 times as long as the traditional method, which, given it’s higher complexity that has to compete with python’s long-honed, optimized string methods is no surprise. </p>
+
+<p>there is yet another algorithm here, the SIMPLE one. as far as i can see, this very much does exactly what ΤΖΩΤΖΙΟΥ’s method does: it iterates over the characters/bytes in the text and performs a lookup for each, then joins all the characters/bytes together and returns the resulting escaped text. you can see that where one way to do that involves a fairly lengthy and myterious formulation, the SIMPLE implementation is actually understandable at a glance. </p>
+
+<p>what really trips me up here, though, is how badly the SIMPLE approach is in performance: it is around 10 times as slow as the traditional one, and also twice as slow as ΤΖΩΤΖΙΟΥ’s method. i am completely at a loss here, maybe someone can come up with an idea why this should be so. it uses only the most basic building blocks of python and works with two implicit iterations, so it avoids to build throw-away lists and everything, but it still slow, and i don’t know why.</p>
+
+<p>let me conclude this code review with a remark on the merit of ΤΖΩΤΖΙΟΥ’s solution. i have made it sufficiently clear i find the code hard to read and too overblown for the task at hand. more critical than that, however, i find the way he treats characters and makes sure that for a given small range of characters they will behave in a byte-like fashion a little irritating. sure it works for the task at hand, but as soon as i iterate e.g. over the bytestring 'ΤΖΩΤΖΙΟΥ' what i do is iterate over adjacent bytes representing single characters. in most situations this is exactly what you should avoid; this is precisely the reason why in py3k ‘strings’ are now the ‘unicode objects’ of old, and the ‘strings’ of old have become ‘bytes’ and ‘bytearray’. if i was to nominate the one feature of py3k that could warrant a possibly expensive migration of code from the 2 series to the 3 series, it would be this single property of py3k. 98% of all my encoding issues have just dissolved ever since, period, and there is no clever hack that could have me seriously doubt my move. said algorithm is not ‘conceptually 8bit-clean and unicode safe’, which to me is a seriously shortcome, given this is 2010.</p>
+<br />

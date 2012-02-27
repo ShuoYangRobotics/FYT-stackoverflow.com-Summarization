@@ -1,0 +1,115 @@
+<h3>Question (ID-1728330):</h3><h2>How to get process's grandparent id</h2><p>How can i get process id of the current process's parent?<br>
+In general given a process id how can I get its parent process id?<br>
+e.g. os.getpid() can be used to get the proccess id, and os.getppid() for the parent, how do I get grandparent,</p>
+
+<p>My target is linux(ubuntu) so platform specific answers are ok.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>linux specific:</p>
+
+<pre><code>os.popen("ps -p %d -oppid=" % os.getppid()).read().strip()
+</code></pre>
+<br /><b>#1</b><br /><p>I don't think you can do this in a portable Python fashion. But there are two possibilities.</p>
+
+<ol>
+<li>The information is available from the <code>ps</code> command so you could analyze that.</li>
+<li>If you have a system with the <code>proc</code> file systems, you can open the file <code>/proc/&lt;pid&gt;/status</code> and search for the line containing <code>PPid:</code>, then do the same for that PID.</li>
+</ol>
+
+<p>For example the following script will get you your PID, PPID and PPPID, permissions willing:</p>
+
+<pre><code>#!/bin/bash
+pid=$$
+ppid=$(grep PPid: /proc/${pid}/status | awk '{print $2'})
+pppid=$(grep PPid: /proc/${ppid}/status | awk '{print $2'})
+echo ${pid} ${ppid} ${pppid}
+ps -f -p "${pid},${ppid},${pppid}"
+</code></pre>
+
+<p>produces:</p>
+
+<pre><code>3269 3160 3142
+UID        PID  PPID  C STIME TTY          TIME CMD
+pax       3142  2786  0 18:24 pts/1    00:00:00 bash
+root      3160  3142  0 18:24 pts/1    00:00:00 bash
+root      3269  3160  0 18:34 pts/1    00:00:00 /bin/bash ./getem.sh
+</code></pre>
+
+<p>Obviously, you'd have to open those files with Python.</p>
+<br /><b>#2</b><br /><pre><code>from __future__ import with_statement
+
+def pnid(pid=None, N=1):
+    "Get parent (if N==1), grandparent (if N==2), ... of pid (or self if not given)"
+    if pid is None:
+        pid= "self"
+
+    while N &gt; 0:
+        filename= "/proc/%s/status" % pid
+        with open(filename, "r") as fp:
+            for line in fp:
+                if line.startswith("PPid:"):
+                    _, _, pid= line.rpartition("\t")
+                    pid= pid.rstrip() # drop the '\n' at end
+                    break
+            else:
+                raise RuntimeError, "can't locate PPid line in %r" % filename
+        N-= 1
+
+    return int(pid) # let it fail through
+
+
+&gt;&gt;&gt; pnid()
+26558
+&gt;&gt;&gt; import os
+&gt;&gt;&gt; os.getppid()
+26558
+&gt;&gt;&gt; pnid(26558)
+26556
+&gt;&gt;&gt; pnid(N=2)
+26556
+&gt;&gt;&gt; pnid(N=3)
+1
+</code></pre>
+<br /><b>#3</b><br /><p>By using psutil ( <a href="http://code.google.com/p/psutil" rel="nofollow">http://code.google.com/p/psutil</a> ):</p>
+
+<pre><code>&gt;&gt;&gt; import psutil, os
+&gt;&gt;&gt; psutil.Process(os.getpid()).ppid
+2335
+&gt;&gt;&gt; psutil.Process(os.getpid()).parent
+&lt;psutil.Process (pid=2335, name='bash', cmdline='bash') at 140052120886608&gt;
+&gt;&gt;&gt; 
+</code></pre>
+<br /><b>#4</b><br /><p>I do not think you can do this portably in the general case.</p>
+
+<p>You need to get this information from the process list (e.g. through the <code>ps</code> command), which is obtained in a system-specific way.</p>
+<br /><b>#5</b><br /><p>If you have a POSIX-compliant 'ps' command, which allows you to specify the columns you want, like this:
+<code>ps -o pid,ppid</code></p>
+
+<p>You could then try:</p>
+
+<pre><code>import os
+import re
+
+ps = os.popen("ps -o pid,ppid")
+ps.readline()    # discard header
+lines = ps.readlines()
+ps.close
+
+procs = [ re.split("\s+", line.strip()) for line in lines ]
+
+parent = {}
+for proc in procs:
+    parent[ int(proc[0]) ] = int(proc[1])
+</code></pre>
+
+<p>Now you can do:</p>
+
+<pre><code>parent[ parent[pid] ]
+</code></pre>
+
+<p>You could even write a function to list a process' ancestors:</p>
+
+<pre><code>def listp(pid):
+    print(pid)
+    if parent.has_key(pid):
+        listp( parent[pid] )
+</code></pre>
+<br />

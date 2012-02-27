@@ -1,0 +1,112 @@
+<h3>Question (ID-668257):</h3><h2>Python: simple async download of url content?</h2><p>I have a web.py server that responds to various user requests. One of these requests involves downloading and analyzing a series of web pages. </p>
+
+<p>Is there a simple way to setup an async / callback based url download mechanism in web.py? Low resource usage is particularly important as each user initiated request could result in download of multiple pages.</p>
+
+<p>The flow would look like:</p>
+
+<p>User request -> web.py -> Download 10 pages in parallel or asynchronously -> Analyze contents, return results</p>
+
+<p>I recognize that Twisted would be a nice way to do this, but I'm already in web.py so I'm particularly interested in something that can fit within web.py .</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>One option would be to post the work onto a queue of some sort (you could use something Enterprisey like <a href="http://activemq.apache.org/" rel="nofollow">ActiveMQ</a> with <a href="http://code.google.com/p/pyactivemq/" rel="nofollow">pyactivemq</a> or <a href="http://stomp.codehaus.org/" rel="nofollow">STOMP</a> as a connector or you could use something lightweight like <a href="http://github.com/robey/kestrel/tree/master" rel="nofollow">Kestrel</a> which is written in Scala and speaks the same protocl as memcache so you can just use the python memcache client to talk to it).</p>
+
+<p>Once you have the queueing mechanism set up, you can create as many or as few worker tasks that are subscribed to the queue and do the actual downloading work as you want.  You can even have them live on other machines so they don't interfere with the speed of serving yourwebsite at all.  When the workers are done, they post the results back to the database or another queue where the webserver can pick them up.</p>
+
+<p>If you don't want to have to manage external worker processes then you could make the workers threads in the same python process that is running the webserver, but then obviously it will have greater potential to impact your web page serving performance.</p>
+<br /><b>#1</b><br /><p>You might be able to use <a href="http://docs.python.org/library/urllib.html" rel="nofollow"><code>urllib</code></a> to download the files and the <a href="http://docs.python.org/library/queue.html" rel="nofollow"><code>Queue</code></a> module to manage a number of worker threads. e.g:</p>
+
+<pre><code>import urllib
+from threading import Thread
+from Queue import Queue
+
+NUM_WORKERS = 20
+
+class Dnld:
+    def __init__(self):
+        self.Q = Queue()
+        for i in xrange(NUM_WORKERS):
+            t = Thread(target=self.worker)
+            t.setDaemon(True)
+            t.start()
+
+    def worker(self):
+        while 1:
+            url, Q = self.Q.get()
+            try:
+                f = urllib.urlopen(url)
+                Q.put(('ok', url, f.read()))
+                f.close()
+            except Exception, e:
+                Q.put(('error', url, e))
+                try: f.close() # clean up
+                except: pass
+
+    def download_urls(self, L):
+        Q = Queue() # Create a second queue so the worker 
+                    # threads can send the data back again
+        for url in L:
+            # Add the URLs in `L` to be downloaded asynchronously
+            self.Q.put((url, Q))
+
+        rtn = []
+        for i in xrange(len(L)):
+            # Get the data as it arrives, raising 
+            # any exceptions if they occur
+            status, url, data = Q.get()
+            if status == 'ok':
+                rtn.append((url, data))
+            else:
+                raise data
+        return rtn
+
+inst = Dnld()
+for url, data in inst.download_urls(['http://www.google.com']*2):
+    print url, data
+</code></pre>
+<br /><b>#2</b><br /><p>Here is an interesting piece of code. I didn't use it myself, but it looks nice ;)</p>
+
+<p><a href="https://github.com/facebook/tornado/blob/master/tornado/httpclient.py" rel="nofollow">https://github.com/facebook/tornado/blob/master/tornado/httpclient.py</a></p>
+
+<p>Low level AsyncHTTPClient:</p>
+
+<p>"An non-blocking HTTP client backed with pycurl. Example usage:"</p>
+
+<pre><code>import ioloop
+
+def handle_request(response):
+    if response.error:
+        print "Error:", response.error
+    else:
+        print response.body
+    ioloop.IOLoop.instance().stop()
+
+http_client = httpclient.AsyncHTTPClient()
+http_client.fetch("http://www.google.com/", handle_request)
+ioloop.IOLoop.instance().start()
+</code></pre>
+
+<p>"
+fetch() can take a string URL or an HTTPRequest instance, which offers more options, like executing POST/PUT/DELETE requests.</p>
+
+<p>The keyword argument max_clients to the AsyncHTTPClient constructor determines the maximum number of simultaneous fetch() operations that can execute in parallel on each IOLoop.
+"</p>
+
+<p>There is also new implementation in progress:
+<a href="https://github.com/facebook/tornado/blob/master/tornado/simple_httpclient.py" rel="nofollow">https://github.com/facebook/tornado/blob/master/tornado/simple_httpclient.py</a>
+"Non-blocking HTTP client with no external dependencies. ... This class is still in development and not yet recommended for production use."</p>
+<br /><b>#3</b><br /><p>I'd just build a service in twisted that did that concurrent fetch and analysis and access that from web.py as a simple http request.</p>
+<br /><b>#4</b><br /><p>Use the async http client which uses asynchat and asyncore.
+<a href="http://sourceforge.net/projects/asynchttp/files/asynchttp-production/asynchttp.py-1.0/asynchttp.py/download" rel="nofollow">http://sourceforge.net/projects/asynchttp/files/asynchttp-production/asynchttp.py-1.0/asynchttp.py/download</a></p>
+<br /><b>#5</b><br /><p>I'm not sure I'm understanding your question, so I'll give multiple partial answers to start with.</p>
+
+<ul>
+<li>If your concern is that web.py is having to download data from somewhere and analyze the results before responding, and you fear the request may time out before the results are ready, you could use ajax to split the work up.  Return immediately with a container page (to hold the results) and a bit of javascript to poll the sever for the results until the client has them all.  Thus the client never waits for the server, though the user still has to wait for the results.</li>
+<li>If your concern is tying up the server waiting for the client to get the results, I doubt if that will actually be a problem.  Your networking layers should not require you to wait-on-write</li>
+<li>If you are worrying about the server waiting while the client downloads static content from elsewhere, either ajax or clever use of redirects should solve your problem</li>
+</ul>
+<br /><b>#6</b><br /><p>I don't know if this will exactly work, but it looks like it might: <a href="http://code.google.com/p/evserver/" rel="nofollow">EvServer: Python Asynchronous WSGI Server</a> has a <a href="http://code.google.com/p/evserver/source/browse/trunk/evserver/examples/framework%5Fwebpy.py" rel="nofollow">web.py interface</a> and can do comet style push to the browser client.</p>
+
+<p>If that isn't right, maybe you can use the <a href="http://opensource.hyves.org/concurrence/http.html" rel="nofollow">Concurrence HTTP client</a> for async download of the pages and figure out how to serve them to browser via ajax or comet.</p>
+<br /><b>#7</b><br /><p>Along the lines of MarkusQ's answer, <a href="http://mochikit.com/" rel="nofollow">MochiKit</a> is a nice JavaScript library, with robust async methods inspired by Twisted.</p>
+<br /><b>#8</b><br /><p>Actually you can integrate twisted with web.py. I'm not really sure  how  as I've only done it with django (used twisted with it).</p>
+<br /><b>#9</b><br /><p>Nowadays there are excellent Python libs you might want to use - <a href="http://urllib3.readthedocs.org/" rel="nofollow">urllib3</a> (uses thread pools) and <a href="http://docs.python-requests.org/" rel="nofollow">requests</a> (uses thread pools through urllib3 or non blocking IO through <a href="http://www.gevent.org/" rel="nofollow">gevent</a>)</p>
+<br />

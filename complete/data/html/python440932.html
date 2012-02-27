@@ -1,0 +1,64 @@
+<h3>Question (ID-440932):</h3><h2>Reading Command Line Arguments of Another Process (Win32 C code)</h2><p>I need to be able to list the command line arguments (if any) passed to other running processes. I have the PIDs already of the running processes on the system, so basically I need to determine the arguments passed to process with given PID <em>XXX</em>. </p>
+
+<p>I'm working on a core piece of a <a href="http://code.google.com/p/psutil/">Python module for managing processes</a>. The code is written as a Python extension in C and will be wrapped by a higher level Python library. The goal of this project is to avoid dependency on third party libs such as the pywin32 extensions, or on ugly hacks like calling 'ps' or taskkill on the command line, so I'm looking for a way to do this in C code.</p>
+
+<p>I've Googled this around and found some brief suggestions of using <a href="http://msdn.microsoft.com/en-us/library/ms682437%28VS.85%29.aspx">CreateRemoteThread()</a> to inject myself into the other process, then run <a href="http://msdn.microsoft.com/en-us/library/ms683156%28VS.85%29.aspx">GetCommandLine()</a> but I was hoping someone might have some working code samples and/or better suggestions.</p>
+
+<p><strong>UPDATE</strong>: I've found full working demo code and a solution using NtQueryProcessInformation on CodeProject: <a href="http://www.codeproject.com/KB/threads/GetNtProcessInfo.aspx">http://www.codeproject.com/KB/threads/GetNtProcessInfo.aspx</a> - It's not ideal since it's "unsupported" to cull the information directly from the NTDLL structures but I'll live with it. Thanks to all for the suggestions. </p>
+
+<p><strong>UPDATE 2</strong>: I managed through more Googling to dig up a C version that does not use C++ code, and is a little more direct/concisely pointed toward this problem. See <a href="http://wj32.wordpress.com/2009/01/24/howto-get-the-command-line-of-processes/">http://wj32.wordpress.com/2009/01/24/howto-get-the-command-line-of-processes/</a> for details.</p>
+
+<p>Thanks!</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>To answer my own question, I finally found a CodeProject solution that does exactly what I'm looking for: </p>
+
+<p><a href="http://www.codeproject.com/KB/threads/GetNtProcessInfo.aspx" rel="nofollow">http://www.codeproject.com/KB/threads/GetNtProcessInfo.aspx</a> </p>
+
+<p>As @Reuben already pointed out, you can use <a href="http://msdn.microsoft.com/en-us/library/ms684280(VS.85).aspx" rel="nofollow">NtQueryProcessInformation</a> to retrieve this information. Unfortuantely it's not a recommended approach, but given the only other solution seems to be to incur the overhead of a WMI query, I think we'll take this approach for now. </p>
+
+<p>Note that this seems to not work if using code compiled from 32bit Windows on a 64bit Windows OS, but since our modules are compiled from source on the target that should be OK for our purposes. I'd rather use this existing code and should it break in Windows 7 or a later date, we can look again at using WMI. Thanks for the responses!</p>
+
+<p><strong>UPDATE</strong>: A more concise and C only (as opposed to C++) version of the same technique is illustrated here:</p>
+
+<p><a href="http://wj32.wordpress.com/2009/01/24/howto-get-the-command-line-of-processes/" rel="nofollow">http://wj32.wordpress.com/2009/01/24/howto-get-the-command-line-of-processes/</a></p>
+<br /><b>#1</b><br /><p>The cached solution:
+<a href="http://74.125.45.132/search?q=cache:-wPkE2PbsGwJ:windowsxp.mvps.org/listproc.htm+running+process+command+line&amp;hl=es&amp;ct=clnk&amp;cd=1&amp;gl=ar&amp;client=firefox-a" rel="nofollow">http://74.125.45.132/search?q=cache:-wPkE2PbsGwJ:windowsxp.mvps.org/listproc.htm+running+process+command+line&amp;hl=es&amp;ct=clnk&amp;cd=1&amp;gl=ar&amp;client=firefox-a</a></p>
+
+<pre><code>in CMD
+WMIC /OUTPUT:C:\ProcessList.txt PROCESS get Caption,Commandline,Processid
+
+or
+
+WMIC /OUTPUT:C:\ProcessList.txt path win32_process get Caption,Processid,Commandline
+</code></pre>
+
+<p>Also:
+<a href="http://mail.python.org/pipermail/python-win32/2007-December/006498.html" rel="nofollow">http://mail.python.org/pipermail/python-win32/2007-December/006498.html</a></p>
+
+<pre><code>http://tgolden.sc.sabren.com/python/wmi_cookbook.html#running_processes 
+seems to do the trick:
+
+import wmi
+c = wmi.WMI ()
+for process in c.Win32_Process ():
+  print process.CommandLine
+</code></pre>
+<br /><b>#2</b><br /><p>I expect to get voted up for my answer!</p>
+<br /><b>#3</b><br /><p>The WMI approach mentioned in another response is probably the most <em>reliable</em> way of doing this.  Looking through MSDN, I spotted what looks like another possible approach; it's documented, but its not clear whether it's fully supported.  In MSDN's language, it--</p>
+
+<blockquote>
+  <p>may be altered or unavailable in
+  future versions of Windows...</p>
+</blockquote>
+
+<p>In any case, provided that your process has the right permissions, you should be able to call <a href="http://msdn.microsoft.com/en-us/library/ms684280%28VS.85%29.aspx" rel="nofollow"><code>NtQueryProcessInformation</code></a> with a <code>ProcessInformationClass</code> of <code>ProcessBasicInformation</code>.  In the returned <code>PROCESS_BASIC_INFORMATION</code> structure, you should get back a pointer to the target process's <a href="http://msdn.microsoft.com/en-us/library/aa813706%28VS.85%29.aspx" rel="nofollow">process execution block</a> (as field <code>PebBaseAddress</code>).  The <code>ProcessParameters</code> field of the PEB will give you a pointer to an <a href="http://msdn.microsoft.com/en-us/library/aa813741%28VS.85%29.aspx" rel="nofollow"><code>RTL_USER_PROCESS_PARAMETERS</code></a> structure.  The <code>CommandLine</code> field of that structure will be a <a href="http://msdn.microsoft.com/en-us/library/aa492030.aspx" rel="nofollow"><code>UNICODE_STRING</code></a> structure.  (Be careful not too make too many assumptions about the string; there are no guarantees that it will be NULL-terminated, and it's not clear whether or not you'll need to strip off the name of the executed application from the beginning of the command line.)</p>
+
+<p>I haven't tried this approach--and as I mentioned above, it seems a bit... iffy (read: non-portable)--but it might be worth a try.  Best of luck...</p>
+<br /><b>#4</b><br /><p>By using psutil ( <a href="http://code.google.com/p/psutil/" rel="nofollow">http://code.google.com/p/psutil/</a> ):</p>
+
+<pre><code>&gt;&gt;&gt; import psutil, os
+&gt;&gt;&gt; psutil.Process(os.getpid()).cmdline
+['C:\\Python26\\python.exe', '-O']
+&gt;&gt;&gt; 
+</code></pre>
+<br /><b>#5</b><br /><p>If you aren't the parent of these processes, then this is not possible using documented functions :(  Now, if you're the parent, you can do your CreateRemoteThread trick, but otherwise you will almost certainly get Access Denied unless your app has admin rights.</p>
+<br />

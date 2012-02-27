@@ -1,0 +1,80 @@
+Question (ID-3018758): Determine precision and scale of particular number in Python I have a variable in Python containing a floating point number (e.g. num = 24654.123 ), and I'd like to determine the number's precision and scale values (in the Oracle sense), so 123.45678 should give me (8,5), 12.76 should give me (4,2), etc. 
+
+ I was first thinking about using the string representation (via str or repr ), but those fail for large numbers (although I understand now it's the limitations of floating point representation that's the issue here): 
+
+ &gt;&gt;&gt; num = 1234567890.0987654321
+&gt;&gt;&gt; str(num) = 1234567890.1
+&gt;&gt;&gt; repr(num) = 1234567890.0987654
+ 
+
+ Edit: 
+
+ Good points below. I should clarify. The number is already a float and is being pushed to a database via cx_Oracle. I'm trying to do the best I can in Python to handle floats that are too large for the corresponding database type short of executing the INSERT and handling Oracle errors (because I want to deal with the numbers a field, not a record, at a time). I guess map(len, repr(num).split('.')) is the closest I'll get to the precision and scale of the float? 
+ Answers (Total-6): #0 I think you should consider using the decimal type instead of a float . The float type will give rounding errors because the numbers are represented internally in binary but many decimal numbers don't have an exact binary representation. 
+ #1 Not possible with floating point variables. For example, typing 
+
+ &gt;&gt;&gt; 10.2345
+ 
+
+ gives: 
+
+ 10.234500000000001
+ 
+
+ So, to get 6,4 out of this, you will have to find a way to distinguish between a user entering 10.2345 and 10.234500000000001 , which is impossible using floats. This has to do with the way floating point numbers are stored. Use decimal . 
+
+ import decimal
+a = decimal.Decimal('10.234539048538495')
+&gt;&gt;&gt; str(a)
+'10.234539048538495'
+&gt;&gt;&gt; (len(str(a))-1, len(str(a).split('.')[1]))
+(17,15)
+ 
+ #2 (0) Please confirm or deny: You are given floats to use, this is unavoidable, you can't get your data as decimal, the Oracle datatypes include decimal-based types, and this fundamental mismatch is unavoidable. Please explain any full or partial denial. 
+
+ (1) Your "fail for large numbers" remark is misleading/irrelevant/wrong -- you say that your starting point is a float, but 1234567890.0987654321 can't be represented as a float, as shown by the result of repr(). 
+
+ (2) Perhaps you could use the NEW repr (Python 2.7 and 3.1) which provides the minimum possible precision of repr(x) that still satisfies float(repr(x)) == x 
+
+ E.g. old repr(1.1) produces "1.1000000000000001", new repr(1.1) produces "1.1" 
+
+ About "I guess map(len, repr(num).split('.')) is the closest I'll get to the precision and scale of the float?": You need a strategy to handle (a) negative and zero numbers (b) numbers like 1.1e20 
+
+ Digging in Objects/floatobject.c should turn up the C code for the new repr() of a float object, should you need to use Python 2.6 or earlier. 
+
+ (3) Perhaps if you told us the specs for the relevant Oracle data types, we could help you devise checks for choosing which type can contain a given float value. 
+ #3 Basically, you can't with floating point numbers. Using the decimal type would help and if you want really large precision, consider using gmpy , the GNU Multiple Precision library's port to Python. 
+ #4 Getting the number of digits to the left of the decimal point is easy: 
+
+ int(log10(x))+1
+ 
+
+ The number of digits to the right of the decimal point is trickier, because of the inherent inaccuracy of floating point values. I'll need a few more minutes to figure that one out. 
+
+ Edit: Based on that principle, here's the complete code. 
+
+ import math
+
+def precision_and_scale(x):
+ max_digits = 14
+ int_part = int(abs(x))
+ magnitude = 1 if int_part == 0 else int(math.log10(int_part)) + 1
+ if magnitude &gt;= max_digits:
+  return (magnitude, 0)
+ frac_part = abs(x) - int_part
+ multiplier = 10 ** (max_digits - magnitude)
+ frac_digits = multiplier + int(multiplier * frac_part + 0.5)
+ while frac_digits % 10 == 0:
+  frac_digits /= 10
+ scale = int(math.log10(frac_digits))
+ return (magnitude + scale, scale)
+ 
+ #5 seems like str is better choice than repr : 
+
+ &gt;&gt;&gt; r=10.2345678
+&gt;&gt;&gt; r
+10.234567800000001
+&gt;&gt;&gt; repr(r)
+'10.234567800000001'
+&gt;&gt;&gt; str(r)
+'10.2345678'

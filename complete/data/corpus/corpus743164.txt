@@ -1,0 +1,270 @@
+Question (ID-743164): do-while loop in Python? I need to emulate a do-while loop in a python. But, unfortunately, following
+straightforward code does not work: 
+
+ l = [ 1, 2, 3 ]
+i = l.__iter__()
+s = None
+while True :
+ if s :
+ print s
+ try :
+ s = i.next()
+ except StopIteration :
+ break
+print "done"
+ 
+
+ Instead of "1,2,3,done" I have the following output: 
+
+ [stdout:]1
+[stdout:]2
+[stdout:]3
+None['Traceback (most recent call last):
+', ' File "test_python.py", line 8, in &lt;module&gt;
+ s = i.next()
+', 'StopIteration
+']
+ 
+
+ What can I do in order to catch 'stop iteration' excepton and break a while
+loop properly? 
+
+ Example why such thing may be needed. State machine: 
+
+ s = ""
+while True :
+ if state is STATE_CODE :
+ if "//" in s :
+  tokens.add( TOKEN_COMMENT, s.split( "//" )[1] )
+  state = STATE_COMMENT
+ else :
+  tokens.add( TOKEN_CODE, s )
+ if state is STATE_COMMENT :
+ if "//" in s :
+  tokens.append( TOKEN_COMMENT, s.split( "//" )[1] )
+ else
+  state = STATE_CODE
+  # re-evaluate same line
+  continue
+ try :
+ s = i.next()
+ except StopIteration :
+ break
+ 
+ Answers (Total-11): #0 I am not sure what you are trying to do. You can implement a do-while loop like this: 
+
+ while True:
+ stuff()
+ if fail_condition:
+ break
+ 
+
+ Or: 
+
+ stuff()
+while not fail_condition:
+ stuff()
+ 
+
+ What are you doing trying to use a do while loop to print the stuff in the list? Why not just use: 
+
+ for i in l:
+ print i
+print "done"
+ 
+
+ Update: 
+
+ So do you have a list of lines? And you want to keep iterating through it? How about: 
+
+ for s in l: 
+ while True: 
+ stuff() 
+ # use a "break" instead of s = i.next()
+ 
+
+ Does that seem like something close to what you would want? With your code example, it would be: 
+
+ for s in some_list:
+ while True :
+ if state is STATE_CODE :
+  if "//" in s :
+  tokens.add( TOKEN_COMMENT, s.split( "//" )[1] )
+  state = STATE_COMMENT
+  else :
+  tokens.add( TOKEN_CODE, s )
+ if state is STATE_COMMENT :
+  if "//" in s :
+  tokens.append( TOKEN_COMMENT, s.split( "//" )[1] )
+  break # get next s
+  else
+  state = STATE_CODE
+  # re-evaluate same line
+  # continues automatically
+ 
+ #1 Here's a very simple way to emulate a do-while loop: 
+
+ condition = True
+while (condition):
+ # loop body here
+ condition = test_loop_condition()
+# end of loop
+ 
+
+ The key features of a do-while loop are that the loop body always executes at least once, and that the condition is evaluated at the bottom of the loop body. The control structure show here accomplishes both of these with no need for exceptions or break statements. It does introduce one extra Boolean variable. 
+ #2 Exception will break the loop, so you might as well handle it outside the loop. 
+
+ try:
+ while True:
+ if s:
+  print s
+ s = i.next()
+except StopIteration: 
+ pass
+ 
+
+ I guess that the problem with your code is that behaviour of break inside except is not defined. Generally break goes only one level up, so e.g. break inside try goes directly to finally (if it exists) an out of the try , but not out of the loop. 
+
+ Related PEP: http://www.python.org/dev/peps/pep-3136 
+Related question: http://stackoverflow.com/questions/653509/breaking-out-of-nested-loops 
+ #3 while condition is True: 
+ stuff()
+else:
+ stuff()
+ 
+ #4 for a do - while loop containing try statements 
+
+ loop = True
+while (loop):
+ generic_stuff()
+ try:
+  questionable_stuff()
+#  to break from successful completion
+#  loop = False 
+ except:
+  optional_stuff()
+#  to break from unsuccessful completion - 
+#  the case referenced in the OP's question
+  loop = False
+ finally:
+  more_generic_stuff()
+ 
+
+ alternatively, when there's no need for the 'finally' clause 
+
+ while (True):
+ generic_stuff()
+ try:
+  questionable_stuff()
+#  to break from successful completion
+#  break 
+ except:
+  optional_stuff()
+#  to break from unsuccessful completion - 
+#  the case referenced in the OP's question
+  break
+ 
+ #5 do {
+ stuff()
+} while (condition())
+ 
+
+ -> 
+
+ while True:
+ stuff()
+ if not condition():
+ break
+ 
+
+ You can do a function: 
+
+ def do_while(stuff, condition):
+ while condition(stuff()):
+ pass
+ 
+
+ But
+1) It's ugly.
+2) Condition should be a function with one parameter, supposed to be filled by stuff (it's the only reason not to use the classic while loop.) 
+ #6 Here is a crazier solution of a different pattern -- using coroutines. The code is still very similar, but with one important difference; there are no exit conditions at all! The coroutine (chain of coroutines really) just stops when you stop feeding it with data. 
+
+ def coroutine(func):
+ """Coroutine decorator
+
+ Coroutines must be started, advanced to their first "yield" point,
+ and this decorator does this automatically.
+ """
+ def startcr(*ar, **kw):
+  cr = func(*ar, **kw)
+  cr.next()
+  return cr
+ return startcr
+
+@coroutine
+def collector(storage):
+ """Act as "sink" and collect all sent in @storage"""
+ while True:
+  storage.append((yield))
+
+@coroutine  
+def state_machine(sink):
+ """ .send() new parts to be tokenized by the state machine,
+ tokens are passed on to @sink
+ """ 
+ s = ""
+ state = STATE_CODE
+ while True: 
+  if state is STATE_CODE :
+   if "//" in s :
+    sink.send((TOKEN_COMMENT, s.split( "//" )[1] ))
+    state = STATE_COMMENT
+   else :
+    sink.send(( TOKEN_CODE, s ))
+  if state is STATE_COMMENT :
+   if "//" in s :
+    sink.send(( TOKEN_COMMENT, s.split( "//" )[1] ))
+   else
+    state = STATE_CODE
+    # re-evaluate same line
+    continue
+  s = (yield)
+
+tokens = []
+sm = state_machine(collector(tokens))
+for piece in i:
+ sm.send(piece)
+ 
+
+ The code above collects all tokens as tuples in tokens and I assume there is no difference between .append() and .add() in the original code. 
+ #7 Why don't you just do 
+
+ for s in l :
+ print s
+print "done"
+ 
+
+ ? 
+ #8 Agree with Martin's answer, I think you want to rethink your need to have such a do-while loop. It's not very "pythonic". 
+
+ But for what it's worth, I tried to run your provided example code and it did work for me. I don't think there's technically anything wrong with it, strange that it didn't work for you. This is with Python 2.5 (and I tested with Python 2.4 too) anyway. 
+ #9 See if this helps : 
+
+ Set a flag inside the exception handler and check it before working on the s. 
+
+ flagBreak = false;
+while True :
+
+if(flagBreak ) break;
+
+ if s :
+ print s
+ try :
+ s = i.next()
+ except StopIteration :
+ flagBreak = true;
+print "done"
+ 
+ #10 Your code looks fine to me. I tried running it in ipython and the output is as expected. 
+
+ How did you run it? Perhaps you are running it in some debugger that catches the StopIteration before you have the chance to catch it? What version of Python are you using?

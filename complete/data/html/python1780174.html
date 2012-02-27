@@ -1,0 +1,119 @@
+<h3>Question (ID-1780174):</h3><h2>Split dictionary of lists into list of dictionaries</h2><p>What i need to do is to convert something like this</p>
+
+<pre><code>{'key1': [1, 2, 3], 'key2': [4, 5, 6]}
+</code></pre>
+
+<p>into</p>
+
+<pre><code>[{'key1':1, 'key2':4}, {'key1':2, 'key2':5}, {'key1':3, 'key2':6}]
+</code></pre>
+
+<p>The length of the value lists can vary!
+What's the quickest way to do this (preferably without for loops)?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p><strong>Works for any number of keys</strong></p>
+
+<pre><code>&gt;&gt;&gt; map(dict, zip(*[[(k, v) for v in value] for k, value in d.items()]))
+[{'key2': 4, 'key1': 1}, {'key2': 5, 'key1': 2}, {'key2': 6, 'key1': 3}]
+</code></pre>
+
+<p>For example:</p>
+
+<pre><code>d = {'key3': [7, 8, 9], 'key2': [4, 5, 6], 'key1': [1, 2, 3]}
+
+&gt;&gt;&gt; map(dict, zip(*[[(k, v) for v in value] for k, value in d.items()]))
+[{'key3': 7, 'key2': 4, 'key1': 1}, {'key3': 8, 'key2': 5, 'key1': 2}, {'key3': 9, 'key2': 6, 'key1': 3}]
+</code></pre>
+
+<p><hr></p>
+
+<p><strong>A general solution that works on any number of values or keys: (python2.6)</strong></p>
+
+<pre><code>&gt;&gt;&gt; from itertools import izip_longest
+&gt;&gt;&gt; d = {'key2': [3, 4, 5, 6], 'key1': [1, 2]}
+&gt;&gt;&gt; map(lambda a: dict(filter(None, a)), izip_longest(*[[(k, v) for v in value] for k, value in d.items()]))
+[{'key2': 3, 'key1': 1}, {'key2': 4, 'key1': 2}, {'key2': 5}, {'key2': 6}]
+</code></pre>
+
+<p><strong>And if you don't have python2.6:</strong></p>
+
+<pre><code>&gt;&gt;&gt; d = {'key2': [3, 4, 5, 6], 'key1': [1, 2]}
+&gt;&gt;&gt; map(lambda a: dict(filter(None, a)), map(None, *[[(k, v) for v in value] for k, value in d.items()]))
+[{'key2': 3, 'key1': 1}, {'key2': 4, 'key1': 2}, {'key2': 5}, {'key2': 6}]
+</code></pre>
+<br /><b>#1</b><br /><p>Assuming the number of keys, and values per key, are both arbitrary and a priori unknown, it's simplest to get the result with for loops, of course:</p>
+
+<pre><code>  itit = thedict.iteritems()
+  k, vs = next(itit)
+  result = [{k: v} for v in vs]
+  for k, vs in itit:
+    for d, v in itertools.izip(result, vs):
+      d[k] = v
+</code></pre>
+
+<p>It can be collapsed, but I'm dubious about the performance implications of doing so (if the data structures involved are so huge as to warrant performance optimization, building any extra auxiliary structure in memory beyond what's strictly required may turn out costly -- this simple approach of mine is being especially careful to avoid any such intermediate structures).</p>
+
+<p><strong>Edit</strong>: another alternative, particularly interesting if the overall data structures are huge but in some use cases you may only need "bits and pieces" of the "transformed" structure, is to build a class that provides the interface you require, but does so "on the fly", rather than in a "big bang", "once and for all" transformation (this might be especially helpful if the original structure can change and the transformed one needs to reflect the present state of the original, etc, etc).</p>
+
+<p>Of course, for such a purpose it's very helpful to identify exactly what features of a "list of dictionaries" your downstream code would use.  Suppose for example that all you need is actually "read-only" indexing (not changing, iterating, slicing, sorting, ...): <code>X[x]</code> must return a dictionary in which each key k maps to a value such that (caling <code>O</code> the original dictionary of lists) <code>X[x][k] is O[k][x]</code>.  Then:</p>
+
+<pre><code>class Wrap1(object):
+  def __init__(self, O):
+    self.O = O
+  def __getitem__(self, x):
+    return dict((k, vs[x]) for k, vs in self.O.iteritems())
+</code></pre>
+
+<p>If you don't in fact need the wrapped structure to track modifications to the original one, then <code>__getitem__</code> might well also "cache" the dict it's returning:</p>
+
+<pre><code>class Wrap2(object):
+  def __init__(self, O):
+    self.O = O
+    self.cache = {}
+  def __getitem__(self, x):
+    r = self.cache.get(x)
+    if r is None:
+      r = self.cache[x] = dict((k, vs[x]) for k, vs in self.O.iteritems())
+    return r
+</code></pre>
+
+<p>Note that this approach may end up with some duplication in the cache, e.g., if <code>O</code>'s lists have 7 items each, the cache at <code>x==6</code> and <code>x==-1</code> may end up with two equal dicts; if that's a problem you can, for example, normalize negative <code>x</code>s in <code>__getitem__</code> by adding <code>len(self.O)</code> to them before proceeding.</p>
+
+<p>If you also need iteration, as well as this simple indexing, that's not too hard: just add an <code>__iter__</code> method, easily implemented e.g. as a simple generator...:</p>
+
+<pre><code>  def __iter__(self, x):
+    for i in xrange(len(self.O)):
+      yield self[i]
+</code></pre>
+
+<p>And so forth, incrementally, if and as you need more and more of a list's functionality (at worst, once you have implemented this <code>__iter__</code>, you can build <code>self.L = list(self)</code> -- reverting to the "big bang" approach -- and, for any further request, punt to <code>self.L</code>... but you'll have to make a special metaclass if you want to take that approach for <em>special</em> methods as well, or use some subtler trick such as <code>self.__class__ = list; self[:] = self.L</code> followed by appropriate <code>del</code>s;-).</p>
+<br /><b>#2</b><br /><p>If there are always two keys you can use:</p>
+
+<pre><code>[{'key1':a, 'key2':b} for (a,b) in zip(d['key1'], d['key2'])]
+</code></pre>
+<br /><b>#3</b><br /><pre><code>&gt;&gt;&gt; a = {'key1': [1, 2, 3], 'key2': [4, 5, 6]}
+&gt;&gt;&gt; [dict((key, a[key][i]) for key in a.keys()) for i in range(len(a.values()[0]))]
+[{'key2': 4, 'key1': 1}, {'key2': 5, 'key1': 2}, {'key2': 6, 'key1': 3}]
+</code></pre>
+<br /><b>#4</b><br /><pre><code>list(map( dict, zip(*([(key, val) for val in data[key]] for key in data.keys()))))
+</code></pre>
+<br /><b>#5</b><br /><p><strong>Without for loop</strong>, Internal process of map is iterating actually, just without the word <strong><em>for</em></strong></p>
+
+<pre><code>&gt;&gt;&gt; x={'key1': [1, 2, 3], 'key2': [4, 5, 6]}
+
+&gt;&gt;&gt; map(lambda x,y:{'key1':x,'key2':y},x['key1'],x['key2'])
+
+[{'key2': 4, 'key1': 1}, {'key2': 5, 'key1': 2}, {'key2': 6, 'key1': 3}]
+</code></pre>
+<br /><b>#6</b><br /><pre><code>d = {'key1': [1, 2, 3], 'key2': [4, 5, 6]}
+
+keys = d.keys()
+vals = zip(*[d[k] for k in keys])
+l = [dict(zip(keys, v)) for v in vals]
+print l
+</code></pre>
+
+<p>produces</p>
+
+<pre><code>[{'key2': 4, 'key1': 1}, {'key2': 5, 'key1': 2}, {'key2': 6, 'key1': 3}]
+</code></pre>
+<br />

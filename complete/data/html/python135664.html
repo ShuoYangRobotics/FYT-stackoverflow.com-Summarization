@@ -1,0 +1,96 @@
+<h3>Question (ID-135664):</h3><h2>How many bytes per element are there in a Python list (tuple)?</h2><p>For example, how much memory is required to store a list of one million (32-bit) integers?</p>
+
+<pre><code>alist = range(1000000) # or list(range(1000000)) in Python 3.0
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>"It depends."  Python allocates space for lists in such a way as to achieve <a href="http://effbot.org/zone/python-list.htm" rel="nofollow">amortized constant time</a> for appending elements to the list.</p>
+
+<p>In practice, what this means with the current implementation is... the list always has space allocated for a power-of-two number of elements.  So range(1000000) will actually allocate a list big enough to hold 2^20 elements (~ 1.045 million).</p>
+
+<p>This is only the space required to store the list structure itself (which is an array of pointers to the Python objects for each element).  A 32-bit system will require 4 bytes per element, a 64-bit system will use 8 bytes per element.</p>
+
+<p>Furthermore, you need space to store the actual elements.  This varies widely.  For small integers (-5 to 256 currently), no additional space is needed, but for larger numbers Python allocates a new object for each integer, which takes 10-100 bytes and tends to fragment memory.</p>
+
+<p>Bottom line: <b>it's complicated</b> and Python lists are <b>not</b> a good way to store large homogeneous data structures.  For that, use the <code>array</code> module or, if you need to do vectorized math, use NumPy.</p>
+
+<p>PS- Tuples, unlike lists, are <i>not designed</i> to have elements progressively appended to them.  I don't know how the allocator works, but don't even think about using it for large data structures :-)</p>
+<br /><b>#1</b><br /><p>Useful links:</p>
+
+<p><a href="http://bytes.com/forum/thread757255.html" rel="nofollow">How to get memory size/usage of python object</a></p>
+
+<p><a href="http://mail.python.org/pipermail/python-list/2002-March/135223.html" rel="nofollow">Memory sizes of python objects?</a></p>
+
+<p><a href="http://groups.google.com/group/comp.lang.python/msg/b9afcfc2e1de5b05" rel="nofollow">if you put data into dictionary, how do we calculate the data size?</a> </p>
+
+<p>However they don't give a definitive answer. The way to go:</p>
+
+<ol>
+<li><p>Measure memory consumed by Python interpreter with/without the list (use OS tools).</p></li>
+<li><p>Use a third-party extension module which defines some sort of sizeof(PyObject).</p></li>
+</ol>
+
+<p><strong>Update</strong>:</p>
+
+<p><a href="http://code.activestate.com/recipes/546530/" rel="nofollow">Recipe 546530: Size of Python objects (revised)</a></p>
+
+<pre><code>import asizeof
+
+N = 1000000
+print asizeof.asizeof(range(N)) / N
+# -&gt; 20 (python 2.5, WinXP, 32-bit Linux)
+# -&gt; 33 (64-bit Linux)
+</code></pre>
+<br /><b>#2</b><br /><p><strong>Addressing "tuple" part of the question</strong></p>
+
+<p>Declaration of CPython's PyTuple in a typical build configuration boils down to this:</p>
+
+<pre><code>struct PyTuple {
+  size_t refcount; // tuple's reference count
+  typeobject *type; // tuple type object
+  size_t n_items; // number of items in tuple
+  PyObject *items[1]; // contains space for n_items elements
+};
+</code></pre>
+
+<p>Size of PyTuple instance is fixed during it's construction and cannot be changed afterwards. The number of bytes occupied by PyTuple can be calculated as</p>
+
+<blockquote>
+  <p><code>sizeof(size_t) x 2 + sizeof(void*) x (n_items + 1)</code>.</p>
+</blockquote>
+
+<p>This gives <em>shallow</em> size of tuple. To get <em>full</em> size you also need to add total number of bytes consumed by object graph rooted in <code>PyTuple::items[]</code> array. </p>
+
+<p>It's worth noting that tuple construction routines make sure that only single instance of empty tuple is ever created (singleton).</p>
+
+<p>References:
+<a href="http://svn.python.org/view/python/tags/r252/Include/Python.h?rev=60915&amp;view=markup" rel="nofollow">Python.h</a>,
+<a href="http://svn.python.org/view/python/tags/r252/Include/object.h?rev=60915&amp;view=markup" rel="nofollow">object.h</a>,
+<a href="http://svn.python.org/view/python/tags/r252/Include/tupleobject.h?rev=60915&amp;view=markup" rel="nofollow">tupleobject.h</a>,
+<a href="http://svn.python.org/view/python/tags/r252/Objects/tupleobject.c?rev=60915&amp;view=markup" rel="nofollow">tupleobject.c</a></p>
+<br /><b>#3</b><br /><blockquote>
+  <p>A new function, <code>getsizeof()</code>, takes a
+  Python object and returns the amount
+  of memory used by the object, measured
+  in bytes. Built-in objects return
+  correct results; third-party
+  extensions may not, but can define a
+  <code>__sizeof__()</code> method to return the object’s size.</p>
+</blockquote>
+
+<pre><code>kveretennicov@nosignal:~/py/r26rc2$ ./python
+Python 2.6rc2 (r26rc2:66712, Sep  2 2008, 13:11:55) 
+[GCC 4.2.3 (Ubuntu 4.2.3-2ubuntu7)] on linux2
+&gt;&gt;&gt; import sys
+&gt;&gt;&gt; sys.getsizeof(range(1000000))
+4000032
+&gt;&gt;&gt; sys.getsizeof(tuple(range(1000000)))
+4000024
+</code></pre>
+
+<p>Obviously returned numbers don't include memory consumed by contained objects (sys.getsizeof(1) == 12).</p>
+<br /><b>#4</b><br /><p>This is implementation specific, I'm pretty sure. Certainly it depends on the internal representation of integers - you can't assume they'll be stored as 32-bit since Python gives you arbitrarily large integers so perhaps small ints are stored more compactly. </p>
+
+<p>On my Python (2.5.1 on Fedora 9 on core 2 duo) the VmSize before allocation is 6896kB, after is 22684kB. After one more million element assignment, VmSize goes to 38340kB. This very grossly indicates around 16000kB for 1000000 integers, which is around 16 bytes per integer. That suggests a <em>lot</em> of overhead for the list. I'd take these numbers with a large pinch of salt.</p>
+<br /><b>#5</b><br /><p>I'm wary of why you're asking.  Are you trying to figure out how much memory you'll need for a given implementation?  Say, you're going to read 10,000,000 widgets and want to know how much RAM it will suck?</p>
+
+<p>If that's the case, rather than trying to figure out how much RAM each widget takes, figure out how much RAM, say, 10,000 widgets takes and multiply up to get your actual size.</p>
+<br />

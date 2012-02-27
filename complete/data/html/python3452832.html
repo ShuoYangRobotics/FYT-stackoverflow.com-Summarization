@@ -1,0 +1,183 @@
+<h3>Question (ID-3452832):</h3><h2>Remove duplicate rows from a large file in Python</h2><p>I've a csv file that I want to remove duplicate rows from, but it's too large to fit into memory. I found a way to get it done, but my guess is that it's not the best way. </p>
+
+<p>Each row contains 15 fields and several hundred characters, and all fields are needed to determine uniqueness. Instead of comparing the entire row to find a duplicate, I'm comparing <code>hash(row-as-a-string)</code> in an attempt to save memory. I set a filter that partitions the data into a roughly equal number of rows (e.g. days of the week), and each partition is small enough that a lookup table of hash values for that partition will fit in memory. I pass through the file once for each partition, checking for unique rows and writing them out to a second file (pseudo code):</p>
+
+<pre><code>import csv
+
+headers={'DayOfWeek':None, 'a':None, 'b':None}
+outs=csv.DictWriter(open('c:\dedupedFile.csv','wb')
+days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+outs.writerows(headers)
+
+for day in days:
+    htable={}
+    ins=csv.DictReader(open('c:\bigfile.csv','rb'),headers)
+    for line in ins:
+        hvalue=hash(reduce(lambda x,y:x+y,line.itervalues()))
+        if line['DayOfWeek']==day:
+            if hvalue in htable:
+                pass
+            else:
+                htable[hvalue]=None
+                outs.writerow(line)
+</code></pre>
+
+<p>One way I was thinking to speed this up is by finding a better filter to reduce the number of passes necessary. Assuming the length of the rows is uniformly distributed, maybe instead of </p>
+
+<pre><code>for day in days: 
+</code></pre>
+
+<p>and </p>
+
+<pre><code>if line['DayOfWeek']==day:
+</code></pre>
+
+<p>we have </p>
+
+<pre><code>for i in range(n):
+</code></pre>
+
+<p>and</p>
+
+<pre><code>if len(reduce(lambda x,y:x+y,line.itervalues())%n)==i:
+</code></pre>
+
+<p>where 'n' as small as memory will allow. But this is still using the same method.</p>
+
+<p><a href="http://stackoverflow.com/users/344286/wayne-werner" title="Wayne Werner">Wayne Werner</a> provided a good practical solution below; I was curious if there was better/faster/simpler way to do this from an algorithm perspective.</p>
+
+<p>P.S. I'm limited to Python 2.5.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>If you want a really simple way to do this, just create a sqlite database:</p>
+
+<pre><code>import sqlite3
+conn = sqlite3.connect('single.db')
+cur = conn.cursor()
+cur.execute("""create table test(
+f1 text,
+f2 text,
+f3 text,
+f4 text,
+f5 text,
+f6 text,
+f7 text,
+f8 text,
+f9 text,
+f10 text,
+f11 text,
+f12 text,
+f13 text,
+f14 text,
+f15 text,
+primary key(f1,  f2,  f3,  f4,  f5,  f6,  f7,  
+            f8,  f9,  f10,  f11,  f12,  f13,  f14,  f15))
+"""
+conn.commit()
+
+#simplified/pseudo code
+for row in reader:
+    #assuming row returns a list-type object
+    try:
+        cur.execute('''insert into test values(?, ?, ?, ?, ?, ?, ?, 
+                       ?, ?, ?, ?, ?, ?, ?, ?)''', row)
+        conn.commit()
+    except IntegrityError:
+        pass
+
+conn.commit()
+cur.execute('select * from test')
+
+for row in cur:
+    #write row to csv file
+</code></pre>
+
+<p>Then you wouldn't have to worry about any of the comparison logic yourself - just let sqlite take care of it for you. It probably won't be much faster than hashing the strings, but it's probably a lot easier. Of course you'd modify the type stored in the database if you wanted, or not as the case may be. Of course since you're already converting the data to a string you could just have one field instead. Plenty of options here.</p>
+<br /><b>#1</b><br /><p>You are basically doing a merge sort, and removing duplicated entries.</p>
+
+<p>Breaking the input into memory-sized pieces, sorting each of piece, then merging the pieces while removing duplicates is a sound idea in general. </p>
+
+<p>Actually, up to a couple of gigs I would let the virtual memory system handle it and just write:</p>
+
+<pre><code>input = open(infilename, 'rb')
+output = open(outfile, 'wb')
+
+for key,  group in itertools.groupby(sorted(input)):
+    output.write(key)
+</code></pre>
+<br /><b>#2</b><br /><p><strong>Your current method is not guaranteed to work properly.</strong></p>
+
+<p>Firstly, there is the small probability that two lines that are actually different can produce the same hash value. <code>hash(a) == hash(b)</code> does not always mean that <code>a == b</code></p>
+
+<p>Secondly, you are making the probability higher with your "reduce/lambda" caper:</p>
+
+<pre><code>&gt;&gt;&gt; reduce(lambda x,y: x+y, ['foo', '1', '23'])
+'foo123'
+&gt;&gt;&gt; reduce(lambda x,y: x+y, ['foo', '12', '3'])
+'foo123'
+&gt;&gt;&gt;
+</code></pre>
+
+<p>BTW, wouldn't "".join(['foo', '1', '23']) be somewhat clearer?</p>
+
+<p>BTW2, why not use a <code>set</code> instead of a <code>dict</code> for <code>htable</code>?</p>
+
+<p><strong>Here's a practical solution:</strong> get the "core utils" package from the <a href="http://gnuwin32.sourceforge.net/" rel="nofollow">GnuWin32</a> site, and install it. Then:</p>
+
+<ol>
+<li>write a copy of your file without the headings to (say) infile.csv</li>
+<li><code>c:\gnuwin32\bin\sort --unique -ooutfile.csv infile.csv</code></li>
+<li>read outfile.csv and write a copy with the headings prepended</li>
+</ol>
+
+<p>For each of steps 1 &amp; 3, you could use a Python script, or some of the other GnuWin32 utilities (head, tail, tee, cat, ...).</p>
+<br /><b>#3</b><br /><p>Your original solution is slightly incorrect: you could have different lines hashing to the same value (a hash collision), and your code would leave one of them out.</p>
+
+<p>In terms of algorithmic complexity, if you're expecting relatively few duplicates, I think the fastest solution would be to scan the file line by line, adding the hash of each line (as you did), but also storing the location of that line. Then when you encounter a duplicate hash, seek to the original place to make sure that it is a duplicate and not just a hash collision, and if so, seek back and skip the line.</p>
+
+<p>By the way, if the CSV values are normalized (i.e., records are considered equal iff the corresponding CSV rows are equivalent byte-for-byte), you need not involve CSV parsing here at all, just deal with plain text lines.</p>
+<br /><b>#4</b><br /><p>Since I suppose you'll have to do this on a somewhat regular basis (or you'd have hacked a once-over script), and you mentioned you were interested in a theoretical solution, here's a possibility.</p>
+
+<p>Read the input lines into B-Trees, ordered by each input line's hash value, writing them to disk when memory fills. We take care to store, on the B-Trees, the original lines attached to the hash (as a set, since we only care about unique lines). When we read a duplicate element, we check the lines set on the stored element and add it if it's a new line that happens to hash to the same value.</p>
+
+<p>Why B-Trees? They requires less disk reads when you only can (or want) to read parts of them to memory. The degree (number of children) on each node depends on the available memory and number of lines, but you don't want to have too many nodes.</p>
+
+<p>Once we have those B-Trees on disk, we compare the lowest element from each of them. We remove the lowest of all, from all B-Trees that have it. We merge their lines sets, meaning that we have no duplicates left for those lines (and also that we have no more lines that hash to that value). We then write the lines from this merge into the output csv structure.</p>
+
+<p>We can separate half of the memory for reading the B-Trees, and half to keep the output csv in memory for some time. We flush the csv to disk when its half is full, appending to whatever has already been written. How much of each B-Tree we read on each step can be roughly calculated by (available_memory / 2) / number_of_btrees, rounded so we read full nodes.</p>
+
+<p>In pseudo-Python:</p>
+
+<pre><code>ins = DictReader(...)
+i = 0
+while ins.still_has_lines_to_be_read():
+    tree = BTree(i)
+    while fits_into_memory:
+        line = ins.readline()
+        tree.add(line, key=hash)
+    tree.write_to_disc()
+    i += 1
+n_btrees = i
+
+# At this point, we have several (n_btres) B-Trees on disk
+while n_btrees:
+    n_bytes = (available_memory / 2) / n_btrees
+    btrees = [read_btree_from_disk(i, n_bytes)
+              for i in enumerate(range(n_btrees))]
+    lowest_candidates = [get_lowest(b) for b in btrees]
+    lowest = min(lowest_candidates)
+    lines = set()
+    for i in range(number_of_btrees):
+        tree = btrees[i]
+        if lowest == lowest_candidates[i]:
+            node = tree.pop_lowest()
+            lines.update(node.lines)
+        if tree.is_empty():
+        n_btrees -= 1
+
+    if output_memory_is_full or n_btrees == 0:
+        outs.append_on_disk(lines)
+</code></pre>
+<br /><b>#5</b><br /><p>How about using heapq module to read pieces of file up to memory limit and write them out the sorted pieces (heapq keeps things always in sorted order).</p>
+
+<p>Or you could catch the first word in line and divide the file to pieces by that. Then you can read the lines (maybe do ' '.join(line.split()) to unify the spacing/tabs in line if it is OK to change spacing) in set in alphabetic order clearing the set between the pieces (set removes duplicates) to get things half sorted (set is not in order, if you want you can read in to heap and write out to get sorted order, last occurrence in set replacing old values as you go.) Alternatively you can also sort the piece and remove duplicate lines with Joe Koberg's groupby solution. Lastly you can join pieces back together (you can of course do the writing as you go piece by piece to final file during sorting of pieces)</p>
+<br />

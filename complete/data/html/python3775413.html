@@ -1,0 +1,255 @@
+<h3>Question (ID-3775413):</h3><h2>What is the Perl version of a Python iterator?</h2><p>I am learning Perl at my work and enjoying it. I usually do my work in Python but boss wants Perl. </p>
+
+<p>Most of the concepts in Python and Perl match nicely: Python dictionary=Perl hash; Python tuple=Perl list; Python list=Perl array; etc. </p>
+
+<p>Question: Is there a Perl version of the Python form of an <a href="http://docs.python.org/library/stdtypes.html#iterator-types" rel="nofollow">Iterator</a> / Generator? </p>
+
+<p>An example: A Classic Python way to generate the Fibonacci numbers is: </p>
+
+<pre><code>#!/usr/bin/python
+
+def fibonacci(mag):
+     a, b = 0, 1
+     while a&lt;=10**mag:
+         yield a
+         a, b = b, a+b
+
+for number in fibonacci(15):  
+     print "%17d" % number
+</code></pre>
+
+<p>Iterators are also useful if you want to generate a subsection of a much larger list as needed. Perl 'lists' seem more static - more like a Python tuple. In Perl, can <code>foreach</code> be dynamic or is only based on a static list?</p>
+
+<p>The Python form of Iterator is a form that I have gotten used to, and I do not find it documented in Perl... Other than writing this in loops or recursively or generating a huge static list, how do I (for ex) write the Fibonacci subroutine it in Perl? Is there a Perl <code>yield</code> that I am missing? </p>
+
+<p>Specifically -- how do I write this:</p>
+
+<pre><code>#!/usr/bin/perl
+use warnings; use strict; # yes -- i use those!
+
+sub fibonacci {
+   # What goes here other than returning an array or list? 
+}
+
+foreach my $number (fibonacci(15)) { print $number . "\n"; }
+</code></pre>
+
+<p>Thanks in advance to being kind to the newbie...</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>For an even more flexible solution than Python's generators, I have written the module <a href="http://search.cpan.org/perldoc?List%3a%3aGen" rel="nofollow">List::Gen</a> on CPAN which provides random access lazy generator arrays:</p>
+
+<pre><code>use List::Gen;
+
+my $fib; $fib = cache gen {$_ &lt; 2  ? $_ : $$fib[$_ - 1] + $$fib[$_ - 2]};
+
+say "@$fib[0 .. 15]";  #  0 1 1 2 3 5 8 13 21 34 55 89 144 233 377 610
+</code></pre>
+
+<p>Since generators pretend to be arrays, they can mix seamlessly with normal perl code.  There is also an object oriented approach:</p>
+
+<pre><code>my $fib; $fib = cache gen {$_ &lt; 2 ? $_ : $fib-&gt;get($_ - 1) + $fib-&gt;get($_ - 2)};
+
+say join ' ' =&gt; $fib-&gt;slice(0 .. 15);
+</code></pre>
+
+<p>In each case, the generator is lazy, calculating nothing upon creation, and then calculating only those values required to satisfy the slices.  The recursive definition of the Fibonacci sequence calls itself many times, so the <code>cache</code> function is used to make sure each value is only calculated once. </p>
+
+<p>You can also use generators as iterators:</p>
+
+<pre><code>while (my $num = $fib-&gt;next) {
+    last if $num &gt; 10**15;
+    print "$_\n";
+}
+</code></pre>
+
+<p><code>$fib-&gt;next</code> can also be written <code>$fib-&gt;()</code>.  Since the generator is still random access, you can <code>$fib-&gt;reset()</code> or <code>$fib-&gt;index = 10;</code></p>
+
+<p>Let me know if you have any questions.</p>
+
+<p>Update:</p>
+
+<p>I have released a new version of the module (0.80) that makes it easier to use iterative algorithms in generators.  Here is an example that closely mirrors the OP's example:</p>
+
+<pre><code>use List::Gen '*';
+
+sub fibonacci {
+    my $limit   = 10**shift;
+    my ($x, $y) = (0, 1);
+
+    While {$_ &lt; $limit} gather {
+        ($x, $y) = ($y, take($x) + $y)
+    }
+}
+
+say for @{fibonacci 15};
+</code></pre>
+
+<p>if you <code>use bigint;</code> before or at the top of the sub, you can of course:</p>
+
+<pre><code>say for @{fibonacci 400}; # or more
+</code></pre>
+<br /><b>#1</b><br /><p>The concept of an iterator is a little different in Perl. You basically want to return a one-use subroutine "closed" over the persistent variables.</p>
+
+<pre><code>use bigint;
+use strict;
+use warnings;
+
+sub fibonacci {
+    my $limit = 10**( shift || 0 );
+    my ( $a, $b ) = ( 0, 1 );
+    return sub { 
+        return if $a &gt; $limit;
+        ( my $r, $a, $b ) = ( $a, $b, $a + $b );
+        return $r;
+    };
+}
+my $fit = fibonacci( 15 );
+my $n = 0;
+while ( defined( my $f = $fit-&gt;())) { 
+     print "F($n): $f\n";
+     $n++;
+}
+</code></pre>
+
+<p>And if you don't like the <code>while</code> loop, then here is two shots at some syntactic sugar, which basically accomplish a each item loop.:</p>
+
+<pre><code>sub iterate ($$) {
+    my $iter   = shift;
+    my $action = shift;
+    while ( defined( my $nextval = $iter-&gt;())) { 
+        local *_ = \$nextval;
+        $action-&gt;( $_ );
+    }
+    return;
+}
+
+iterate fibonacci( 15 ) =&gt; sub { print "$_\n"; };
+
+sub iter (&amp;$) { 
+    my $action = shift;
+    my $iter   = shift;
+    while ( defined( my $nextval = $iter-&gt;())) { 
+        local *_ = \$nextval;
+        $action-&gt;( $_ );
+    }
+    return;
+}
+
+iter { print "$_\n" } fibonacci( 15 );
+</code></pre>
+<br /><b>#2</b><br /><p>The excellent <a href="http://hop.perl.plover.com/book/" rel="nofollow">Higher-Order Perl</a> book (available for free at the specified link) contains a lot of information on related topics, and in particular has a whole chapter on iterators. By "higher order" the author implies using Perl's abilities as a functional language with first-class functions to implement all kinds of cool stuff. It really is a very good book - I read most of it, and the chapters on iterators and streams are terrific. I highly recommend to at least skim through it if you plan to write Perl code.</p>
+<br /><b>#3</b><br /><p>There is a similar method to produce a Iterator / Generator, but it is not a "first class citizen" as it is on Python.</p>
+
+<p>In Perl, if you do not see what you want (after a <strong>MANDATORY</strong> trip to <a href="http://search.cpan.org/search?query=iterator&amp;mode=all" rel="nofollow">CPAN</a> <strong>FIRST</strong>!), you can roll your own that is similar to a Python iterator based on Perl closures and an anonymous subroutine. </p>
+
+<p>Consider:</p>
+
+<pre><code>use strict; use warnings;
+
+sub fibo {
+    my ($an, $bn)=(1,0);
+    my $mag=(shift || 1);
+    my $limit=10**$mag;
+    my $i=0;
+
+    return sub {
+        ($an, $bn)=($bn, $an+$bn);      
+        return undef if ($an &gt;=$limit || wantarray );
+        return $an;
+    }
+}
+
+my $num;
+my $iter=fibo(15);
+while (defined($num=$iter-&gt;()) ) { printf "%17d\n", $num; }
+</code></pre>
+
+<p>The sub <code>fibo</code> maintains a Perl <a href="http://perldoc.perl.org/perlfaq7.html#What%27s-a-closure%3f" rel="nofollow">closure</a> that allows persistent variables to be maintained. You can do the same by having a module, similar to C / C++. Inside <code>fibo</code> an anonymous subroutine does the work of returning the next data item. </p>
+
+<p>To quote from the <a href="http://rads.stackoverflow.com/amzn/click/0596000278" rel="nofollow">Perl Bible</a> "You will be miserable until you learn the difference between scalar and list context" -- p 69 (A highly recommended book btw...)</p>
+
+<p>In this case, the annon sub only returns a single value. The only looping mechanism that I know of in Perl that can work in scalar context is <code>while</code>; The others try to fill the list before proceeding I think. Therefor, if you called the anon sub in list context, it will dutifully return the next fibonacci number, unlike Python's for iterators, and the loop would terminate. That is why I put the <code>return undef if .... wantarray</code> because it does not work in list context as written. </p>
+
+<p>There are ways to fix that. Indeed, you can write subroutines that act like <code>map</code> <code>foreach</code> etc but it is not as straightforward as Python's yield. You will need an additional function to use inside a foreach loop. The tradeoff is the Perl approach has tremendous power and flexibility.  </p>
+
+<p>You can read more about Perl iterators in Mark Jason Dominus' excellent book "Higher Order Perl" <a href="http://hop.perl.plover.com/book/pdf/04Iterators.pdf" rel="nofollow">Chapter 4 is all about Interators</a> brian d foy also has an excellent <a href="http://www.theperlreview.com/Articles/v0i5/iterators.pdf" rel="nofollow">article</a> on Interators in the Perl Review.</p>
+<br /><b>#4</b><br /><p>There's a good practical example <a href="http://www.perl.com/pub/2005/06/16/iterators.html" rel="nofollow">here</a> and a PDF article <a href="http://www.theperlreview.com/Articles/v0i5/iterators.pdf" rel="nofollow">here</a>... but I'm too rusty in Perl to try to implement your challenge directly (as you'll see, both the example and the approach in the PDF use a less direct approach).</p>
+<br /><b>#5</b><br /><p>In this case, memoization can be used.</p>
+
+<pre><code>use strict;
+use warnings;
+
+use Memoize;
+memoize('fib');
+
+foreach my $i (1..15) {
+  print "$i -&gt; ",fib($i),"\n";
+}
+
+sub fib {
+  my $n = shift;
+  return $n if $n &lt; 2;
+  fib($n-1) + fib($n-2);
+}
+</code></pre>
+<br /><b>#6</b><br /><p>Here is a response tailored to conform closely to the question as originally posed.</p>
+
+<p>Any perl module that implements lazy lists (e.g. List::Gen, Memoize, etc.) and also lets you supply your own generator subroutine (I don't mean 'generator' as in Python) will allow you to do as shown in this example. Here the module that lazily produces the list is called Alef.</p>
+
+<pre><code>#!/usr/bin/perl -w
+
+use strict; use warnings; 
+use Alef;
+
+my $fibo;
+
+BEGIN {
+
+    my ($a, $b) = (0, 1);
+
+    $fibo = sub {
+        ($a, $b) = ($b, $a+$b);
+        $a;
+    }
+}
+
+my $fibonacci = new Alef($fibo);
+
+foreach my $number ($fibonacci-&gt;take(15)){ print $number . "\n"; }
+</code></pre>
+
+<p>Here is the output:</p>
+
+<p>[spl@briareus ~]$ ./fibo.pl 
+0
+1
+1
+2
+3
+5
+8
+13
+21
+34
+55
+89
+144
+233
+377</p>
+
+<p>There is nothing magical happening behind the scenes with the lazy list module used here. This is what Alef's take subroutine looks like.</p>
+
+<pre><code>sub take {
+
+    my ($self,$n) = (@_);
+
+    my @these = ();
+
+    my $generator = $self-&gt;{'generator'};
+    for (1..$n){
+        push(@these,$self-&gt;{'this'});
+        $self-&gt;{'this'} = &amp;$generator($self-&gt;{'this'});
+    }
+    @these;
+}
+</code></pre>
+<br />

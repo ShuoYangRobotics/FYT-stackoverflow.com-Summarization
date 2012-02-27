@@ -1,0 +1,225 @@
+<h3>Question ( ID-798442 ) : </h3><h2>What is the correct ( or best ) way to subclass the Python <span style="background-color:yellow;">set</span> class , adding a new instance variable ? </h2><p>I 'm implementing an object that is almost identical to a <span style="background-color:yellow;">set</span> , but requires an extra instance variable , so I am subclassing the built-in <span style="background-color:yellow;">set</span> object. What is the best way to make sure that the value of this variable is copied when one of my objects is copied ? </p>
+<p>Using the old <span style="background-color:yellow;">sets</span> module , the <span style="background-color:yellow;">following</span> code worked perfectly : </p>
+<pre><code>import sets
+class Fooset(sets.Set):
+	def __init__(self, s = []):
+		sets.Set.__init__(self, s)
+		if isinstance(s, Fooset):
+			self.foo = s.foo
+		else:
+			self.foo = 'default'
+f = Fooset([1,2,4])
+f.foo = 'bar'
+assert( (f | f).foo == 'bar')
+</code></pre>
+<p>but this does not work using the built-in <span style="background-color:yellow;">set</span> module . </p>
+<p>The only solution that I can see is to override every single <span style="background-color:yellow;">method</span> that returns a copied <span style="background-color:yellow;">set</span> object... in which case I might as well not bother subclassing the <span style="background-color:yellow;">set</span> object. Surely there is a standard way to do this ? </p>
+<p>( To clarify , the <span style="background-color:yellow;">following</span> code does not work ( the assertion <span style="background-color:yellow;">fails</span> ) : </p>
+<pre><code>class Fooset(set):
+	def __init__(self, s = []):
+		set.__init__(self, s)
+		if isinstance(s, Fooset):
+			self.foo = s.foo
+		else:
+			self.foo = 'default'
+
+f = Fooset([1,2,4])
+f.foo = 'bar'
+assert( (f | f).foo == 'bar')
+</code></pre>
+<p>) </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>My <span style="background-color:yellow;">favorite</span> way to wrap <span style="background-color:yellow;">methods</span> of a built-in collection : </p>
+<pre><code>class Fooset(set):
+    def __init__(self, s=(), foo=None):
+        super(Fooset,self).__init__(s)
+        if foo is None and hasattr(s, 'foo'):
+            foo = s.foo
+        self.foo = foo
+
+
+
+    @classmethod
+    def _wrap_methods(cls, names):
+        def wrap_method_closure(name):
+            def inner(self, *args):
+                result = getattr(super(cls, self), name)(*args)
+                if isinstance(result, set) and not hasattr(result, 'foo'):
+                    result = cls(result, foo=self.foo)
+                return result
+            inner.fn_name = name
+            setattr(cls, name, inner)
+        for name in names:
+            wrap_method_closure(name)
+
+Fooset._wrap_methods(['__ror__', 'difference_update', '__isub__', 
+    'symmetric_difference', '__rsub__', '__and__', '__rand__', 'intersection',
+    'difference', '__iand__', 'union', '__ixor__', 
+    'symmetric_difference_update', '__or__', 'copy', '__rxor__',
+    'intersection_update', '__xor__', '__ior__', '__sub__',
+])
+</code></pre>
+<p>Essentially the same thing you 're doing in your own answer , but with <span style="background-color:yellow;">fewer</span> loc. It 's also easy to put in a metaclass if you want to do the same thing with lists and dicts as well . </p>
+<br /><b># 1 </b><br /><p>It looks like <span style="background-color:yellow;">set</span> bypasses <span style="background-color:yellow;">__init__</span> in the c code . However you will end an instance of <span style="background-color:yellow;">Fooset</span> , it just wo n't have had a chance to <span style="background-color:yellow;">copy</span> the <span style="background-color:yellow;">field</span> . </p>
+<p>Apart <span style="background-color:yellow;">from</span> overriding the <span style="background-color:yellow;">methods</span> that return new <span style="background-color:yellow;">sets</span> I 'm not sure you can do too much in this case. <span style="background-color:yellow;">Set</span> is clearly built <span style="background-color:yellow;">for</span> a certain amount of speed , so does a lot of work in c . </p>
+<br /><b># 2 </b><br /><p><span style="background-color:yellow;">set1</span> | <span style="background-color:yellow;">set2</span> is an operation that wo n't modify either existing <span style="background-color:yellow;">set</span> , but return a new <span style="background-color:yellow;">set</span> instead. The new <span style="background-color:yellow;">set</span> is created and returned. There is no way to make it automatically <span style="background-color:yellow;">copy</span> arbritary attributes <span style="background-color:yellow;">from</span> one or both of the <span style="background-color:yellow;">set</span> s to the newly created <span style="background-color:yellow;">set</span> , without customizing the | operator yourself by defining the <span style="background-color:yellow;">__or__</span> <span style="background-color:yellow;">method</span> . </p>
+<pre><code>class MySet(set):
+    def __init__(self, *args, **kwds):
+        super(MySet, self).__init__(*args, **kwds)
+        self.foo = 'nothing'
+    def __or__(self, other):
+        result = super(MySet, self).__or__(other)
+        result.foo = self.foo + "|" + other.foo
+        return result
+
+r = MySet('abc')
+r.foo = 'bar'
+s = MySet('cde')
+s.foo = 'baz'
+
+t = r | s
+
+print r, s, t
+print r.foo, s.foo, t.foo
+</code></pre>
+<p>Prints : </p>
+<pre><code>MySet(['a', 'c', 'b']) MySet(['c', 'e', 'd']) MySet(['a', 'c', 'b', 'e', 'd'])
+bar baz bar|baz
+</code></pre>
+<br /><b># 3 </b><br /><p>Assuming the other answers are correct , and overriding all the <span style="background-color:yellow;">methods</span> is the only way to do this , here 's my attempt at a moderately elegant way of doing this. If more instance variables are added , only one piece of code needs to change. Unfortunately if a new binary operator is added to the <span style="background-color:yellow;">set</span> object , this code will break , but I do n't think there 's a way to avoid that. Comments welcome ! </p>
+<pre><code>def foocopy(f):
+	def cf(self, new):
+		r = f(self, new)
+		r.foo = self.foo
+		return r
+	return cf
+
+class Fooset(set):
+	def __init__(self, s = []):
+		set.__init__(self, s)
+		if isinstance(s, Fooset):
+			self.foo = s.foo
+		else:
+			self.foo = 'default'
+
+	def copy(self):
+		x = set.copy(self)
+		x.foo = self.foo
+		return x
+
+	@foocopy
+	def __and__(self, x):
+		return set.__and__(self, x)
+
+	@foocopy
+	def __or__(self, x):
+		return set.__or__(self, x)
+
+	@foocopy
+	def __rand__(self, x):
+		return set.__rand__(self, x)
+
+	@foocopy
+	def __ror__(self, x):
+		return set.__ror__(self, x)
+
+	@foocopy
+	def __rsub__(self, x):
+		return set.__rsub__(self, x)
+
+	@foocopy
+	def __rxor__(self, x):
+		return set.__rxor__(self, x)
+
+	@foocopy
+	def __sub__(self, x):
+		return set.__sub__(self, x)
+
+	@foocopy
+	def __xor__(self, x):
+		return set.__xor__(self, x)
+
+	@foocopy
+	def difference(self, x):
+		return set.difference(self, x)
+
+	@foocopy
+	def intersection(self, x):
+		return set.intersection(self, x)
+
+	@foocopy
+	def symmetric_difference(self, x):
+		return set.symmetric_difference(self, x)
+
+	@foocopy
+	def union(self, x):
+		return set.union(self, x)
+
+
+f = Fooset([1,2,4])
+f.foo = 'bar'
+assert( (f | f).foo == 'bar')
+</code></pre>
+<br /><b># 4 </b><br /><p>I think that the recommended way to do this is not to subclass directly <span style="background-color:yellow;">from</span> the built-in <span style="background-color:yellow;">set</span> , but rather to make use of the Abstract Base Class <span style="background-color:yellow;">Set</span> available in <span style="background-color:yellow;">collections</span> . </p>
+<p>Using the ABC <span style="background-color:yellow;">Set</span> gives you some <span style="background-color:yellow;">methods</span> <span style="background-color:yellow;">for</span> <span style="background-color:yellow;">free</span> as a mix-in so you can have a minimal <span style="background-color:yellow;">Set</span> class by defining only <span style="background-color:yellow;">__contains__</span> ( ) , <span style="background-color:yellow;">__len__</span> ( ) and <span style="background-color:yellow;">__iter__</span> ( ) . If you want some of the nicer <span style="background-color:yellow;">set</span> <span style="background-color:yellow;">methods</span> like <span style="background-color:yellow;">intersection</span> ( ) and <span style="background-color:yellow;">difference</span> ( ) , you probably do have to wrap them . </p>
+<p>Here 's my attempt ( this one happens to be a <span style="background-color:yellow;">frozenset-like</span> , but you can inherit <span style="background-color:yellow;">from</span> MutableSet to get a mutable version ) : </p>
+<pre><code>from collections import Set, Hashable
+
+class CustomSet(Set, Hashable):
+    """An example of a custom frozenset-like object using
+    Abstract Base Classes.
+    """
+    ___hash__ = Set._hash
+
+    wrapped_methods = ('difference',
+                       'intersection',
+                       'symetric_difference',
+                       'union',
+                       'copy')
+
+    def __repr__(self):
+        return "CustomSet({0})".format(list(self._set))
+
+    def __new__(cls, iterable):
+        selfobj = super(CustomSet, cls).__new__(CustomSet)
+        selfobj._set = frozenset(iterable)
+        for method_name in cls.wrapped_methods:
+            setattr(selfobj, method_name, cls._wrap_method(method_name, selfobj))
+        return selfobj
+
+    @classmethod
+    def _wrap_method(cls, method_name, obj):
+        def method(*args, **kwargs):
+            result = getattr(obj._set, method_name)(*args, **kwargs)
+            return CustomSet(result)
+        return method
+
+    def __getattr__(self, attr):
+        """Make sure that we get things like issuperset() that aren't provided
+        by the mix-in, but don't need to return a new set."""
+        return getattr(self._set, attr)
+
+    def __contains__(self, item):
+        return item in self._set
+
+    def __len__(self):
+        return len(self._set)
+
+    def __iter__(self):
+        return iter(self._set)
+</code></pre>
+<br /><b># 5 </b><br /><p>For me this works perfectly using Python 2.5.2 on Win32. Using you class definition and the <span style="background-color:yellow;">following</span> test : </p>
+<pre><code>f = Fooset([1,2,4])
+s = sets.Set((5,6,7))
+print f, f.foo
+f.foo = 'bar'
+print f, f.foo
+g = f | s
+print g, g.foo
+assert( (f | f).foo == 'bar')
+</code></pre>
+<p>I get this output , which is what I expect : </p>
+<pre><code>Fooset([1, 2, 4]) default
+Fooset([1, 2, 4]) bar
+Fooset([1, 2, 4, 5, 6, 7]) bar
+</code></pre>
+<br />

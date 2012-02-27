@@ -1,0 +1,194 @@
+Question (ID-4844010): Python: the mechanism behind list comprehension When using list comprehension or the in keyword in a for loop context, i.e: 
+
+ for o in X:
+ do_something_with(o)
+ 
+
+ or 
+
+ l=[o for o in X]
+ 
+
+ 
+ How does the mechanism behind in works? 
+ Which functions\methods within X does it call? 
+ If X can comply to more than one method, what's the precedence? 
+ How to write an efficient X , so that list comprehension will be quick? 
+ 
+ Answers (Total-6): #0 The, afaik, complete and correct answer. 
+
+ for , both in for loops and list comprehensions, calls iter() on X . iter() will return an iterable if X either has an __iter__ method or a __getitem__ method. If it implements both, __iter__ is used. If it has neither you get TypeError: 'Nothing' object is not iterable . 
+
+ This implements a __getitem__ : 
+
+ class GetItem(object):
+ def __init__(self, data):
+  self.data = data
+
+ def __getitem__(self, x):
+  return self.data[x]
+ 
+
+ Usage: 
+
+ &gt;&gt;&gt; data = range(10)
+&gt;&gt;&gt; print [x*x for x in GetItem(data)]
+[0, 1, 4, 9, 16, 25, 36, 49, 64, 81]
+ 
+
+ This is an example of implementing __iter__ : 
+
+ class TheIterator(object):
+ def __init__(self, data):
+  self.data = data
+  self.index = -1
+
+ # Note: In Python 3 this is called __next__
+ def next(self):
+  self.index += 1
+  try:
+   return self.data[self.index]
+  except IndexError:
+   raise StopIteration
+
+ def __iter__(self):
+  return self
+
+class Iter(object):
+ def __init__(self, data):
+  self.data = data
+
+ def __iter__(self):
+  return TheIterator(data)
+ 
+
+ Usage: 
+
+ &gt;&gt;&gt; data = range(10)
+&gt;&gt;&gt; print [x*x for x in Iter(data)]
+[0, 1, 4, 9, 16, 25, 36, 49, 64, 81]
+ 
+
+ As you see you need both to implement an iterator, and __iter__ that returns the iterator. 
+
+ You can combine them: 
+
+ class CombinedIter(object):
+ def __init__(self, data):
+  self.data = data
+
+ def __iter__(self):
+  self.index = -1
+  return self
+
+ def next(self):
+  self.index += 1
+  try:
+   return self.data[self.index]
+  except IndexError:
+   raise StopIteration
+ 
+
+ Usage: 
+
+ &gt;&gt;&gt; well, you get it, it's all the same...
+ 
+
+ But then you can only have one iterator going at once.
+OK, in this case you could just do this: 
+
+ class CheatIter(object):
+ def __init__(self, data):
+  self.data = data
+
+ def __iter__(self):
+  return iter(self.data)
+ 
+
+ But that's cheating because you are just reusing the __iter__ method of list .
+An easier way is to use yield, and make __iter__ into a generator: 
+
+ class Generator(object):
+ def __init__(self, data):
+  self.data = data
+
+ def __iter__(self):
+  for x in self.data:
+   yield x
+ 
+
+ This last is the way I would recommend. Easy and efficient. 
+ #1 X must be iterable. It must implement __iter__() which returns an iterator object; the iterator object must implement next() , which returns next item every time it is called or raises a StopIteration if there's no next item. 
+
+ Lists, tuples and generators are all iterable. 
+
+ Note that the plain for operator uses the same mechanism. 
+ #2 Answering question's comments I can say that reading source is not the best idea in this case. The code that is responsible for execution of compiled code ( ceval.c ) does not seem to be very verbose for a person that sees Python sources for the first time. Here is the snippet that represents iteration in for loops: 
+
+  TARGET(FOR_ITER)
+  /* before: [iter]; after: [iter, iter()] *or* [] */
+  v = TOP();
+
+  /*
+   Here tp_iternext corresponds to next() in Python
+  */
+  x = (*v-&gt;ob_type-&gt;tp_iternext)(v); 
+  if (x != NULL) {
+   PUSH(x);
+   PREDICT(STORE_FAST);
+   PREDICT(UNPACK_SEQUENCE);
+   DISPATCH();
+  }
+  if (PyErr_Occurred()) {
+   if (!PyErr_ExceptionMatches(
+       PyExc_StopIteration))
+    break;
+   PyErr_Clear();
+  }
+  /* iterator ended normally */
+  x = v = POP();
+  Py_DECREF(v);
+  JUMPBY(oparg);
+  DISPATCH();
+ 
+
+ To find what actually happens here you need to dive into bunch of other files which verbosity is not much better. Thus I think that in such cases documentation and sites like SO are the first place to go while the source should be checked only for uncovered implementation details. 
+ #3 X must be an iterable object, meaning it needs to have an __iter__() method. 
+
+ So, to start a for..in loop, or a list comprehension, first X 's __iter__() method is called to obtain an iterator object; then that object's next() method is called for each iteration until StopIteration is raised, at which point the iteration stops. 
+
+ I'm not sure what your third question means, and how to provide a meaningful answer to your fourth question except that your iterator should not construct the entire list in memory at once. 
+ #4 Maybe this helps (tutorial http://docs.python.org/tutorial/classes.html Section 9.9): 
+
+ 
+ Behind the scenes, the for statement
+ calls iter() on the container object.
+ The function returns an iterator
+ object that defines the method next()
+ which accesses elements in the
+ container one at a time. When there
+ are no more elements, next() raises a
+ StopIteration exception which tells
+ the for loop to terminate. 
+ 
+ #5 To answer your questions: 
+
+ How does the mechanism behind in works? 
+
+ It is the exact same mechanism as used for ordinary for loops, as others have already noted. 
+
+ Which functions\methods within X does it call? 
+
+ As noted in a comment below, it calls iter(X) to get an iterator. If X has a method function __iter__() defined, this will be called to return an iterator; otherwise, if X defines __getitem__() , this will be called repeatedly to iterate over X . See the Python documentation for iter() here: http://docs.python.org/library/functions.html#iter 
+
+ If X can comply to more than one method, what's the precedence? 
+
+ I'm not sure what your question is here, exactly, but Python has standard rules for how it resolves method names, and they are followed here. Here is a discussion of this: 
+
+ Method Resolution Order (MRO) in new style Python classes 
+
+ How to write an efficient X, so that list comprehension will be quick? 
+
+ I suggest you read up more on iterators and generators in Python. One easy way to make any class support iteration is to make a generator function for iter (). Here is a discussion of generators: 
+
+ http://linuxgazette.net/100/pramode.html

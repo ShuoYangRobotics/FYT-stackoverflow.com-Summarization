@@ -1,0 +1,58 @@
+<h3>Question (ID-1594604):</h3><h2>How should I optimize this filesystem I/O bound program?</h2><p>I have a python program that does something like this:</p>
+
+<ol>
+<li>Read a row from a csv file.</li>
+<li>Do some transformations on it.</li>
+<li>Break it up into the actual rows as they would be written to the database.</li>
+<li>Write those rows to individual csv files.</li>
+<li>Go back to step 1 unless the file has been totally read.</li>
+<li>Run SQL*Loader and load those files into the database.</li>
+</ol>
+
+<p>Step 6 isn't really taking much time at all.  It seems to be step 4 that's taking up most of the time.  For the most part, I'd like to optimize this for handling a set of records in the low millions running on a quad-core server with a RAID setup of some kind.</p>
+
+<p>There are a few ideas that I have to solve this:</p>
+
+<ol>
+<li>Read the entire file from step one (or at least read it in very large chunks) and write the file to disk as a whole or in very large chunks.  The idea being that the hard disk would spend less time going back and forth between files.  Would this do anything that buffering wouldn't?</li>
+<li>Parallelize steps 1, 2&amp;3, and 4 into separate processes.  This would make steps 1, 2, and 3 not have to wait on 4 to complete.</li>
+<li>Break the load file up into separate chunks and process them in parallel.  The rows don't need to be handled in any sequential order.  This would likely need to be combined with step 2 somehow.</li>
+</ol>
+
+<p>Of course, the correct answer to this question is "do what you find to be the fastest by testing."  However, I'm mainly trying to get an idea of where I should spend my time first.  Does anyone with more experience in these matters have any advice?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Poor man's map-reduce:</p>
+
+<p>Use <a href="http://www.gnu.org/manual/gawk/html%5Fnode/Split-Program.html" rel="nofollow">split</a> to break the file up into as many pieces as you have CPUs.</p>
+
+<p>Use <a href="http://linux.about.com/library/cmd/blcmdl1%5Fbatch.htm" rel="nofollow">batch</a> to run your muncher in parallel.</p>
+
+<p>Use <a href="http://www.gnu.org/software/coreutils/manual/html%5Fnode/cat-invocation.html#cat-invocation" rel="nofollow">cat</a> to concatenate the results.</p>
+<br /><b>#1</b><br /><p>If you are I/O bound, the best way I have found to optimize is to read or write the <em>entire</em> file into/out of memory at once, then operate out of RAM from there on.</p>
+
+<p>With extensive testing I found that my runtime eded up bound not by the amount of data I read from/wrote to disk, but by the number of I/O operations I used to do it. That is what you need to optimize.</p>
+
+<p>I don't know Python, but if there is a way to tell it to write the whole file out of RAM in one go, rather than issuing a separate I/O for each byte, that's what you need to do.</p>
+
+<p>Of course the drawback to this is that files can be considerably larger than available RAM. There are lots of ways to deal with that, but that is another question for another time.</p>
+<br /><b>#2</b><br /><p>Python already does IO buffering and the OS <em>should</em> handle both prefetching the input file and delaying writes until it needs the RAM for something else or just gets uneasy about having dirty data in RAM for too long.  Unless you force the OS to write them immediately, like closing the file after each write or opening the file in O_SYNC mode.</p>
+
+<p>If the OS isn't doing the right thing, you can try raising the buffer size (third parameter to <code>open()</code>). For some guidance on appropriate values given a 100MB/s 10ms latency IO system a 1MB IO size will result in approximately 50% latency overhead, while a 10MB IO size will result in 9% overhead. If its still IO bound, you probably just need more bandwidth. Use your OS specific tools to check what kind of bandwidth you are getting to/from the disks.</p>
+
+<p>Also useful is to check if step 4 is taking a lot of time executing or waiting on IO. If it's executing you'll need to spend more time checking which part is the culprit and optimize that, or split out the work to different processes.</p>
+<br /><b>#3</b><br /><p>Can you use a ramdisk for step 4? Low millions sounds doable if the rows are less than a couple of kB or so.</p>
+<br /><b>#4</b><br /><p>Use buffered writes for step 4.</p>
+
+<p>Write a simple function that simply appends the output onto a string, checks the string length, and only writes when you have enough which should be some multiple of 4k bytes. I would say start with 32k buffers and time it.</p>
+
+<p>You would have one buffer per file, so that most "writes" won't actually hit the disk.</p>
+<br /><b>#5</b><br /><p>Isn't it possible to collect a few thousand rows in ram, then go directly to the database server and execute them? </p>
+
+<p>This would remove the save to and load from the disk that step 4 entails.</p>
+
+<p>If the database server is transactional, this is also a safe way to do it - just have the database begin before your first row and commit after the last.</p>
+<br /><b>#6</b><br /><p>The first thing is to be certain of what you should optimize. You seem to not know precisely where your time is going.  Before spending more time wondering, use a performance profiler to see exactly where the time is going.</p>
+
+<p><a href="http://docs.python.org/library/profile.html" rel="nofollow">http://docs.python.org/library/profile.html</a></p>
+
+<p>When you know exactly where the time is going, you'll be in a better position to know where to spend your time optimizing.</p>
+<br />

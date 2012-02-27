@@ -1,0 +1,191 @@
+<h3>Question (ID-127606):</h3><h2>Editing XML as a dictionary in python?</h2><p>I'm trying to generate customized xml files from a template xml file in python. </p>
+
+<p>Conceptually, I want to read in the template xml, remove some elements, change some text attributes, and write the new xml out to a file.  I wanted it to work something like this:</p>
+
+<p>conf_base = ConvertXmlToDict('config-template.xml')
+conf_base_dict = conf_base.UnWrap()
+del conf_base_dict['root-name']['level1-name']['leaf1']
+del conf_base_dict['root-name']['level1-name']['leaf2']</p>
+
+<p>conf_new = ConvertDictToXml(conf_base_dict)</p>
+
+<p>now I want to write to file, but I don't see how to get to 
+ElementTree.ElementTree.write() </p>
+
+<p>conf_new.write('config-new.xml') </p>
+
+<p>Is there some way to do this, or can someone suggest doing this a different way? </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>This'll get you a dict minus attributes... dunno if this is useful to anyone. I was looking for an xml to dict solution myself when i came up with this.</p>
+
+<pre><code>
+
+import xml.etree.ElementTree as etree
+
+tree = etree.parse('test.xml')
+root = tree.getroot()
+
+def xml_to_dict(el):
+  d={}
+  if el.text:
+    d[el.tag] = el.text
+  else:
+    d[el.tag] = {}
+  children = el.getchildren()
+  if children:
+    d[el.tag] = map(xml_to_dict, children)
+  return d
+</code></pre>
+
+<p>This: <a href="http://www.w3schools.com/XML/note.xml" rel="nofollow">http://www.w3schools.com/XML/note.xml</a></p>
+
+<p>Would equal this:</p>
+
+<pre><code>
+{'note': [{'to': 'Tove'},
+          {'from': 'Jani'},
+          {'heading': 'Reminder'},
+          {'body': "Don't forget me this weekend!"}]}
+</code></pre>
+<br /><b>#1</b><br /><p>I'm not sure if converting the info set to nested dicts first is easier. Using ElementTree, you can do this:</p>
+
+<pre><code>import xml.etree.ElementTree as ET
+doc = ET.parse("template.xml")
+lvl1 = doc.findall("level1-name")[0]
+lvl1.remove(lvl1.find("leaf1")
+lvl1.remove(lvl1.find("leaf2")
+# or use del lvl1[idx]
+doc.write("config-new.xml")
+</code></pre>
+
+<p>ElementTree was designed so that you don't have to convert your XML trees to lists and attributes first, since it uses exactly that internally.</p>
+
+<p>It also support as small subset of <a href="http://effbot.org/zone/element-xpath.htm" rel="nofollow">XPath</a>.</p>
+<br /><b>#2</b><br /><p>For easy manipulation of XML in python, I like the <a href="http://www.crummy.com/software/BeautifulSoup/">Beautiful Soup</a> library. It works something like this:<br />
+Sample XML File:</p>
+
+<pre><code>&lt;root&gt;
+  &lt;level1&gt;leaf1&lt;/level1&gt;
+  &lt;level2&gt;leaf2&lt;/level2&gt;
+&lt;/root&gt;
+</code></pre>
+
+<p>Python code:</p>
+
+<pre><code>from BeautifulSoup import BeatifulStoneSoup, Tag, NavigableString
+
+soup = BeautifulStoneSoup('config-template.xml') # get the parser for the xml file
+soup.contents[0].name
+# u'root'
+</code></pre>
+
+<p>You can use the node names as methods:</p>
+
+<pre><code>soup.root.contents[0].name
+# u'level1'
+</code></pre>
+
+<p>It is also possible to use regexes:</p>
+
+<pre><code>import re
+tags_starting_with_level = soup.findAll(re.compile('^level'))
+for tag in tags_starting_with_level: print tag.name
+# level1
+# level2
+</code></pre>
+
+<p>Adding and inserting new nodes is pretty straightforward:</p>
+
+<pre><code># build and insert a new level with a new leaf
+level3 = Tag(soup, 'level3')
+level3.insert(0, NavigableString('leaf3')
+soup.root.insert(2, level3)
+
+print soup.prettify()
+# &lt;root&gt;
+#  &lt;level1&gt;
+#   leaf1
+#  &lt;/level1&gt;
+#  &lt;level2&gt;
+#   leaf2
+#  &lt;/level2&gt;
+#  &lt;level3&gt;
+#   leaf3
+#  &lt;/level3&gt;
+# &lt;/root&gt;
+</code></pre>
+<br /><b>#3</b><br /><p>My modification of Daniel's answer, to give a marginally neater dictionary:</p>
+
+<pre><code>def xml_to_dictionary(element):
+    l = len(namespace)
+    dictionary={}
+    tag = element.tag[l:]
+    if element.text:
+        if (element.text == ' '):
+            dictionary[tag] = {}
+        else:
+            dictionary[tag] = element.text
+    children = element.getchildren()
+    if children:
+        subdictionary = {}
+        for child in children:
+            for k,v in xml_to_dictionary(child).items():
+                if k in subdictionary:
+                    if ( isinstance(subdictionary[k], list)):
+                        subdictionary[k].append(v)
+                    else:
+                        subdictionary[k] = [subdictionary[k], v]
+                else:
+                    subdictionary[k] = v
+        if (dictionary[tag] == {}):
+            dictionary[tag] = subdictionary
+        else:
+            dictionary[tag] = [dictionary[tag], subdictionary]
+    if element.attrib:
+        attribs = {}
+        for k,v in element.attrib.items():
+            attribs[k] = v
+        if (dictionary[tag] == {}):
+            dictionary[tag] = attribs
+        else:
+            dictionary[tag] = [dictionary[tag], attribs]
+    return dictionary
+</code></pre>
+
+<p>namespace is the xmlns string, including braces, that ElementTree prepends to all tags, so here I've cleared it as there is one namespace for the entire document</p>
+
+<p>NB that I adjusted the raw xml too, so that 'empty' tags would produce at most a ' ' text property in the ElementTree representation</p>
+
+<pre><code>spacepattern = re.compile(r'\s+')
+mydictionary = xml_to_dictionary(ElementTree.XML(spacepattern.sub(' ', content)))
+</code></pre>
+
+<p>would give for instance</p>
+
+<pre><code>{'note': {'to': 'Tove',
+         'from': 'Jani',
+         'heading': 'Reminder',
+         'body': "Don't forget me this weekend!"}}
+</code></pre>
+
+<p>it's designed for specific xml that is basically equivalent to json, should handle element attributes such as</p>
+
+<pre><code>&lt;elementName attributeName='attributeContent'&gt;elementContent&lt;/elementName&gt;
+</code></pre>
+
+<p>too</p>
+
+<p>there's the possibility of merging the attribute dictionary / subtag dictionary similarly to how repeat subtags are merged, although nesting the lists seems kind of appropriate :-)</p>
+<br /><b>#4</b><br /><p>Have you tried this?</p>
+
+<pre><code>print xml.etree.ElementTree.tostring( conf_new )
+</code></pre>
+<br /><b>#5</b><br /><p>most direct way to me :</p>
+
+<pre><code>root        = ET.parse(xh)
+data        = root.getroot()
+xdic        = {}
+if data &gt; None:
+    for part in data.getchildren():
+        xdic[part.tag] = part.text
+</code></pre>
+<br />

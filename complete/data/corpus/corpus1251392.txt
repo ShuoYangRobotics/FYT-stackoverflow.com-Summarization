@@ -1,0 +1,115 @@
+Question (ID-1251392): Read from socket: Is it guaranteed to at least get x bytes? I have a rare bug that seems to occur reading a socket. 
+
+ It seems, that during reading of data sometimes I get only 1-3 bytes of a data package that is bigger than this. 
+
+ As I learned from pipe-programming, there I always get at least 512 bytes as long as the sender provides enough data. 
+
+ Also my sender does at least transmit >= 4 Bytes anytime it does transmit anything -- so I was thinking that at least 4 bytes will be received at once in the beginning (!!) of the transmission. 
+
+ In 99.9% of all cases, my assumption seems to hold ... but there are really rare cases, when less than 4 bytes are received. It seems to me ridiculous, why the networking system should do this? 
+
+ Does anybody know more? 
+
+ Here is the reading-code I use: 
+
+ mySock, addr = masterSock.accept()
+mySock.settimeout(10.0)
+result = mySock.recv(BUFSIZE)
+# 4 bytes are needed here ...
+...
+# read remainder of datagram
+...
+ 
+
+ The sender sends the complete datagram with one call of send. 
+
+ Edit: the whole thing is working on localhost -- so no complicated network applications (routers etc.) are involved. BUFSIZE is at least 512 and the sender sends at least 4 bytes. 
+ Answers (Total-8): #0 I assume you're using TCP. TCP is a stream based protocol with no idea of packets or message boundaries. 
+
+ This means when you do a read you may get less bytes than you request. If your data is 128k for example you may only get 24k on your first read requiring you to read again to get the rest of the data. 
+
+ For an example in C: 
+
+ int read_data(int sock, int size, unsigned char *buf) {
+ int bytes_read = 0, len = 0;
+ while (bytes_read &lt; size &amp;&amp; 
+   ((len = recv(sock, buf + bytes_read,size-bytes_read, 0)) &gt; 0)) {
+  bytes_read += len;
+ }
+ if (len == 0 || len &lt; 0) doerror();
+ return bytes_read;
+}
+ 
+ #1 As far as I know, this behaviour is perfectly reasonable. Sockets may, and probably will fragment your data as they transmit it. You should be prepared to handle such cases by applying appropriate buffering techniques. 
+
+ On other hand, if you are transmitting the data on the localhost and you are indeed getting only 4 bytes it probably means you have a bug somewhere else in your code. 
+
+ EDIT: An idea - try to fire up a packet sniffer and see whenever the packet transmitted will be full or not; this might give you some insight whenever your bug is in your client or in your server. 
+ #2 The simple answer to your question, "Read from socket: Is it guaranteed to at least get x bytes?", is no . Look at the doc strings for these socket methods: 
+
+ &gt;&gt;&gt; import socket
+&gt;&gt;&gt; s = socket.socket()
+&gt;&gt;&gt; print s.recv.__doc__
+recv(buffersize[, flags]) -&gt; data
+
+Receive up to buffersize bytes from the socket. For the optional flags
+argument, see the Unix manual. When no data is available, block until
+at least one byte is available or until the remote end is closed. When
+the remote end is closed and all data is read, return the empty string.
+&gt;&gt;&gt; 
+&gt;&gt;&gt; print s.settimeout.__doc__
+settimeout(timeout)
+
+Set a timeout on socket operations. 'timeout' can be a float,
+giving in seconds, or None. Setting a timeout of None disables
+the timeout feature and is equivalent to setblocking(1).
+Setting a timeout of zero is the same as setblocking(0).
+&gt;&gt;&gt; 
+&gt;&gt;&gt; print s.setblocking.__doc__
+setblocking(flag)
+
+Set the socket to blocking (flag is true) or non-blocking (false).
+setblocking(True) is equivalent to settimeout(None);
+setblocking(False) is equivalent to settimeout(0.0).
+ 
+
+ From this it is clear that recv() is not required to return as many bytes as you asked for. Also, because you are calling settimeout(10.0) , it is possible that some, but not all, data is received near the expiration time for the recv() . In that case recv() will return what it has read - which will be less than you asked for (but consistenty &lt; 4 bytes does seem unlikely). 
+
+ You mention datagram in your question which implies that you are using (connectionless) UDP sockets (not TCP). The distinction is described here . The posted code does not show socket creation so we can only guess here, however, this detail can be important. It may help if you could post a more complete sample of your code. 
+
+ If the problem is reproducible you could disable the timeout (which incidentally you do not seem to be handling) and see if that fixes the problem. 
+ #3 This is just the way TCP works. You aren't going to get all of your data at once. There are just too many timing issues between sender and receiver including the senders operating system, NIC, routers, switches, the wires themselves, the receivers NIC, OS, etc. There are buffers in the hardware, and in the OS. 
+
+ You can't assume that the TCP network is the same as a OS pipe. With the pipe, it's all software so there's no cost in delivering the whole message at once for most messages. With the network, you have to assume there will be timing issues, even in a simple network. 
+
+ That's why recv() can't give you all the data at once, it may just not be available, even if everything is working right. Normally, you will call recv() and catch the output. That should tell you how many bytes you've received. If it's less than you expect, you need to keep calling recv() (as has been suggested) until you get the correct number of bytes. Be aware that in most cases, recv() returns -1 on error, so check for that and check your documentation for ERRNO values. EAGAIN in particular seems to cause people problems. You can read about it on the internet for details, but if I recall, it means that no data is available at the moment and you should try again. 
+
+ Also, it sounds like from your post that you're sure the sender is sending the data you need sent, but just to be complete, check this:
+ http://beej.us/guide/bgnet/output/html/multipage/advanced.html#sendall 
+
+ You should be doing something similar on the recv() end to handle partial receives. If you have a fixed packet size, you should read until you get the amount of data you expect. If you have a variable packet size, you should read until you have the header that tells you how much data you send(), then read that much more data. 
+ #4 From the Linux man page of recv http://linux.about.com/library/cmd/blcmdl2_recv.htm : 
+
+ 
+ The receive calls normally return any
+ data available, up to the requested
+ amount, rather than waiting for
+ receipt of the full amount requested. 
+ 
+
+ So, if your sender is still transmitting bytes, the call will only give what has been transmitted so far. 
+ #5 If the sender sends 515 bytes, and your BUFSIZE is 512, then the first recv will return 512 bytes, and the next will return 3 bytes... Could this be what's happening? 
+
+ (This is just one case amongst many which will result in a 3-byte recv from a larger send...) 
+ #6 If you are still interested, patterns like this : 
+
+ # 4 bytes are needed here ......
+# read remainder of datagram...
+ 
+
+ may create the silly window thing. 
+
+ Check this out 
+ #7 If indeed you are using UDP datagrams, then "partial" recv()'s should not be possible as long as your receive buffer is large enough. 
+
+ Refer to this other StackOverflow post: C: non-blocking udp socket: what do I get?

@@ -1,0 +1,187 @@
+Question (ID-6831539): Optimizing Python for loop I have a loop that is my biggest time suck for a particular function and I'd like to speed it up. Current, this single loop takes up about 400ms, while the execution for the rest of the function takes about 610ms. 
+
+ The code is: 
+
+ for ctr in xrange(N):
+ list1[ctr] = in1[ctr] - in1[0] - ctr * c1
+ list2[ctr] = in2[ctr] - in2[0] - ctr * c2
+ list3[ctr] = c3 - in1[ctr]
+ list4[ctr] = c4 - in2[ctr]
+ 
+
+ N can be anywhere from around 40,000 to 120,000, and is the length of all lists (in1, in2, listN) shown. 
+
+ Does anyone know some Python tricks to speed this up? I already tried using map instead, as I know it tries to compile to more efficient code, but it was about 250ms slower. 
+
+ Thanks 
+ Answers (Total-9): #0 Assuming that list1 , list2 , etc, all are numerical, consider using numpy arrays instead of lists. For large sequences of integers or floats you'll see a huge speedup. 
+
+ If you go that route, your loop above could be written like this: 
+
+ ctr = np.arange(N)
+list1 = n1 - n1[0] - ctr * c1
+list2 = n2 - n2[0] - ctr * c2
+list3 = c3 - ctr
+list4 = c4 - ctr
+ 
+
+ And as a full stand-alone example for timing: 
+
+ import numpy as np
+N = 100000
+
+# Generate some random data...
+n1 = np.random.random(N)
+n2 = np.random.random(N)
+c1, c2, c3, c4 = np.random.random(4)
+
+ctr = np.arange(N)
+list1 = n1 - n1[0] - ctr * c1
+list2 = n2 - n2[0] - ctr * c2
+list3 = c3 - ctr
+list4 = c4 - ctr
+ 
+
+ Of course, if your list1 , list2 , etc are non-numerical (i.e. lists of python objects other than floats or ints), then this won't help. 
+ #1 There was a bit of a mistake originally (see below) These are more properly cached. 
+
+ # These can be cached as they do not change.
+base_in1 = in1[0]
+base_in2 = in2[0]
+for ctr in xrange(N):
+ # these are being looked up several times. Look-ups take time in almost every
+ # language. Look them up once and then use the new value.
+ cin1 = in1[ctr]
+ cin2 = in2[ctr]
+ list1[ctr] = cin1 - base_in1 - ctr * c1
+ list2[ctr] = cin2 - base_in2 - ctr * c2
+ list3[ctr] = c3 - cin1
+ list4[ctr] = c4 - cin2
+ 
+
+ (Mistake below): 
+
+ Originally I thought that this could be solved by caching constants: 
+
+ # these values never change
+ctr1 = ctr * c1
+ctr2 = ctr * c2
+in10 = ctr1 + in1[0]
+in20 = ctr2 + in2[0]
+for ctr in xrange(N):
+ # these are being looked up several times. That costs time.
+ # look them up once and then use the new value.
+ cin1 = in1[ctr]
+ cin2 = in2[ctr]
+ list1[ctr] = cin1 - in10
+ list2[ctr] = cin2 - in20
+ list3[ctr] = c3 - cin1
+ list4[ctr] = c4 - cin2
+ 
+
+ But as Tim pointed out, I had missed the ctr in my original attempt. 
+ #2 Optimization depends on the compiler but there are a couple of things you can try. Glad to see you are profiling the code! 
+
+ You can try: 
+
+ 
+ Storing in1[ctr] and other multiply used expressions in a variable first (although most compilers can do this already, who knows). 
+ Loop fission (http://en.wikipedia.org/wiki/Loop_fission) in case you are having cache problems, alternating between massive arrays. 
+ 
+ #3 From what I've noticed, Python is bad at successive mathematical expressions and will slow down tremendously. Your best options are likely to use numpy as someone else said so the code runs in C. One more Python optimization to try is to use list comprehensions. List comprehensions are usually faster than map. 
+
+ in = in1[0]
+list1 = [x - in - i * c1 for i, x in enumerate(in1)]
+ 
+
+ This method doesn't involve using xrange at all (uses Python's very strong iteration functions). 
+
+ Example using timeit. 
+
+ &gt;&gt;&gt; import timeit
+&gt;&gt;&gt; timeit.timeit(stmt="[x * 2 for x in xrange(1000)]", number=10000)
+8.27007...
+&gt;&gt;&gt; timeit.timeit(stmt="map(lambda x: x * 2, xrange(1000))", number=10000)
+19.5969...
+&gt;&gt;&gt; timeit.timeit(stmt="""lst=[0]*1000
+for x in xrange(1000):
+ lst[x] = x * 2
+""", number=10000)
+13.7785...
+# this last one doesn't actually do what you want it to do, but for comparison
+# it's faster because it doesn't have to store any data from the computation
+&gt;&gt;&gt; timeit.timeit(stmt="for x in xrange(1000): x * 2", number=10000)
+6.98619...
+ 
+
+ (if you need help constructing the other 4 list comprehensions, just comment) 
+
+ Edit: Some timeit examples. 
+ #4 You could try re-writing it as several loops: 
+
+ for ctr in xrange(N):
+ list1[ctr] = in1[ctr] - in1[0] - ctr * c1
+
+for ctr in xrange(N):
+ list2[ctr] = in2[ctr] - in2[0] - ctr * c2
+
+for ctr in xrange(N):
+ list3[ctr] = c3 - in1[ctr]
+
+for ctr in xrange(N):
+ list4[ctr] = c4 - in2[ctr]
+ 
+
+ It may not be as stupid as it sounds. Measure it. One problem with this kind of code can be locality of reference. If you're jumping around memory you can work against cache. You may find zipping through arrays individually may be kinder on your cache. 
+
+ You could also think of doing them in parallel threads. 
+ #5  itertools.count is faster. map generates a list in Python 2, you'll want itertools.imap there. 
+ #6 A map only helps if you have random access. In your case, a list is the correct data type. 
+
+ Try to extract the constants in1[0] - ctr * c1 and in2[0] - ctr * c2 out of the loop . Opps. ctr is not a constant. You can try x1 = c1 and then x1 += c1 but I don't think the addition is much faster than multiply on todays CPUs. 
+
+ Then, you should have a look at the array module or Numpy . Instead of creating list3 like in your code, create a copy of in1 , invert all elements ( *-1 ) and then add c3 to each element. The mass mutation methods of array/Numpy will make this much faster. 
+
+ Other than that, there is little you can do without touching the rest of the code. For example, instead of actually calculating list3 and list4 , you could create objects that return the values when they are necessary. But my guess is that you need all values, so this wouldn't help. 
+
+ If that's not fast enough, you will have to use a different language or write a C module. 
+ #7 Use numpy . The loop gets replaced by a few differences of arrays, the evaluation of which is done in C. 
+ #8 It is somewhat faster to use list comprehensions to calculate the contents of your lists than to use a for loop. 
+
+ import random
+
+N = 40000
+c1 = 4
+c2 = 9
+c3 = 11
+c4 = 8
+in1 = [random.randint(1, 50000) for _ in xrange(N)]
+in2 = [random.randint(1, 50000) for _ in xrange(N)]
+list1 = [None for _ in xrange(N)]
+list2 = [None for _ in xrange(N)]
+list3 = [None for _ in xrange(N)]
+list4 = [None for _ in xrange(N)]
+in1_0 = in1[0]
+in2_0 = in2[0]
+
+def func():
+ for ctr in xrange(N):
+  list1[ctr] = in1[ctr] - in1_0 - ctr * c1
+  list2[ctr] = in2[ctr] - in2_0 - ctr * c2
+  list3[ctr] = c3 - in1[ctr]
+  list4[ctr] = c4 - in2[ctr]
+
+def func2():
+ global list1, list2, list3, list4
+ list1 = [(in1[ctr] - in1_0 - ctr * c1) for ctr in xrange(N)]
+ list2 = [(in2[ctr] - in2_0 - ctr * c2) for ctr in xrange(N)]
+ list3 = [(c3 - in1[ctr]) for ctr in xrange(N)]
+ list4 = [(c4 - in2[ctr]) for ctr in xrange(N)]
+ 
+
+ And then timeit results: 
+
+ % python -mtimeit -s 'import flup' 'flup.func()'
+10 loops, best of 3: 42 msec per loop
+% python -mtimeit -s 'import flup' 'flup.func2()'
+10 loops, best of 3: 34.1 msec per loop

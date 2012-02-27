@@ -1,0 +1,110 @@
+<h3>Question ( ID-1166118 ) : </h3><h2>How to strip <span style="background-color:yellow;">decorators</span> <span style="background-color:yellow;">from</span> a <span style="background-color:yellow;">function</span> in python </h2><p>Let 's say I have the <span style="background-color:yellow;">following</span> : </p>
+<pre><code>def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(get_connection(...), *args, **kwargs)
+    return decorated
+
+@with_connection
+def spam(connection):
+    # Do something
+</code></pre>
+<p>I want to test the <span style="background-color:yellow;">spam</span> <span style="background-color:yellow;">function</span> without going through the hassle of setting up a <span style="background-color:yellow;">connection</span> ( or whatever the <span style="background-color:yellow;">decorator</span> is doing ) . </p>
+<p>Given <span style="background-color:yellow;">spam</span> , how do I strip the <span style="background-color:yellow;">decorator</span> <span style="background-color:yellow;">from</span> it and get the underlying " undecorated " <span style="background-color:yellow;">function</span> ? </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>In the general case , you ca n't , because </p>
+<pre><code>@with_connection
+def spam(connection):
+    # Do something
+</code></pre>
+<p>is equivalent to </p>
+<pre><code>def spam(connection):
+    # Do something
+
+spam = with_connection(spam)
+</code></pre>
+<p>which means that the " original " <span style="background-color:yellow;">spam</span> might not even exist anymore. A ( not too pretty ) hack would be this : </p>
+<pre><code>def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(get_connection(...), *args, **kwargs)
+    decorated._original = f
+    return decorated
+
+@with_connection
+def spam(connection):
+    # Do something
+
+spam._original(testcon) # calls the undecorated function
+</code></pre>
+<br /><b># 1 </b><br /><p>Behold , FuglyHackThatWillWorkForYourExampleButICantPromiseAnythingElse : </p>
+<pre><code> orig_spam = spam.func_closure[0].cell_contents
+</code></pre>
+<p>Edit : For <span style="background-color:yellow;">functions/methods</span> <span style="background-color:yellow;">decorated</span> more than once and with more complicated <span style="background-color:yellow;">decorators</span> you can try using the <span style="background-color:yellow;">following</span> code. It relies on the <span style="background-color:yellow;">fact</span> , that <span style="background-color:yellow;">decorated</span> <span style="background-color:yellow;">functions</span> are __name__d differently than the original <span style="background-color:yellow;">function</span> . </p>
+<pre><code>def search_for_orig(decorated, orig_name):
+    for obj in (c.cell_contents for c in decorated.__closure__):
+    	if hasattr(obj, "__name__") and obj.__name__ == orig_name:
+    		return obj
+    	if hasattr(obj, "__closure__") and obj.__closure__:
+    		found = search_for_orig(obj, orig_name)
+    		if found:
+    			return found
+    return None
+
+ >>> search_for_orig(spam, "spam")
+ <function spam at 0x027ACD70>
+</code></pre>
+<p>It 's not <span style="background-color:yellow;">fool</span> proof though. It will <span style="background-color:yellow;">fail</span> if the name of the <span style="background-color:yellow;">function</span> returned <span style="background-color:yellow;">from</span> a <span style="background-color:yellow;">decorator</span> is the same as the <span style="background-color:yellow;">decorated</span> one. The order of hasattr ( ) checks is also a heuristic , there are <span style="background-color:yellow;">decoration</span> chains that return wrong results in any case . </p>
+<br /><b># 2 </b><br /><p>balpha 's solution can be made more generalizable with this meta-decorator : </p>
+<pre><code>def include_original(dec):
+    def meta_decorator(f):
+        decorator = dec(f)
+        decorator._original = f
+        return decorator
+    return meta_decorator
+</code></pre>
+<p>Then you can <span style="background-color:yellow;">decorate</span> your <span style="background-color:yellow;">decorators</span> with @ <span style="background-color:yellow;">include_original</span> , and every one will have a testable ( undecorated ) version tucked away inside it . </p>
+<br /><b># 3 </b><br /><p>The usual approach to testing such <span style="background-color:yellow;">functions</span> is to make any dependencies , such as get_connection , configurable. Then you can override it with a mock while testing. Basically the same as dependency injection in the Java world but a lot simpler thanks to Pythons dynamic nature . </p>
+<p>Code <span style="background-color:yellow;">for</span> it might look something like this : </p>
+<pre><code># decorator definition
+def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(with_connection.connection_getter(), *args, **kwargs)
+    return decorated
+
+# normal configuration
+with_connection.connection_getter = lambda: get_connection(...)
+
+# inside testsuite setup override it
+with_connection.connection_getter = lambda: "a mock connection"
+</code></pre>
+<p>Depending on your code you could <span style="background-color:yellow;">find</span> a better object than the <span style="background-color:yellow;">decorator</span> to stick the <span style="background-color:yellow;">factory</span> <span style="background-color:yellow;">function</span> on. The issue with having it on the <span style="background-color:yellow;">decorator</span> is that you 'd have to remember to restore it to the old value in the teardown method . </p>
+<br /><b># 4 </b><br /><p>Instead of doing. . </p>
+<pre><code>def with_connection(f):
+    def decorated(*args, **kwargs):
+        f(get_connection(...), *args, **kwargs)
+    return decorated
+
+@with_connection
+def spam(connection):
+    # Do something
+
+orig_spam = magic_hack_of_a_function(spam)
+</code></pre>
+<p>You could just do. . </p>
+<pre><code>def with_connection(f):
+    ....
+
+def spam_f(connection):
+    ...
+
+spam = with_connection(spam_f)
+</code></pre>
+<p>..which is all the @ <span style="background-color:yellow;">decorator</span> syntax does - you can then obviously access the original <span style="background-color:yellow;">spam_f</span> normally </p>
+<br /><b># 5 </b><br /><p>Add a do-nothing <span style="background-color:yellow;">decorator</span> : </p>
+<pre><code>def do_nothing(f):
+    return f
+</code></pre>
+<p>After defining or importing <span style="background-color:yellow;">with_connection</span> but before you get to the methods that use it as a <span style="background-color:yellow;">decorator</span> , add : </p>
+<pre><code>if TESTING:
+    with_connection = do_nothing
+</code></pre>
+<p>Then if you set the global TESTING to True , you will have replaced <span style="background-color:yellow;">with_connection</span> with a do-nothing <span style="background-color:yellow;">decorator</span> . </p>
+<br />

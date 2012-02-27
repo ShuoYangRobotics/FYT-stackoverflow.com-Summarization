@@ -1,0 +1,114 @@
+Question (ID-1975856): Python: find index of item containing X in list I have a huge list of data, more than 1M records in a form similar (though this is a much simpler form) to this: 
+
+ [
+ {'name': 'Colby Karnopp', 'ids': [441, 231, 822]}, 
+ {'name': 'Wilmer Lummus', 'ids': [438, 548, 469]},
+ {'name': 'Hope Teschner', 'ids': [735, 747, 488]}, 
+ {'name': 'Adolfo Fenrich', 'ids': [515, 213, 120]} 
+ ... 
+]
+ 
+
+ Given an id of 735, I want to find the index 2 for Hope Teschner since the given id falls within the list of ids for Hope. What is the best (performance-wise) way to do this? 
+
+ Thanks for any tips. 
+
+ EDIT 
+
+ Probably should have mentioned this, but an id could show up more than once. In the case that a particular id does show up more than once, I want the lowest index for the given id. 
+
+ The data in the list will be changing frequently, so I am hesitant to go about building a dictionary since the dictionary would need to be modified / rebuilt with each update to the list since the indexes are the values in the dict - ie. changing the position of one item in the list would require every value in the dictionary to be updated whose index is greater than the newly changed index. 
+
+ EDIT EDIT 
+
+ I just did some benchmarking and it seems that rebuilding the dictionary is quite fast even for 1M + records. I think I will pursue this solution for now. 
+ Answers (Total-7): #0 Simplest way to get the first index satisfying the condition (in Python 2.6 or better: 
+
+ next((i for i, d in enumerate(hugelist) if 735 in d['ids']), None)
+ 
+
+ this gives None if no item satisfies the condition; more generally you could put as the second argument to the next built-in whatever you require in that case, or omit the second arg (and in that case you can remove one set of parentheses) if you're OK with getting a StopIteration exception when no item satisfies the condition (e.g., you know that situation is impossible). 
+
+ If you need to do this kind of operation more than very few times between changes to the hugelist or its contents, then, as you indicate in the second edit to your question, building an auxiliary dict (from integer to index of first dict containing it) is preferable. Since you want the first applicable index, you want to iterate backwards (so hits that are closer to the start of hugelist will override ones that are further on) -- for example: 
+
+ auxdict = {}
+L = len(hugelist) - 1
+for i, d in enumerate(reversed(hugelist)):
+ auxdict.update(dict.fromkeys(d['ids'], L-i))
+ 
+
+ [[You cannot use reversed(enumerate(... because enumerate returns an iterator, not a list, and reversed is optimized to only work on a sequence argument -- whence the need for L-i ]]. 
+
+ You can build auxdict in other ways, including without the reversal, for example: 
+
+ auxdict = {}
+for i, d in enumerate(hugelist):
+ for item in d['ids']:
+ if item not in auxdict: auxdict[item] =i
+ 
+
+ but this is likely to be substantially slower due to the huge number of if that execute in the inner loop. The direct dict constructor (taking a sequence of key, value pairs) is also likely to be slower due to the need of inner loops: 
+
+ L = len(hugelist) - 1
+auxdict = dict((item, L-i) for i, d in enumerate(reversed(hugelist)) for item in d['ids'])
+ 
+
+ However, these are just qualitative considerations -- consider running benchmarks over a few "typical / representative" examples of values you could have in hugelist (using timeit at the command line prompt, as I've often recommended) to measure the relative speeds of these approaches (as well as, how their runtimes compare to that of an unaided lookup as I showed at the start of this answer -- this ratio, plus the average number of lookups you expect to perform between successive hugelist changes, will help you select the overall strategy). 
+ #1 Performancewise, if you have 1M records you might want to switch to a database or a different data structure. With the given data structure this will be a linear time operation. You could create an ID to records dict once though if you plan to do this query often. 
+ #2 The best way would probably be to setup a reverse dict() from ids to names. 
+ #3 You might find the Schwartzian Transform useful. 
+ #4 Can two or more dicts share the same ID? If so, I presume you will need to return a list of indexes. 
+
+ If you want to do a one-off search then you can do it with a list comprehension: 
+
+ &gt;&gt;&gt; x = [
+... {'name': 'Colby Karnopp', 'ids': [441, 231, 822]}, 
+... {'name': 'Wilmer Lummus', 'ids': [438, 548, 469]},
+... {'name': 'Hope Teschner', 'ids': [735, 747, 488]}, 
+... {'name': 'Adolfo Fenrich', 'ids': [515, 213, 120]},
+  ...
+... ]
+
+&gt;&gt;&gt; print [idx for (idx, d) in enumerate(x) if 735 in d['ids']]
+[2]
+ 
+
+ However if you want to do this a lot and the list does not change much then it is much better to create an inverse index: 
+
+ &gt;&gt;&gt; indexes = dict((id, idx) for (idx,d) in enumerate(x) for id in d['ids'])
+&gt;&gt;&gt; indexes
+{213: 3, 515: 3, 548: 1, 822: 0, 231: 0, 488: 2, 747: 2, 469: 1, 438: 1, 120: 3, 441: 0, 735: 2}
+&gt;&gt;&gt; indexes[735]
+2
+ 
+
+ NB: the above code assumes that each ID is unique. If there are duplicates replace the dict with a collections.defaultdict(list). 
+
+ NNB: the above code returns the index into the original list since that is what you asked for. However it is probably better to return the actual dict instead of the index unless you want to use the index to delete it from the list. 
+ #5 If frequency of building the index is low: 
+
+ Create a lookup array of index values into your main list, such that eg 
+
+ lookup = [-1,-1,-1...]
+
+...
+def addtolookup
+...
+
+mainlistindex =lookup[myvalue]
+if mainlistindex!=-1:
+ name=mainlist[mainlistindex].name
+ 
+
+ If frwquency is high, consider the sorting approach (I think this is what is meant by the Schwartzian Transform answer). This might be good if you are having more problems with the performance in rebuilding your tree whenever the source list changes than you are with performance getting the data out of the manufactured index; as slotting data into an existing list (that (crucially) knows about the other possible matches for an id for when previous best match string stops being associated with an id) will be faster than building a list from scratch on every delta. 
+
+ EDIT 
+
+ This assumes that your IDs are densely populated integers. 
+
+ To increase performance in accessing the sorted list, it can be partitioned into blocks of say 400-600 entries to avoid repeatedly moving the entire list forwards or backwards one or a few positions, and searched with a binary algorithm. 
+ #6 It seems that the data structure is ill-suited to its use. Changing the list is costly - both the change itself (if you do any insertions/delitions) and the resulting need to rebuild a dict, or do linear scans every time. 
+
+ The question is: how is your list changing? 
+
+ Perhaps instead of using indexes (which change frequently), you could use objects, and use pointers to the objects themselves instead of worrying about indexes?

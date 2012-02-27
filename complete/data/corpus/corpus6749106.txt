@@ -1,0 +1,200 @@
+Question (ID-6749106): Most efficient method to get key for similar values in a dict I have a dictionary of objects: 
+
+ # I have thousands of objects in my real world scenario
+dic = {'k1':obj1, 'k2':obj2, 'k3':obj3, ...}
+# keys are string
+# objs are MyObject
+ 
+
+ Edit : Sorry for letting doubt in the question. Here is the exact class and the like() function: 
+
+ class MyObject(object):
+ def __init__(self, period, dimensions):
+  self.id = None
+  self.period = period # period is etree.Element
+  self.dimensions = dict() # id -&gt; lxml.XMLElements
+  for dim in dimensions:
+   # there must be only one child: the typed dimension
+   self.dimensions[dim.get('dimension')] = dim[0]
+  self._hash = None
+
+ def __eq__(self, other):
+  return isinstance(other, MyObject)
+   and self.period == other.period
+   and self.dimensions == other.dimensions
+
+ def like(self, other):
+  return (other is not None \
+   and self.period == other.period \
+   and self.dimensions.keys() == other.dimensions.keys())
+ 
+
+ I wonder how I can have the best implementation for finding objects in dictionary dic that are similar to a given value val . Something equivalent to: 
+
+ def find_keys(dic, val):
+ return [v for v in dic if v.like(val))
+ 
+
+ However this method is too slow, because I have thousands of iterations over find-keys() and thousands objects in the dictionary. 
+
+ Right now, I have implemented a __hash__(self) on these objects, and added the key as a property: 
+
+  def __hash__(self):
+  if self._hash is None:
+   self._hash = hash(self.periodtype) ^ \
+    hash(tuple(sorted(self.dimensions.values())))
+  return self._hash
+ 
+
+ Then, I have built a lookup dictionary that is 
+
+ hash_dic = { hash(obj1): [obj1], hash(obj2): [obj2, obj3] }
+ 
+
+ And this new search method is much faster: 
+
+ def find_keys_fast(dic, val):
+ prefetched=hash_dic[hash(val)]
+ return [x.key for x in prefetched if x.like(val)]
+ 
+
+ Since __hash__ is a native function internally used by Sets and Dictionaries, is there anything faster or more elegant I could do? 
+ Answers (Total-6): #0 Since I don't know the structure of your data or the nature of the similarity you are seeking, I can only guess at what might work. But perhaps you could build some kind of prefix tree using dictionaries. As in: 
+
+ trie = {'a':{'b':{'e':{}, 's':{}}, 'c':{'t':{}, 'k':{}}}}
+ 
+
+ These are most commonly used for looking up strings with common prefixes, but perhaps there's some sense in which the data in your objects can be represented as a string. This seems like it would work especially well if there's some order the data can be put in such that earlier data in the string must compare as == . I think I can even imagine the leaves of the trie including all similar, rather than all strictly equivalent, objects. 
+
+ A small toy example of how to work with a trie: 
+
+ &gt;&gt;&gt; trie = {'a':{'b':{'e':{}, 's':{}}, 'c':{'t':{}, 'k':{}}}}
+&gt;&gt;&gt; def rec_print(trie, accum=''):
+...  if trie:
+...   for k in trie:
+...    rec_print(trie[k], accum + k)
+...  else:
+...   print accum
+... 
+&gt;&gt;&gt; rec_print(trie)
+ack
+act
+abs
+abe
+ 
+ #1 Your approach looks quite good to me if you only want the like objects of a few objects. 
+
+ There is also nothing wrong with defining __hash__() for your own class. 
+
+ If you want to group all your objects in classes of "like" objects, then there is a faster approach: you can use the transitivity of your like() method. In fact, if like(obj0, obj1) and like(obj1, obj2) are true, then like(obj0, obj2) is automatically true, with no need for further calculations. This means that you can directly group all your objects in classes with the efficient 
+
+ signature = lambda obj: (obj.period, obj.typed_dimensions.keys())
+sorted_objs = sorted(dic.values(), key=signature)
+objs_in_like_classes = [list(group) for (_, group) in itertools.groupby(sorted_objs, key=signature)]
+ 
+
+ This groups like objects together, automatically. This is simpler, and is likely faster than defining __hash__() and __eq__() and doing the prefetching by yourself, because groupby() uses the transitivity of == . 
+
+ ( PS : I prefer Michael J. Barber's "dictionary of like objects grouped by hashable signature" approach to this solution, because it is probably a tad faster, and is also more general, as no sorting is necessary.) 
+
+ If you need to keep your current approach, you can do it in a slightly cleaner way: you could check whether you really need any of these if other is not None tests. If you want to handle comparisons ( __eq__ ) properly, you should also handle the case of other being of a different class (instead of checking only for identity with None ); an isinstance() would do. like() might be different, if you only ever compare objects of class MyObject . In this case, your code should look something like: 
+
+ def __eq__(self, other):
+ if isinstance(other, MyObject):
+  return (self.period == other.period
+    and self.typed_dimensions == other.typed_dimensions)
+ else:
+  return False
+
+def like(self, other):
+ return (self.period == other.period # No need for a backslash
+   and self.typed_dimensions.keys() == other.typed_dimensions.keys())
+ 
+
+ This would make the code cleaner (but not really faster). 
+
+ You could make your __hash__() function a tad faster by not doing self._hash = None in __init__() and by writing: 
+
+ def __hash__(self):
+ try:
+  return self._hash
+ except AttributeError:
+  self._hash = (hash(self.periodtype) ^
+      hash(tuple(sorted(self.dimensions.values()))))
+  return self._hash
+ 
+
+ In fact, try is fast when no exception is raised (which is the most common case by far, in your case). 
+
+ As for your hash_dict , it can be constructed quite efficiently with: 
+
+ hash_dict = dict(itertools.groupby(dic.values(), key=hash))
+ 
+
+ (maybe that's what you are already doing). 
+ #2 Now that we can see the implementation of like , a quite simple approach seems feasible---far simpler than my other answer, for one. Define a new signature method on MyObject : 
+
+ def signature(self):
+ return (self.period, frozenset(self.dimensions.keys()))
+ 
+
+ And then iterate through the objects: 
+
+ import collections
+sig_keys = collections.defaultdict(set)
+for k, obj in dic.iteritems():
+ sig_keys[obj.signature()].add(k)
+ 
+
+ With that, sig_keys.values() gives all the sets of identifiers for objects which are alike. Lists of objects could instead be directly constructed, if that would better: 
+
+ sig_objs = collections.defaultdict(list)
+for obj in dic.itervalues():
+ sig_objs[obj.signature()].append(obj)
+ 
+
+ If you want, you could define __hash__ to return hash(self.signature()) or the equivalent. 
+ #3 I don't exactly follow your prefetch step, as you didn't explain it in detail, but maybe you could just as well precompute the complete result? 
+
+ Another possibility, which I would have done, if the like method really looks like that is indexing over the y values. 
+
+ Something like index = { 10 : [obj1], 12 : [obj2, obj3] ,... } where they keys are the objects' y attribute. Hence, you end up with: 
+
+ def find_keys_in_constant_time(dic, val):
+ precomputed = index[val.y]
+ return precomputed
+ 
+
+ Of course, it also returns the original val object, but so does your original method. 
+ #4 NOTE After seeing the implementation of like , the method described is seen to be more complicated than necessary. I'll leave it here, as the approach can be generalized to fuzzier similarity measures, e.g., at least 50% of the dimensions must be the same. 
+
+ What you're doing looks a lot like an inverted index , although it's impossible to say without really knowing how like is implemented. For an inverted index, you use possible object values as the dictionary keys, mapping to lists (or other collections) of objects taking those values. With several properties, you can make several dictionaries, handling the different types of object values. You then look up all the properties for the object in the inverted index, determining an aggregate similarity for each object based on all properties. 
+
+ To take full advantage of the inverted index, it's better to think of returning all similar objects from one function. This helps you handle each possible "like" objects just once. As an extreme example, you might have an object like another only if all properties are the same; similar objects are then those objects found in all corresponding lists from the inverted index. To get all of the similar objects, you could just convert the lists to sets and take the intersection. 
+
+ Here's what it might look like in Python, slightly abbreviated to focus on the dimensions---extension to include period should be easy. There is a mapping from object identifier strings to the objects in dic . You can thus build an inverted index by mapping from the dimensions to sets of the object identifiers that have that dimension. It might be done so: 
+
+ import collections
+invind = collections.defaultdict(set)
+for k, obj in dic.iteritems():
+ for d in obj.dimensions:
+  invind[d].add(k)
+ 
+
+ Now say that you want to find all objects that have identical dimensions to a specific object test_obj . Just look up the sets of object identifiers with at least one of the dimensions, and take the intersection of all those sets. A concise way to write such a query is: 
+
+ import operator
+similar_keys = reduce(operator.and_, [invind[d] for d in test_ojb.dimensions])
+similar_objects = [dic[k] for k in similar_keys]
+ 
+
+ The operate.and_ will calculate the set intersections, reduce extends it to the whole list of sets. This is not generally the fastest approach to implement the intersections; instead you can manipulate a set of results in-place with the intersection_update method of sets, stopping early once the set is empty---I'll leave the details, as they're easy but verbose. 
+
+ The advantage of this approach is that any objects with no dimensions in common will not be compared at all . Depending on how your dimensions occur, it could be a dramatic reduction in the number of tests made. You can take the idea further, e.g., using pairs of co-occuring dimensions as the keys in the inverted index. This is more expensive to generate the keys, but generally reduces the sizes of the sets of object identifiers---a bit of experimentation, or just a good understanding of the dimensions, should help to make the right tradeoff. 
+
+ To include the periods in the comparisons, just add another inverted index mapping periods to sets of object identifiers. Extending the query for similar objects should be straightforward. 
+ #5 It's hard to answer he question, as I have no idea what are you requirements. What I would do is creating some kind of Related class and populate your items with it. How to implement it mainly depends on properties of you like function. If your relationship is symmetrical (i.e. a is like b if and only if b is like a), than you can cluster related items and instead of iterating items, you iterate clusters and compare with any item within it; if it matches, all items within cluster are in relationship with your element. 
+
+ However, the relationship from you example is not symmetrical, so you probably need another approach. You still could cluster by y and z , and on looking up element taking intersection of corresponding cluster_y with union of cluster_z 's holding z's greater or equal to element being looked up. However, it might add significant memory overhead if the values differs much. 
+
+ And you could do something else by examining your relationship properties. We could help if you provided more details.

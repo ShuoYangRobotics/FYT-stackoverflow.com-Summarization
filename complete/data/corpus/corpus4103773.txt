@@ -1,0 +1,234 @@
+Question (ID-4103773): Efficient way of having a function only execute once in a loop Atm, I'm doing stuff like: 
+
+ run_once = 0
+while 1:
+ if run_once == 0:
+  myFunction()
+  run_once = 1:
+ 
+
+ Which is getting tedious. I'm guessing there is some more accepted way of handling this stuff?
+I'm a noob, so hit me with the logic. 
+
+ *more context:
+Sorry for the vagueness, and thanks for all the answers. 
+
+ What I'm looking for is having a function excecute once, on demand. For example, at the press of a certain button. It is an interactive app which has a lot of user controlled switches. Having a junk variable for every switch, just for keeping track of whether it has been run or not, seemed kind of inefficient. 
+
+ Now, how to notify you guys on an updated question? 
+ Answers (Total-12): #0 I would use a decorator on the function to handle keeping track of how many times it runs. 
+
+ def run_once(f):
+ def wrapper(*args, **kwargs):
+  if not wrapper.has_run:
+   wrapper.has_run = True
+   return f(*args, **kwargs)
+ wrapper.has_run = False
+ return wrapper
+
+
+@run_once
+def my_function(foo, bar):
+ return foo+bar
+ 
+
+ Now my_function will only run once. Other calls to it will return None . Just add an else clause to the if if you want it to return something else. From your example, it doesn't need to return anything ever. 
+
+ If you don't control the creation of the function, or the function needs to be used normally in other contexts, you can just apply the decorator manually as well. 
+
+ action = run_once(my_function)
+while 1:
+ if predicate:
+  action()
+ 
+
+ This will leave my_function available for other uses. 
+
+ Finally, if you need to only run it once twice, then you can just do 
+
+ action = run_once(my_function)
+action() # run once the first time
+
+action.has_run = False
+action() # run once the second time
+ 
+ #1 Run the function before the loop. Example: 
+
+ myFunction()
+while True:
+ # all the other code being executed in your loop
+ 
+
+ This is the obvious solution. If there's more than meets the eye, the solution may be a bit more complicated. 
+ #2 I'm assuming this is an action that you want to be performed at most one time, if some conditions are met. Since you won't always perform the action, you can't do it unconditionally outside the loop. Something like lazily retrieving some data (and caching it) if you get a request, but not retrieving it otherwise. 
+
+ def do_something():
+ [x() for x in expensive_operations]
+ global action
+ action = lambda : None
+
+action = do_something
+while True:
+ # some sort of complex logic...
+ if foo:
+  action()
+ 
+ #3 There are many ways to do what you want; however, do note that it is quite possible that —as described in the question— you don't have to call the function inside the loop. 
+
+ If you insist in having the function call inside the loop, you can also do: 
+
+ needs_to_run= expensive_function
+while 1:
+ …
+ if needs_to_run: needs_to_run(); needs_to_run= None
+ …
+ 
+ #4 Assuming there is some reason why myFunction() can't be called before the loop 
+
+ from itertools import count
+for i in count():
+ if i==0:
+  myFunction()
+ 
+ #5 Why is this any different from your code? 
+
+ myFunction()
+while 1:
+ # rest of your code
+ pass
+ 
+ #6 I'm not sure that I understood your problem, but I think you can divide loop. On the part of the function and the part without it and save the two loops. 
+ #7 One way would be to use an object-oriented approach and make your function a class whose instances keep track whether they've been "run" or not. Since your updated question indicates you may need many of them, I've updated my answer how to handle that using the class factory pattern. 
+
+ def RunOnceFactory():
+ _shared_state = {} # created class instances share state (aka borg pattern)
+
+ class RunOnceBase(object): # an abstract base class
+  has_run = False
+  def __init__(self):
+   self.__dict__ = _shared_state
+   if self.has_run: return
+   self._do_stuff()
+   self.has_run = True
+
+  def _do_stuff(self):
+   """ abstract method (i.e. subclasses MUST implement) """
+   raise NotImplementedError
+
+ return RunOnceBase # the class created
+
+# usage examples
+class my_function1(RunOnceFactory()):
+ def __init__(self):
+  super(self.__class__, self).__init__()
+ def _do_stuff(self):
+  print "{} doing stuff".format(self.__class__.__name__)
+
+class my_function2(RunOnceFactory()):
+ def __init__(self):
+  super(self.__class__, self).__init__()
+ def _do_stuff(self):
+  print "{} doing some other stuff".format(self.__class__.__name__)
+
+for i in range(10):
+ my_function1()
+ my_function2()
+
+# output:
+# my_function1 doing stuff
+# my_function2 doing some other stuff
+ 
+
+ Note: You could make a function/class able to do stuff again by adding a reset() method to its subclass (and calling it ;-). 
+ #8 Here's an explicit way to code this up, where the state of which functions have been called is kept locally (so global state is avoided). I don't much like the non-explicit forms suggested in other answers: it's too surprising to see f() and for this not to mean that f() gets called. 
+
+ This works by using dict.pop which looks up a key in a dict, removes the key from the dict, and takes a default value to use in case the key isn't found. 
+
+ def do_nothing(*args, *kwargs):
+ pass
+
+# A list of all the functions you want to run just once.
+actions = [
+ my_function,
+ other_function
+]
+actions = dict((action, action) for action in actions)
+
+while True:
+ if some_condition:
+  actions.pop(my_function, do_nothing)()
+ if some_other_condition:
+  actions.pop(other_function, do_nothing)()
+ 
+ #9 I've thought of aother, very effective way to do this that doesn't require decorator function or classes. Instead it just uses a mutable keyword argument, which ought to work in most versions of Python. Most of the time these are something to be avoided since normally you wouldn't want a default argument value to be able to change from call-to-call -- but that ability can be leveraged and used as cheap storage mechanism. Here's how it would work: 
+
+ def my_function1(_has_run=[]):
+ if _has_run: return
+ print "my_function1 doing stuff"
+ _has_run.append(1)
+
+def my_function2(_has_run=[]):
+ if _has_run: return
+ print "my_function2 doing some other stuff"
+ _has_run.append(1)
+
+for i in range(10):
+ my_function1()
+ my_function2()
+
+my_function1(_has_run=[]) # force it to run
+
+# output:
+# my_function1 doing stuff
+# my_function2 doing some other stuff
+# my_function1 doing stuff
+ 
+
+ This could be simplified a little further by doing what @gnibbler suggested in his answer and using an iterator (which were introduced in Python 2.2.): 
+
+ from itertools import count
+
+def my_function3(_count=count()):
+ if _count.next(): return
+ print "my_function3 doing something"
+
+for i in range(10):
+ my_function3()
+
+# my_function3 doing something
+ 
+ #10 If I understand the updated question correctly, something like this should work 
+
+ def function1():
+ print "function1 called"
+
+def function2():
+ print "function2 called"
+
+def function3():
+ print "function3 called"
+
+called_functions = set()
+while True:
+ n = raw_input("choose a function: 1,2 or 3 ")
+ func = {"1": function1,
+   "2": function2,
+   "3": function3}.get(n)
+
+ if func in called_functions:
+  print "That function has already been called"
+ else:
+  called_functions.add(func)
+  func()
+ 
+ #11 If the condition check needs to happen only once you are in the loop, having a flag signaling that you have already run the function helps. In this case you used a counter, a boolean variable would work just as fine. 
+
+ signal = False
+count = 0 
+def callme(): 
+  print "I am being called" 
+while count &lt; 2: 
+  if signal == False : 
+   callme()
+   signal = True
+  count +=1

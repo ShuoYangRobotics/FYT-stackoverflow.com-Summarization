@@ -1,0 +1,131 @@
+<h3>Question ( ID-448034 ) : </h3><h2>Multithreaded Resource Access - Where Do I Put My <span style="background-color:yellow;">Locks</span> ? </h2><p>I have threaded code where each thread needs to <span style="background-color:yellow;">write</span> to the same <span style="background-color:yellow;">file.</span> To prevent concurrency <span style="background-color:yellow;">issues</span> , I am using a <span style="background-color:yellow;">Lock</span> object . </p>
+<p>My question <span style="background-color:yellow;">is</span> whether I am using the <span style="background-color:yellow;">Lock</span> correctly. If I set the lock from within each thread , <span style="background-color:yellow;">is</span> that lock global or only specific to that specific thread ? </p>
+<p>Basically , should I create a <span style="background-color:yellow;">Lock</span> first and pass <span style="background-color:yellow;">its</span> reference to each thread , or <span style="background-color:yellow;">is</span> <span style="background-color:yellow;">it</span> ok to set <span style="background-color:yellow;">it</span> from within the thread like I do here : </p>
+<pre><code>import time
+from threading import Thread, Lock
+
+def main():
+    for i in range(20):
+        agent = Agent(i)
+        agent.start()
+
+class Agent(Thread):
+    def __init__(self, thread_num):
+        Thread.__init__(self)
+        self.thread_num = thread_num
+
+    def run(self):
+        while True:
+            print 'hello from thread %s' % self.thread_num
+            self.write_result()   
+
+    def write_result(self):
+        lock = Lock()
+        lock.acquire()
+        try:
+            f = open('foo.txt', 'a')
+            f.write('hello from thread %s\n' % self.thread_num)
+            f.flush()
+            f.close()
+        finally:
+            lock.release()
+
+if __name__ == '__main__':
+    main()
+</code></pre>
+<br /><h3>Answers ( Total-7 ) : </h3><b># 0 </b><br /><p>For your use case one approach could be to <span style="background-color:yellow;">write</span> a <span style="background-color:yellow;">file</span> subclass that locks : </p>
+<pre><code>class LockedWrite(file):
+    """ Wrapper class to a file object that locks writes """
+    def __init__(self, *args, **kwds):
+        super(LockedWrite, self).__init__(*args, **kwds)
+        self._lock = Lock()
+
+    def write(self, *args, **kwds):
+        self._lock.acquire()
+        try:
+            super(LockedWrite, self).write(*args, **kwds)
+        finally:
+            self._lock.release()
+</code></pre>
+<p>To use <span style="background-color:yellow;">in</span> your code just replace following functions : </p>
+<pre><code>def main():
+    f = LockedWrite('foo.txt', 'a')
+
+    for i in range(20):
+        agent = Agent(i, f)
+        agent.start()
+
+class Agent(Thread):
+    def __init__(self, thread_num, fileobj):
+        Thread.__init__(self)
+        self.thread_num = thread_num
+        self._file = fileobj    
+
+#   ...
+
+    def write_result(self):
+        self._file.write('hello from thread %s\n' % self.thread_num)
+</code></pre>
+<p>This approach puts <span style="background-color:yellow;">file</span> locking <span style="background-color:yellow;">in</span> the <span style="background-color:yellow;">file</span> <span style="background-color:yellow;">itself</span> which seems cleaner IMHO </p>
+<br /><b># 1 </b><br /><p>Create the lock outside the method . </p>
+<pre><code>class Agent(Thread):
+    mylock = Lock()
+    def write_result(self):
+        self.mylock.acquire()
+        try:
+            ...
+        finally:
+            self.mylock.release()
+</code></pre>
+<p>or <span style="background-color:yellow;">if</span> using python &gt ; = 2.5 : </p>
+<pre><code>class Agent(Thread):
+    mylock = Lock()
+    def write_result(self):
+        with self.mylock:
+            ...
+</code></pre>
+<p>To use that with python 2.5 you must <span style="background-color:yellow;">import</span> the statement from the future : </p>
+<pre><code>from __future__ import with_statement
+</code></pre>
+<br /><b># 2 </b><br /><p>The lock ( ) method returns a lock object for every call. So every thread ( actually every call to <span style="background-color:yellow;">write_result</span> ) will have a different lock object. And there will be no locking . </p>
+<br /><b># 3 </b><br /><p>The lock that 's used needs to be common to all threads , or at least ensure that two locks ca n't lock the same resource at the same <span style="background-color:yellow;">time</span> . </p>
+<br /><b># 4 </b><br /><p>The lock <span style="background-color:yellow;">instance</span> should be associated with the <span style="background-color:yellow;">file</span> <span style="background-color:yellow;">instance</span> . </p>
+<p>In other words , you should create both the lock and <span style="background-color:yellow;">file</span> at the same <span style="background-color:yellow;">time</span> and pass both to each thread . </p>
+<p>MSN </p>
+<br /><b># 5 </b><br /><p>You can simplify things a bit ( at the cost of slightly more overhead ) by designating a single thread ( probably created exclusively for this purpose ) as the sole thread that <span style="background-color:yellow;">writes</span> to the <span style="background-color:yellow;">file</span> , and have all other threads delegate to the <span style="background-color:yellow;">file-writer</span> by placing the string that they want to add to the <span style="background-color:yellow;">file</span> <span style="background-color:yellow;">into</span> a queue.Queue object . </p>
+<p>Queues have all of the locking built-in , so any thread can safely call Queue.put ( ) at any <span style="background-color:yellow;">time.</span> The <span style="background-color:yellow;">file-writer</span> would be the only thread calling Queue.get ( ) , and can presumably spend much of <span style="background-color:yellow;">its</span> <span style="background-color:yellow;">time</span> blocking on that call ( with a reasonable <span style="background-color:yellow;">timeout</span> to allow the thread to cleanly respond to a shutdown request ) . All of the synchronization <span style="background-color:yellow;">issues</span> will be handled by the Queue , and you 'll be spared having to worry about whether you 've forgotten some lock acquire/release somewhere... : ) </p>
+<br /><b># 6 </b><br /><p>I 'm pretty sure that the lock needs to be the same object for each thread. Try this : </p>
+<pre><code>import time
+from threading import Thread, Lock
+
+def main():
+    lock = Lock()
+    for i in range(20):
+        agent = Agent(i, lock)
+        agent.start()
+
+class Agent(Thread, Lock):
+    def __init__(self, thread_num, lock):
+        Thread.__init__(self)
+        self.thread_num = thread_num
+        self.lock = lock
+
+    def run(self):
+        while True:
+            print 'hello from thread %s' % self.thread_num
+            self.write_result()   
+
+    def write_result(self):
+        self.lock.acquire()
+        try:
+            f = open('foo.txt', 'a')
+            f.write('hello from thread %s\n' % self.thread_num)
+            f.flush()
+            f.close()
+        finally:
+            lock.release()
+
+if __name__ == '__main__':
+    main()
+</code></pre>
+<br />

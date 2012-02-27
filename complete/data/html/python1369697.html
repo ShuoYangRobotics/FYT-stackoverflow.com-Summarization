@@ -1,0 +1,255 @@
+<h3>Question (ID-1369697):</h3><h2>Why is my "exploded" Python code actually running faster?</h2><p>I'm in an introductory comp-sci class (after doing web programming for years) and became curious about how much speed I was gaining, if any, with my one-liners.</p>
+
+<pre><code>for line in lines:
+  numbers.append(eval(line.strip().split()[0]))
+</code></pre>
+
+<p>So I wrote the same thing with painfully explicit assignments and ran them against each other.</p>
+
+<pre><code>for line in lines:
+  a = line.split()
+  b = a[0]
+  c = b.strip()
+  d = eval(c)
+  numbers.append(d)
+</code></pre>
+
+<p>The second one runs a consistent 30ms <em>faster</em> (on my FreeBSD shell account; see Edit #2) with an input file of 100K lines! Of course this is on a total run time of 3 seconds, so the percentage isn't large...but I'm really surprised to see all those explicit named assignments somehow <em>helping</em>.</p>
+
+<p>There's a <a href="http://stackoverflow.com/questions/1362997/encapsulation-severely-hurts-performance">recent thread</a> on the performance of functions as opposed to inline code, but this seems even more basic. What gives? Should I be writing lovingly fulsomely verbose code and telling my sneering colleagues it's for performance reasons? (Thankfully, a list-comprehension version runs about 10ms faster yet, so my cherished compactness isn't totally out the window.)</p>
+
+<p><strong><em>EDIT:</em></strong> Thanks for the tip on my sloppy expansion of the code. You're all correct that the second one should really be:</p>
+
+<pre><code>for line in lines:
+  a = line.strip()
+  b = a.split()
+  c = b[0]
+  d = eval(c)
+  numbers.append(d)
+</code></pre>
+
+<p>However, even once I've fixed that, my timings are 2.714s, 2.652s, and 2.624s respectively, for the one-liner, the fully-exploded form, and the list comprehension (not pictured). So my question stands!</p>
+
+<p><strong><em>EDIT #2:</em></strong> It's interesting that the answer doesn't seem to be obvious even to a bunch of knowledgeable folks, which makes me feel a bit better about the question! I'll probably play with dis a bit on my own now, in this and similar circumstances, and see what turns up. By all means keep tinkering with the thread if you want, but <strong>I'm going to declare my received answer to be "huh, that's interesting; must be something deep."</strong> Especially since the behavior isn't consistent across machines, as steveha pointed out -- the slight difference goes the other direction on my Debian and Windows installs. Thanks to everyone who's contributed!</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Your code isn't exploded in the same order.  The compact version goes:</p>
+
+<pre><code>A &gt; B &gt; C &gt; D &gt; E
+</code></pre>
+
+<p>while your exploded version goes </p>
+
+<pre><code>B &gt; C &gt; A &gt; D &gt; E
+</code></pre>
+
+<p>The effect is that strip() is being deferred 2 steps down, which may affect performance depending on what the input is.</p>
+<br /><b>#1</b><br /><p>Frankly speaking, the first version, where everything is in one line, is a pain to read.<br />
+The second one is maybe a little too verbose (something in the middle would be appreciated) but it is definitely better.</p>
+
+<p>I would not care too much about micro optimizations because of Python internals, and focus only on readable code.</p>
+
+<p>By the way: the two (initial) versions are not doing the same thing.<br />
+In the former, you first strip, then split, while in the latter you first split and then strip (furthermore, only the first element).<br />
+Again, I think you overlooked this because the former version is quite difficult to focus on.<br />
+Then, analyzing the two (updated) versions with <code>dis</code> (<a href="http://docs.python.org/library/dis.html" rel="nofollow">python disassembler</a>) showed no real difference between the two codes, only the order how the function names are being looked up. It is possible that this may have an impact on performance.  </p>
+
+<p>While we are on this, you could get some performance improvement just by binding eval to a local variable, before the loop. I would expect that after that change, there should be no difference in time between the two versions.<br />
+For example:</p>
+
+<pre><code>eval_ = eval
+for line in lines:
+    a = line.strip()
+    b = a.split()
+    c = b[0]
+    d = eval_(c)
+    numbers.append(d)
+</code></pre>
+
+<p>We are mostly talking about micro-optimizations, but this aliasing is actually a technique that may be very useful in several circumstances.</p>
+<br /><b>#2</b><br /><p>The method calls are also not in the same order:</p>
+
+<pre><code>for line in lines:
+    numbers.append(eval(line.strip().split()[0]))
+</code></pre>
+
+<p>should be:</p>
+
+<pre><code>for line in lines:
+    numbers.append(eval(line.split()[0].strip()))
+</code></pre>
+<br /><b>#3</b><br /><p>I agree with Roberto Liffredo; don't worry about that small of a performance improvement; code that is easier to understand, debug, and change is its own reward.</p>
+
+<p>As for what's going on: the terse code and the expanded code don't do quite the same things.  <code>line.strip().split()</code> first strips the line and then splits it; your expanded code splits the line first, and then calls <code>strip()</code> on the first word from the line.  Now, the <code>strip()</code> isn't needed here; it's stripping white space from the end of the line, and words returned by <code>split()</code> never have any.  Thus, in your expanded version, <code>strip()</code> has absolutely no work to do.</p>
+
+<p>Without benchmarking, I can't be certain, but I think that <code>strip()</code> having no work to do is the key.  In the one-line version, <code>strip()</code> sometimes has work to do; so it will strip the whitespace, building a new string object, and then return that string object.  Then, that new string object will be split and discarded.  The extra work of creating and discarding string objects is likely what is making the one-line solution slower.  Compare that with the expanded version, where <code>strip()</code> simply looks at the string, decides it has no work to do, and returns the string unmodified.</p>
+
+<p>In summary, I predict that a one-liner equivalent to your expanded code will be slightly faster than your expanded code.  Try benchmarking this:</p>
+
+<pre><code>for line in lines:
+  numbers.append(eval(line.split()[0].strip()))
+</code></pre>
+
+<p>If you want to be completely thorough, you could benchmark both versions with the <code>strip()</code> removed completely.  You just don't need it.  Or, you could pre-process your input file, making sure that there is no leading or trailing white space on any input line, and thus never any work for <code>strip()</code> to do, and you will probably see the benchmarks work as you would expect.</p>
+
+<p>If you really want to make a hobby out of optimizing for speed here, you could call split with a "maxsplit" argument; you don't need to process the whole string as you are throwing away everything after the first split.  Thus you could call <code>split(None, 1)</code>.   You can get rid of the <code>strip()</code>, of course.  And you would then have:</p>
+
+<pre><code>for line in lines:
+  numbers.append(eval(line.split(None, 1)[0]))
+</code></pre>
+
+<p>If you knew the numbers were always integers, you could call <code>int()</code> instead of <code>eval()</code>, for a speed improvement and security improvement.</p>
+<br /><b>#4</b><br /><p>Also, sometimes it's tricky to run benchmarks.  Did you re-run the benchmarks multiple times and take the best of several runs?  Is there any chance that caching effects give a performance advantage to the second Python program you run?  Have you tried making your input file ten times bigger, so your program will take about ten times longer to run?</p>
+<br /><b>#5</b><br /><p>I haven't benchmarked it, but one factor in the time differences is that you have to do several variable lookups in the second function.</p>
+
+<p><a href="http://www.python.org/doc/essays/list2str.html" rel="nofollow">From Python Patterns - An Optimization Anecdote</a>:</p>
+
+<blockquote>
+  <p>This is because local variable lookups are much faster than global or built-in variable lookups: the Python "compiler" optimizes most function bodies so that for local variables, no dictionary lookup is necessary, but a simple array indexing operation is sufficient. </p>
+</blockquote>
+
+<p>So, local variable lookups <em>do</em> have a cost associated.  Let's take a look at the disassembled functions:</p>
+
+<p>First, making sure I have the same defined functions as you:</p>
+
+<pre><code>&gt;&gt;&gt; def a(lines):
+    for line in lines:
+    	numbers.append(eval(line.strip().split()[0]))
+
+&gt;&gt;&gt; def b(lines):
+    for line in lines:
+    	a = line.strip()
+    	b = a.split()
+    	c = b[0]
+    	d = eval(c)
+    	numbers.append(d)
+</code></pre>
+
+<p>Now, let's compare their disassembled values:</p>
+
+<pre><code>&gt;&gt;&gt; import dis
+&gt;&gt;&gt; dis.dis(a)
+  2           0 SETUP_LOOP              49 (to 52)
+              3 LOAD_FAST                0 (lines)
+              6 GET_ITER            
+        &gt;&gt;    7 FOR_ITER                41 (to 51)
+             10 STORE_FAST               1 (line)
+
+  3          13 LOAD_GLOBAL              0 (numbers)
+             16 LOAD_ATTR                1 (append)
+             19 LOAD_GLOBAL              2 (eval)
+             22 LOAD_FAST                1 (line)
+             25 LOAD_ATTR                3 (strip)
+             28 CALL_FUNCTION            0
+             31 LOAD_ATTR                4 (split)
+             34 CALL_FUNCTION            0
+             37 LOAD_CONST               1 (0)
+             40 BINARY_SUBSCR       
+             41 CALL_FUNCTION            1
+             44 CALL_FUNCTION            1
+             47 POP_TOP             
+             48 JUMP_ABSOLUTE            7
+        &gt;&gt;   51 POP_BLOCK           
+        &gt;&gt;   52 LOAD_CONST               0 (None)
+             55 RETURN_VALUE        
+&gt;&gt;&gt; dis.dis(b)
+  2           0 SETUP_LOOP              73 (to 76)
+              3 LOAD_FAST                0 (lines)
+              6 GET_ITER            
+        &gt;&gt;    7 FOR_ITER                65 (to 75)
+             10 STORE_FAST               1 (line)
+
+  3          13 LOAD_FAST                1 (line)
+             16 LOAD_ATTR                0 (strip)
+             19 CALL_FUNCTION            0
+             22 STORE_FAST               2 (a)
+
+  4          25 LOAD_FAST                2 (a)
+             28 LOAD_ATTR                1 (split)
+             31 CALL_FUNCTION            0
+             34 STORE_FAST               3 (b)
+
+  5          37 LOAD_FAST                3 (b)
+             40 LOAD_CONST               1 (0)
+             43 BINARY_SUBSCR       
+             44 STORE_FAST               4 (c)
+
+  6          47 LOAD_GLOBAL              2 (eval)
+             50 LOAD_FAST                4 (c)
+             53 CALL_FUNCTION            1
+             56 STORE_FAST               5 (d)
+
+  7          59 LOAD_GLOBAL              3 (numbers)
+             62 LOAD_ATTR                4 (append)
+             65 LOAD_FAST                5 (d)
+             68 CALL_FUNCTION            1
+             71 POP_TOP             
+             72 JUMP_ABSOLUTE            7
+        &gt;&gt;   75 POP_BLOCK           
+        &gt;&gt;   76 LOAD_CONST               0 (None)
+             79 RETURN_VALUE
+</code></pre>
+
+<p>It's a lot of information, but we can see the second method is riddled with <code>STORE_FAST</code>, <code>LOAD_FAST</code> pairs due to the local variables being used.  That <em>might</em> be enough to cause your small timing differences, (perhaps) in addition to the different operation order as others have mentioned.</p>
+<br /><b>#6</b><br /><p>Okay, enough theorizing.  I created a file with one million lines, with random amounts of white space (0 to 4 spaces, usually 0) at beginning and end of each line.  And I ran your one-liner, your expanded version, and my own list comprehension version (as fast as I know how to make it).</p>
+
+<p>My results?  (Each one is the best of three trials):</p>
+
+<pre><code>one-line: 13.208s
+expanded: 26.321s
+listcomp: 13.024s
+</code></pre>
+
+<p>I tested under Ubuntu 9.04, 32-bit, with Python 2.6.2 (CPython, of course).</p>
+
+<p>So I am completely unable to explain why you saw the expanded one running faster, given that it ran <em>half</em> as fast on my computer.</p>
+
+<p>Here's the Python program I used to generate my test data:</p>
+
+<pre><code>import random
+
+f = open("/tmp/junk.txt", "w")
+
+r = random.Random()
+
+def randws():
+    n = r.randint(0, 10) - 4
+    if n &lt; 0 or n &gt; 4:
+        n = 0
+    return " " * n
+
+for i in xrange(1000000):
+    s0 = randws()
+    n = r.randint(0, 256)
+    s1 = randws()
+    f.write("%s%d%s\n" % (s0, n, s1))
+</code></pre>
+
+<p>Here's my list comprehension program:</p>
+
+<pre><code>lines = open("/tmp/junk.txt")
+
+numbers = [eval(line.split(None, 1)[0]) for line in lines]
+</code></pre>
+
+<p>P.S.  Here is a nice, fast version that can handle both <code>int</code> and <code>float</code> values.</p>
+
+<pre><code>lines = open("/tmp/junk.txt")
+
+def val(x):
+    try:
+        return int(x)
+    except ValueError:
+        pass
+
+    try:
+        return float(x)
+    except StandardError:
+        return 0
+
+numbers = [val(line.split(None, 1)[0]) for line in lines]
+</code></pre>
+
+<p>Its best-of-three time was: 2.161s</p>
+<br /><b>#7</b><br /><p>A one liner doesn't mean smaller or faster code. And I would expect that the eval() line would throw off performance measurements quite a bit. </p>
+
+<p>Do you see similar performance differences without eval ?</p>
+<br />

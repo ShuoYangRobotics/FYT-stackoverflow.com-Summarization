@@ -1,0 +1,47 @@
+<h3>Question (ID-1823300):</h3><h2>What's the best way to divide large files in Python for multiprocessing?</h2><p>I run across a lot of "embarrassingly parallel" projects I'd like to parallelize with the <code>multiprocessing</code> module. However, they often involve reading in huge files (greater than 2gb), processing them line by line, running basic calculations, and then writing results. What's the best way to split a file and process it using Python's multiprocessing module? Should <code>Queue</code> or <code>JoinableQueue</code> in <code>multiprocessing</code> be used? Or the <code>Queue</code> module itself? Or, should I map the file iterable over a pool of processes using <code>multiprocessing</code>? I've experimented with these approaches but the overhead is immense in distribution the data line by line. I've settled on a lightweight pipe-filters design by using <code>cat file | process1 --out-file out1 --num-processes 2 | process2 --out-file out2</code>, which passes a certain percentage of the first process's input directly to the second input (see <a href="http://stackoverflow.com/questions/659865/python-multiprocessing-sharing-a-large-read-only-object-between-processes/659888#659888">this post</a>), but I'd like to have a solution contained entirely in Python. </p>
+
+<p>Surprisingly, the Python documentation doesn't suggest a canonical way of doing this (despite a lengthy section on programming guidelines in the <code>multiprocessing</code> documentation).</p>
+
+<p>Thanks,
+Vince</p>
+
+<p>Additional information: Processing time per line varies. Some problems are fast and barely not I/O bound, some are CPU-bound. The CPU bound, non-dependent tasks will gain the post from parallelization, such that even inefficient ways of assigning data to a processing function would still be beneficial in terms of wall clock time.</p>
+
+<p>A prime example is a script that extracts fields from lines, checks for a variety of bitwise flags, and writes lines with certain flags to a new file in an entirely new format. This seems like an I/O bound problem, but when I ran it with my cheap concurrent version with pipes, it was about 20% faster. When I run it with pool and map, or queue in <code>multiprocessing</code> it is always over 100% slower. </p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>One of the best architectures is already part of Linux OS's.  No special libraries required.</p>
+
+<p>You want a "fan-out" design.</p>
+
+<ol>
+<li><p>A "main" program creates a number of subprocesses connected by pipes.</p></li>
+<li><p>The main program reads the file, writing lines to the pipes doing the minimum filtering required to deal the lines to appropriate subprocesses.</p></li>
+</ol>
+
+<p>Each subprocess should probably be a pipeline of distinct processes that read and write from stdin.</p>
+
+<p>You don't need a queue data structure, that's exactly what an in-memory pipeline is -- a queue of bytes between two concurrent processes.</p>
+<br /><b>#1</b><br /><p>One strategy is to assign each worker an offset so if you have eight worker processes you assign then numbers 0 to 7. Worker number 0 reads the first record processes it then skips 7 and goes on to process the 8th record etc., worker number 1 reads the second record then skips 7 and processes the 9th record.........</p>
+
+<p>There are a number of advantages to this scheme. It doesnt matter how big the file is the work is always divided evenly, processes on the same machine will process at roughly the same rate, and use the same buffer areas so you dont incur any excessive I/O overhead. As long as the file hasnt been updated you can rerun individual threads to recover from failures.</p>
+<br /><b>#2</b><br /><p>You dont mention how you are processing the lines; possibly the most important piece of info.</p>
+
+<p>Is each line independant?  Is the calculation dependant on one line coming before the next?  Must they be processed in blocks?  How long does the processing for each line take? Is there a processing step that must incorporate "all" the data at the end? Or can intermediate results be thrown away and just a running total maintained? Can the file be initially split by dividing filesize by count of threads? Or does it grow as you process it?</p>
+
+<p>If the lines are independant and the file doesn't grow, the only coordination you need is to farm out "starting addresses" and "lengths" to each of the workers; they can independantly open and seek into the file and then you must simply coordinate their results; perhaps by waiting for N results to come back into a queue.</p>
+
+<p>If the lines are not independant, the answer will depend highly on the structure of the file.</p>
+<br /><b>#3</b><br /><p>It depends a lot on the format of your file.</p>
+
+<p>Does it make sense to split it anywhere? Or do you need to split it at a new line? Or do you need to make sure that you split it at the end of an object definition?</p>
+
+<p>Instead of splitting the file, you should use multiple readers on the same file, using <code>os.lseek</code> to jump to the appropriate part of the file.</p>
+
+<p>Update: Poster added that he wants to split on new lines. Then I propose the following:</p>
+
+<p>Let's say you have 4 processes. Then the simple solution is to os.lseek to 0%, 25%, 50% and 75% of the file, and read bytes until you hit the first new line. That's your starting point for each process. You don't need to split the file to do this, just seek to the right location in the large file in each process and start reading from there.</p>
+<br /><b>#4</b><br /><p>I know you specifically asked about Python, but I will encourage you to look at Hadoop (<a href="http://hadoop.apache.org/" rel="nofollow">http://hadoop.apache.org/</a>): it implements the Map and Reduce algorithm which was specifically designed to address this kind of problem. </p>
+
+<p>Good luck</p>
+<br /><b>#5</b><br /><p>Fredrik Lundh's <a href="http://effbot.org/zone/wide-finder.htm" rel="nofollow">Some Notes on Tim Bray's Wide Finder Benchmark</a> is an interesting read, about a very similar use case, with a lot of good advice. Various other authors also implemented the same thing, some are linked from the article, but you might want to try googling for "python wide finder" or something to find some more. (there was also a solution somewhere based on the <code>multiprocessing</code> module, but that doesn't seem to be available anymore)</p>
+<br /><b>#6</b><br /><p>If the run time is long, instead of having each process read its next line through a <code>Queue</code>, have the processes read batches of lines. This way the overhead is amortized over several lines (e.g. thousands or more).</p>
+<br />

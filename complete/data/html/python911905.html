@@ -1,0 +1,120 @@
+<h3>Question (ID-911905):</h3><h2>Is there a way to access the formal parameters if you implement __getattribute__</h2><p>It seems as though <code>__getattribute__</code> has only 2 parameters <code>(self, name)</code>.</p>
+
+<p>However, in the actual code, the method I am intercepting actually takes arguments.</p>
+
+<p>Is there anyway to access those arguments?</p>
+
+<p>Thanks,</p>
+
+<p>Charlie</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p><strong>__getattribute__</strong> simply returns the attribute that was requested, in case of a method, the <strong>__call__</strong> interface is then used to call it.</p>
+
+<p>Instead of returning the method, return a wrapper around it, for instance:</p>
+
+<pre><code>def __getattribute__(self, attr):
+     def make_interceptor(callble):
+         def func(*args, **kwargs):
+             print args, kwargs
+             return callble(*args, **kwargs)
+         return func
+     att = self.__dict__[attr]
+     if callable(att):
+        return make_interceptor(att)
+</code></pre>
+<br /><b>#1</b><br /><p>Method invocation in Python is two step process, first a function is looked up, then it is invoked. For a more involved discussion see my answer to <a href="http://stackoverflow.com/questions/852308/how-the-method-resolution-and-invocation-works-internally-in-python/870650#870650">this question</a>.</p>
+
+<p>So you would need to do something like this:</p>
+
+<pre><code>def __getattribute__(self, key):
+    if key == "something_interesting":
+        def func(*args, **kwargs):
+            # use arguments, and possibly the self variable from outer scope
+        return func
+    else:
+        return object.__getattribute__(self, key)
+</code></pre>
+
+<p>Also, overriding __getattribute__ is usually a bad idea. Because it is called on all attribute accesses it is really easy to end up in an infinite loop, and even if you do everything correctly it ends up being a pretty big performance hit. Are you sure that __getattr__ won't be enough for your purposes? Or maybe even a descriptor object that returns functions. Descriptors are usually a lot better at reuse.</p>
+<br /><b>#2</b><br /><p>Honestly I'm not sure I understand your question. If you want a way to override getattribute and yet keep the original attributes you can use <a href="http://docs.python.org/library/stdtypes.html#object.%5F%5Fdict%5F%5F" rel="nofollow"><code>__dict__</code></a></p>
+
+<pre><code>def __getattribute__(self, attr):
+    if attr in self.__dict__:
+          return self.__dict__[attr]
+    # Add your changes here
+</code></pre>
+<br /><b>#3</b><br /><p>I don't think you can. <code>__getattribute__</code> doesn't intercept the method call, it only intercepts the method name lookup. So it should return a function (or callable object), which will then be called with whatever parameters specified at the call site.</p>
+
+<p>In particular, if it returns a function which takes <code>(*args, **kwargs)</code>, then in that function you can examine the arguments however you want.</p>
+
+<p>I think. I'm not a Python expert.</p>
+<br /><b>#4</b><br /><p>Yes</p>
+
+<pre><code>def argumentViewer(func):
+    def newfunc(*args, **kwargs):
+        print "Calling %r with %r %r" % (func, args, kwargs)
+        return func(*args, **kwargs)
+    return newfunc
+
+class Foo(object):
+    def __getattribute__(self, name):
+        print "retrieving data"
+        return object.__getattribute__(self, name)
+
+    @argumentViewer
+    def bar(self, a, b):
+        return a+b
+
+# Output
+&gt;&gt;&gt; a=Foo()
+&gt;&gt;&gt; a.bar
+retrieving data
+&lt;bound method Foo.newfunc of &lt;__main__.Foo object at 0x01B0E3D0&gt;&gt;
+&gt;&gt;&gt; a.bar(2,5)
+retrieving data
+Calling &lt;function bar at 0x01B0ACF0&gt; with (&lt;__main__.Foo object at 0x01B0E3D0&gt;, 2, 5) {}
+7
+</code></pre>
+<br /><b>#5</b><br /><p>Here is a variation on Unknown's suggestion that returns a callable "wrapper" instance in place of the requested function.  This does not require decorating any methods:</p>
+
+<pre><code>class F(object):
+   def __init__(self, func):
+      self.func = func
+      return
+   def __call__(self, *args, **kw):
+      print "Calling %r:" % self.func
+      print "  args: %r" % (args,)
+      print "  kw: %r" % kw
+      return self.func(*args,**kw)
+
+class C(object):
+   def __init__(self):
+      self.a = 'an attribute that is not callable.'
+      return
+   def __getattribute__(self,name):
+      attr = object.__getattribute__(self,name)
+      if callable(attr):
+         # Return a callable object that can examine, and even
+         # modify the arguments prior to calling the method.
+         return F(attr)
+      # Return the reference to any non-callable attribute.
+      return attr
+   def m(self, *a, **kw):
+      print "hello from m!"
+      return
+
+&gt;&gt;&gt; c=C()
+&gt;&gt;&gt; c.a
+'an attribute that is not callable.'
+&gt;&gt;&gt; c.m
+&lt;__main__.F object at 0x63ff30&gt;
+&gt;&gt;&gt; c.m(1,2,y=25,z=26)
+Calling &lt;bound method C.m of &lt;__main__.C object at 0x63fe90&gt;&gt;:
+  args: (1, 2)
+  kw: {'y': 25, 'z': 26}
+hello from m!
+&gt;&gt;&gt;
+</code></pre>
+
+<p><a href="http://stackoverflow.com/questions/911905/is-there-a-way-to-access-the-formal-parameters-if-you-implement-getattribute/911943#911943">Ants Aasma above</a> makes an important point regarding recursion when using <code>__getattribute__</code>.  It is called by <strong>all</strong> attribute lookups on <code>self</code>, even those inside of the <code>__getattribute__</code> method.  Several of the other examples include references to <code>self.__dict__</code> inside of <code>__getattribute__</code> which will result in recursing until you exceed the maximum stack depth!  To avoid this, use one of the
+base class' versions of <code>__getattribute__</code> (e.g. <code>object.__getattribute__(self,name)</code>.)</p>
+<br />

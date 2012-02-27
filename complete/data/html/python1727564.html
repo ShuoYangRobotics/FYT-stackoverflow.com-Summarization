@@ -1,0 +1,109 @@
+<h3>Question (ID-1727564):</h3><h2>How to create a UserProfile form in Django with first_name, last_name modifications?</h2><p>If think my question is pretty obvious and almost every developer working with UserProfile should be able to answer it.</p>
+
+<p>However, I could not find any help on the django documentation or in the Django Book.</p>
+
+<p>When you want to do a UserProfile form in with Django Forms, you'd like to modify the profile fields as well as some User field.</p>
+
+<p>But there is no forms.UserProfileForm (yet?) !</p>
+
+<p>How do you do that ?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Here is how I finally did : </p>
+
+<pre><code>class UserProfileForm(forms.ModelForm):
+    first_name = forms.CharField(label=_(u'Prénom'), max_length=30)
+    last_name = forms.CharField(label=_(u'Nom'), max_length=30)
+
+    def __init__(self, *args, **kw):
+        super(UserProfileForm, self).__init__(*args, **kw)
+        self.fields['first_name'].initial = self.instance.user.first_name
+        self.fields['last_name'].initial = self.instance.user.last_name
+
+        self.fields.keyOrder = [
+            'first_name',
+            'last_name',
+            ...some_other...
+            ]
+
+    def save(self, *args, **kw):
+        super(UserProfileForm, self).save(*args, **kw)
+        self.instance.user.first_name = self.cleaned_data.get('first_name')
+        self.instance.user.last_name = self.cleaned_data.get('last_name')
+        self.instance.user.save()
+
+    class Meta:
+        model = UserProfile
+</code></pre>
+<br /><b>#1</b><br /><p>I stumbled across this today and after some googling I found a solution that is a bit cleaner in my opinion: </p>
+
+<pre><code>#in forms.py
+class UserForm(forms.ModelForm):
+    class Meta:
+        model = User
+        fields = ["username", "email"]
+
+class UserProfileForm(forms.ModelForm):
+    class Meta:
+        model = UserProfile
+
+#in views.py
+def add_user(request):
+    ...
+    if request.method == "POST":
+        uform = UserForm(data = request.POST)
+        pform = UserProfileForm(data = request.POST)
+        if uform.is_valid() and pform.is_valid():
+            user = uform.save()
+            profile = pform.save(commit = False)
+            profile.user = user
+            profile.save()
+            ....
+    ...
+
+#in template
+&lt;form method="post"&gt;
+    {{ uform.as_p }}
+    {{ pform.as_p }}
+    &lt;input type="submit" ...&gt;
+&lt;/form&gt;
+</code></pre>
+
+<p><a href="http://uswaretech.com/blog/2010/01/doing-things-with-django-forms/" rel="nofollow">Source</a></p>
+<br /><b>#2</b><br /><p>This is how I did it in the current trunk (Revision: 11804). The solution of Natim was not working for me.</p>
+
+<p>In <code>admin.py</code>:</p>
+
+<pre><code>class ProfileAdmin(admin.ModelAdmin):
+    form = ProfileForm
+
+    def save_model(self, request, obj, form, change):
+        obj.user.first_name = form.cleaned_data['first_name']
+        obj.user.last_name = form.cleaned_data['last_name']
+        obj.user.save()
+        obj.save()
+</code></pre>
+
+<p>In <code>forms.py</code>:</p>
+
+<pre><code>class ProfileForm(forms.ModelForm):
+    first_name = forms.CharField(max_length=256)
+    last_name = forms.CharField(max_length=256)
+
+    def __init__(self, *args, **kwargs):
+        super(ProfileForm, self).__init__(*args, **kwargs)
+        try:
+            self.fields['first_name'].initial = self.instance.user.first_name
+            self.fields['last_name'].initial = self.instance.user.last_name
+        except User.DoesNotExist:
+            pass
+
+    class Meta:
+         fields = ['first_name', 'last_name', ...etc.]
+</code></pre>
+<br /><b>#3</b><br /><p>I take it normal that you don't find any information in the docs as you merge two models into a single form. </p>
+
+<p>Alternatively and maybe very obviously you can: Create two modelforms, one for the user and the other for the userprofile. Set the userprofile modelform to display only firstname and lastname. Put both forms in the same template within a single <code>&lt;form&gt;</code> tag. When it is submitted, call the save methods of each form.</p>
+<br /><b>#4</b><br /><p>Why not have two model forms on the back-end and just present them as a single form in your template? Drop the name fields from your UserProfileForm and create a second model form for the user object?</p>
+<br /><b>#5</b><br /><p>You can also try to use the django-basic-apps project which has a profiles app:</p>
+
+<p><a href="http://github.com/lincolnloop/django-basic-apps" rel="nofollow">http://github.com/lincolnloop/django-basic-apps</a></p>
+<br />

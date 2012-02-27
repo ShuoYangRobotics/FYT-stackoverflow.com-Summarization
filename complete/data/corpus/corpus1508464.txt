@@ -1,0 +1,124 @@
+Question (ID-1508464): fast string modification in python This is partially a theoretical question: 
+
+ I have a string (say UTF-8), and I need to modify it so that each character (not byte) becomes 2 characters, for instance: 
+
+ "Nissim" becomes "N-i-s-s-i-m-"
+
+
+"01234" becomes "0a1b2c3d4e"
+ 
+
+ and so on.
+I would suspect that naive concatenation in a loop would be too expensive (it IS the bottleneck, this is supposed to happen all the time). 
+
+ I would either use an array (pre-allocated) or try to make my own C module to handle this. 
+
+ Anyone has better ideas for this kind of thing? 
+
+ (Note that the problem is always about multibyte encodings, and must be solved for UTF-8 as well), 
+
+ Oh and its Python 2.5, so no shiny Python 3 thingies are available here. 
+
+ Thanks 
+ Answers (Total-7): #0 @gnosis, beware of all the well-intentioned responders saying you should measure the times: yes, you should (because programmers' instincts are often off-base about performance), but measuring a single case, as in all the timeit examples proffered so far, misses a crucial consideration -- big-O . 
+
+ Your instincts are correct: in general (with a very few special cases where recent Python releases can optimize things a bit, but they don't stretch very far), building a string by a loop of += over the pieces (or a reduce and so on) must be O(N**2) due to the many intermediate object allocations and the inevitable repeated copying of those object's content; joining, regular expressions, and the third option that was not mentioned in the above answers ( write method of cStringIO.StringIO instances) are the O(N) solutions and therefore the only ones worth considering unless you happen to know for sure that the strings you'll be operating on have modest upper bounds on their length. 
+
+ So what, if any, are the upper bounds in length on the strings you're processing? If you can give us an idea, benchmarks can be run on representative ranges of lengths of interest (for example, say, "most often less than 100 characters but some % of the time maybe a couple thousand characters" would be an excellent spec for this performance evaluation: IOW, it doesn't need to be extremely precise, just indicative of your problem space). 
+
+ I also notice that nobody seems to follow one crucial and difficult point in your specs: that the strings are Python 2.5 multibyte, UTF-8 encoded, str s, and the insertions must happen only after each "complete character", not after each byte . Everybody seems to be "looping on the str", which give each byte, not each character as you so clearly specify. 
+
+ There's really no good, fast way to "loop over characters" in a multibyte-encoded byte str ; the best one can do is to .decode('utf-8') , giving a unicode object -- process the unicode object (where loops do correctly go over characters!), then .encode it back at the end. By far the best approach in general is to only, exclusively use unicode objects, not encoded str s, throughout the heart of your code; encode and decode to/from byte strings only upon I/O (if and when you must because you need to communicate with subsystems that only support byte strings and not proper Unicode). 
+
+ So I would strongly suggest that you consider this "best approach" and restructure your code accordingly: unicode everywhere, except at the boundaries where it may be encoded/decoded if and when necessary only. For the "processing" part, you'll be MUCH happier with unicode objects than you would be lugging around balky multibyte-encoded strings!-) 
+
+ Edit : forgot to comment on a possible approach you mention -- array.array . That's indeed O(N) if you are only appending to the end of the new array you're constructing (some appends will make the array grow beyond previously allocated capacity and therefore require a reallocation and copying of data, but , just like for list, a midly exponential overallocation strategy allows append to be amortized O(1), and therefore N appends to be O(N)). 
+
+ However, to build an array (again, just like a list) by repeated insert operations in the middle of it is O(N**2) , because each of the O(N) insertions must shift all the O(N) following items (assuming the number of previously existing items and the number of newly inserted ones are proportional to each other, as seems to be the case for your specific requirements). 
+
+ So, an array.array('u') , with repeated append s to it ( not insert s!-), is a fourth O(N) approach that can solve your problem (in addition to the three I already mentioned: join , re , and cStringIO ) -- those are the ones worth benchmarking once you clarify the ranges of lengths that are of interest, as I mentioned above. 
+ #1 Try to build the result with the re module . It will do the nasty concatenation under the hood, so performance should be OK. Example: 
+
+ import re
+ re.sub(r'(.)', r'\1-', u'Nissim')
+
+ count = 1
+ def repl(m):
+  global count
+  s = m.group(1) + unicode(count)
+  count += 1
+  return s
+ re.sub(r'(.)', repl, u'Nissim')
+ 
+ #2 this might be a python effective solution: 
+
+ s1="Nissim"
+s2="------"
+s3=''.join([''.join(list(x)) for x in zip(s1,s2)])
+ 
+ #3 have you tested how slow it is or how fast you need, i think something like this will be fast enough 
+
+ s = u"\u0960\u0961"
+ss = ''.join(sum(map(list,zip(s,"anurag")),[]))
+ 
+
+ So try with simplest and if it doesn't suffice then try to improve upon it, C module should be last option 
+
+ Edit: This is also the fastest 
+
+ import timeit
+
+s1="Nissim"
+s2="------"
+
+timeit.f1=lambda s1,s2:''.join(sum(map(list,zip(s1,s2)),[]))
+timeit.f2=lambda s1,s2:''.join([''.join(list(x)) for x in zip(s1,s2)])
+timeit.f3=lambda s1,s2:''.join(i+j for i, j in zip(s1, s2))
+
+N=100000
+
+print "anurag",timeit.Timer("timeit.f1('Nissim', '------')","import timeit").timeit(N)
+print "dweeves",timeit.Timer("timeit.f2('Nissim', '------')","import timeit").timeit(N)
+print "SilentGhost",timeit.Timer("timeit.f3('Nissim', '------')","import timeit").timeit(N)
+ 
+
+ output is 
+
+ anurag 1.95547590546
+dweeves 2.36131184271
+SilentGhost 3.10855625505
+ 
+ #4 here are my timings. Note, it's py3.1 
+
+ &gt;&gt;&gt; s1
+'Nissim'
+&gt;&gt;&gt; s2 = '-' * len(s1)
+&gt;&gt;&gt; timeit.timeit("''.join(i+j for i, j in zip(s1, s2))", "from __main__ import s1, s2")
+3.5249209707199043
+&gt;&gt;&gt; timeit.timeit("''.join(sum(map(list,zip(s1,s2)),[]))", "from __main__ import s1, s2")
+5.903614027402
+&gt;&gt;&gt; timeit.timeit("''.join([''.join(list(x)) for x in zip(s1,s2)])", "from __main__ import s1, s2")
+6.04072124013328
+&gt;&gt;&gt; timeit.timeit("''.join(i+'-' for i in s1)", "from __main__ import s1, s2")
+2.484378367653335
+&gt;&gt;&gt; timeit.timeit("reduce(lambda x, y : x+y+'-', s1, '')", "from __main__ import s1; from functools import reduce")
+2.290644129319844
+ 
+ #5 Use Reduce. 
+
+ &gt;&gt;&gt; str = "Nissim"
+&gt;&gt;&gt; reduce(lambda x, y : x+y+'-', str, '')
+'N-i-s-s-i-m-'
+ 
+
+ The same with numbers too as long as you know which char maps to which. [dict can be handy] 
+
+ &gt;&gt;&gt; mapper = dict([(repr(i), chr(i+ord('a'))) for i in range(9)])
+&gt;&gt;&gt; str1 = '0123'
+&gt;&gt;&gt; reduce(lambda x, y : x+y+mapper[y], str1, '')
+'0a1b2c3d'
+ 
+ #6 string="™¡™©€"
+unicode(string,"utf-8")
+s2='-'*len(s1)
+''.join(sum(map(list,zip(s1,s2)),[])).encode("utf-8")

@@ -1,0 +1,108 @@
+Question (ID-4209781): How to speed up this Python code? I've got the following tiny Python method that is by far the performance hotspot (according to my profiler, >95% of execution time is spent here) in a much larger program: 
+
+ def topScore(self, seq):
+ ret = -1e9999
+ logProbs = self.logProbs # save indirection
+ l = len(logProbs)
+ for i in xrange(len(seq) - l + 1):
+  score = 0.0
+  for j in xrange(l):
+   score += logProbs[j][seq[j + i]]
+  ret = max(ret, score)
+
+ return ret
+ 
+
+ The code is being run in the Jython implementation of Python, not CPython, if that matters. seq is a DNA sequence string, on the order of 1,000 elements. logProbs is a list of dictionaries, one for each position. The goal is to find the maximum score of any length l (on the order of 10-20 elements) subsequence of seq . 
+
+ I realize all this looping is inefficient due to interpretation overhead and would be a heck of a lot faster in a statically compiled/JIT'd language. However, I'm not willing to switch languages. First, I need a JVM language for the libraries I'm using, and this kind of constrains my choices. Secondly, I don't want to translate this code wholesale into a lower-level JVM language. However, I'm willing to rewrite this hotspot in something else if necessary, though I have no clue how to interface it or what the overhead would be. 
+
+ In addition to the single-threaded slowness of this method, I also can't get the program to scale much past 4 CPUs in terms of parallelization. Given that it spends almost all its time in the 10-line hotspot I've posted, I can't figure out what the bottleneck could be here. 
+ Answers (Total-8): #0 The reason it is slow is because it is O(N*N) 
+
+ The maximum subsequence algorithm may help you improve this 
+ #1 if topScore is called repeatedly for same seq you could memoize its value. 
+
+ E.g. http://code.activestate.com/recipes/52201/ 
+ #2 i don't have any idea what i'm doing but maybe this can help speed up your algo: 
+
+ ret = -1e9999
+logProbs = self.logProbs # save indirection
+l = len(logProbs)
+
+scores = collections.defaultdict(int)
+
+for j in xrange(l):
+ prob = logProbs[j]
+ for i in xrange(len(seq) - l + 1):
+  scores[i] += prob[seq[j + i]]
+
+
+ret = max(ret, max(scores.values()))
+ 
+ #3 What about precomputing xrange(l) outside the for i loop? 
+ #4 Nothing jumps out as being slow. I might rewrite the inner loop like this: 
+
+ score = sum(logProbs[j][seq[j+i]] for j in xrange(l))
+ 
+
+ or even: 
+
+ seqmatch = zip(seq[i:i+l], logProbs)
+score = sum(posscores[base] for base, posscores in seqmatch)
+ 
+
+ but I don't know that either would save much time. 
+
+ It might be marginally quicker to store DNA bases as integers 0-3, and look up the scores from a tuple instead of a dictionary. There'll be a performance hit on translating letters to numbers, but that only has to be done once. 
+ #5 Definitely use numpy and store logProbs as a 2D array instead of a list of dictionaries. Also store seq as a 1D array of (short) integers as suggested above. This will help if you don't have to do these conversions every time you call the function (doing these conversions inside the function won't save you much). You can them eliminate the second loop: 
+
+ import numpy as np
+...
+print np.shape(self.logProbs) # (20, 4)
+print np.shape(seq) # (1000,)
+...
+def topScore(self, seq):
+ret = -1e9999
+logProbs = self.logProbs # save indirection
+l = len(logProbs)
+for i in xrange(len(seq) - l + 1):
+ score = np.sum(logProbs[:,seq[i:i+l]])
+ ret = max(ret, score)
+
+return ret
+ 
+
+ What you do after that depends on which of these 2 data elements changes the most often: 
+
+ If logProbs generally stays the same and you want to run many DNA sequences through it, then consider stacking your DNA sequences as a 2D array. numpy can loop through the 2D array very quickly so if you have 200 DNA sequences to process, it will only take a little longer than a single. 
+
+ Finally, if you really need speed up, use scipy.weave. This is a very easy way to write a few lines of fast C to accelerate you loops. However, I recommend scipy >0.8. 
+ #6 You can try hoisting more than just self.logProbs outside the loops: 
+
+ def topScore(self, seq):
+ ret = -1e9999
+ logProbs = self.logProbs # save indirection
+ l = len(logProbs)
+ lrange = range(l)
+ for i in xrange(len(seq) - l + 1):
+  score = 0.0
+  for j in lrange:
+   score += logProbs[j][seq[j + i]]
+  if score &gt; ret: ret = score # avoid lookup and function call
+
+ return ret
+ 
+ #7 I doubt it will make a significant difference, but you could try changing: 
+
+ for j in xrange(l):
+  score += logProbs[j][seq[j + i]]
+ 
+
+ to 
+
+ for j,lP in enumerate(logProbs):
+  score += lP[seq[j + i]]
+ 
+
+ or even hoisting that enumeration outside the seq loop.

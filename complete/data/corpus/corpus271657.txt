@@ -1,0 +1,131 @@
+Question (ID-271657): how to tell if a string is base64 or not I have many emails coming in from different sources.
+they all have attachments, many of them have attachment names in chinese, so these
+names are converted to base64 by their email clients. 
+
+ When I receive these emails, I wish to decode the name. but there are other names which are
+not base64. How can I differentiate whether a string is base64 or not, using the jython programming language? 
+
+ Ie. 
+
+ First attachment: 
+
+ ------=_NextPart_000_0091_01C940CC.EF5AC860
+Content-Type: application/vnd.ms-excel;
+ name="Copy of Book1.xls"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment;
+ filename="Copy of Book1.xls"
+ 
+
+ second attachment: 
+
+ ------=_NextPart_000_0091_01C940CC.EF5AC860
+Content-Type: application/vnd.ms-excel;
+ name="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment;
+ filename="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+ 
+
+ Please note both " Content-Transfer-Encoding " have base64 
+ Answers (Total-6): #0 The header value tells you this: 
+
+ 
+=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?=
+
+"=?"  introduces an encoded value
+"gb2312" denotes the character encoding of the original value
+"B"  denotes that B-encoding (equal to Base64) was used (the alternative 
+   is "Q", which refers to something close to quoted-printable)
+"?"  functions as a separator
+"uLG..." is the actual value, encoded using the encoding specified before
+"?="  ends the encoded value
+ 
+
+ So splitting on "?" actually gets you this (JSON notation) 
+
+ 
+["=", "gb2312", "B", "uLGxvmhlbrixsb5nLnhscw==", "="]
+ 
+
+ In the resulting array, if "B" is on position 2, you face a base-64 encoded string on position 3. Once you decoded it, be sure to pay attention to the encoding on position 1, probably it would be best to convert the whole thing to UTF-8 using that info. 
+ #1 
+ Please note both Content-Transfer-Encoding have base64 
+ 
+
+ Not relevant in this case, the Content-Transfer-Encoding only applies to the body payload, not to the headers. 
+
+ =?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?=
+ 
+
+ That's an RFC2047 -encoded header atom. The stdlib function to decode it is email.header.decode_header . It still needs a little post-processing to interpret the outcome of that function though: 
+
+ import email.header
+x= '=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?='
+try:
+ name= u''.join([
+  unicode(b, e or 'ascii') for b, e in email.header.decode_header(x)
+ ])
+except email.Errors.HeaderParseError:
+ pass # leave name as it was
+ 
+
+ However... 
+
+ Content-Type: application/vnd.ms-excel;
+ name="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+ 
+
+ This is simply wrong. What mailer created it? RFC2047 encoding can only happen in atoms, and a quoted-string is not an atom. RFC2047 §5 explicitly denies this: 
+
+ 
+ 
+ An 'encoded-word' MUST NOT appear within a 'quoted-string'. 
+ 
+ 
+
+ The accepted way to encode parameter headers when long string or Unicode characters are present is RFC2231 , which is a whole new bag of hurt. But you should be using a standard mail-parsing library which will cope with that for you. 
+
+ So, you could detect the '=?' in filename parameters if you want, and try to decode it via RFC2047. However, the strictly-speaking-correct thing to do is to take the mailer at its word and really call the file =?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?= ! 
+ #2 @gnud, @edg - Unless I misunderstand, he's asking about the filename, not the file content
+@setori - the Content-Trasfer-Encoding is telling you how the CONTENT of the file is encoded, not the "filename". 
+
+ I'm not an expert, but this part here in the filename is telling him about the characters that follow: 
+
+ =?gb2312?B? 
+
+ I'm looking for the documentation in the RFCs... Ah! here it is: http://tools.ietf.org/html/rfc2047 
+
+ The RFC says: 
+
+ Generally, an "encoded-word" is a sequence of printable ASCII characters that begins with "=?", ends with "?=", and has two "?"s in between. 
+
+ Something else to look at is the code in SharpMimeTools, a MIME parser (in C#) that I use in my bug tracking app, BugTracker.NET 
+ #3 There is a better way than bobince’s method to handle the output of decode_header . I found it here: http://mail.python.org/pipermail/email-sig/2007-March/000332.html 
+
+ name = unicode(email.header.make_header(email.header.decode_header(x)))
+ 
+ #4 Well, you parse the email header into a dictionary. And then you check if Content-Transfer-Encoding is set, and if it = "base64" or "base-64". 
+ #5 Question: """Also I actually need to know what type of file it is ie .xls or .doc so I do need to decode the filename in order to correctly process the attachment, but as above, seems gb2312 is not supported in jython, know any roundabouts?""" 
+
+ Data: 
+
+ Content-Type: application/vnd.ms-excel;
+ name="=?gb2312?B?uLGxvmhlbrixsb5nLnhscw==?="
+ 
+
+ Observations: 
+
+ (1) The first line indicates Microsoft Excel, so .xls is looking better than .doc 
+
+ (2) 
+
+ &gt;&gt;&gt; import base64
+&gt;&gt;&gt; base64.b64decode("uLGxvmhlbrixsb5nLnhscw==")
+'\xb8\xb1\xb1\xbehen\xb8\xb1\xb1\xbeg.xls'
+&gt;&gt;&gt;
+ 
+
+ (a) The extension appears to be .xls -- no need for a gb2312 codec 
+(b) If you want a file-system-safe file name, you could use the "-_" variant of base64 OR you could percent-encode it 
+(c) For what it's worth, the file name is XYhenXYg.xls where X and Y are 2 Chinese characters that together mean "copy" and the remainder are literal ASCII characters.

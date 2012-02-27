@@ -1,0 +1,127 @@
+<h3>Question (ID-195626):</h3><h2>How to avoid computation every time a python module is reloaded</h2><p>I have a python module that makes use of a huge dictionary global variable, currently I put the computation code in the top section, every first time import or reload of the module takes more then one minute which is totally unacceptable. How can I save the computation result somewhere so that the next import/reload doesn't have to compute it? I tried cPickle, but loading the dictionary variable from a file(1.3M) takes approximately the same time as computation.</p>
+
+<p>To give more information about my problem, </p>
+
+<pre><code>FD = FreqDist(word for word in brown.words()) # this line of code takes 1 min
+</code></pre>
+<br /><h3>Answers (Total-13):</h3><b>#0</b><br /><p>Just to clarify: the code in the body of a module is <em>not</em> executed every time the module is imported - it is run only once, after which future imports find the already created module, rather than recreating it.  Take a look at sys.modules to see the list of cached modules.</p>
+
+<p>However, if your problem is the time it takes for the first import after the program is run, you'll probably need to use some other method than a python dict.  Probably best would be to use an on-disk form, for instance a sqlite database, one of the dbm modules.</p>
+
+<p>For a minimal change in your interface, the shelve module may be your best option - this puts a pretty transparent interface between the dbm modules that makes them act like an arbitrary python dict, allowing any picklable value to be stored. Here's an example:</p>
+
+<pre><code># Create dict with a million items:
+import shelve
+d = shelve.open('path/to/my_persistant_dict')
+d.update(('key%d' % x, x) for x in xrange(1000000))
+d.close()
+</code></pre>
+
+<p>Then in the next process, use it.  There should be no large delay, as lookups are only performed for the key requested on the on-disk form, so everything doesn't have to get loaded into memory:</p>
+
+<pre><code>&gt;&gt;&gt; d = shelve.open('path/to/my_persistant_dict')
+&gt;&gt;&gt; print d['key99999']
+99999
+</code></pre>
+
+<p>It's a bit slower than a real dict, and it <strong>will</strong> still take a long time to load if you do something that requires all the keys (eg. try to print it), but may solve your problem.</p>
+<br /><b>#1</b><br /><p>Calculate your global var on the first use.</p>
+
+<pre><code>class Proxy:
+    @property
+    def global_name(self):
+        # calculate your global var here, enable cache if needed
+        ...
+
+_proxy_object = Proxy()
+GLOBAL_NAME = _proxy_object.global_name
+</code></pre>
+
+<p>Or better yet, access necessery data via special data object.</p>
+
+<pre><code>class Data:
+    GLOBAL_NAME = property(...)
+
+data = Data()
+</code></pre>
+
+<p>Example:</p>
+
+<pre><code>from some_module import data
+
+print(data.GLOBAL_NAME)
+</code></pre>
+
+<p>See <a href="http://docs.djangoproject.com/en/dev/topics/settings/" rel="nofollow">Django settings</a>.</p>
+<br /><b>#2</b><br /><p>I assume you've pasted the dict literal into the source, and that's what's taking a minute? I don't know how to get around that, but you could probably avoid instantiating this dict upon <em>import</em>... You could lazily-instantiate it the first time it's actually used.</p>
+<br /><b>#3</b><br /><p>You could try using the <a href="http://en.wikipedia.org/wiki/All_You_Zombies%E2%80%94" rel="nofollow">marshal</a> module instead of the c?Pickle one; it could be faster. This module is used by python to store values in a binary format. Note especially the following paragraph, to see if marshal fits your needs:</p>
+
+<blockquote>
+  <p>Not all Python object types are supported; in general, only objects whose value is independent from a particular invocation of Python can be written and read by this module. The following types are supported: None, integers, long integers, floating point numbers, strings, Unicode objects, tuples, lists, sets, dictionaries, and code objects, where it should be understood that tuples, lists and dictionaries are only supported as long as the values contained therein are themselves supported; and recursive lists and dictionaries should not be written (they will cause infinite loops). </p>
+</blockquote>
+
+<p>Just to be on the safe side, before unmarshalling the dict, make sure that the Python version that unmarshals the dict is the same as the one that did the marshal, since there are no guarantees for backwards compatibility.</p>
+<br /><b>#4</b><br /><p>If the 'shelve' solution turns out to be too slow or fiddly, there are other possibilities:</p>
+
+<ul>
+<li><a href="http://pypi.python.org/pypi/shove" rel="nofollow">shove</a></li>
+<li><a href="http://www.mems-exchange.org/software/durus/" rel="nofollow">Durus</a></li>
+<li><a href="http://www.zope.org" rel="nofollow">ZopeDB</a></li>
+<li><a href="http://www.pytables.org/" rel="nofollow">pyTables</a></li>
+</ul>
+<br /><b>#5</b><br /><p><code>shelve</code> gets really slow with large data sets. I've been using <a href="http://streamhacker.com/2009/05/20/building-a-nltk-freqdist-on-redis/" rel="nofollow">redis</a> quite successfully, and wrote a <a href="http://bitbucket.org/japerk/nltk-extras/src/tip/probability.py" rel="nofollow">FreqDist wrapper</a> around it. It's very fast, and can be accessed concurrently.</p>
+<br /><b>#6</b><br /><p>You can use a <a href="http://www.python.org/doc/2.5.2/lib/module-shelve.html" rel="nofollow">shelve</a> to store your data on disc instead of loading the whole data into memory. So startup time will be very fast, but the trade-off will be slower access time. </p>
+
+<p>Shelve will pickle the dict values too, but will do the (un)pickle not at startup for all the items, but only at access time for each item itself.</p>
+<br /><b>#7</b><br /><p>A couple of things that will help speed up imports:</p>
+
+<ol>
+<li>You might try running python using the -OO flag when running python.  This will do some optimizations that will reduce import time of modules.</li>
+<li>Is there any reason why you couldn't break the dictionary up into smaller dictionaries in separate modules that can be loaded more quickly?</li>
+<li>As a last resort, you could do the calculations asynchronously so that they won't delay your program until it needs the results.  Or maybe even put the dictionary in a separate process and pass data back and forth using IPC if you want to take advantage of multi-core architectures.</li>
+</ol>
+
+<p>With that said, I agree that you shouldn't be experiencing any delay in importing modules after the first time you import it.  Here are a couple of other general thoughts:</p>
+
+<ol>
+<li>Are you importing the module within a function?  If so, this <em>can</em> lead to performance problems since it has to check and see if the module is loaded every time it hits the import statement.</li>
+<li>Is your program multi-threaded?  I have seen occassions where executing code upon module import in a multi-threaded app can cause some wonkiness and application instability (most notably with the cgitb module).</li>
+<li>If this is a global variable, be aware that global variable lookup times can be significantly longer than local variable lookup times.  In this case, you can achieve a significant performance improvement by binding the dictionary to a local variable if you're using it multiple times in the same context.</li>
+</ol>
+
+<p>With that said, it's a tad bit difficult to give you any specific advice without a little bit more context.  More specifically, where are you importing it?  And what are the computations?</p>
+<br /><b>#8</b><br /><ol>
+<li><p>Factor the computationally intensive part into a separate module.  Then at least on reload, you won't have to wait. </p></li>
+<li><p>Try dumping the data structure using protocol 2.  The command to try would be <code>cPickle.dump(FD, protocol=2)</code>.  From the docstring for <code>cPickle.Pickler</code>:</p>
+
+<blockquote>
+<pre><code>Protocol 0 is the
+only protocol that can be written to a file opened in text
+mode and read back successfully.  When using a protocol higher
+than 0, make sure the file is opened in binary mode, both when
+pickling and unpickling.
+</code></pre>
+</blockquote></li>
+</ol>
+<br /><b>#9</b><br /><p>Expanding on the delayed-calculation idea, why not turn the dict into a class that supplies (and caches) elements as necessary?</p>
+
+<p>You might also use psyco to speed up overall execution...</p>
+<br /><b>#10</b><br /><p><em>OR</em> you could just use a database for storing the values in? Check out SQLObject, which makes it very easy to store stuff to a database.</p>
+<br /><b>#11</b><br /><p>There's another pretty obvious solution for this problem. When code is reloaded the original scope is still available.</p>
+
+<p>So... doing something like this will make sure this code is executed only once.</p>
+
+<pre><code>try:
+    FD
+except NameError:
+    FD = FreqDist(word for word in brown.words())
+</code></pre>
+<br /><b>#12</b><br /><p>I'm going through this same issue... 
+shelve, databases, etc... are all too slow for this type of problem. You'll need to take the hit once, insert it into an inmemory key/val store like Redis. It will just live there in memory (warning it could use up a good amount of memory so you may want a dedicated box). You'll never have to reload it and you'll just get looking in memory for keys</p>
+
+<pre><code>r = Redis()
+r.set(key, word)
+
+word = r.get(key)
+</code></pre>
+<br />

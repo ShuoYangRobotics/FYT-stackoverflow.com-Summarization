@@ -1,0 +1,47 @@
+<h3>Question (ID-3692854):</h3><h2>How should a ZeroMQ worker safely "hang up"?</h2><p>I started using ZeroMQ this week, and when using the Request-Response pattern I am not sure how to have a worker safely "hang up" and close his socket without possibly dropping a message and causing the customer who sent that message to never get a response. Imagine a worker written in Python who looks something like this:</p>
+
+<pre><code>import zmq
+c = zmq.Context()
+s = c.socket(zmq.REP)
+s.connect('tcp://127.0.0.1:9999')
+while i in range(8):
+    s.recv()
+    s.send('reply')
+s.close()
+</code></pre>
+
+<p>I have been doing experiments and have found that a customer at <code>127.0.0.1:9999</code> of socket type <code>zmq.REQ</code> who makes a fair-queued request just might have the misfortune of having the fair-queuing algorithm choose the above worker right after the worker has done its last <code>send()</code> but before it runs the following <code>close()</code> method. In that case, it seems that the request is received and buffered by the ØMQ stack in the worker process, and that the request is then lost when <code>close()</code> throws out everything associated with the socket.</p>
+
+<p>How can a worker detach "safely" — is there any way to signal "I don't want messages anymore", then (a) loop over any final messages that have arrived during transmission of the signal, (b) generate their replies, and then (c) execute <code>close()</code> with the guarantee that no messages are being thrown away?</p>
+
+<p><strong>Edit:</strong> I suppose the raw state that I would want to enter is a "half-closed" state, where no further requests could be received — and the sender would know that — but where the return path is still open so that I can check my incoming buffer for one last arrived message and respond to it if there is one sitting in the buffer.</p>
+
+<p><strong>Edit:</strong> In response to a good question, corrected the description to make the number of waiting messages plural, as there could be many connections waiting on replies.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You seem to think that you are trying to avoid a “simple” race condition such as in</p>
+
+<pre><code>... = zmq_recv(fd);
+do_something();
+zmq_send(fd, answer);
+/* Let's hope a new request does not arrive just now, please close it quickly! */
+zmq_close(fd);
+</code></pre>
+
+<p>but I think the problem is that fair queuing (round-robin) makes things even more difficult: you might already even have several queued requests on your worker. The sender will not wait for your worker to be free before sending a new request if it is its turn to receive one, so at the time you call <code>zmq_send</code> other requests might be waiting already.</p>
+
+<p>In fact, it looks like you might have selected the wrong data direction. Instead of having a requests pool send requests to your workers (even when you would prefer not to receive new ones), you might want to have your workers fetch a new request from a requests queue, take care of it, then send the answer.</p>
+
+<p>Of course, it means using <code>XREP</code>/<code>XREQ</code>, but I think it is worth it.</p>
+
+<p><strong>Edit:</strong> I wrote <a href="https://github.com/samueltardieu/zmq-broker">some code</a> implementing <a href="http://www.rfc1149.net/blog/2010/12/08/responsible-workers-with-0mq/">the other direction</a> to explain what I mean.</p>
+<br /><b>#1</b><br /><p>I've been thinking about this as well.  You may want to implement a CLOSE message which notifies the customer that the worker is going away.  You could then have the worker drain for a period of time before shutting down.  Not ideal, of course, but might be workable.</p>
+<br /><b>#2</b><br /><p>I think the problem is that your messaging architecture is wrong. Your workers should use a REQ socket to send a request for work and that way there is only ever one job queued at the worker. Then to acknowledge completion of the work, you could either use another REQ request that doubles as ack for the previous job and request for a new one, or you could have a second control socket.</p>
+
+<p>Some people do this using PUB/SUB for the control so that each worker publishes acks and the master subscribes to them.</p>
+
+<p>You have to remember that with ZeroMQ there are 0 message queues. None at all! Just messages buffered in either the sender or receiver depending on settings like High Water Mark, and type of socket. If you really do need message queues then you need to write a broker app to handle that, or simply switch to AMQP where all communication is through a 3rd party broker.</p>
+<br /><b>#3</b><br /><p>There is a conflict of interest between sending requests as rapidly as possible to workers, and getting reliability in case a worked crashes or dies. There is an entire section of the ZeroMQ Guide that explains different answers to this question of reliability. Read that, it'll help a lot.</p>
+
+<p>tl;dr workers can/will crash and clients need a resend functionality. The Guide provides reusable code for that, in many languages.</p>
+<br /><b>#4</b><br /><p>Wouldn't the simplest solution be to have the customer timeout when waiting for the reply and then retry if no reply is received?</p>
+<br /><b>#5</b><br /><p>Try sleeping before the call to close. This is fixed in 2.1 but not in 2.0 yet.</p>
+<br />

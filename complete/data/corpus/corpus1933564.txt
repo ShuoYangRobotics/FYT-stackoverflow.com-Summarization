@@ -1,0 +1,220 @@
+Question (ID-1933564): How to refactor this python code block to be more efficient This code block works - it loops through a file that has a repeating number of sets of data 
+and extracts out each of the 5 pieces of information for each set. 
+
+ But I I know that the current factoring is not as efficient as it can be since it is looping 
+through each key for each line found. 
+
+ Wondering if some python gurus can offer better way to do this more efficiently. 
+
+ def parse_params(num_of_params,lines):
+
+ for line in lines:
+ for p in range(1,num_of_params + 1,1):
+  nam = "model.paramName "+str(p)+" "
+  par = "model.paramValue "+str(p)+" "
+  opt = "model.optimizeParam "+str(p)+" "
+  low = "model.paramLowerBound "+str(p)+" "
+  upp = "model.paramUpperBound "+str(p)+" "
+  keys = [nam,par,opt,low,upp]
+  for key in keys:
+  if key in line:
+   a,val = line.split(key)
+   if key == nam: names.append(val.rstrip())
+   if key == par: params.append(val.rstrip())
+   if key == opt: optimize.append(val.rstrip())
+   if key == upp: upper.append(val.rstrip())
+   if key == low: lower.append(val.rstrip())
+
+print "Names = ",names 
+print "Params = ",params
+print "Optimize = ",optimize
+print "Upper = ",upper
+print "Lower = ",lower
+ 
+ Answers (Total-7): #0 Though this doesn't answer your question (other answers are getting at that) something that has helped me a lot in doing things similar to what you're doing are List Comprehensions . They allow you to build lists in a concise and (I think) easy to read way. 
+
+ For instance, the below code builds a 2-dimenstional array with the values you're trying to get at. some_funct here would be a little regex, if I were doing it, that uses the index of the last space in the key as the parameter, and looks ahead to collect the value you're trying to get in the line (the value which corresponds to the key currently being looked at) and appends it to the correct index in the seen_keys 2D array. 
+
+ Wordy, yes, but if you get list-comprehension and you're able to construct the regex to do that, you've got a nice, concise solution. 
+
+ keys = ["model.paramName ","model.paramValue ","model.optimizeParam ""model.paramLowerBound ","model.paramUpperBound "]
+for line in lines:
+ seen_keys = [[],[],[],[],[]]
+ [seen_keys[keys.index(k)].some_funct(line.index(k) for k in keys if k in line]
+ 
+ #1 There is a lot of duplication there, and if you ever add another key or param , you're going to have to add it in many places, which leaves you ripe for errors. What you want to do is pare down all of the places you have repeated things and use some sort of data model, such as a dict . 
+
+ Some others have provided some excellent examples, so I'll just leave my answer here to give you something to think about. 
+ #2 It's not totally easy to see the expected format. From what I can see, the format is like: 
+
+ lines = [
+ "model.paramName 1 foo",
+ "model.paramValue 2 bar",
+ "model.optimizeParam 3 bat",
+ "model.paramLowerBound 4 zip",
+ "model.paramUpperBound 5 ech",
+ "model.paramName 1 foo2",
+ "model.paramValue 2 bar2",
+ "model.optimizeParam 3 bat2",
+ "model.paramLowerBound 4 zip2",
+ "model.paramUpperBound 5 ech2",
+]
+ 
+
+ I don't see the above code working if there is more than one value in each line. Which means the digit is not really significant unless I'm missing something. In that case this works very easily: 
+
+ import re
+
+def parse_params(num_of_params,lines):
+ key_to_collection = {
+  "model.paramName":names,
+  "model.paramValue":params,
+  "model.optimizeParam":optimize,
+  "model.paramLowerBound":upper,
+  "model.paramUpperBound":lower,
+ }
+
+ reg = re.compile(r'(.+?) (\d) (.+)')
+
+ for line in lines:
+  m = reg.match(line)
+  key, digit, value = m.group(1, 2, 3)
+  key_to_collection[key].append(value)
+ 
+ #3 It's not entirely obvious from your code, but it looks like each line can have one "hit" at most; if that's indeed the case, then something like: 
+
+ import re
+
+def parse_params(num_of_params, lines):
+ sn = 'Names Params Optimize Upper Lower'.split()
+ ks = '''paramName paramValue optimizeParam
+   paramLowerBound paramUpperBound'''.split()
+ vals = dict((k, []) for k in ks)
+ are = re.compile(r'model\.(%s) (\d+) (.*)' % '|'.join(ks))
+ for line in lines:
+ mo = are.search(line)
+ if not mo: continue
+ p = int(mo.group(2))
+ if p &lt; 1 or p &gt; num_of_params: continue
+ vals[mo.group(1)].append(mo.group(3).rstrip())
+ for k, s in zip(ks, sn):
+ print '%-8s =' % s,
+ print vals[k]
+ 
+
+ might work -- I exercised it with a little code as follows: 
+
+ if __name__ == '__main__':
+ lines = '''model.paramUpperBound 1 ZAP
+ model.paramLowerBound 1 zap
+ model.paramUpperBound 5 nope'''.splitlines()
+ parse_params(2, lines)
+ 
+
+ and it emits 
+
+ Names = []
+Params = []
+Optimize = []
+Upper = ['zap']
+Lower = ['ZAP']
+ 
+
+ which I think is what you want (if some details must differ, please indicate exactly what they are and let's see if we can fix it). 
+
+ The two key ideas are: use a dict instead of lots of if s; use a re to match "any of the following possibilities" with parenthesized groups in the re's pattern to catch the bits of interest (the keyword after model. , the integer number after that, and the "value" which is the rest of the line) instead of lots of if x in y checks and string manipulation. 
+ #4 The code given in the OP does multiple tests per line to try to match against the expected set of values, each of which is being constructed on the fly. Rather than construct paramValue1 , paramValue2 , etc. for each line, we can use a regular expression to try to do the matching in a cheaper (and more robust) manner. 
+
+ Here's my code snippet, drawing from some ideas that have already been posted. This lets you add a new keyword to the key_to_collection dictionary and not have to change anything else. 
+
+ import re
+
+def parse_params(num_of_params, lines):
+
+ pattern = re.compile(r"""
+  model\.
+  (.+) # keyword
+  (\d+) # index to keyword
+  [ ]+ # whitespace
+  (.+) # value
+  """, re.VERBOSE)
+
+ key_to_collection = {
+  "paramName": names,
+  "paramValue": params,
+  "optimizeParam": optimize,
+  "paramLowerBound": upper,
+  "paramUpperBound": lower,
+ }
+
+ for line in lines:
+  match = pattern.match(line)
+  if not match:
+   print "Invalid line: " + line
+  elif match[1] not in key_to_collection:
+   print "Invalid key: " + line
+  # Not sure if you really care about enforcing this
+  elif match[2] &gt; num_of_params:
+   print "Invalid param: " + line
+  else:
+   key_to_collection[match[1]].append(match[3])
+ 
+
+ Full disclosure: I have not compiled/tested this. 
+ #5 Are you sure that parse_params is the bottle-neck? Have you profiled your app? 
+
+ import re
+from collections import defaultdict 
+
+names = ("paramName paramValue optimizeParam "
+   "paramLowerBound paramUpperBound".split())
+stmt_regex = re.compile(r'model\.(%s)\s+(\d+)\s+(.*)' % '|'.join(names))
+
+def parse_params(num_of_params, lines):
+ stmts = defaultdict(list)
+ for m in (stmt_regex.match(s) for s in lines):
+  if m and 1 &lt;= int(m.group(2)) &lt;= num_of_params: 
+   stmts[m.group(1)].append(m.group(3).rstrip())
+
+ for k, v in stmts.iteritems():
+  print "%s = %s" % (k, ' '.join(v))
+ 
+ #6 It can certainly be made more efficient. But, to be honest, unless this function is called hundreds of times a second, or works on thousands of lines, is it necessary? 
+
+ I would be more concerned about making it clear what is happening... currently, I'm far from clear on that aspect. 
+
+ Just eyeballing it, the input seems to look like this: 
+
+ model.paramName 1 A model.paramValue 1 B model.optimizeParam 1 C model.paramLowerBound 1 D model.paramUpperBound 1 E model.paramName 2 F model.paramValue 2 G model.optimizeParam 2 H model.paramLowerBound 2 I model.paramUpperBound 2 J 
+
+ And your desired output seems to be something like: 
+
+ Names  = AF
+Params = BG
+etc... 
+
+ Now, since my input certainly doesn't match yours, the output is likely off too, but I think I have the gist. 
+
+ There are a few points. First, does it matter how many parameters are passed to the function? For example, if the input has two sets of parameters, do I just want to read both, or is it necessary to allow the function to only read one? For example, your code allows me to call parse_params(1,1) and have it only read parameters ending in a 1 from the same input. If that's not actually a requirement, you can skip a large chunk of the code. 
+
+ Second, is it important to ONLY read the given parameters? If I, for example, have a parameter called 'paramFoo', is it bad if I read it? You can also simplify the procedure by just grabbing all parameters regardless of their name, and extracting their value. 
+
+ def parse_params(input):
+ parameter_list = {}
+ param = re.compile(r"model\.([^ ]+) [0-9]+ ([^ ]+)")
+ each_parameter = param.finditer(input)
+ for match in each_parameter:
+ key = match[0]
+ value = match[1]
+ if not key in paramter_list:
+  parameter_list[key] = []
+
+ parameter_list[key].append(value)
+
+ return parameter_list 
+
+ The output, in this instance, will be something like this: 
+
+ {'paramName':[A, F], 'paramValue':[B, G], 'optimizeParam':[C, H], etc...} 
+
+ Notes: I don't know Python well, I'm a Ruby guy, so my syntax may be off. Apologies.

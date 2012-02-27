@@ -1,0 +1,170 @@
+<h3>Question (ID-3106480):</h3><h2>Really simple way to deal with XML in Python?</h2><p>Musing over a <a href="http://stackoverflow.com/questions/3063319/">recently asked question</a>, I started to wonder if there is a <em>really simple</em> way to deal with XML documents in Python. A pythonic way, if you will.</p>
+
+<p>Perhaps I can explain best if i give example: let's say the following - which i think is a good example of how XML is (mis)used in web services - is the response i get from http request to <a href="http://www.google.com/ig/api?weather=94043" rel="nofollow">http://www.google.com/ig/api?weather=94043</a></p>
+
+<pre><code>&lt;xml_api_reply version="1"&gt;
+  &lt;weather module_id="0" tab_id="0" mobile_row="0" mobile_zipped="1" row="0" section="0" &gt;
+    &lt;forecast_information&gt;
+      &lt;city data="Mountain View, CA"/&gt;
+      &lt;postal_code data="94043"/&gt;
+      &lt;latitude_e6 data=""/&gt;
+      &lt;longitude_e6 data=""/&gt;
+      &lt;forecast_date data="2010-06-23"/&gt;
+      &lt;current_date_time data="2010-06-24 00:02:54 +0000"/&gt;
+      &lt;unit_system data="US"/&gt;
+    &lt;/forecast_information&gt;
+    &lt;current_conditions&gt;
+      &lt;condition data="Sunny"/&gt;
+      &lt;temp_f data="68"/&gt;
+      &lt;temp_c data="20"/&gt;
+      &lt;humidity data="Humidity: 61%"/&gt;
+      &lt;icon data="/ig/images/weather/sunny.gif"/&gt;
+      &lt;wind_condition data="Wind: NW at 19 mph"/&gt;
+    &lt;/current_conditions&gt;
+    ...
+    &lt;forecast_conditions&gt;
+      &lt;day_of_week data="Sat"/&gt;
+      &lt;low data="59"/&gt;
+      &lt;high data="75"/&gt;
+      &lt;icon data="/ig/images/weather/partly_cloudy.gif"/&gt;
+      &lt;condition data="Partly Cloudy"/&gt;
+    &lt;/forecast_conditions&gt;
+  &lt;/weather&gt;
+&lt;/xml_api_reply&gt;
+</code></pre>
+
+<p>After loading/parsing such document, i would like to be able to access the information as simple as say </p>
+
+<pre><code>&gt;&gt;&gt; xml['xml_api_reply']['weather']['forecast_information']['city'].data
+'Mountain View, CA'
+</code></pre>
+
+<p>or</p>
+
+<pre><code>&gt;&gt;&gt; xml.xml_api_reply.weather.current_conditions.temp_f['data']
+'68'
+</code></pre>
+
+<p>From what I saw so far, seems that <code>ElementTree</code> is the closest to what I dream of. But it's not there, there is still some fumbling to do when consuming XML. OTOH, what I am thinking is not that complicated - probably just thin veneer on top of a parser - and yet it can decrease annoyance of dealing with XML. Is there such a magic? (And if not - why?)</p>
+
+<p>PS. Note I have tried <code>BeautifulSoup</code> already and while I like its approach, it has real issues with empty <code>&lt;element/&gt;</code>s - see below in comments for examples.</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>lxml has been mentioned. You might also check out <a href="http://codespeak.net/lxml/objectify.html" rel="nofollow">lxml.objectify</a> for some really simple manipulation.</p>
+
+<pre><code>&gt;&gt;&gt; from lxml import objectify
+&gt;&gt;&gt; tree = objectify.fromstring(your_xml)
+&gt;&gt;&gt; tree.weather.attrib["module_id"]
+'0'
+&gt;&gt;&gt; tree.weather.forecast_information.city.attrib["data"]
+'Mountain View, CA'
+&gt;&gt;&gt; tree.weather.forecast_information.postal_code.attrib["data"]
+'94043'
+</code></pre>
+<br /><b>#1</b><br /><p>You want a thin veneer? That's easy to cook up. Try the following trivial wrapper around ElementTree as a start:</p>
+
+<pre><code># geetree.py
+import xml.etree.ElementTree as ET
+
+class GeeElem(object):
+    """Wrapper around an ElementTree element. a['foo'] gets the
+       attribute foo, a.foo gets the first subelement foo."""
+    def __init__(self, elem):
+        self.etElem = elem
+
+    def __getitem__(self, name):
+        res = self._getattr(name)
+        if res is None:
+            raise AttributeError, "No attribute named '%s'" % name
+        return res
+
+    def __getattr__(self, name):
+        res = self._getelem(name)
+        if res is None:
+            raise IndexError, "No element named '%s'" % name
+        return res
+
+    def _getelem(self, name):
+        res = self.etElem.find(name)
+        if res is None:
+            return None
+        return GeeElem(res)
+
+    def _getattr(self, name):
+        return self.etElem.get(name)
+
+class GeeTree(object):
+    "Wrapper around an ElementTree."
+    def __init__(self, fname):
+        self.doc = ET.parse(fname)
+
+    def __getattr__(self, name):
+        if self.doc.getroot().tag != name:
+            raise IndexError, "No element named '%s'" % name
+        return GeeElem(self.doc.getroot())
+
+    def getroot(self):
+        return self.doc.getroot()
+</code></pre>
+
+<p>You invoke it so:</p>
+
+<pre><code>&gt;&gt;&gt; import geetree
+&gt;&gt;&gt; t = geetree.GeeTree('foo.xml')
+&gt;&gt;&gt; t.xml_api_reply.weather.forecast_information.city['data']
+'Mountain View, CA'
+&gt;&gt;&gt; t.xml_api_reply.weather.current_conditions.temp_f['data']
+'68'
+</code></pre>
+<br /><b>#2</b><br /><p>Take a look at Amara 2, particularly the Bindery part of <a href="http://www.xml3k.org/Amara2/Tutorial" rel="nofollow">this tutorial</a>.</p>
+
+<p>It works in a way pretty similar to what you describe.</p>
+
+<p>On the other hand. ElementTree's <a href="http://docs.python.org/library/xml.etree.elementtree.html#xml.etree.ElementTree.ElementTree.find" rel="nofollow">find*()</a> methods can give you 90% of that and are packaged with Python.</p>
+<br /><b>#3</b><br /><p>I highly recommend lxml.etree and xpath to parse and analyse your data. Here is a complete example. I have truncated the xml to make it easier to read.</p>
+
+<pre><code>import lxml.etree
+
+s = """&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;xml_api_reply version="1"&gt;
+  &lt;weather module_id="0" tab_id="0" mobile_row="0" mobile_zipped="1" row="0" section="0" &gt;
+    &lt;forecast_information&gt;
+      &lt;city data="Mountain View, CA"/&gt; &lt;forecast_date data="2010-06-23"/&gt;
+    &lt;/forecast_information&gt;
+    &lt;forecast_conditions&gt;
+      &lt;day_of_week data="Sat"/&gt;
+      &lt;low data="59"/&gt;
+      &lt;high data="75"/&gt;
+      &lt;icon data="/ig/images/weather/partly_cloudy.gif"/&gt;
+      &lt;condition data="Partly Cloudy"/&gt;
+    &lt;/forecast_conditions&gt;
+  &lt;/weather&gt;
+&lt;/xml_api_reply&gt;"""
+
+tree = lxml.etree.fromstring(s)
+for weather in tree.xpath('/xml_api_reply/weather'):
+    print weather.find('forecast_information/city/@data')[0]
+    print weather.find('forecast_information/forecast_date/@data')[0]
+    print weather.find('forecast_conditions/low/@data')[0]
+    print weather.find('forecast_conditions/high/@data')[0]
+</code></pre>
+<br /><b>#4</b><br /><p>If you don't mind using a 3rd party library, then <a href="http://www.crummy.com/software/BeautifulSoup/" rel="nofollow">BeautifulSoup</a> will do almost exactly what you ask for:</p>
+
+<pre><code>&gt;&gt;&gt; from BeautifulSoup import BeautifulStoneSoup
+&gt;&gt;&gt; soup = BeautifulStoneSoup('''&lt;snip&gt;''')
+&gt;&gt;&gt; soup.xml_api_reply.weather.current_conditions.temp_f['data']
+u'68'
+</code></pre>
+<br /><b>#5</b><br /><p>I believe that the built in python xml module will do the trick.  Look at "xml.parsers.expat"</p>
+
+<p><a href="http://docs.python.org/library/pyexpat.html#module-xml.parsers.expat" rel="nofollow">xml.parsers.expat</a></p>
+<br /><b>#6</b><br /><p>The suds project provides a Web Services client library that works almost exactly as you describe -- provide it a wsdl and then use factory methods to create the defined types (and process the responses too!).</p>
+<br /><b>#7</b><br /><p>I found the following <a href="http://github.com/joestump/python-simplexml" rel="nofollow">python-simplexml</a> module, which in the attempts of the author to get something close to SimpleXML from PHP is indeed a <code>small wrapper around ElementTree</code>. It's under 100 lines but seems to do what was requested:</p>
+
+<pre><code>&gt;&gt;&gt; import SimpleXml
+&gt;&gt;&gt; x = SimpleXml.parse(urllib.urlopen('http://www.google.com/ig/api?weather=94043'))
+&gt;&gt;&gt; print x.weather.current_conditions.temp_f['data']
+58
+</code></pre>
+<br /><b>#8</b><br /><p>If you haven't already, I'd suggest looking into the <a href="http://docs.python.org/library/xml.dom.html" rel="nofollow">DOM API for Python</a>. DOM is a pretty widely used XML interpretation system, so it should be pretty robust.</p>
+
+<p>It's probably a little more complicated than what you describe, but that comes from its attempts to preserve all the information implicit in XML markup rather than from bad design.</p>
+<br />

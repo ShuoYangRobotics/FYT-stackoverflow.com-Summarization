@@ -1,0 +1,187 @@
+Question (ID-3031582): Python: slow read & write for millions of small files 
+ Conclusion: 
+ It seems that HDF5 is the way to go for my purposes. Basically " HDF5 is a data model, library, and file format for storing and managing data. " and is designed to handle incredible amounts of data. It has a Python module called python-tables. (The link is in the answer below) 
+ 
+ HDF5 does the job done 1000% better in saving tons and tons of data. Reading/modifying the data from 200 million rows is a pain though, so that's the next problem to tackle. 
+ 
+
+ 
+
+ I am building directory tree which has tons of subdirectories and files. There are about 10 million files spread around a hundred thousand directories. Each file is under 32 subdirectories. 
+
+ I have a python script that builds this filesystem and reads &amp; writes those files. The problem is that when I reach more than a million files, the read and write methods become extremely slow. 
+
+ Here's the function I have that reads the contents of a file (the file contains an integer string), adds a certain number to it, then writes it back to the original file. 
+
+ def addInFile(path, scoreToAdd):
+ num = scoreToAdd
+ try:
+  shutil.copyfile(path, '/tmp/tmp.txt')
+  fp = open('/tmp/tmp.txt', 'r')
+  num += int(fp.readlines()[0])
+  fp.close()
+ except:
+  pass
+ fp = open('/tmp/tmp.txt', 'w')
+ fp.write(str(num))
+ fp.close()
+ shutil.copyfile('/tmp/tmp.txt', path)
+ 
+
+ 
+ Relational databases seem too slow for accessing these data, so I opted for a filesystem approach. 
+ I previously tried performing linux console commands for these but it was way slower. 
+ I copy the file to a temporary file first then access/modify it then copy it back because i found this was faster than directly accessing the file. 
+ Putting all the files into 1 directory (in reiserfs format) caused too much slowdown when accessing the files. 
+ 
+
+ I think the cause of the slowdown is because there're tons of files. Performing this function 1000 times clocked at less than a second.. but now it's reaching 1 minute. 
+
+ How do you suggest I fix this? Do I change my directory tree structure? 
+
+ All I need is to quickly access each file in this very huge pool of files* 
+ Answers (Total-6): #0 Two suggestions: 
+
+ First , a structure that involves 32-deep nesting of subdirectories is inherently flawed. Assuming that you really have "about 10 million files", one level of subdirectories should absolutely be enough (assuming you use a modern filesystem). 
+
+ Second : You say you have "about 10 million files" and that each file "contains an integer string". Assuming that those are 32-bit integers and you store them directly instead of as strings, that amounts to a total dataset size of 40MiB (10M files * 4 bytes per file). Assuming that each filename is 32 bytes long, add another 320MiB for "keys" to this data. 
+
+ So you'll be able to easily fit the whole dataset into memory . I suggest doing just that, and operate over the data held in main memory. And unless there is any reason you need an elaborate directory structure, I further suggest storing the data in a single file. 
+ #1 I would suggest you rethink your approach, using lots of extremely small files is bound to give you serious performance problems. Depending on the purpose of your program some kind of database could be far more efficient. 
+
+ If you're doing lots of I/O you can also just throw more hardware at the problem and use SSDs or keep all the data in RAM (explicitly or by caching). With harddrives alone you have no chance of achiving good performance in this scenario. 
+
+ I've never used it, but e.g. Redis is a persistent key-value store that is supposed to be very fast. If your data fits this model I would definately try this or something similar. You'll find some performance data in this article , which should give you an idea what speeds you can achieve. 
+ #2 I know this isn't a direct answer to your question, but it is a direct solution to your problem. 
+
+ You need to research using something like HDF5 . It is designed for just the type of hierarchical data with millions of individual data points. 
+
+ You are REALLY in luck because there are awesome Python bindings for HDF5 called pytables .
+I have used it in a very similar way and had tremendous success. 
+ #3 
+ The disk is limited by amount of bytes it can read/write per second and also by amount of operations it can perform in second. 
+ While your small files are cached, operations are significantly faster than with uncached files. 
+ 
+
+ It looks like you are hitting both issues, 
+
+ 
+ doing too many i/o operations 
+ running out of cache 
+ 
+
+ I'd suggest revisiting the structure you are using, and using less larger files. Keep in minf (as a rule of thumb) than I/O operation less than 128K runtime cost is more or less equal to I/O of 1byte! 
+ #4 You're copying a file, opening it to read, closing it, then reopening it for writing, then recopying it back. It would be faster to do it in one go. 
+
+ EDIT: the previous version has a bug when the number of digits become less than the current number of digits (e.g. if you're subtracting or adding by negative number); this version fixes it, timing result is barely unaffected 
+
+ def addInFile(path, scoreToAdd):
+ try:
+  fp = open(path, 'r+')
+ except IOError as e:
+  print e
+ else:
+  num = str(scoreToAdd + int(fp.read()))
+  fp.seek(0)
+  fp.write(num)
+  fp.truncate(len(num))
+ finally:
+  fp.close()
+ 
+
+ alternatively, if you want to avoid file loss and writes to cache, you should do the copying and the summing in one go, then do a an overwrite-dance in another step: 
+
+ def addInFile(path, scoreToAdd):
+ try:
+  orig = open(path, 'r')
+  tmp = open('/home/lieryan/junks/tmp.txt', 'w')
+ except IOError as e:
+  print e
+ else:
+  num = int(orig.read())
+  tmp.write(str(scoreToAdd + num))
+ finally:
+  orig.close()
+  tmp.close()
+ try:
+  # make sure /tmp/ and path is in the same partition
+  # otherwise the fast shutil.move become a slow shutil.copy
+  shutil.move(path, '/home/lieryan/junks/backup.txt')
+  shutil.move('/home/lieryan/junks/tmp.txt', path)
+  os.remove('/home/lieryan/junks/backup.txt')
+ except (IOError, shutil.Error) as e:
+  print e
+ 
+
+ also, don't use bare excepts. 
+
+ Alternatively, how about grouping all the 256 files in the lowest leaf into one bigger file? Then you can read multiple numbers in one go, in one cache. And if you used a fixed width file, then you can quickly use seek() to get to any entry in the file in O(1). 
+
+ Some timings, writing 1000 times on the same file: 
+
+ 
+ Your original approach: 1.87690401077 
+ My first approach (open with rw+): 0.0926730632782 
+ My second approach, copy to the same partition: 0.464048147202 
+ 
+
+ (all functions untested on their error handling path) 
+ #5 Resolving all of those subdirectories takes time. You're over-taxing the file-system. 
+
+ Maybe instead of using the directory tree, you could instead encode the path information into the file name, so instead of creating a file with a path like this: 
+
+ /parent/00/01/02/03/04/05/06/07
+  /08/09/0A/0B/0C/0D/0E/0F
+  /10/11/12/13/14/15/16/17
+  /18/19/1A/1B/1C/1D/1E/1F.txt
+ 
+
+ ...you could create a file with a path like this: 
+
+ /parent/00_01_02_03_04_05_06_07_
+  08_09_0A_0B_0C_0D_0E_0F_
+  10_11_12_13_14_15_16_17_
+  18_19_1A_1B_1C_1D_1E_1F.txt
+ 
+
+ ...of course, you'll still have a problem, because now all of your ten million files will be in a single directory, and in my experience (NTFS), a directory with more than a few thousand files in it still over-taxes the file-system. 
+
+ You could come up with a hybrid approach: 
+
+ /parent/00_01_02_03/04_05_06_07
+  /08_09_0A_0B/0C_0D_0E_0F
+  /10_11_12_13/14_15_16_17
+  /18_19_1A_1B/1C_1D_1E_1F.txt
+ 
+
+ But that will still give you problems if you exhaustively create all those directories. Even though most of those directories are "empty" (in that they don't contain any files ), the operating system still has to create an INODE record for each directory, and that takes space on disk. 
+
+ Instead, you should only create a directory when you have a file to put into it. Also, if you delete all the files in any given directory, then delete the empty directory. 
+
+ How many levels deep should you create the directory hierarchy? In my little example, I transformed your 32-level hierarchy into an 8-level hierarchy, but after doing some testing, you might decide on a slightly different mapping. It really depends on your data, and how evenly those paths are distributed through the combinatorial solution space. You need to optimize a solution with two constraints: 
+
+ 1) Minimize the number of directories you create, knowing that each directory becomes an INODE in the underlying file-system, and creating too many of them will overwhelm the file system. 
+
+ 2) Minimize the number of files in each directory, knowing that having too many files per directory (in my experience, more than 1000) overwhelms the file-system. 
+
+ There's one other consideration to keep in mind: Storage space on disks is addressed and allocated using "blocks". If you create a file smaller than the minimum block size, it nevertheless consumes the whole block, wasting disk space. In NTFS, those blocks are defined by their "cluster size" (which is partially determined by the overall size of the volume), and usually defaults to 4kB: 
+
+ http://support.microsoft.com/kb/140365 
+
+ So if you create a file with only one byte of data, it will still consume 4kB worth of disk space, wasting 4095 bytes. 
+
+ In your example, you said you had about 10 million files, with about 1gB of data. If that's true, then each of your files is only about 100 bytes long. With a cluster size of 4096, you have about a 98% space-wasted ratio. 
+
+ If at all possible, try to consolidate some of those files. I don't know what kind of data they contain, but if it's a text format, you might try doing something like this: 
+
+ [id:01_23_45_67_89_AB_CD_EF]
+lorem ipsum dolor sit amet consectetur adipiscing elit
+[id:fe_dc_ba_98_76_54_32_10]
+ut non lorem quis quam malesuada lacinia
+[id:02_46_81_35_79_AC_DF_BE]
+nulla semper nunc id ligula eleifend pulvinar
+ 
+
+ ...and so on and so forth. It might look like you're wasting space with all those verbose headers, but as far as the disk is concerned, this is a much more space-efficient strategy than having separate files for all those little snippets. This little example used exactly 230 bytes (including newlines) for three records, so you might try to put about sixteen records into each file (remembering that it's much better to have slightly less than 4096 bytes-per-file than to have slightly more than 4096, wasting a whole extra disk block). 
+
+ Anyhow, good luck!

@@ -1,0 +1,131 @@
+<h3>Question ( ID-2276689 ) : </h3><h2>How do I unit test a module that relies on <span style="background-color:yellow;">urllib2</span> ? </h2><p>I 've got a piece of <span style="background-color:yellow;">code</span> that I ca n't figure out how to unit test ! The module pulls content from external XML feeds ( twitter , flickr , youtube , etc. ) with <span style="background-color:yellow;">urllib2.</span> Here 's some pseudo-code for it : </p>
+<pre><code>params = (url, urlencode(data),) if data else (url,)
+req = Request(*params)
+response = urlopen(req)
+#check headers, content-length, etc...
+#parse the response XML with lxml...
+</code></pre>
+<p>My first thought was to pickle the <span style="background-color:yellow;">response</span> and load it for testing , but apparently urllib 's <span style="background-color:yellow;">response</span> <span style="background-color:yellow;">object</span> is unserializable ( it raises an exception ) . </p>
+<p>Just saving the XML from the <span style="background-color:yellow;">response</span> body is n't ideal , because my <span style="background-color:yellow;">code</span> uses the header information too. It 's designed to act on a <span style="background-color:yellow;">response</span> <span style="background-color:yellow;">object</span> . </p>
+<p>And of course , relying on an external source for data in a unit test is a horrible idea . </p>
+<p>So how do I write a unit test for this ? </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>It would be best if you could write a mock urlopen ( and possibly Request ) which provides the minimum <span style="background-color:yellow;">required</span> interface to behave like <span style="background-color:yellow;">urllib2</span> 's version. You 'd then need to have your function/method which uses it able to accept this mock urlopen somehow , and use <span style="background-color:yellow;">urllib2.urlopen</span> otherwise . </p>
+<p>This is a fair amount of work , but worthwhile. Remember that python is very friendly to ducktyping , so you just need to provide some semblance of the <span style="background-color:yellow;">response</span> <span style="background-color:yellow;">object</span> 's properties to mock it . </p>
+<p>For example : </p>
+<pre><code>class MockResponse(object):
+    def __init__(self, resp_data, code=200, msg='OK'):
+        self.resp_data = resp_data
+        self.code = code
+        self.msg = msg
+        self.headers = {'content-type': 'text/xml; charset=utf-8'}
+
+    def read(self):
+        return self.resp_data
+
+    def getcode(self):
+        return self.code
+
+    # Define other members and properties you want
+
+def mock_urlopen(request):
+    return MockResponse(r'<xml document>')
+</code></pre>
+<p>Granted , some of these are difficult to mock , because for example I believe the normal " headers " is an HTTPMessage which implements fun stuff like case-insensitive header names. But , you might be able to simply construct an HTTPMessage with your <span style="background-color:yellow;">response</span> data . </p>
+<br /><b># <span style="background-color:yellow;">1</span> </b><br /><p><span style="background-color:yellow;">urllib2</span> has a functions called build_opener ( ) and <span style="background-color:yellow;">install_opener</span> ( ) which you should use to mock the behaviour of urlopen ( ) </p>
+<pre><code>import urllib2
+from StringIO import StringIO
+
+def mock_response(req):
+    if req.get_full_url() == "http://example.com":
+        resp = urllib2.addinfourl(StringIO("mock file"), "mock message", req.get_full_url())
+        resp.code = 200
+        resp.msg = "OK"
+        return resp
+
+class MyHTTPHandler(urllib2.HTTPHandler):
+    def http_open(self, req):
+        print "mock opener"
+        return mock_response(req)
+
+my_opener = urllib2.build_opener(MyHTTPHandler)
+urllib2.install_opener(my_opener)
+
+response=urllib2.urlopen("http://example.com")
+print response.read()
+print response.code
+print response.msg
+</code></pre>
+<br /><b># 2 </b><br /><p>Build a separate class or module responsible for communicating with your external feeds . </p>
+<p>Make this class able to be a test double . You 're using python , so you 're pretty golden there ; if you were using C # , I 'd suggest either in interface or virtual methods . </p>
+<p>In your unit test , insert a test double of the external feed class. Test that your <span style="background-color:yellow;">code</span> uses the class correctly , assuming that the class does the work of communicating with your external resources correctly. Have your test double return fake data rather than live data ; test various combinations of the data and of course the possible exceptions <span style="background-color:yellow;">urllib2</span> could throw . </p>
+<p>Aand... that 's it . </p>
+<p>You ca n't effectively automate unit tests that rely on external sources , so you 're best off not doing it . Run an occasional integration test on your communication module , but do n't include those tests as part of your automated tests . </p>
+<p>Edit : </p>
+<p>Just a note on the difference between my answer and @ Crast 's answer. Both are essentially correct , but they involve different approaches. In Crast 's approach , you use a test double on the library itself. In my approach , you abstract the use of the library away into a separate module and test double that module . </p>
+<p>Which approach you use is entirely subjective ; there 's no " correct " answer there. I prefer my approach because it allows me to build more modular , flexible <span style="background-color:yellow;">code</span> , something I value. But it comes at a cost in terms of additional <span style="background-color:yellow;">code</span> to write , something that may not be valued in many agile situations . </p>
+<br /><b># 3 </b><br /><p>You can use pymox to mock the behavior of anything and everything in the <span style="background-color:yellow;">urllib2</span> ( or any other ) package. It 's 2010 , you should n't be writing your own mock classes . </p>
+<br /><b># 4 </b><br /><p>I think the easiest thing to do is to actually create a simple web server in your unit test. When you start the test , create a new thread that listens on some arbitrary port and when a client connects just returns a known set of headers and XML , then terminates . </p>
+<p>I can elaborate if you need more info . </p>
+<p>Here 's some <span style="background-color:yellow;">code</span> : </p>
+<pre><code>import threading, SocketServer, time
+
+# a request handler
+class SimpleRequestHandler(SocketServer.BaseRequestHandler):
+    def handle(self):
+        data = self.request.recv(102400) # token receive
+        senddata = file(self.server.datafile).read() # read data from unit test file
+        self.request.send(senddata)
+        time.sleep(0.1) # make sure it finishes receiving request before closing
+        self.request.close()
+
+def serve_data(datafile):
+    server = SocketServer.TCPServer(('127.0.0.1', 12345), SimpleRequestHandler)
+    server.datafile = datafile
+    http_server_thread = threading.Thread(target=server.handle_request())
+</code></pre>
+<p>To run your unit test , call <span style="background-color:yellow;">serve_data</span> ( ) then call your <span style="background-color:yellow;">code</span> that <span style="background-color:yellow;">requests</span> a URL that looks like http : //localhost : <span style="background-color:yellow;">12345/anythingyouwant</span> . </p>
+<br /><b># 5 </b><br /><p>Why not just mock a website that returns the <span style="background-color:yellow;">response</span> you expect ? then start the server in a thread in setup and kill it in the teardown. I ended up doing this for testing <span style="background-color:yellow;">code</span> that would send email by mocking an smtp server and it works great. Surely something more trivial could be done for http.. . </p>
+<pre><code>from smtpd import SMTPServer
+from time import sleep
+import asyncore
+SMTP_PORT = 6544
+
+class MockSMTPServer(SMTPServer):
+    def __init__(self, localaddr, remoteaddr, cb = None):
+        self.cb = cb
+        SMTPServer.__init__(self, localaddr, remoteaddr)
+
+    def process_message(self, peer, mailfrom, rcpttos, data):
+        print (peer, mailfrom, rcpttos, data)
+        if self.cb:
+            self.cb(peer, mailfrom, rcpttos, data)
+        self.close()
+
+def start_smtp(cb, port=SMTP_PORT):
+
+    def smtp_thread():
+        _smtp = MockSMTPServer(("127.0.0.1", port), (None, 0), cb)
+        asyncore.loop()
+        return Thread(None, smtp_thread)
+
+
+def test_stuff():
+        #.......snip noise
+        email_result = None
+
+        def email_back(*args):
+            email_result = args
+
+        t = start_smtp(email_back)
+        t.start()
+        sleep(1)
+
+        res.form["email"]= self.admin_email
+        res = res.form.submit()
+        assert res.status_int == 302,"should've redirected"
+
+
+        sleep(1)
+        assert email_result is not None, "didn't get an email"
+</code></pre>
+<br />

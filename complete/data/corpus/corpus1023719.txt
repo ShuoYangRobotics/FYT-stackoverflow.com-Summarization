@@ -1,0 +1,212 @@
+Question (ID-1023719): smoothing irregularly sampled time data Given a table where the first column is seconds past a certain reference point and the second one is an arbitrary measurement: 
+
+ 6	0.738158581
+21	0.801697222
+39	1.797224596
+49	2.77920469
+54	2.839757536
+79	3.832232283
+91	4.676794376
+97	5.18244704
+100	5.521878863
+118	6.316630137
+131	6.778507504
+147	7.020395216
+157	7.331607129
+176	7.637492223
+202	7.848079136
+223	7.989456499
+251	8.76853608
+278	9.092367123 
+ ...
+ 
+
+ As you see, the measurements are sampled at irregular time points. I need to smooth the data by averaging the reading up to 100 seconds prior each measurement (in Python). Since the data table is huge, an iterator-based method is really preferred. 
+Unfortunately, after two hours of coding I can't figure out efficient and elegant solution. 
+
+ Can anyone help me? 
+
+ EDIT s 
+
+ 
+ I want one smoothed reading for each raw reading, and the smoothed reading is to be the arithmetic mean of the raw reading and any others in the previous 100 (delta) seconds. (John, you are right) 
+ Huge ~ 1e6 - 10e6 lines + need to work with tight RAM 
+ The data is approximately random walk 
+ The data is sorted 
+ 
+
+ RESOLUTION 
+
+ I have tested solutions proposed by J Machin and yairchu. They both gave the same results, however, on my data set, J Machin's version performs exponentially, while that of yairchu is linear. Following are execution times as measured by IPython's %timeit (in microseconds): 
+
+ data size J Machin yairchu
+10  90.2	  55.6
+50   930  	258
+100   3080 	514
+500   64700 	2660
+1000  253000 	5390
+2000  952000 	11500
+ 
+
+ Thank you all for the help. 
+ Answers (Total-8): #0 You haven't said exactly when you want output. I'm assuming that you want one smoothed reading for each raw reading, and the smoothed reading is to be the arithmetic mean of the raw reading and any others in the previous 100 (delta) seconds. 
+
+ Short answer: use a collections.deque ... it will never hold more than "delta" seconds of readings. The way I've set it up you can treat the deque just like a list, and easily calculate the mean or some fancy gizmoid that gives more weight to recent readings. 
+
+ Long answer: 
+
+ &gt;&gt;&gt; the_data = [tuple(map(float, x.split())) for x in """\
+... 6  0.738158581
+... 21  0.801697222
+[snip]
+... 251  8.76853608
+... 278  9.092367123""".splitlines()]
+&gt;&gt;&gt; import collections
+&gt;&gt;&gt; delta = 100.0
+&gt;&gt;&gt; q = collections.deque()
+&gt;&gt;&gt; for t, v in the_data:
+...  while q and q[0][0] &lt;= t - delta:
+...   # jettison outdated readings
+...   _unused = q.popleft()
+...  q.append((t, v))
+...  count = len(q)
+...  print t, sum(item[1] for item in q) / count, count
+...
+...
+6.0 0.738158581 1
+21.0 0.7699279015 2
+39.0 1.112360133 3
+49.0 1.52907127225 4
+54.0 1.791208525 5
+79.0 2.13137915133 6
+91.0 2.49500989771 7
+97.0 2.8309395405 8
+100.0 3.12993279856 9
+118.0 3.74976297144 9
+131.0 4.41385300278 9
+147.0 4.99420529389 9
+157.0 5.8325615685 8
+176.0 6.033109419 9
+202.0 7.15545189083 6
+223.0 7.4342562845 6
+251.0 7.9150342134 5
+278.0 8.4246097095 4
+&gt;&gt;&gt;
+ 
+
+ Edit 
+
+ One-stop shop: get your fancy gizmoid here. Here's the code: 
+
+ numerator = sum(item[1] * upsilon ** (t - item[0]) for item in q)
+denominator = sum(upsilon ** (t - item[0]) for item in q)
+gizmoid = numerator / denominator
+ 
+
+ where upsilon should be a little less than 1.0 (&lt;= zero is illegal, just above zero does little smoothing, one gets you the arithmetic mean plus wasted CPU time, and greater than one gives the inverse of your purpose). 
+ #1 I'm using a sum result to which I'm adding the new members and subtracting the old ones. However in this way one may suffer accumulating floating point inaccuracies. 
+
+ Therefore I implement a "Deque" with a list. And whenever my Deque reallocates to a smaller size. I recalculate the sum at the same occasion. 
+
+ I'm also calculating the average up to point x including point x so there's at least one sample point to average. 
+
+ def getAvgValues(data, avgSampleTime):
+ lastTime = 0
+ prevValsBuf = []
+ prevValsStart = 0
+ tot = 0
+ for t, v in data:
+ avgStart = t - avgSampleTime
+ # remove too old values
+ while prevValsStart &lt; len(prevValsBuf):
+  pt, pv = prevValsBuf[prevValsStart]
+  if pt &gt; avgStart:
+  break
+  tot -= pv
+  prevValsStart += 1
+ # add new item
+ tot += v
+ prevValsBuf.append((t, v))
+ # yield result
+ numItems = len(prevValsBuf) - prevValsStart
+ yield (t, tot / numItems)
+ # clean prevVals if it's time
+ if prevValsStart * 2 &gt; len(prevValsBuf):
+  prevValsBuf = prevValsBuf[prevValsStart:]
+  prevValsStart = 0
+  # recalculate tot for not accumulating float precision error
+  tot = sum(v for (t, v) in prevValsBuf)
+ 
+ #2 Your data seems to be roughly linear: 
+
+ 
+
+ What kind of smoothing are you looking for? A least squares fit of a line to this data set? Some sort of low-pass filter? Or something else? 
+
+ Please tell us the application so we can advise you a bit better. 
+
+ EDIT: For example, depending on the application, interpolating a line between the first and last point may be good enough for your purposes. 
+ #3 This one makes it linear: 
+
+ def process_data(datafile):
+ previous_n = 0
+ previous_t = 0
+ for line in datafile:
+  t, number = line.strip().split()
+  t = int(t)
+  number = float(number)
+  delta_n = number - previous_n
+  delta_t = t - previous_t
+  n_per_t = delta_n / delta_t
+  for t0 in xrange(delta_t):
+   yield previous_t + t0, previous_n + (n_per_t * t0)
+  previous_n = n
+  previous_t = t
+
+f = open('datafile.dat')
+
+for sample in process_data(f):
+ print sample
+ 
+ #4 O(1) memory in case you can iterate the input more than once - you can use one iterator for the "left" and one for the "right". 
+
+ def getAvgValues(makeIter, avgSampleTime):
+ leftIter = makeIter()
+ leftT, leftV = leftIter.next()
+ tot = 0
+ count = 0
+ for rightT, rightV in makeIter():
+ tot += rightV
+ count += 1
+ while leftT &lt;= rightT - avgSampleTime:
+  tot -= leftV
+  count -= 1
+  leftT, leftV = leftIter.next()
+ yield rightT, tot / count
+ 
+ #5 While it gives an exponentially decaying average, rather than a total average, I think you may want what I called an exponential moving average with varying alpha , which is really a single-pole low-pass filter. There's now a solution to that question, and it runs in time linear to the number of data points. See if it works for you. 
+ #6 what about something like this, keep storing values till time difference with last time is > 100, average and yield such values
+e.g. 
+
+ def getAvgValues(data):
+ lastTime = 0
+ prevValues = []
+ avgSampleTime=100
+
+ for t, v in data:
+  if t - lastTime &lt; avgSampleTime:
+   prevValues.append(v)
+  else:
+   avgV = sum(prevValues)/len(prevValues)
+   lastTime = t
+   prevValues = [v]
+   yield (t,avgV)
+
+for v in getAvgValues(data):
+ print v
+ 
+ #7 Sounds like you need a simple rounding formula. To round any number to an arbitrary interval: 
+
+ round(num/interval)*interval 
+
+ You can substitute round with floor or ceiling for "leading up to" or "since" affects. It can work in any language, including SQL.

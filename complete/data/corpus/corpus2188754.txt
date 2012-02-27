@@ -1,0 +1,120 @@
+Question (ID-2188754): Multiple Try-Excepts followed by an Else in python Is there some way to have several consecutive Try-Except clauses that trigger a single Else only if all of them are successful? 
+
+ As an example: 
+
+ try:
+ private.anodization_voltage_meter = Voltmeter(voltage_meter_address.value) #assign voltmeter location
+except(visa.VisaIOError): #channel time out
+ private.logger.warning('Volt Meter is not on or not on this channel')
+try:
+ private.anodization_current_meter = Voltmeter(current_meter_address.value) #assign voltmeter as current meter location
+except(visa.VisaIOError): #channel time out
+ private.logger.warning('Ammeter is not on or not on this channel')
+try:
+ private.sample_thermometer = Voltmeter(sample_thermometer_address.value)#assign voltmeter as thermomter location for sample.
+except(visa.VisaIOError): #channel time out
+ private.logger.warning('Sample Thermometer is not on or not on this channel')
+try:
+ private.heater_thermometer = Voltmeter(heater_thermometer_address.value)#assign voltmeter as thermomter location for heater.
+except(visa.VisaIOError): #channel time out
+ private.logger.warning('Heater Thermometer is not on or not on this channel')
+else:
+ private.logger.info('Meters initialized')
+ 
+
+ As you can see, you only want to print meters initialized if all of them went off, however as currently written it only depends on the heater thermometer. is there some way to stack these? 
+ Answers (Total-6): #0 Consider breaking the try/except structure into a function that returns True if the call worked and False if it failed, then use e.g. all() to see that they all succeded: 
+
+ def initfunc(structure, attrname, address, desc):
+ try:
+ var = Voltmeter(address.value)
+ setattr(structure, attrname, var)
+ return True
+ except(visa.VisaIOError):
+ structure.logger.warning('%s is not on or not on this channel' % (desc,))
+
+if all([initfunc(*x) for x in [(private, 'anodization_voltage_meter', voltage_meter_address, 'Volt Meter'), ...]]):
+ private.logger.info('Meters initialized')
+ 
+ #1 Personally I'd just have a trip variable init_ok or somesuch. 
+
+ Set it as True, and have all the except clauses set it False, then test at the end? 
+ #2 Try something like this. keeping the original behaviour of not stopping after the first exception 
+
+ success = True
+for meter, address, message in (
+  ('anodization_voltage_meter',voltage_meter_address,'Volt Meter is not on or not on this channel'),
+  ('anodization_current_meter',current_meter_address,'Ammeter is not on or not on this channel'),
+  ('sample_thermometer',sample_thermometer_address,'Sample Thermometer is not on or not on this channel'),
+  ('heater_thermometer',heater_thermometer_address,'Heater Thermometer is not on or not on this channel')):
+ try:
+  setattr(private,meter, Voltmeter(address.value):
+ except (visa.VisaIOError,):
+  success = False
+  private.logger.warning(message)
+
+if success: # everything is ok
+ private.logger.info('Meters initialized')
+ 
+ #3 You've got a number of quite similar objects, and in cases like that it's often better to treat them uniformly and use a data-driven approach. 
+
+ So, I'd start with your ..._meter_address objects. To me they sound like configuration for the meters, so I'd have a class that looks something like this: 
+
+ class MeterConfiguration(object):
+ def __init__(self, name, address):
+  self.name = name
+  self.address = address
+
+ def english_name(self):
+  """A readable form of the name for this meter."""
+  return ' '.join(x.title() for x in self.name.split('_')) + ' Meter'
+ 
+
+ Perhaps you have some more configuration (currently stored in variables) that could go in here too. 
+
+ Then, I'd have a summary of all the meters that your program deals with. I'm creating these statically, but it may well be right for you to read all or part of this information from a config file. I've no idea what your addresses look like, so I made something up :) 
+
+ ALL_METERS = [
+ MeterConfiguration('anodization_voltage', 'PORT0001'),
+ MeterConfiguration('anodization_current', 'PORT0002'),
+ MeterConfiguration('sample_thermometer', 'PORT0003'),
+ MeterConfiguration('heater_thermometer', 'PORT0004')
+]
+ 
+
+ Cool, now all configuration is in one place, and we can use this to make things uniform and simpler. 
+
+ private.meters = {}
+any_errors = False
+for meter in ALL_METERS:
+ try:
+  private.meters[meter.name] = Voltmeter(meter.address)
+ except VisaError:
+  logging.error('%s not found at %s', meter.english_name(), meter.address)
+  any_errors = True
+if not any_errors:
+ logging.info('All meters initialized.')
+ 
+
+ You can use, for example private.meters['anodization_voltage'] to refer to a particular meter, or iterate over the meters dict if you need to do something to them all. 
+ #4 You can keep a boolean, initialized at the beginning to: everythingOK=True
+Then set it to false in all the except blocks and log the final line only if true. 
+ #5 allDone = 0
+try: #1
+ ...
+ allDone += 1
+except:
+ ...
+try: #2
+ ...
+ allDone += 1
+except:
+ ...
+try: #3
+ ...
+ allDone += 1
+except:
+ ...
+
+if allDone == 3:
+ # execute this block only when all the try blocks and none of the except blocks were executed

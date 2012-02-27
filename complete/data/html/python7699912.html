@@ -1,0 +1,522 @@
+<h3>Question (ID-7699912):</h3><h2>Clean and type-safe state machine implementation in a statically typed language?</h2><p>I implemented a simple state machine in Python:</p>
+
+<pre><code>import time
+
+def a():
+    print "a()"
+    return b
+
+def b():
+    print "b()"
+    return c
+
+def c():
+    print "c()"
+    return a
+
+
+if __name__ == "__main__":
+    state = a
+    while True:
+        state = state()
+        time.sleep(1)
+</code></pre>
+
+<p>I wanted to port it to C, because it wasn't fast enough. But C doesn't let me make a function that returns a function of the same type. I tried making the function of this type: <code>typedef *fn(fn)()</code>, but it doesn't work, so I had to use a structure instead. Now the code is very ugly!</p>
+
+<pre><code>#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;unistd.h&gt;
+
+typedef struct fn {
+    struct fn (*f)(void);
+} fn_t;
+
+fn_t a(void);
+fn_t b(void);
+fn_t c(void);
+
+fn_t a(void)
+{
+    fn_t f = {b};
+
+    (void)printf("a()\n");
+
+    return f;
+}
+
+fn_t b(void)
+{
+    fn_t f = {c};
+
+    (void)printf("b()\n");
+
+    return f;
+}
+
+fn_t c(void)
+{
+    fn_t f = {a};
+
+    (void)printf("c()\n");
+
+    return f;
+}
+
+int main(void)
+{
+    fn_t state = {a};
+
+    for(;; (void)sleep(1)) state = state.f();
+
+    return EXIT_SUCCESS;
+}
+</code></pre>
+
+<p>So I figured it's a problem with C's broken type system. So I used a language with a real type system (Haskell), but the same problem happens. I can't just do something like:</p>
+
+<pre><code>type Fn = IO Fn
+a :: Fn
+a = print "a()" &gt;&gt; return b
+b :: Fn
+b = print "b()" &gt;&gt; return c
+c :: Fn
+c = print "c()" &gt;&gt; return a
+</code></pre>
+
+<p>I get the error, <code>Cycle in type synonym declarations</code>.</p>
+
+<p>So I have to make some wrapper the same way I did for the C code like this:</p>
+
+<pre><code>import Control.Monad
+import System.Posix
+
+data Fn = Fn (IO Fn)
+
+a :: IO Fn
+a = print "a()" &gt;&gt; return (Fn b)
+
+b :: IO Fn
+b = print "b()" &gt;&gt; return (Fn c)
+
+c :: IO Fn
+c = print "c()" &gt;&gt; return (Fn a)
+
+run = foldM (\(Fn f) () -&gt; sleep 1 &gt;&gt; f) (Fn a) (repeat ())
+</code></pre>
+
+<p>Why is it so hard to make a state machine in a statically typed language? I have to make unnecessary overhead in statically typed languages as well. Dynamically typed languages don't have this problem. Is there an easier way to do it in a statically typed language?</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>In Haskell, the idiom for this is just to go ahead and execute the next state:</p>
+
+<pre><code>type StateMachine = IO ()
+a, b, c :: StateMachine
+a = print "a()" &gt;&gt; b
+b = print "b()" &gt;&gt; c
+c = print "c()" &gt;&gt; a
+</code></pre>
+
+<p>You need not worry that this will overflow a stack or anything like that. If you insist on having states, then you should make the data type more explicit:</p>
+
+<pre><code>data PossibleStates = A | B | C
+type StateMachine = PossibleStates -&gt; IO PossibleStates
+machine A = print "a()" &gt;&gt; return B
+machine B = print "b()" &gt;&gt; return C
+machine C = print "c()" &gt;&gt; return A
+</code></pre>
+
+<p>You can then get compiler warnings about any <code>StateMachine</code> that forgot some states.</p>
+<br /><b>#1</b><br /><p>If you use <code>newtype</code> instead of <code>data</code>, you don't incur any overhead.  Also, you can wrap each state's function at the point of definition, so the expressions that use them don't have to:</p>
+
+<pre><code>import Control.Monad
+
+newtype State = State { runState :: IO State }
+
+a :: State
+a = State $ print "a()" &gt;&gt; return b
+
+b :: State
+b = State $ print "b()" &gt;&gt; return c
+
+c :: State
+c = State $ print "c()" &gt;&gt; return a
+
+runMachine :: State -&gt; IO ()
+runMachine s = runMachine =&lt;&lt; runState s
+
+main = runMachine a
+</code></pre>
+
+<p><strong>Edit</strong>: it struck me that <code>runMachine</code> has a more general form; a monadic version of <code>iterate</code>:</p>
+
+<pre><code>iterateM :: Monad m =&gt; (a -&gt; m a) -&gt; a -&gt; m [a]
+iterateM f a = do { b &lt;- f a
+                  ; as &lt;- iterateM f b
+                  ; return (a:as)
+                  }
+
+main = iterateM runState a
+</code></pre>
+
+<p><strong>Edit</strong>: Hmm, <code>iterateM</code> causes a space-leak.  Maybe <code>iterateM_</code> would be better.</p>
+
+<pre><code>iterateM_ :: Monad m =&gt; (a -&gt; m a) -&gt; a -&gt; m ()
+iterateM_ f a = f a &gt;&gt;= iterateM_ f
+
+main = iterateM_ runState a
+</code></pre>
+
+<p><strong>Edit</strong>: If you want to thread some state through the state machine, you can use the same definition for <code>State</code>, but change the state functions to:</p>
+
+<pre><code>a :: Int -&gt; State
+a i = State $ do{ print $ "a(" ++ show i ++ ")"
+                ; return $ b (i+1)
+                }
+
+b :: Int -&gt; State
+b i = State $ do{ print $ "b(" ++ show i ++ ")"
+                ; return $ c (i+1)
+                }
+
+c :: Int -&gt; State
+c i = State $ do{ print $ "c(" ++ show i ++ ")"
+                ; return $ a (i+1)
+                }
+
+main = iterateM_ runState $ a 1
+</code></pre>
+<br /><b>#2</b><br /><p>In the C-like type systems functions are not first order citizens. There are certain restrictions on handling them. That was a decision for simplicity and speed of implementation/execution that stuck. To have functions behave like objects, one generally requires support for closures. Those however are not naturally supported by mosts processors' instruction sets. As C was designed to be close to the metal, there was no support for them.</p>
+
+<p>When declaring recursive structures in C, the type must be fully expandable. A consequence of this is, that you can only have pointers as self-references in struct declarations:</p>
+
+<pre><code>struct rec;
+struct rec {
+    struct rec *next;
+};
+</code></pre>
+
+<p>Also every identifier we use has to be declared. One of the restrictions of function-types is, that one can not forward declare them.</p>
+
+<p>A state machine in C usually works by making a mapping from integers to functions, either in a switch statement or in a jump table:</p>
+
+<pre><code>typedef int (*func_t)();
+
+void run() {
+    func_t table[] = {a, b, c};
+
+    int state = 0;
+
+    while(True) {
+        state = table[state]();
+    }
+}
+</code></pre>
+
+<p>Alternatively you could <a href="http://docs.python.org/library/profile.html" rel="nofollow">profile your Python code</a> and try to find out why your code is slow. You can port the critical parts to C/C++ and keep using Python for the state machine.</p>
+<br /><b>#3</b><br /><p>The problem with your Haskell code is, that <code>type</code> only introduces a synonym, which is quite similar to what <code>typedef</code> in C does.  One important restriction is, that the expansion of the type must be finite, you can't give a finite expansion of your state machine. A solution is using a <code>newtype</code>: A <code>newtype</code> is a wrapper that does only exist for the type checker; there is absolutely zero overhead (excluded stuff that occurs because of generalization that can't be removed). Here is your signature; it typechecks:</p>
+
+<pre><code>newtype FN = FN { unFM :: (IO FN) }
+</code></pre>
+
+<p>Please note, that whenever you want to use an <code>FN</code>, you have to unpack it first using <code>unFN</code>. Whenever you return a new function, use <code>FN</code> to pack it.</p>
+<br /><b>#4</b><br /><p>As usual, despite the great answers already present, I couldn't resist trying it out for myself. One thing that bothered me about what is presented is that it ignores input. State machines--the ones that I am familiar with--choose between various possible transitions based on input.</p>
+
+<pre><code>data State vocab = State { stateId :: String
+                         , possibleInputs :: [vocab]
+                         , _runTrans :: (vocab -&gt; State vocab)
+                         }
+                      | GoalState { stateId :: String }
+
+instance Show (State a) where
+  show = stateId
+
+runTransition :: Eq vocab =&gt; State vocab -&gt; vocab -&gt; Maybe (State vocab)
+runTransition (GoalState id) _                   = Nothing
+runTransition s x | x `notElem` possibleInputs s = Nothing
+                  | otherwise                    = Just (_runTrans s x)
+</code></pre>
+
+<p>Here I define a type <code>State</code>, which is parameterized by a vocabulary type <code>vocab</code>. Now let's define a way that we can trace the execution of a state machine by feeding it inputs.</p>
+
+<pre><code>traceMachine :: (Show vocab, Eq vocab) =&gt; State vocab -&gt; [vocab] -&gt; IO ()
+traceMachine _ [] = putStrLn "End of input"
+traceMachine s (x:xs) = do
+  putStrLn "Current state: "
+  print s
+  putStrLn "Current input: "
+  print x
+  putStrLn "-----------------------"
+  case runTransition s x of
+    Nothing -&gt; putStrLn "Invalid transition"
+    Just s' -&gt; case s' of
+      goal@(GoalState _) -&gt; do
+        putStrLn "Goal state reached:"
+        print s'
+        putStrLn "Input remaining:"
+        print xs
+      _ -&gt; traceMachine s' xs
+</code></pre>
+
+<p>Now let's try it out on a simple machine that ignores its inputs. Be warned: the format I have chosen is rather verbose. However, each function that follows can be viewed as a node in a state machine diagram, and I think you'll find the verbosity to be completely relevant to describing such a node. I've used <code>stateId</code> to encode in string format some visual information about how that state behaves.</p>
+
+<pre><code>data SimpleVocab = A | B | C deriving (Eq, Ord, Show, Enum)
+
+simpleMachine :: State SimpleVocab
+simpleMachine = stateA
+
+stateA :: State SimpleVocab
+stateA = State { stateId = "A state. * -&gt; B"
+               , possibleInputs = [A,B,C]
+               , _runTrans = \_ -&gt; stateB
+               }
+
+stateB :: State SimpleVocab
+stateB = State { stateId = "B state. * -&gt; C"
+               , possibleInputs = [A,B,C]
+               , _runTrans = \_ -&gt; stateC
+               }
+
+stateC :: State SimpleVocab
+stateC = State { stateId = "C state. * -&gt; A"
+               , possibleInputs = [A,B,C]
+               , _runTrans = \_ -&gt; stateA
+               }
+</code></pre>
+
+<p>Since the inputs don't matter for this state machine, you can feed it anything.</p>
+
+<pre><code>ghci&gt; traceMachine simpleMachine [A,A,A,A]
+</code></pre>
+
+<p>I won't include the output, which is also very verbose, but you can see it clearly moves from <code>stateA</code> to <code>stateB</code> to <code>stateC</code> and back to <code>stateA</code> again. Now let's make a slightly more complicated machine:</p>
+
+<pre><code>lessSimpleMachine :: State SimpleVocab
+lessSimpleMachine = startNode
+
+startNode :: State SimpleVocab
+startNode = State { stateId = "Start node. A -&gt; 1, C -&gt; 2"
+                  , possibleInputs = [A,C]
+                  , _runTrans = startNodeTrans
+                  }
+  where startNodeTrans C = node2
+        startNodeTrans A = node1
+
+node1 :: State SimpleVocab
+node1 = State { stateId = "node1. B -&gt; start, A -&gt; goal"
+              , possibleInputs = [B, A]
+              , _runTrans = node1trans
+              }
+  where node1trans B = startNode
+        node1trans A = goalNode
+
+node2 :: State SimpleVocab
+node2 = State { stateId = "node2. C -&gt; goal, A -&gt; 1, B -&gt; 2"
+              , possibleInputs = [A,B,C]
+              , _runTrans = node2trans
+              }
+  where node2trans A = node1
+        node2trans B = node2
+        node2trans C = goalNode
+
+goalNode :: State SimpleVocab
+goalNode = GoalState "Goal. :)"
+</code></pre>
+
+<p>The possible inputs and transitions for each node should require no further explanation, as they are verbosely described in the code. I'll let you play with <code>traceMachine lessSipmleMachine inputs</code> for yourself. See what happens when <code>inputs</code> is invalid (does not adhere to the "possible inputs" restrictions), or when you hit a goal node before the end of input.</p>
+
+<p>I suppose the verbosity of my solution sort of fails what you were basically asking, which was to cut down on the cruft. But I think it also illustrates how descriptive Haskell code can be. Even though it is very verbose, it is also very straightforward in how it represents nodes of a state machine diagram.</p>
+<br /><b>#5</b><br /><p>Your problem has been had before: <a href="http://stackoverflow.com/questions/793449/recursive-declaration-of-function-pointer-in-c">Recursive declaration of function pointer in C</a></p>
+
+<p>C++ operator overloading can be used to hide the mechanics of what is essentially the same as your your C and Haskell solutions, as Herb Sutter describes in <a href="http://www.gotw.ca/gotw/057.htm" rel="nofollow">GotW #57: Recursive Declarations</a>.</p>
+
+<pre><code>struct FuncPtr_;
+typedef FuncPtr_ (*FuncPtr)();
+
+struct FuncPtr_
+{
+  FuncPtr_( FuncPtr pp ) : p( pp ) { }
+  operator FuncPtr() { return p; }
+  FuncPtr p;
+};
+
+FuncPtr_ f() { return f; } // natural return syntax
+
+int main()
+{
+  FuncPtr p = f();  // natural usage syntax
+  p();
+}
+</code></pre>
+
+<p>But this business with functions will, in all likelihood, perform worse than the equivalent with numeric states. You should use a <code>switch</code> statement or a state table, because what you really want in this situation is a structured semantic equivalent to <code>goto</code>.</p>
+<br /><b>#6</b><br /><p>You can get the same effect in C as in Python code,- just declare that functions returns <code>(void*)</code>:</p>
+
+<pre><code>#include "stdio.h"
+
+typedef void* (*myFunc)(void);
+
+void* a(void);
+void* b(void);
+void* c(void);
+
+void* a(void) {
+  printf("a()\n");
+  return b;
+}
+
+void* b(void) {
+  printf("b()\n");
+  return c;
+}
+
+void* c(void) {
+  printf("c()\n");
+  return a;
+}
+
+void main() {
+ void* state = a;
+ while (1) {
+   state = ((myFunc)state)();
+   sleep(1);
+ }
+}
+</code></pre>
+
+<p>HTH!</p>
+<br /><b>#7</b><br /><p>What you want is a recursive type. Different languages have different ways of doing this.</p>
+
+<p>For example, in OCaml (a statically-typed language), there is an optional compiler/interpreter flag <code>-rectypes</code> that enables support for recursive types, allowing you to define stuff like this:</p>
+
+<pre><code>let rec a () = print_endline "a()"; b
+and b () = print_endline "b()"; c
+and c () = print_endline "c()"; a
+;;
+</code></pre>
+
+<p>Although this is not "ugly" as you complained about in your C example, what happens <em>underneath</em> is still the same. The compiler simply worries about that for you instead of forcing you to write it out.</p>
+
+<p>As others have pointed out, in Haskell you can use <code>newtype</code> and there won't be any "overhead". But you complain about having to explicitly wrap and unwrap the recursive type, which is "ugly". (Similarly with your C example; there is no "overhead" since at the machine level a 1-member struct is identical to its member, but it is "ugly".)</p>
+
+<p>Another example I want to mention is Go (another statically-typed language). In Go, the <code>type</code> construct defines a new type. It is not a simple alias (like <code>typedef</code> in C or <code>type</code> in Haskell), but creates a full-fledged new type (like <code>newtype</code> in Haskell) because such a type has an independent "method set" of methods that you can define on it. Because of this, the type definition can be recursive:</p>
+
+<pre><code>type Fn func () Fn
+</code></pre>
+<br /><b>#8</b><br /><p>Iit's not hard to make state machines in Haskell, once you realize that they are <strong>not</strong> monads!  A state machine like the one you want is an arrow, an automaton arrow to be exact:</p>
+
+<pre><code>newtype State a b = State (a -&gt; (b, State a b))
+</code></pre>
+
+<p>This is a function, which takes an input value and produces an output value along with a new version of itself.  This is not a monad, because you cannot write <code>join</code> or <code>(&gt;&gt;=)</code> for it.  Equivalently once you have turned this into an arrow you will realize that it's impossible to write an <code>ArrowApply</code> instance for it.</p>
+
+<p>Here are the instances:</p>
+
+<pre><code>import Control.Arrow
+import Control.Category
+import Prelude hiding ((.), id)
+
+instance Category State where
+    id = State $ \x -&gt; (x, id)
+
+    State f . State g =
+        State $ \x -&gt;
+            let (y, s2) = g x
+                (z, s1) = f y
+            in (z, s1 . s2)
+
+instance Arrow State where
+    arr f = let s = State $ \x -&gt; (f x, s) in s
+    first (State f) =
+        State $ \(x1, x2) -&gt;
+            let (y1, s) = f x1
+            in ((y1, x2), first s)
+</code></pre>
+
+<p>Have fun.</p>
+<br /><b>#9</b><br /><p>An example in F#:</p>
+
+<pre>
+type Cont = Cont of (unit -> Cont)
+
+let rec a() =
+    printfn "a()"
+    Cont (fun () -> b 42)
+
+and b n =
+    printfn "b(%d)" n
+    Cont c
+
+and c() =
+    printfn "c()"
+    Cont a
+
+let rec run (Cont f) =
+    let f = f()
+    run f
+
+run (Cont a)
+</pre>
+
+<p>Regarding the question "why is it so hard to implement state machines using functions in statically typed languages?": That's because the type of of <code>a</code> and friends is a little bit weird: a function that when returns a function that returns a function that returns a function...</p>
+
+<p>If I remove Cont from my example the F# compiler complains and says:</p>
+
+<pre>
+Expecting 'a but given unit -> 'a. The resulting type would be infinite when unifying 'a and unit -> 'a.
+</pre>
+
+<p>Another answer shows a solution in OCaml whose type inference is strong enough to remove the need for declaring Cont, which shows static typing is not to blame, rather the lack of powerful type inference in many statically typed languages.</p>
+
+<p>I don't know why F# doesn't do it, I would guess maybe this would make the type inference algorithm more complicated, slower, or "too powerful" (it could manage to infer the type of incorrectly typed expressions, failing at a later point giving error messages that are hard to understand).</p>
+
+<p>Note that the Python example you gave isn't really safe. In my example, <code>b</code> represents a family of states parameterized by an integer. In an untyped language, it's easy to make a mistake and return <code>b</code> or <code>b 42</code> instead of the correct lambda and miss that mistake until the code is executed.</p>
+<br /><b>#10</b><br /><p>The Python code you posted will be transformed into a recursive function, but it will not be tail call optimized because Python has no tail call optimization, so it will stack overflow at some point. So the Python code is actually broken, and would take more work to get it as good as the Haskell or C versions.</p>
+
+<p>Here is an example of what I mean:</p>
+
+<p>so.py:</p>
+
+<pre><code>import threading
+stack_size_bytes = 10**5
+threading.stack_size(10**5)
+machine_word_size = 4
+
+def t1():
+    print "start t1"
+    n = stack_size_bytes/machine_word_size
+    while n:
+        n -= 1
+    print "done t1"
+
+def t2():
+    print "start t2"
+    n = stack_size_bytes/machine_word_size+1
+    while n:
+        n -= 1
+    print "done t2"
+
+if __name__ == "__main__":
+    t = threading.Thread(target=t1)
+    t.start()
+    t.join()
+    t = threading.Thread(target=t2)
+    t.start()
+    t.join()
+</code></pre>
+
+<p>shell:</p>
+
+<pre><code>$ python so.py
+start t1
+done t1
+start t2
+Exception in thread Thread-2:
+Traceback (most recent call last):
+  File "/usr/lib/python2.7/threading.py", line 530, in __bootstrap_inner
+    self.run()
+  File "/usr/lib/python2.7/threading.py", line 483, in run
+    self.__target(*self.__args, **self.__kwargs)
+  File "so.py", line 18, in t2
+    print "done t2"
+RuntimeError: maximum recursion depth exceeded
+</code></pre>
+<br />

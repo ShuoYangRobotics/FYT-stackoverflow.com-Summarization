@@ -1,0 +1,249 @@
+<h3>Question (ID-2328495):</h3><h2>Python code optimization (20x slower than C)</h2><p>I've written this very badly optimized C code that does a simple math calculation:</p>
+
+<pre><code>#include &lt;stdio.h&gt;
+#include &lt;math.h&gt;
+#include &lt;stdlib.h&gt;
+#define MIN(a, b) (((a) &lt; (b)) ? (a) : (b))
+#define MAX(a, b) (((a) &gt; (b)) ? (a) : (b))
+
+
+unsigned long long int p(int);
+float fullCheck(int);
+
+int main(int argc, char **argv){
+  int i, g, maxNumber;
+  unsigned long long int diff = 1000;
+
+  if(argc &lt; 2){
+    fprintf(stderr, "Usage: %s maxNumber\n", argv[0]);
+    return 0;
+  }
+  maxNumber = atoi(argv[1]);
+
+  for(i = 1; i &lt; maxNumber; i++){
+    for(g = 1; g &lt; maxNumber; g++){
+      if(i == g)
+        continue;
+      if(p(MAX(i,g)) - p(MIN(i,g)) &lt; diff &amp;&amp;  fullCheck(p(MAX(i,g)) - p(MIN(i,g))) &amp;&amp; fullCheck(p(i) + p(g))){
+          diff = p(MAX(i,g)) - p(MIN(i,g));
+          printf("We have a couple %llu %llu with diff %llu\n", p(i), p(g), diff);
+      }
+    }
+  }
+
+  return 0;
+}
+
+float fullCheck(int number){
+  float check = (-1 + sqrt(1 + 24 * number))/-6;
+  float check2 = (-1 - sqrt(1 + 24 * number))/-6;
+  if(check/1.00 == (int)check)
+    return check;
+  if(check2/1.00 == (int)check2)
+    return check2;
+  return 0;
+}
+
+unsigned long long int p(int n){
+  return n * (3 * n - 1 ) / 2;
+}
+</code></pre>
+
+<p>And then I've tried (just for fun) to port it under Python to see how it would react. My first version was almost a 1:1 conversion that run terribly slow (120+secs in Python vs &lt;1sec in C).
+I've done a bit of optimization, and this is what I obtained:</p>
+
+<pre><code>#!/usr/bin/env/python
+from cmath import sqrt
+import cProfile
+from pstats import Stats
+
+def quickCheck(n):
+        partial_c = (sqrt(1 + 24 * (n)))/-6 
+        c = 1/6 + partial_c
+        if int(c.real) == c.real:
+                return True
+        c = c - 2*partial_c
+        if int(c.real) == c.real:
+                return True
+        return False
+
+def main():        
+        maxNumber = 5000
+        diff = 1000
+        for i in range(1, maxNumber):
+                p_i = i * (3 * i - 1 ) / 2
+                for g in range(i, maxNumber):
+                        if i == g:
+                                continue
+                        p_g = g * (3 * g - 1 ) / 2
+                        if p_i &gt; p_g:
+                                ma = p_i
+                                mi = p_g
+                        else:
+                                ma = p_g
+                                mi = p_i
+
+                        if ma - mi &lt; diff and quickCheck(ma - mi):
+                                if quickCheck(ma + mi):
+                                        print ('New couple ', ma, mi)
+                                        diff = ma - mi
+
+
+cProfile.run('main()','script_perf')
+perf = Stats('script_perf').sort_stats('time', 'calls').print_stats(10)
+</code></pre>
+
+<p>This runs in about 16secs which is better but also almost 20 times slower than C.
+Now, I know C is better than Python for this kind of calculations, but what I would like to know is if there something that I've missed (Python-wise, like an horribly slow function or such) that could have made this function faster.
+Please note that I'm using Python 3.1.1, if this makes a difference</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Since <code>quickCheck</code> is being called close to 25,000,000 times, you might want to use memoization to cache the answers.</p>
+
+<p>You can do memoization in C as well as Python.  Things will be much faster in C, also.</p>
+
+<p>You're computing <code>1/6</code> in each iteration of quickCheck.  I'm not sure if this will be optimized out by Python, but if you can avoid recomputing constant values, you'll find things are faster.  C compilers do this for you.</p>
+
+<p>Doing things like <code>if condition: return True; else: return False</code> is silly -- and time consuming.  Simply do <code>return condition</code>.</p>
+
+<p>In Python 3.x, <code>/2</code> must create floating-point values.  You appear to need integers for this.  You should be using <code>//2</code> division.  It will be closer to the C version in terms of what it does, but I don't think it's significantly faster. </p>
+
+<p>Finally, Python is generally interpreted.  The interpreter will always be significantly slower than C.</p>
+<br /><b>#1</b><br /><p>I made it go from ~7 seconds to ~3 seconds on my machine:</p>
+
+<ul>
+<li>Precomputed <code>i * (3 * i - 1 ) / 2</code> for each value, in yours it was computed twice quite a lot</li>
+<li>Cached calls to quickCheck</li>
+<li>Removed <code>if i == g</code> by adding +1 to the range</li>
+<li>Removed <code>if p_i &gt; p_g</code> since p_i is <em>always</em> smaller than p_g</li>
+</ul>
+
+<p>Also put the quickCheck-function inside main, to make all variables local (which have faster lookup than global).
+I'm sure there are more micro-optimizations available.</p>
+
+<pre><code>def main():
+        maxNumber = 5000
+        diff = 1000
+
+        p = {}
+        quickCache = {}
+
+        for i in range(maxNumber):
+            p[i] = i * (3 * i - 1 ) / 2
+
+        def quickCheck(n):
+            if n in quickCache: return quickCache[n]
+            partial_c = (sqrt(1 + 24 * (n)))/-6 
+            c = 1/6 + partial_c
+            if int(c.real) == c.real:
+                    quickCache[n] = True
+                    return True
+            c = c - 2*partial_c
+            if int(c.real) == c.real:
+                    quickCache[n] = True
+                    return True
+            quickCache[n] = False
+            return False
+
+        for i in range(1, maxNumber):
+                mi = p[i]
+                for g in range(i+1, maxNumber):
+                        ma = p[g]
+                        if ma - mi &lt; diff and quickCheck(ma - mi) and quickCheck(ma + mi):
+                                print('New couple ', ma, mi)
+                                diff = ma - mi
+</code></pre>
+<br /><b>#2</b><br /><p>There are some python compilers that might actually do a good bit for you.  Have a look at <a href="http://psyco.sourceforge.net/doc.html" rel="nofollow">Psyco</a>.</p>
+
+<p>Another way of dealing with math intensive programs is to rewrite the majority of the work into a math kernel, such as <a href="http://numpy.scipy.org/" rel="nofollow">NumPy</a>, so that heavily optimized code is doing the work, and your python code only guides the calculation.  To get the most out of this strategy, avoid doing calculations in loops, and instead let the math kernel do all of that.</p>
+<br /><b>#3</b><br /><p>The other respondents have already mentioned several optimizations that will help. However, ultimately, you're not going to be able to match the performance of C in Python. Python is a nice tool, but since it's interpreted, it isn't really suited for heavy number crunching or other apps where performance is key.</p>
+
+<p>Also, even in your C version, your inner loop could use quite a bit of help. Updated version:</p>
+
+<pre><code>  for(i = 1; i &lt; maxNumber; i++){
+    for(g = 1; g &lt; maxNumber; g++){
+      if(i == g)
+        continue;
+      max=i;
+      min=g;
+
+      if (max&lt;min) { 
+          // xor swap - could use swap(p_max,p_min) instead. 
+          max=max^min;
+          min=max^min;
+          max=max^min;
+      }
+
+      p_max=P(max);
+      p_min=P(min);
+      p_i=P(i);
+      p_g=P(g);
+
+      if(p_max - p_min &lt; diff &amp;&amp;  fullCheck(p_max-p_min) &amp;&amp; fullCheck(p_i + p_g)){
+          diff = p_max - p_min;
+          printf("We have a couple %llu %llu with diff %llu\n", p_i, p_g, diff);
+      }
+    }
+  }
+
+
+///////////////////////////
+float fullCheck(int number){
+  float den=sqrt(1+24*number)/6.0;
+  float check = 1/6.0 - den;
+  float check2 = 1/6.0 + den;
+
+
+  if(check == (int)check)
+    return check;
+  if(check2 == (int)check2)
+    return check2;
+
+  return 0.0;
+}
+</code></pre>
+
+<p>Division, function calls, etc are costly. Also, calculating them once and storing in vars such as I've done can make things a lot more readable. </p>
+
+<p>You might consider declaring P() as <strong>inline</strong> or rewrite as a preprocessor macro. Depending on how good your optimizer is, you might want to perform some of the arithmetic yourself and simplify its implementation.</p>
+
+<p>Your implementation of fullCheck() would return what appear to be invalid results, since 1/6==0, where 1/6.0 would return 0.166... as you would expect.</p>
+
+<p>This is a <em>very</em> brief take on what you can do to your C code to improve performance. This will, no doubt, widen the gap between C and Python performance.</p>
+<br /><b>#4</b><br /><p>Because the function p() monotonically increasing you can avoid comparing the values as <em>g > i</em> implies <em>p(g) > p(i)</em>. Also, the inner loop can be broken early because <em>p(g) - p(i) >= diff</em> implies <em>p(g+1) - p(i) >= diff</em>.</p>
+
+<p>Also for correctness, I changed the equality comparison in quickCheck to compare difference against an epsilon because exact comparison with floating point is pretty fragile.</p>
+
+<p>On my machine this reduced the runtime to 7.8ms using Python 2.6. Using PyPy with JIT reduced this to 0.77ms.</p>
+
+<p>This shows that before turning to micro-optimization it pays to look for algorithmic optimizations. Micro-optimizations make spotting algorithmic changes much harder for relatively tiny gains.</p>
+
+<pre><code>EPS = 0.00000001
+def quickCheck(n):
+    partial_c = sqrt(1 + 24*n) / -6
+    c = 1/6 + partial_c
+    if abs(int(c) - c) &lt; EPS:
+        return True
+    c = 1/6 - partial_c
+    if abs(int(c) - c) &lt; EPS:
+        return True
+    return False
+
+def p(i):
+    return i * (3 * i - 1 ) / 2
+
+def main(maxNumber):
+    diff = 1000
+
+    for i in range(1, maxNumber):
+        for g in range(i+1, maxNumber):
+            if p(g) - p(i) &gt;= diff:
+                break 
+            if quickCheck(p(g) - p(i)) and quickCheck(p(g) + p(i)):
+                print('New couple ', p(g), p(i), p(g) - p(i))
+                diff = p(g) - p(i)
+</code></pre>
+<br /><b>#5</b><br /><p>20x difference between Python and C for a number crunching task seems quite good to me.</p>
+
+<p>Check the usual <a href="http://shootout.alioth.debian.org/u32q/benchmark.php?test=all&amp;lang=python&amp;lang2=gcc" rel="nofollow">performance differences</a> for some CPU intensive tasks (keep in mind that the scale is logarithmic).</p>
+
+<p>But look on the bright side, what's 1 minute of CPU time compared with the brain and typing time you saved writing Python instead of C? :-)</p>
+<br />

@@ -1,0 +1,405 @@
+<h3>Question (ID-5938309):</h3><h2>"sorted 1-d iterator" based on "2-d iterator" (Cartesian product of iterators)</h2><p>I'm looking for a clean way to do this in Python:</p>
+
+<p>Let's say I have two iterators "iter1" and "iter2": perhaps a prime number generator, and itertools.count().  I know a priori that both are are infinite and monotonically increasing.  Now I want to take some simple operation of two args "op" (perhaps operator.add or operator.mul), and calculate <strong>every element</strong> of the first iterator with <strong>every element</strong> of the next, using said operation, then yield them one at a time, sorted.  Obviously, this is an infinite sequence itself.  (As mentioned in comment by @RyanThompson: this would be called the <a href="http://en.wikipedia.org/wiki/Cartesian_product" rel="nofollow">Cartesian Product</a> of these sequences... or, more exactly, the 1d-sort of that product.) </p>
+
+<p>What is the best way to:</p>
+
+<ul>
+<li>wrap-up "iter1", "iter2", and "op" in an iterable that itself yields the values in monotonically increasing output.</li>
+</ul>
+
+<p>Allowable simplifying assumptions:</p>
+
+<ul>
+<li>If it helps, we can assume op(a,b) >= a and op(a,b) >= b.</li>
+<li>If it helps, we can assume op(a,b) > op(a,c) for all b > c.</li>
+</ul>
+
+<p>Also allowable:</p>
+
+<ul>
+<li>Also acceptable would be an iterator that yields values in "generally increasing" order... by which I mean the iterable could occasionally give me a number less than a previous one, but it would somehow make "side information" available (as via a method on the object) that would say "I'm not guarenteeing the next value I give you will be greater than the one I just gave you, but I AM SURE that all future values will at least be greater than N.".... and "N" itself is monotonically increasing.</li>
+</ul>
+
+<p>The only way I can think to do this is a sort of "diagonalization" process, where I keep an increasing number of partially processed iterables around, and "look ahead" for the minimum of all the possible next() values, and yield that.  But this weird agglomeration of a heapq and a bunch of deques just seems outlandish, even before I start to code it.</p>
+
+<p>Please: do <em>not</em> base your answer on the fact that my examples mentioned primes or count().... I have several uses for this very concept that are NOT related to primes and count().</p>
+
+<hr>
+
+<p><strong>UPDATE:</strong> OMG! What a great discussion!  And some great answers with really thorough explanations.  Thanks so much.  StackOverflow rocks; you guys rock.</p>
+
+<p>I'm going to delve in to each answer more thoroughly soon, and give the sample code a kick in the tires.  From what I've read so far, my original suspicions are confirmed that there is no "simple Python idiom" to do this.  Rather, by one way or another, I can't escape keeping all yielded values of iter1 and iter2 around indefinitely.</p>
+
+<p>FWIW: here's an official "test case" if you want to try your solutions.</p>
+
+<pre><code>import operator
+
+def powers_of_ten():
+    n = 0
+    while True:
+        yield 10**n
+        n += 1
+
+def series_of_nines():
+    yield 1
+    n = 1
+    while True:
+        yield int("9"*n)
+        n += 1
+
+op = operator.mul
+iter1 = powers_of_ten()
+iter2 = series_of_nines()
+
+# given (iter1, iter2, op), create an iterator that yields:
+# [1, 9, 10, 90, 99, 100, 900, 990, 999, 1000, 9000, 9900, 9990, 9999, 10000, ...]
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><pre><code>import heapq
+import itertools
+import operator
+
+
+def increasing(fn, left, right):
+    """
+    Given two never decreasing iterators produce another iterator
+    resulting from passing the value from left and right to fn.
+    This iterator should also be never decreasing.
+    """
+    # Imagine an infinite 2D-grid.
+    # Each column corresponds to an entry from right
+    # Each row corresponds to an entry from left
+    # Each cell correspond to apply fn to those two values
+
+    # If the number of columns were finite, then we could easily solve
+    # this problem by keeping track of our current position in each column
+    # in each iteration, we'd take the smallest value report it, and then
+    # move down in that column. This works because the values must increase
+    # as we move down the column. That means the current set of values
+    # under consideration must include the lowest value not yet reported
+
+    # To extend this to infinite columns, at any point we always track a finite
+    # number of columns. The last column current tracked is always in the top row
+    # if it moves down from the top row, we add a new column which starts at the top row
+    # because the values are increasing as we move to the right, we know that
+    # this last column is always lower then any columns that come after it
+
+
+
+
+
+    # Due to infinities, we need to keep track of all
+    # items we've ever seen. So we put them in this list
+    # The list contains the first part of the incoming iterators that
+    # we have explored
+    left_items = [next(left)]
+    right_items = [next(right)]
+
+    # we use a heap data structure, it allows us to efficiently
+    # find the lowest of all value under consideration
+    heap = []
+
+    def add_value(left_index, right_index):
+        """
+        Add the value result from combining the indexed attributes
+        from the two iterators. Assumes that the values have already
+        been copied into the lists
+        """
+        value = fn( left_items[left_index], right_items[right_index] )
+        # the value on the heap has the index and value.
+        # since the value is first, low values will be "first" on the heap
+        heapq.heappush( heap, (value, left_index, right_index) )
+
+    # we know that every other value must be larger then 
+    # this one. 
+    add_value(0,0)
+
+    # I assume the incoming iterators are infinite
+    while True:
+        # fetch the lowest of all values under consideration
+        value, left_index, right_index = heapq.heappop(heap)
+
+        # produce it
+        yield value
+
+        # add moving down the column
+        if left_index + 1 == len(left_items):
+            left_items.append(next(left))
+
+        add_value(left_index+1, right_index)
+
+        # if this was the first row in this column, add another column
+        if left_index == 0:
+            right_items.append( next(right) )
+            add_value(0, right_index+1)
+
+
+
+
+
+
+def fib():
+    a = 1
+    b = 1
+    while True:
+        yield a
+        a,b = b,a+b
+
+
+
+r = increasing(operator.add, fib(), itertools.count() )
+for x in range(100):
+    print next(r)
+</code></pre>
+<br /><b>#1</b><br /><p>Define the sequences as:</p>
+
+<pre><code>a1 &lt;= a2 &lt;= a3 ...
+b1 &lt;= b2 &lt;= b3 ...
+</code></pre>
+
+<p>Let <code>a1b1</code> mean <code>op(a1,b1)</code> for short.</p>
+
+<p>Based on your allowable assumptions (very important) you know the following:</p>
+
+<pre><code>max(a1, b1) &lt;= a1b1 &lt;= a1b2 &lt;= a1b3 ...
+   &lt;=
+max(a2, b1) &lt;= a2b1 &lt;= a2b2 &lt;= a2b3 ...
+   &lt;=
+max(a3, b1) &lt;= a3b1 &lt;= a3b2 &lt;= a3b3 ...
+    .     .
+    .      .
+    .       .
+</code></pre>
+
+<p>You'll have to do something like: </p>
+
+<p>Generate <code>a1b1</code>. You know that if you continue increasing the <code>b</code> variables, you will only get higher values. The question now is: is there a smaller value by increasing the <code>a</code> variables? Your lower bound is <code>min(a1, b1)</code>, so you will have to increase the <code>a</code> values until <code>min(ax,b1) &gt;= a1b1</code>. Once you hit that point, you can find the smallest value from <code>anb1</code> where <code>1 &lt;= n &lt;= x</code> and yield that safely. </p>
+
+<p>You then will have multiple horizontal chains that you'll have to keep track of. Every time you have a value that goes past <code>min(ax,b1)</code>, you'll have to increase <code>x</code> (adding more chains) until <code>min(ax,b1)</code> is larger than it before safely emitting it. </p>
+
+<p>Just a starting point... I don't have time to code it at the moment.</p>
+
+<p>EDIT: Oh heh that's exactly what you already had. Well, without more info, this is all you can do, as I'm pretty sure that mathematically, that's what is necessary. </p>
+
+<p>EDIT2: As for your 'acceptable' solution: you can just yield <code>a1bn</code> in increasing order of <code>n</code>, returning <code>min(a1,b1)</code> as <code>N</code> =P. You'll need to be more specific. You speak as if you have a heuristic of what you generally want to see, the general way you want to progress through both iterables, but without telling us what it is I don't know how one could do better. </p>
+
+<hr>
+
+<p>UPDATE: Winston's is good but makes an assumption that the poster didn't mention: that <code>op(a,c)</code> > <code>op(b,c)</code> if <code>b&gt;a</code>. However, we do know that <code>op(a,b)&gt;=a</code> and <code>op(a,b)&gt;=b</code>.</p>
+
+<p>Here is my solution which takes that second assumption but not the one Winston took. Props to him for the code structure, though:</p>
+
+<pre><code>def increasing(fn, left, right):
+    left_items = [next(left)]
+    right_items = [next(right)]
+
+    #columns are (column value, right index)
+    columns = [(fn(left_items[0],right_items[0]),0)]
+
+    while True:
+        #find the current smallest value
+        min_col_index = min(xrange(len(columns)), key=lambda i:columns[i][0])
+
+        #generate columns until it's impossible to get a smaller value
+        while right_items[0] &lt;= columns[min_col_index][0] and \
+              left_items[-1] &lt;= columns[min_col_index][0]:
+            next_left = next(left)
+
+            left_items.append(next_left)
+            columns.append((fn(next_left, right_items[0]),0))
+
+            if columns[-1][0] &lt; columns[min_col_index][0]:
+                min_col_index = len(columns)-1
+
+        #yield the smallest value
+        yield columns[min_col_index][0]
+
+        #move down that column
+        val, right_index = columns[min_col_index]
+
+        #make sure that right value is generated:
+        while right_index+1 &gt;= len(right_items):
+            right_items.append(next(right))
+
+        columns[min_col_index] = (fn(left_items[min_col_index],right_items[right_index+1]),
+                                  right_index+1)
+        #repeat                
+</code></pre>
+
+<p>For a (pathological) input that demonstrates the difference, consider:</p>
+
+<pre><code>def pathological_one():
+    cur = 0
+    while True:
+        yield cur
+        cur += 100
+
+def pathological_two():
+    cur = 0
+    while True:
+        yield cur
+        cur += 100
+
+lookup = [
+    [1,   666, 500],
+    [666, 666, 666],
+    [666, 666, 666],
+    [666, 666, 666]]
+
+def pathological_op(a, b):
+    if a &gt;= 300 or b &gt;= 400: return 1005
+    return lookup[b/100][a/100]
+
+r = increasing(pathological_op, pathological_one(), pathological_two())
+for x in range(15):
+    print next(r)
+</code></pre>
+
+<p>Winston's answer gives:</p>
+
+<pre><code>&gt;&gt;&gt; 
+1
+666
+666
+666
+666
+500
+666
+666
+666
+666
+666
+666
+1005
+1005
+1005
+</code></pre>
+
+<p>While mine gives:</p>
+
+<pre><code>&gt;&gt;&gt; 
+1
+500
+666
+666
+666
+666
+666
+666
+666
+666
+666
+666
+1005
+1005
+1005
+</code></pre>
+<br /><b>#2</b><br /><p>So you basically want to take two monotonically increasing sequences, and then (lazily) compute the multiplication (or addition, or another operation) table between them, which is a 2-D array. Then you want to put the elements of that 2-D array in sorted order and iterate through them.</p>
+
+<p>In general, this is impossible. However, if your sequences and operation are such that you can make certain guarantees about the rows and columns of the table, then you can make some progress. For example, let's assume that your sequences are monitonically-increasing sequences of positive integers only, and that the operation is multiplication (as in your example). In this case, we know that every row and column of the array is a monotonically-increasing sequence. In this case, you do not need to compute the entire array, but rather only parts of it. Specifically, you must keep track of the following:</p>
+
+<ul>
+<li>How many rows you have ever used</li>
+<li>The number of elements you have taken from each row that you have used</li>
+<li>Every element from either input sequence that you have ever used, plus one more from each</li>
+</ul>
+
+<p>To compute the next element in your iterator, you must do the following:</p>
+
+<ul>
+<li>For each row that you have ever used, compute the "next" value in that row. For example, if you have used 5 values from row 1, then compute the 6th value (i=1, j=6) by taking the 1st value from the first sequence and the 6th value from the second sequence (both of which you have cached) and applying the operation (multiplication) to them. Also, compute the first value in the first unused row.</li>
+<li>Take the minimum of all the values you computed. Yield this value as the next element in your iterator</li>
+<li>Increment the counter for the row from which you sampled the element in the previous step. If you took the element from a new, unused row, you must increment the count of the number of rows you have used, and you must create a new counter for that row initialized to 1. If necessary, you must also compute more values of one or both input sequences.</li>
+</ul>
+
+<p>This process is kind of complex, and in particular notice that to compute N values, you must in the worst case save an amount of state proportional to the <strike>square root of</strike> N. (Edit: sqrt(N) is actually the <em>best</em> case.) This is in stark contrast to a typical generator, which only requires constant space to iterate through its elements regardless of length.</p>
+
+<p>In summary, you can do this under certain assumptions, and you can provide a generator-like interface to it, but it cannot be done in a "streaming" fashion, because you need to save a lot of state in order to iterate through the elements in the correct order.</p>
+<br /><b>#3</b><br /><p>Let me start with an example of how I would solve this intuitively.</p>
+
+<p>Because reading code inline is a little tedious, I'll introduce some notation:</p>
+
+<h1>Notation</h1>
+
+<ul>
+<li><em>i1</em> will represent <code>iter1</code>. <em>i1</em><sub>0</sub> will represent the first element of <code>iter1</code>. Same for <code>iter2</code>.</li>
+<li>※ will represent the <code>op</code> operator</li>
+</ul>
+
+<h1>Intuitive solution</h1>
+
+<p>By using simplifying assumption 2, we know that <em>i1</em><sub>0</sub> ※ <em>i2</em><sub>0</sub> is the smallest element that will ever be yielded from your final iterator. The next element would the smaller of <em>i1</em><sub>0</sub> ※ <em>i2</em><sub>1</sub> and <em>i1</em><sub>1</sub> ※ <em>i2</em><sub>0</sub>.</p>
+
+<p>Assuming <em>i1</em><sub>0</sub> ※ <em>i2</em><sub>1</sub> is smaller, you would yield that element. Next, you would yield the smaller of <em>i1</em><sub>1</sub> ※ <em>i2</em><sub>0</sub>, <em>i1</em><sub>1</sub> ※ <em>i2</em><sub>0</sub>, and <em>i1</em><sub>1</sub> ※ <em>i2</em><sub>1</sub>.</p>
+
+<h1>Expression as traversal of a DAG</h1>
+
+<p>What you have here is a graph traversal problem. First, think of the problem as a tree. The root of the tree is <em>i1</em><sub>0</sub> ※ <em>i2</em><sub>0</sub>. This node, and each node below it, has two children. The two children of <em>i1</em><sub>x</sub> ※ <em>i2</em><sub>y</sub> are the following: One child is <em>i1</em><sub>x+1</sub> ※ <em>i2</em><sub>y</sub>, and the other child is <em>i1</em><sub>x</sub> ※ <em>i2</em><sub>y+1</sub>. Based on your second assumption, we know that <em>i1</em><sub>x</sub> ※ <em>i2</em><sub>y</sub> is less than both of its children.</p>
+
+<p>(In fact, as Ryan mentions in a comment, this is a directed acyclic graph, or DAG. Some "parents" share "children" with other "parent" nodes.)</p>
+
+<p>Now, we need to keep a <em>frontier</em> - a collection of nodes that could be next to be returned. After returning a node, we add both its children to the frontier. To select the next node to visit (and return from your new iterator), we compare the values of all the nodes in the frontier. We take the node with the smallest value and we return it. Then, we again add both of its child nodes to the frontier. If the child is already in the frontier (added as the child of some other parent), just ignore it.</p>
+
+<h1>Storing the frontier</h1>
+
+<p>Because you are primarily interested in the value of the nodes, it makes sense to store these nodes indexed by value. As such, it may be in your interest to use a <code>dict</code>. Keys in this dict should be the values of nodes. Values in this dict should be lists containing individual nodes. Because the only identifying information in a node is the pair of operands, you can store individual nodes as a two-tuple of operands.</p>
+
+<p>In practice, after a few iterations, your frontier may look like the following:</p>
+
+<pre><code>&gt;&gt;&gt; frontier
+{1: [(2, 3), (2, 4)], 2: [(3, 5), (5, 4)], 3: [(1, 6)], 4: [(6, 3)]}
+</code></pre>
+
+<h1>Other implementation notes</h1>
+
+<p>Because iterators don't support random access, you'll need to hang on to values that are produced by your first two iterators until they are no longer needed. <strike>You'll know that a value is still needed if it is referenced by any value in your frontier. You'll know that a value is no longer needed once all nodes in the frontier reference values later/greater than one you've stored. For example, <em>i1</em><sub>20</sub> is no longer needed when nodes in your frontier reference only <em>i1</em><sub>21</sub>, <em>i1</em><sub>25</sub>, <em>i1</em><sub>33</sub>, ...</strike></p>
+
+<p>As mentioned by Ryan, each value from each iterator will be used an infinite number of times. Thus, every value produced will need to be saved.</p>
+
+<h1>Not practical</h1>
+
+<p>Unfortunately, in order to assure that elements are returned only in increasing order, the frontier will grow without bound. Your memoized values will <strike>probably also take a significant amount of space</strike> also grow without bound. This may be something you can address by making your problem less general, but this should be a good starting point.</p>
+<br /><b>#4</b><br /><p>Use <a href="http://docs.python.org/tutorial/classes.html#generators" rel="nofollow">generators</a>, which are just iterators written as functions that yield results. In this case you can write generators for <code>iter1</code> and <code>iter2</code> and another generator to wrap them and yield their results (or do calculations with them, or the history of their results) as you go.</p>
+
+<p>From my reading of the question you want something like this, which will <em>calculate every element of the first iterator with every element of the next, using said operation</em>, you also state you want some way to <em>wrap-up "iter1", "iter2", and "op" in an iterable that itself yields the values in monotonically increasing output</em>. I propose generators offer a simple solution to such problem.</p>
+
+<pre><code>import itertools
+
+def prime_gen():
+    D, q = {}, 2
+    while True:
+        if q not in D:
+            yield q
+            D[q * q] = [q]
+        else:
+            for p in D[q]:
+                D.setdefault(p + q, []).append(p)
+            del D[q]
+        q += 1
+
+def infinite_gen(op, iter1, iter2):
+    while True:
+        yield op(iter1.next(), iter2.next())
+
+&gt;&gt;&gt; gen = infinite_gen(operator.mul, prime_gen(), itertools.count())
+
+&gt;&gt;&gt; gen.next()
+&lt;&lt;&lt; 0
+
+&gt;&gt;&gt; gen.next()
+&lt;&lt;&lt; 3
+
+&gt;&gt;&gt; gen.next()
+&lt;&lt;&lt; 10
+</code></pre>
+
+<p>Generators offer a lot of flexibility, so it should be fairly easy to write <code>iter1</code> and <code>iter2</code> as generators that return values you want in the order you want. You could also consider using <a href="http://www.python.org/dev/peps/pep-0342/" rel="nofollow">coroutines</a>, which let you send values <em>into</em> a generator. </p>
+<br /><b>#5</b><br /><p>Discussion in other answers observes that there is potentially infinite storage required no matter what the algorithm, since every <code>a[n]</code> must remain available for each new <code>b[n]</code>.  If you remove the restriction that the <em>input</em> be two iterators and instead only require that they be sequences (indexable or merely something that can be regenerated repeatedly) then I believe all of your state suddenly collapses to one number:  The last value you returned.  Knowing the last result value you can search the output space looking for the next one.  (If you want to emit duplicates properly then you may need to also track the number of times the result has been returned)</p>
+
+<p>With a pair of sequences you have a simple recurrence relation:</p>
+
+<pre><code>result(n) = f(seq1, seq1, result(n-1))
+</code></pre>
+
+<p>where <code>f(seq1, seq1, p)</code> searches for the minimum value in the output space <code>q</code> such that <code>q &gt; p</code>.  In practical terms you'd probably make the sequences memoized functions and choose your search algorithm to avoid thrashing the pool of memoized items.</p>
+<br />

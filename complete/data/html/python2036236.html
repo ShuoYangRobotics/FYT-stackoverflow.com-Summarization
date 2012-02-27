@@ -1,0 +1,212 @@
+<h3>Question (ID-2036236):</h3><h2>Tips on how to parse custom file format</h2><p>Sorry about the vague title, but I really don't know how to describe this problem concisely.</p>
+
+<p>I've created a (more or less) simple <a href="http://en.wikipedia.org/wiki/Domain-specific_language" rel="nofollow">domain-specific language</a> that I will to use to specify what validation rules to apply to different entities (generally forms submitted from a web page). I've included a sample at the bottom of this post of what the language looks like.</p>
+
+<p>My problem is that I have no idea how to begin parsing this language into a form I can use (I will be using Python to do the parsing). My goal is to end up with a list of rules/filters (as strings, including arguments, e.g. <code>'cocoa(99)'</code>) that should be applied (in order) to each object/entity (also a string, e.g. <code>'chocolate'</code>, <code>'chocolate.lindt'</code>, etc.).</p>
+
+<p>I'm not sure what technique to use to start with, or even what techniques exist for problems like this. What do you think is the best way of going about this? I'm not looking for a complete solution, just a general nudge in the right direction.</p>
+
+<p>Thanks.   </p>
+
+<p>Sample file of language:</p>
+
+<pre><code># Comments start with the '#' character and last until the end of the line
+# Indentation is significant (as in Python)
+
+
+constant NINETY_NINE = 99       # Defines the constant `NINETY_NINE` to have the value `99`
+
+
+*:      # Applies to all data
+    isYummy             # Everything must be yummy
+
+chocolate:              # To validate, say `validate("chocolate", object)`
+    sweet               # chocolate must be sweet (but not necessarily chocolate.*)
+
+    lindt:              # To validate, say `validate("chocolate.lindt", object)`
+        tasty           # Applies only to chocolate.lindt (and not to chocolate.lindt.dark, for e.g.)
+
+        *:              # Applies to all data under chocolate.lindt
+            smooth      # Could also be written smooth()
+            creamy(1)   # Level 1 creamy
+        dark:           # dark has no special validation rules
+            extraDark:
+                melt            # Filter that modifies the object being examined
+                c:bitter        # Must be bitter, but only validated on client
+                s:cocoa(NINETY_NINE)    # Must contain 99% cocoa, but only validated on server. Note constant
+        milk:
+            creamy(2)   # Level 2 creamy, overrides creamy(1) of chocolate.lindt.* for chocolate.lindt.milk
+            creamy(3)   # Overrides creamy(2) of previous line (all but the last specification of a given rule are ignored)
+
+
+
+ruleset food:       # To define a chunk of validation rules that can be expanded from the placeholder `food` (think macro)
+    caloriesWithin(10, 2000)        # Unlimited parameters allowed
+    edible
+    leftovers:      # Nested rules allowed in rulesets
+        stale
+
+# Rulesets may be nested and/or include other rulesets in their definition
+
+
+
+chocolate:              # Previously defined groups can be re-opened and expanded later
+    ferrero:
+        hasHazelnut
+
+
+
+cake:
+    tasty               # Same rule used for different data (see chocolate.lindt)
+    isLie
+    ruleset food        # Substitutes with rules defined for food; cake.leftovers must now be stale
+
+
+pasta:
+    ruleset food        # pasta.leftovers must also be stale
+
+
+
+
+# Sample use (in JavaScript):
+
+# var choc = {
+#   lindt: {
+#       cocoa: {
+#           percent: 67,
+#           mass:    '27g'
+#       }
+#   }
+#   // Objects/groups that are ommitted (e.g. ferrro in this example) are not validated and raise no errors
+#   // Objects that are not defined in the validation rules do not raise any errors (e.g. cocoa in this example)
+# };
+# validate('chocolate', choc);
+
+# `validate` called isYummy(choc), sweet(choc), isYummy(choc.lindt), smooth(choc.lindt), creamy(choc.lindt, 1), and tasty(choc.lindt) in that order
+# `validate` returned an array of any validation errors that were found
+
+# Order of rule validation for objects:
+# The current object is initially the object passed in to the validation function (second argument).
+# The entry point in the rule group hierarchy is given by the first argument to the validation function.
+# 1. First all rules that apply to all objects (defined using '*') are applied to the current object,
+#    starting with the most global rules and ending with the most local ones.
+# 2. Then all specific rules for the current object are applied.
+# 3. Then a depth-first traversal of the current object is done, repeating steps 1 and 2 with each object found as the current object
+# When two rules have equal priority, they are applied in the order they were defined in the file.
+
+
+
+# No need to end on blank line
+</code></pre>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>First off, if you want to learn about parsing, then write your own recursive descent parser. The language you've defined only requires a handful of productions. I suggest using Python's <code>tokenize</code> library to spare yourself the boring task of converting a stream of bytes into a stream of tokens.</p>
+
+<p>For practical parsing options, read on...</p>
+
+<p>A quick and dirty solution is to use python itself:</p>
+
+<pre><code>NINETY_NINE = 99       # Defines the constant `NINETY_NINE` to have the value `99`
+
+rules = {
+  '*': {     # Applies to all data
+    'isYummy': {},      # Everything must be yummy
+
+    'chocolate': {        # To validate, say `validate("chocolate", object)`
+      'sweet': {},        # chocolate must be sweet (but not necessarily chocolate.*)
+
+      'lindt': {          # To validate, say `validate("chocolate.lindt", object)`
+        'tasty':{}        # Applies only to chocolate.lindt (and not to chocolate.lindt.dark, for e.g.)
+
+        '*': {            # Applies to all data under chocolate.lindt
+          'smooth': {}  # Could also be written smooth()
+          'creamy': 1   # Level 1 creamy
+        },
+# ...
+    }
+  }
+}
+</code></pre>
+
+<p>There are several ways to pull off this trick, e.g., here's a cleaner (albeit somewhat unusual) approach using classes:</p>
+
+<pre><code>class _:
+    class isYummy: pass
+
+    class chocolate:
+        class sweet: pass
+
+        class lindt:
+            class tasty: pass
+
+            class _:
+                class smooth: pass
+                class creamy: level = 1
+# ...
+</code></pre>
+
+<p>As an intermediate step to a full parser, you can use the "batteries-included" Python parser, which parses Python syntax and returns an AST. The AST is very deep with lots of (IMO) unnecessary levels. You can filter these down to a much simpler structure by culling any nodes that have only one child. With this approach you can do something like this:</p>
+
+<pre><code>import parser, token, symbol, pprint
+
+_map = dict(token.tok_name.items() + symbol.sym_name.items())
+
+def clean_ast(ast):
+    if not isinstance(ast, list):
+        return ast
+    elif len(ast) == 2: # Elide single-child nodes.
+        return clean_ast(ast[1])
+    else:
+        return [_map[ast[0]]] + [clean_ast(a) for a in ast[1:]]
+
+ast = parser.expr('''{
+
+'*': {     # Applies to all data
+  isYummy: _,    # Everything must be yummy
+
+  chocolate: {        # To validate, say `validate("chocolate", object)`
+    sweet: _,        # chocolate must be sweet (but not necessarily chocolate.*)
+
+    lindt: {          # To validate, say `validate("chocolate.lindt", object)`
+      tasty: _,        # Applies only to chocolate.lindt (and not to chocolate.lindt.dark, for e.g.)
+
+      '*': {            # Applies to all data under chocolate.lindt
+        smooth: _,  # Could also be written smooth()
+        creamy: 1   # Level 1 creamy
+      }
+# ...
+    }
+  }
+}
+
+}''').tolist()
+pprint.pprint(clean_ast(ast))
+</code></pre>
+
+<p>This approach does have its limitations. The final AST is still a bit noisy, and the language you define has to be interpretable as valid python code. For instance, you couldn't support this...</p>
+
+<pre><code>*:
+    isYummy
+</code></pre>
+
+<p>...because this syntax doesn't parse as python code. Its big advantage, however, is that you control the AST conversion, so it is impossible to inject arbitrary Python code.</p>
+<br /><b>#1</b><br /><p>If your goal is to learn about parsing, I'd highly recommend an OO style library like <a href="http://pyparsing.wikispaces.com/" rel="nofollow">PyParsing</a>.  They are not as fast as the more sophisticated antler, lex, yac options, but you get started with the parsing right away.   </p>
+<br /><b>#2</b><br /><p>Again not teaching you about parsing, but your format is so close to legal <a href="http://www.yaml.org/" rel="nofollow">YAML</a> that you might want to just redefine your language as a subset of YAML and use a <a href="http://pyyaml.org/" rel="nofollow">standard YAML parser</a>.</p>
+<br /><b>#3</b><br /><p>The language you've shown an example for is probably too complex to write a simple (and bug-free) parsing fuction for. I'd suggest reading up on parsing techniques such as recursive-descent or table-driven parsing such as LL(1), LL(k), etc.</p>
+
+<p>But that may be too general and/or complicated. It might be easier to simplify your rules language to something simple like delimited text.</p>
+
+<p>For example, something like</p>
+
+<p>chocolate:sweet<br>
+chocolate.lindt:tasty<br>
+chocolate.lindt.*:smooth,creamy(1)</p>
+
+<p>This would be easier to parse and could be done without formal parsers.</p>
+<br /><b>#4</b><br /><p>There are libraries and tools to make parsing easier. One of the more well known is lex / yacc. There's a python library called '<a href="http://www.dabeaz.com/ply/" rel="nofollow">lex</a>' and a <a href="http://www.dalkescientific.com/writings/NBN/parsing_with_ply.html" rel="nofollow">tutorial</a> on using it.</p>
+<br /><b>#5</b><br /><p>As 'Marcelo Cantos' suggested you can use python dict, benefit is that you do not have to parse any thing, you can use same rules on server side as python dict and on client side using  javascript objects, and can pass them from server to client or viceversa as JSON.</p>
+
+<p>If you really want to do parsing yourself see this
+<a href="http://nedbatchelder.com/text/python-parsers.html" rel="nofollow">http://nedbatchelder.com/text/python-parsers.html</a></p>
+
+<p>but I am not sure you will be easily able to parse a indented language.</p>
+<br /><b>#6</b><br /><p>what is the motivation for the customized file structure?  Would it be possible to remodel your data into a better known structure like XML? If so you could use one of a multitude to parse your file.  Using an accepted parsing tool may save you a lot of time debugging, and it may make your file more readable if that is a consideration</p>
+<br />

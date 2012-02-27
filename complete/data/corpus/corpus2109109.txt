@@ -1,0 +1,61 @@
+Question (ID-2109109): Creating very large images using Python Image Library I'm trying to create a very large image (25000x25000) by pasting together many smaller images. Upon calling Image.new() with such large dimensions, python runs out of memory and I get a MemoryError. 
+
+ Is there a way to write out an image like this incrementally, without having the whole thing resident in RAM? 
+
+ EDIT:
+Using ImageMagick's montage command, it seems possible to create arbitrarily sized images. It looks like it's not trying loading the final image into RAM (it uses very little memory during the process) but rather streaming it out to disk, which is ideal. 
+ Answers (Total-6): #0 You may try to use GDAL library. It provides bindings to Python. Here is combined tutorial presenting how to read and write images using C++, C and Python APIs
+Depending on GDAL operations and functions being used, GDAL can handle very large images and process images which are too large to be held in RAM. 
+ #1 Not too suprising you're running out of memory; that image will take over 2gig in memory and depending on the system you're using your OS might not be able to allocate enough virtual memory to python to run it, regardless of your actual RAM. 
+
+ You are definitely going to need to write it out incrementally. If you're using a raw format you could probably do this per row of images, if they are all of the same dimensions. Then you could concatenate the files, otherwise you'd have to be a bit more careful with how you encode the data. 
+ #2 It's just a matter of understanding the binary file format. Compressed formats are going to be more difficult. 
+
+ Assuming you want a bitmap/DIB, this code: 
+
+ #incremental_write_bmp.py
+import binascii
+
+data='''
+0h -2 -42 4D -"BM" -Magic Number (unsigned integer 66, 77)
+2h -4 -46 00 00 00 -70 Bytes -Size of the BMP file
+6h -2 -00 00 -Unused -Application Specific
+8h -2 -00 00 -Unused -Application Specific
+Ah -4 -36 00 00 00 -54 bytes -The offset where the bitmap data (pixels) can be found.
+Eh -4 -28 00 00 00 -40 bytes -The number of bytes in the header (from this point).
+12h -4 -02 00 00 00 -2 pixels -The width of the bitmap in pixels
+16h -4 -02 00 00 00 -2 pixels -The height of the bitmap in pixels
+1Ah -2 -01 00 -1 plane -Number of color planes being used.
+1Ch -2 -18 00 -24 bits -The number of bits/pixel.
+1Eh -4 -00 00 00 00 -0 -BI_RGB, No compression used
+22h -4 -10 00 00 00 -16 bytes -The size of the raw BMP data (after this header)
+26h -4 -13 0B 00 00 -2,835 pixels/meter -The horizontal resolution of the image
+2Ah -4 -13 0B 00 00 -2,835 pixels/meter -The vertical resolution of the image
+2Eh -4 -00 00 00 00 -0 colors -Number of colors in the palette
+32h -4 -00 00 00 00 -0 important colors -Means all colors are important
+36h -3 -00 00 FF -0 0 255 -Red, Pixel (1,0)
+39h -3 -FF FF FF -255 255 255 -White, Pixel (1,1)
+3Ch -2 -00 00 -0 0 -Padding for 4 byte alignment (Could be a value other than zero)
+3Eh -3 -FF 00 00 -255 0 0 -Blue, Pixel (0,0)
+41h -3 -00 FF 00 -0 255 0 -Green, Pixel (0,1)
+44h -2 -00 00 -0 0 -Padding for 4 byte alignment (Could be a value other than zero)
+'''.strip().split('\n')
+
+open('test.bmp','wb')
+for l in data:
+ b = l.split('-')[2].strip()
+ d = ''.join(b.split())
+ x = binascii.a2b_hex(d)
+ # this re-opens the file and appends each iteration
+ open('test.bmp','ab').write(x)
+ 
+
+ ...will incrementally write the example 2x2 bitmap found here . Now it's just a matter of setting the headers to the size you want and reading (and sometimes re-reading) your tiles in the right order. I tried it with a very large file and did not see python's memory spike. I assume the OS can append to a file without reading the whole thing. 
+ #3 Check if your system runs out of virtual memory when you do this. If it does, try adding more. That way, you offload the entire problem onto the virtual memory subsystem, which might be quicker. 
+ #4 mayby You could try out OIIO python bindings that was created by one of the GSoC student? OpenImageIO itself can read big images using small memory - but I didn't use it by myself 
+
+ OIIO: http://openimageio.org 
+How to use python bindings: http://openimageio.org/wiki/index.php?title=Python_bindings 
+
+ There is also a small script called "isticher" that is doing what You want (at least I think so) 
+ #5 Use numpy.memmap and the png module.

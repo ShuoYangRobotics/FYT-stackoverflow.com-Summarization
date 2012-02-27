@@ -1,0 +1,88 @@
+Question (ID-250209): How can I optimize this Google App Engine code? I'm relatively new to the python world, but this seems very straight forward. 
+
+ Google is yelling at me that this code needs to be optimized: 
+
+ class AddLinks(webapp.RequestHandler):
+  def post(self):
+   # Hash the textarea input to generate pseudo-unique value
+   hash = md5.new(self.request.get('links')).hexdigest()
+
+   # Seperate the input by line
+   allLinks = self.request.get('links').splitlines()
+
+   # For each line in the input, add to the database
+   for x in allLinks:
+    newGroup = LinkGrouping()
+    newGroup.reference = hash
+    newGroup.link = x
+    newGroup.put()
+
+   # testing vs live
+   #baseURL = 'http://localhost:8080'
+   baseURL = 'http://linkabyss.appspot.com'
+
+   # Build template parameters
+   template_values = {
+    'all_links': allLinks,
+    'base_url': baseURL,
+    'reference': hash,
+   }
+
+   # Output the template
+   path = os.path.join(os.path.dirname(__file__), 'addLinks.html')
+   self.response.out.write(template.render(path, template_values))
+ 
+
+ The dashboard is telling me that this is using a ton of CPU. 
+
+ Where should I look for improvements? 
+ Answers (Total-6): #0 The main overhead here is the multiple individual puts to the datastore. If you can, store the links as a single entity, as Andre suggests. You can always split the links into an array and store it in a ListProperty. 
+
+ If you do need an entity for each link, try this: 
+
+ # For each line in the input, add to the database
+groups = []
+for x in allLinks:
+  newGroup = LinkGrouping()
+  newGroup.reference = hash
+  newGroup.link = x
+  groups.append(newGroup)
+db.put(groups)
+ 
+
+ It will reduce the datastore roundtrips to one, and it's the roundtrips that are really killing your high CPU cap. 
+ #1 Looks pretty tight to me. 
+
+ I see one thing that may make a small improvement.
+Your calling, "self.request.get('links')" twice. 
+
+ So adding: 
+
+ unsplitlinks = self.request.get('links')
+ 
+
+ And referencing, "unsplitlinks" could help. 
+
+ Other than that the loop is the only area I see that would be a target for optimization.
+Is it possible to prep the data and then add it to the db at once, instead of doing a db add per link? (I assume the .put() command adds the link to the database) 
+ #2 You can dramatically reduce the interaction between your app and the database by just storing the complete self.request.get('links') in a text field in the database. 
+
+ 
+ only one put() per post(self) 
+ the hash isn't stored n-times (for every link, which makes no sense and is really a waste of space) 
+ 
+
+ And you save yourself the parsing of the textfield when someone actually calls the page.... 
+ #3 How frequently is this getting called? This doesn't look that bad... especially after removing the duplicate request. 
+ #4 Can I query against the ListProperty? 
+
+ Something like 
+
+ SELECT * FROM LinkGrouping WHERE links.contains('http://www.google.com')
+ 
+
+ I have future plans where I would need that functionality. 
+
+ I'll definitely implement the single db.put() to reduce usage. 
+ #5 no/ you can not use something like "links.contains(' http://www.google.com ')"
+GQL not support this

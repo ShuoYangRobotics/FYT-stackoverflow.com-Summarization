@@ -1,0 +1,276 @@
+Question (ID-603856): How do you get default headers in a urllib2 Request? I have a Python web client that uses urllib2. It is easy enough to add HTTP headers to my outgoing requests. I just create a dictionary of the headers I want to add, and pass it to the Request initializer. 
+
+ However, other "standard" HTTP headers get added to the request as well as the custom ones I explicitly add. When I sniff the request using Wireshark, I see headers besides the ones I add myself. My question is how do a I get access to these headers? I want to log every request (including the full set of HTTP headers), and can't figure out how. 
+
+ any pointers? 
+
+ in a nutshell: How do I get all the outgoing headers from an HTTP request created by urllib2? 
+ Answers (Total-8): #0 The urllib2 library uses OpenerDirector objects to handle the actual opening. Fortunately, the python library provides defaults so you don't have to. It is, however, these OpenerDirector objects that are adding the extra headers. 
+
+ To see what they are after the request has been sent (so that you can log it, for example): 
+
+ req = urllib2.Request(url='http://google.com')
+response = urllib2.urlopen(req)
+print req.unredirected_hdrs
+
+(produces {'Host': 'google.com', 'User-agent': 'Python-urllib/2.5'} etc)
+ 
+
+ The unredirected_hdrs is where the OpenerDirectors dump their extra headers. Simply looking at req.headers will show only your own headers - the library leaves those unmolested for you. 
+
+ If you need to see the headers before you send the request, you'll need to subclass the OpenerDirector in order to intercept the transmission. 
+
+ Hope that helps. 
+
+ EDIT: I forgot to mention that, once the request as been sent, req.header_items() will give you a list of tuples of ALL the headers, with both your own and the ones added by the OpenerDirector. I should have mentioned this first since it's the most straightforward :-) Sorry. 
+
+ EDIT 2: After your question about an example for defining your own handler, here's the sample I came up with. The concern in any monkeying with the request chain is that we need to be sure that the handler is safe for multiple requests, which is why I'm uncomfortable just replacing the definition of putheader on the HTTPConnection class directly. 
+
+ Sadly, because the internals of HTTPConnection and the AbstractHTTPHandler are very internal, we have to reproduce much of the code from the python library to inject our custom behaviour. Assuming I've not goofed below and this works as well as it did in my 5 minutes of testing, please be careful to revisit this override if you update your Python version to a revision number (ie: 2.5.x to 2.5.y or 2.5 to 2.6, etc). 
+
+ I should therefore mention that I am on Python 2.5.1. If you have 2.6 or, particularly, 3.0, you may need to adjust this accordingly. 
+
+ Please let me know if this doesn't work. I'm having waaaayyyy too much fun with this question: 
+
+ import urllib2
+import httplib
+import socket
+
+
+class CustomHTTPConnection(httplib.HTTPConnection):
+
+ def __init__(self, *args, **kwargs):
+  httplib.HTTPConnection.__init__(self, *args, **kwargs)
+  self.stored_headers = []
+
+ def putheader(self, header, value):
+  self.stored_headers.append((header, value))
+  httplib.HTTPConnection.putheader(self, header, value)
+
+
+class HTTPCaptureHeaderHandler(urllib2.AbstractHTTPHandler):
+
+ def http_open(self, req):
+  return self.do_open(CustomHTTPConnection, req)
+
+ http_request = urllib2.AbstractHTTPHandler.do_request_
+
+ def do_open(self, http_class, req):
+  # All code here lifted directly from the python library
+  host = req.get_host()
+  if not host:
+   raise URLError('no host given')
+
+  h = http_class(host) # will parse host:port
+  h.set_debuglevel(self._debuglevel)
+
+  headers = dict(req.headers)
+  headers.update(req.unredirected_hdrs)
+  headers["Connection"] = "close"
+  headers = dict(
+   (name.title(), val) for name, val in headers.items())
+  try:
+   h.request(req.get_method(), req.get_selector(), req.data, headers)
+   r = h.getresponse()
+  except socket.error, err: # XXX what error?
+   raise urllib2.URLError(err)
+  r.recv = r.read
+  fp = socket._fileobject(r, close=True)
+
+  resp = urllib2.addinfourl(fp, r.msg, req.get_full_url())
+  resp.code = r.status
+  resp.msg = r.reason
+
+  # This is the line we're adding
+  req.all_sent_headers = h.stored_headers
+  return resp
+
+my_handler = HTTPCaptureHeaderHandler()
+opener = urllib2.OpenerDirector()
+opener.add_handler(my_handler)
+req = urllib2.Request(url='http://www.google.com')
+
+resp = opener.open(req)
+
+print req.all_sent_headers
+
+shows: [('Accept-Encoding', 'identity'), ('Host', 'www.google.com'), ('Connection', 'close'), ('User-Agent', 'Python-urllib/2.5')]
+ 
+ #1 If you want to see the literal request text that is sent out, and therefore see every last header exactly as it is represented on the wire, then you can tell urllib to use your own version of an HTTPHandler that prints out (or saves, or whatever) the outgoing HTTP request. 
+
+ import httplib, urllib
+
+class MyHTTPConnection(httplib.HTTPConnection):
+ def send(self, s):
+  print s # or save them, or whatever!
+  httplib.HTTPConnection.send(self, s)
+
+class MyHTTPHandler(urllib2.HTTPHandler):
+ def http_open(self, req):
+  return self.do_open(MyHTTPConnection, req)
+
+opener = urllib2.build_opener(MyHTTPHandler)
+response = opener.open('http://www.google.com/')
+ 
+
+ The result of running this code is: 
+
+ GET / HTTP/1.1
+Accept-Encoding: identity
+Host: www.google.com
+Connection: close
+User-Agent: Python-urllib/2.6
+ 
+ #2 How about something like this: 
+
+ import urllib2
+import httplib
+
+old_putheader = httplib.HTTPConnection.putheader
+def putheader(self, header, value):
+ print header, value
+ old_putheader(self, header, value)
+httplib.HTTPConnection.putheader = putheader
+
+urllib2.urlopen('http://www.google.com')
+ 
+ #3 A low-level solution: 
+
+ import httplib
+
+class HTTPConnection2(httplib.HTTPConnection):
+ def __init__(self, *args, **kwargs):
+  httplib.HTTPConnection.__init__(self, *args, **kwargs)
+  self._request_headers = []
+  self._request_header = None
+
+ def putheader(self, header, value):
+  self._request_headers.append((header, value))
+  httplib.HTTPConnection.putheader(self, header, value)
+
+ def send(self, s):
+  self._request_header = s
+  httplib.HTTPConnection.send(self, s)
+
+ def getresponse(self, *args, **kwargs):
+  response = httplib.HTTPConnection.getresponse(self, *args, **kwargs)
+  response.request_headers = self._request_headers
+  response.request_header = self._request_header
+  return response
+ 
+
+ Example: 
+
+ conn = HTTPConnection2("www.python.org")
+conn.request("GET", "/index.html", headers={
+ "User-agent": "test",
+ "Referer": "/",
+})
+response = conn.getresponse()
+ 
+
+ response.status, response.reason: 
+
+ 1: 200 OK
+ 
+
+ response.request_headers: 
+
+ [('Host', 'www.python.org'), ('Accept-Encoding', 'identity'), ('Referer', '/'), ('User-agent', 'test')]
+ 
+
+ response.request_header: 
+
+ GET /index.html HTTP/1.1
+Host: www.python.org
+Accept-Encoding: identity
+Referer: /
+User-agent: test
+ 
+ #4 A other solution, witch used the idea from How do you get default headers in a urllib2 Request? But doesn't copy code from std-lib: 
+
+ class HTTPConnection2(httplib.HTTPConnection):
+ """
+ Like httplib.HTTPConnection but stores the request headers.
+ Used in HTTPConnection3(), see below.
+ """
+ def __init__(self, *args, **kwargs):
+  httplib.HTTPConnection.__init__(self, *args, **kwargs)
+  self.request_headers = []
+  self.request_header = ""
+
+ def putheader(self, header, value):
+  self.request_headers.append((header, value))
+  httplib.HTTPConnection.putheader(self, header, value)
+
+ def send(self, s):
+  self.request_header = s
+  httplib.HTTPConnection.send(self, s)
+
+
+class HTTPConnection3(object):
+ """
+ Wrapper around HTTPConnection2
+ Used in HTTPHandler2(), see below.
+ """
+ def __call__(self, *args, **kwargs):
+  """
+  instance made in urllib2.HTTPHandler.do_open()
+  """
+  self._conn = HTTPConnection2(*args, **kwargs)
+  self.request_headers = self._conn.request_headers
+  self.request_header = self._conn.request_header
+  return self
+
+ def __getattribute__(self, name):
+  """
+  Redirect attribute access to the local HTTPConnection() instance.
+  """
+  if name == "_conn":
+   return object.__getattribute__(self, name)
+  else:
+   return getattr(self._conn, name)
+
+
+class HTTPHandler2(urllib2.HTTPHandler):
+ """
+ A HTTPHandler which stores the request headers.
+ Used HTTPConnection3, see above.
+
+ &gt;&gt;&gt; opener = urllib2.build_opener(HTTPHandler2)
+ &gt;&gt;&gt; opener.addheaders = [("User-agent", "Python test")]
+ &gt;&gt;&gt; response = opener.open('http://www.python.org/')
+
+ Get the request headers as a list build with HTTPConnection.putheader():
+ &gt;&gt;&gt; response.request_headers
+ [('Accept-Encoding', 'identity'), ('Host', 'www.python.org'), ('Connection', 'close'), ('User-Agent', 'Python test')]
+
+ &gt;&gt;&gt; response.request_header
+ 'GET / HTTP/1.1\\r\\nAccept-Encoding: identity\\r\\nHost: www.python.org\\r\\nConnection: close\\r\\nUser-Agent: Python test\\r\\n\\r\\n'
+ """
+ def http_open(self, req):
+  conn_instance = HTTPConnection3()
+  response = self.do_open(conn_instance, req)
+  response.request_headers = conn_instance.request_headers
+  response.request_header = conn_instance.request_header
+  return response
+ 
+
+ EDIT: Update the source 
+ #5 see urllib2.py:do_request (line 1044 (1067)) and urllib2.py:do_open (line 1073)
+(line 293) self.addheaders = [('User-agent', client_version)] (only 'User-agent' added) 
+ #6 It sounds to me like you're looking for the headers of the response object, which include Connection: close , etc. These headers live in the object returned by urlopen. Getting at them is easy enough: 
+
+ from urllib2 import urlopen
+req = urlopen("http://www.google.com")
+print req.headers.headers
+ 
+
+ req.headers is a instance of httplib.HTTPMessage 
+ #7 It should send the default http headers (as specified by w3.org ) alongside the ones you specify. You can use a tool like WireShark if you would like to see them in their entirety. 
+
+ Edit: 
+
+ If you would like to log them, you can use WinPcap to capture packets sent by specific applications (in your case, python). You can also specify the type of packets and many other details. 
+
+ -John

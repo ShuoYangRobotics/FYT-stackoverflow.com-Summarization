@@ -1,0 +1,138 @@
+<h3>Question (ID-7679624):</h3><h2>How do I parse lines from a log file?</h2><p>I need to extract the values of following output:</p>
+
+<pre><code>Oct  6 17:29:52 FW kernel: [ 5470.058450] ipTables: IN= OUT=eth0 SRC=192.168.1.116 DST=192.168.1.110 LEN=516 TOS=0x10 PREC=0x00 TTL=64 ID=4949 DF PROTO=TCP SPT=22 DPT=46216 WINDOW=446 RES=0x00 ACK PSH URGP=0
+</code></pre>
+
+<p>I'd need for example the value of PROTO stored in a value. tried shellscripting, my problem is that it works only if the log entry is in the same order everytime.</p>
+
+<p>so this doens't work:</p>
+
+<pre><code>while read line
+do
+        in_if=`echo $line | cut -d ' ' -f 10 | cut -d '=' -f 2`;
+        out_if=`echo $line | cut -d ' ' -f 11 | cut -d '=' -f 2`;
+        src_ip=`echo $line | cut -d ' ' -f 12 | cut -d '=' -f 2`;
+        dst_ip=`echo $line | cut -d ' ' -f 13 | cut -d '=' -f 2`;
+        pro=`echo $line | cut -d ' ' -f 20 | cut -d '=' -f 2`;
+        echo "$in_if,$out_if,$src_ip,$dst_ip,$pro" &gt;&gt; output.csv;
+done &lt; $tmp_file
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You can do this without touching Perl. You were on the right track, but with a regex you can search by name, not position.</p>
+
+<p>Also, you should put quotes around $line so you don't get burned by any pipes or semicolons hanging around.</p>
+
+<pre><code>pro=`echo "$line" | grep -o 'PROTO=\w+\+' | cut -d '=' -f 2`;
+</code></pre>
+
+<p>Of course, if you <em>did</em> want to use Perl, you could make a much slicker solution:</p>
+
+<pre><code>#!/usr/bin/perl
+while(&lt;&gt;) {
+    /IN=(\S*) .*OUT=(\S*) .*SRC=(\S*) .*DST=(\S*) .*PROTO=(\S*)/
+       and print "$1,$2,$3,$4,$5\n";
+}
+</code></pre>
+
+<p>Then call:</p>
+
+<pre><code>./thatScript.pl logFile.txt &gt;&gt;output.csv
+</code></pre>
+<br /><b>#1</b><br /><p>you don't even need to cut:</p>
+
+<pre><code>grep -Po "(?&lt;=PROTO=)\w+" yourFile
+</code></pre>
+
+<p>OR</p>
+
+<pre><code> sed -r 's/.*PROTO=(\w+).*/\1/' yourFile
+</code></pre>
+
+<p>OR</p>
+
+<pre><code>awk -F'PROTO=' '{split($2,a," ");print a[1]}' yourfile
+</code></pre>
+
+<p>test:</p>
+
+<pre><code>kent$  echo "Oct  6 17:29:52 FW kernel: [ 5470.058450] ipTables: IN= OUT=eth0 SRC=192.168.1.116 DST=192.168.1.110 LEN=516 TOS=0x10 PREC=0x00 TTL=64 ID=4949 DF PROTO=TCP SPT=22 DPT=46216 WINDOW=446 RES=0x00 ACK PSH URGP=0"|grep -Po "(?&lt;=PROTO=)\w+"
+TCP
+
+kent$  echo "Oct  6 17:29:52 FW kernel: [ 5470.058450] ipTables: IN= OUT=eth0 SRC=192.168.1.116 DST=192.168.1.110 LEN=516 TOS=0x10 PREC=0x00 TTL=64 ID=4949 DF PROTO=TCP SPT=22 DPT=46216 WINDOW=446 RES=0x00 ACK PSH URGP=0"|sed -r 's/.*PROTO=(\w+).*/\1/'
+TCP
+
+kent$  echo "Oct  6 17:29:52 FW kernel: [ 5470.058450] ipTables: IN= OUT=eth0 SRC=192.168.1.116 DST=192.168.1.110 LEN=516 TOS=0x10 PREC=0x00 TTL=64 ID=4949 DF PROTO=TCP SPT=22 DPT=46216 WINDOW=446 RES=0x00 ACK PSH URGP=0"|awk -F'PROTO=' '{split($2,a," ");print a[1]}'
+TCP
+</code></pre>
+<br /><b>#2</b><br /><p>Python does this conveniently.  A general solution that gets all the KEY=value pairs is:</p>
+
+<pre><code>import re
+import fileinput
+
+pair_re = re.compile('([^ ]+)=([^ ]+)')  # Matches KEY=value pair
+
+for line in fileinput.input():  # The script accepts both data from stdin or a filename 
+
+    line = line.rstrip()  # Removes final spaces and newlines
+    data = dict(pair_re.findall(line))  # Fetches all the KEY=value pairs and puts them in a dictionary
+
+    # Example of usage:
+    print "PROTO =", data['PROTO'], "SRC =", data['SRC']  # Easy access to any value
+</code></pre>
+
+<p>This is arguably more legible, flexible and convenient than a shell script.</p>
+<br /><b>#3</b><br /><p>A straightforward Perl solution might be the most readable one:</p>
+
+<pre><code>#!/usr/bin/env perl
+
+use strict; use warnings;
+
+my $s = q{Oct  6 17:29:52 FW kernel: [ 5470.058450] ipTables: IN= OUT=eth0
+SRC=192.168.1.116 DST=192.168.1.110 LEN=516 TOS=0x10 PREC=0x00 TTL=64
+ID=4949 DF PROTO=TCP SPT=22 DPT=46216 WINDOW=446 RES=0x00 ACK PSH URGP=0};
+
+while ($s =~ /(?&lt;k&gt; [A-Z]+) = (?&lt;v&gt; \S*)/xg)  {
+    print "'$+{k}' = '$+{v}'\n";
+}
+</code></pre>
+
+<pre>C:\Temp> z
+'IN' = ''
+'OUT' = 'eth0'
+'SRC' = '192.168.1.116'
+'DST' = '192.168.1.110'
+'LEN' = '516'
+'TOS' = '0x10'
+'PREC' = '0x00'
+'TTL' = '64'
+'ID' = '4949'
+'PROTO' = 'TCP'
+'SPT' = '22'
+'DPT' = '46216'
+'WINDOW' = '446'
+'RES' = '0x00'
+'URGP' = '0'</pre>
+
+<p>You can also assign the information in the log line to a hash:</p>
+
+<pre><code>my %entry = ($s =~ /(?&lt;k&gt; [A-Z]+) = (?&lt;v&gt; \S*)/xg);
+</code></pre>
+<br /><b>#4</b><br /><p>In perl this should do it</p>
+
+<pre><code>#consider the $a variable has the log file my
+$a = &lt;&lt;log file&gt;&gt;;
+my $desired_answer;
+#regex 
+if ($a =~ m/PROTO=(.*?) /ig) 
+{  $desired_answer=$1; }
+</code></pre>
+<br /><b>#5</b><br /><p>thanks for all the responses!</p>
+
+<p>i chose the way of shellscripting using egrep and regex...</p>
+
+<pre><code>in_if=`echo "$line" | egrep -Eo 'IN=eth[0-9]*\b' | cut -d '=' -f 2`;
+out_if=`echo "$line" | egrep -Eo 'OUT=eth[0-9]*\b' | cut -d '=' -f 2`;
+src_ip=`echo "$line" | egrep -Eo 'SRC=[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | cut -d '=' -f 2`;
+dst_ip=`echo "$line" | egrep -Eo 'DST=[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | cut -d '=' -f 2`;
+pro=`echo "$line" | grep -o 'PROTO=[A-Z]*\b' | cut -d '=' -f 2`;
+</code></pre>
+<br />

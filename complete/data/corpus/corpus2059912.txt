@@ -1,0 +1,146 @@
+Question (ID-2059912): Using an index to recursively get all files in a directory really fast Attempt #2: 
+
+ People don't seem to be understanding what I'm trying to do. Let me see if I can state it more clearly: 
+
+ 1) Reading a list of files is much faster than walking a directory. 
+
+ 2) So let's have a function that walks a directory and writes the resulting list to a file. Now, in the future, if we want to get all the files in that directory we can just read this file instead of walking the dir. I call this file the index. 
+
+ 3) Obviously, as the filesystem changes the index file gets out of sync. To overcome this, we have a separate program that hooks into the OS in order to monitor changes to the filesystem. It writes those changes to a file called the monitor log. Immediately after we read the index file for a particular directory, we use the monitor log to apply the various changes to the index so that it reflects the current state of the directory. 
+
+ Because reading files is so much cheaper than walking a directory, this should be much faster than walking for all calls after the first. 
+
+ Original post: 
+
+ I want a function that will recursively get all the files in any given directory and filter them according to various parameters. And I want it to be fast -- like, an order of magnitude faster than simply walking the dir. And I'd prefer to do it in Python. Cross-platform is preferable, but Windows is most important. 
+
+ Here's my idea for how to go about this: 
+
+ I have a function called all_files: 
+
+ def all_files(dir_path, ...parms...):
+ ...
+ 
+
+ The first time I call this function it will use os.walk to build a list of all the files, along with info about the files such as whether they are hidden, a symbolic link, etc. I'll write this data to a file called ".index" in the directory. On subsequent calls to all_files, the .index file will be detected, and I will read that file rather than walking the dir. 
+
+ This leaves the problem of the index getting out of sync as files are added and removed. For that I'll have a second program that runs on startup, detects all changes to the entire filesystem, and writes them to a file called "mod_log.txt". It detects changes via Windows signals, like the method described here . This file will contain one event per line, with each event consisting of the path affected, the type of event (create, delete, etc.), and a timestamp. The .index file will have a timestamp as well for the time it was last updated. After I read the .index file in all_files I will tail mod_log.txt and find any events that happened after the timestamp in the .index file. It will take these recent events, find any that apply to the current directory, and update the .index accordingly. 
+
+ Finally, I'll take the list of all files, filter it according to various parameters, and return the result. 
+
+ What do you think of my approach? Is there a better way to do this? 
+
+ Edit: 
+
+ Check this code out. I'm seeing a drastic speedup from reading a cached list over a recursive walk. 
+
+ import os
+from os.path import join, exists
+import cProfile, pstats
+
+dir_name = "temp_dir"
+index_path = ".index"
+
+def create_test_files():
+ os.mkdir(dir_name)
+ index_file = open(index_path, 'w')
+ for i in range(10):
+  print "creating dir: ", i
+  sub_dir = join(dir_name, str(i))
+  os.mkdir(sub_dir)
+  for i in range(100):
+   file_path = join(sub_dir, str(i))
+   open(file_path, 'w').close() 
+   index_file.write(file_path + "\n")
+ index_file.close()
+#
+
+# 0.238 seconds
+def test_walk():   
+ for info in os.walk("temp_dir"):
+  pass
+
+# 0.001 seconds
+def test_read():
+ open(index_path).readlines()
+
+if not exists("temp_dir"):
+ create_test_files()
+
+def profile(s):
+ cProfile.run(s, 'profile_results.txt')
+ p = pstats.Stats('profile_results.txt')
+ p.strip_dirs().sort_stats('cumulative').print_stats(10)
+
+profile("test_walk()")
+profile("test_read()")
+ 
+ Answers (Total-6): #0 Do not try to duplicate the work that the filesystem already does. You are not going to do better than it already does. 
+
+ Your scheme is flawed in many ways and it will not get you an order-of-magnitude improvement. 
+
+ Flaws and potential problems: 
+
+ You are always going to be working with a snapshot of the file system. You will never know with any certainty that it is not significantly disjoint from reality. If that is within the working parameters of your application, no sweat. 
+
+ The filesystem monitor program still has to recursively walk the file system, so the work is still being done. 
+
+ In order to increase the accuracy of the cache, you have to increase the frequency with which the filesystem monitor runs. The more it runs, the less actual time that you are saving. 
+
+ Your client application likely won't be able to read the index file while it is being updated by the filesystem monitor program, so you'll lose time while the client waits for the index to be readable. 
+
+ I could go on. 
+
+ If, in fact, you don't care about working with a snapshot of the filesystem that may be very disjoint from reality, I think that you'd be much better off with keeping the index in memory and updating from with the application itself. That will scrub any file contention issues that will otherwise arise. 
+ #1 Doesn't Windows Desktop Search provide such an index as a byproduct? On the mac the spotlight index can be queried for filenames like this: mdfind -onlyin . -name '*' . 
+
+ Of course it's much faster than walking the directory. 
+ #2 The best answer came from Michał Marczyk toward the bottom of the comment list on the initial question. He pointed out that what I'm describing is very close to the UNIX locate program. I found a Windows version here: http://locate32.net/index.php . It solved my problem. 
+
+ Edit: Actually the Everything search engine looks even better. Apparently Windows keeps journals of changes to the filesystem, and Everything uses that to keep the database up to date. 
+ #3 I would like to recommend you just use a combination of os.walk (to get directory trees) &amp; os.stat (to get file information) for this. Using the std-lib will ensure it works on all platforms, and they do the job nicely. And no need to index anything. 
+
+ As other have stated, I don't really think you're going to buy much by attempting to index and re-index the filesystem, especially if you're already limiting your functionality by path and parameters. 
+ #4 I'm new to Python, but I'm using a combination of list comprehensions, iterator and a generator should scream according to reports I've read. 
+
+ class DirectoryIterator:
+ def __init__(self, start_dir, pattern):
+  self.directory = start_dir
+  self.pattern = pattern
+
+ def __iter__(self):
+  [([DirectoryIterator(dir, self.pattern) for dir in dirnames], [(yield os.path.join(dirpath, name)) for name in filenames if re.search(self.pattern, name) ]) for dirpath, dirnames, filenames in os.walk(self.directory)]
+
+ ###########
+
+ for file_name in DirectoryIterator(".", "\.py$"): print file_name
+ 
+ #5 The short answer is "no". You will not be able to build an indexing system in Python that will outpace the file system by an order of magnitude. 
+
+ "Indexing" a filesystem is an intensive/slow task, regardless of the caching implementation. The only realistic way to avoid the huge overhead of building filesystem indexes is to "index as you go" to avoid the big traversal. (After all, the filesystem itself is already a data indexer.) 
+
+ There are operating system features that are capable of doing this "build as you go" filesystem indexing. It's the very foundation of services like Spotlight on OSX and Windows Desktop Search. 
+
+ To have any hope of getting faster speeds than walking the directories, you'll want to leverage one of those OS or filesystem level tools. 
+
+ Also, try not to mislead yourself into thinking solutions are faster just because you've "moved" the work to a different time/process. Your example code does exactly that. You traverse the directory structure of your sample files while you're building the same files and create the index, and then later just read that file. 
+
+ There are two lessons, here. (a) To create a proper test it's essential to separate the "setup" from the "test". Here your performance test essentially says, "Which is faster, traversing a directory structure or reading an index that's already been created in advance?" Clearly this is not an apples to oranges comparison. 
+
+ However, (b) you've stumbled on the correct answer at the same time. You can get a list of files much faster if you use an already existing index . This is where you'd need to leverage something like the Windows Desktop Search or Spotlight indexes. 
+
+ Make no mistake, in order to build an index of a filesystem you must, by definition, "visit" every file. If your files are stored in a tree, then a recursive traversal is likely going to be the fastest way you can visit every file. If the question is "can I write Python code to do exactly what os.walk does but be an order of magnitude faster than os.walk " the answer is a resounding no . If the question is "can I write Python code to index every file on the system without taking the time to actually visit every file" then the answer is still no . 
+
+ ( Edit in response to "I don't think you understand what I'm trying to do" ) 
+
+ Let's be clear here, virtually everyone here understands what you're trying to do. It seems that you're taking "no, this isn't going to work like you want it to work" to mean that we don't understand. 
+
+ Let's look at this from another angle. File systems have been an essential component to modern computing from the very beginning. The categorization, indexing, storage, and retrieval of data is a serious part of computer science and computer engineering and many of the most brilliant minds in computer science are working on it constantly. 
+
+ You want to be able to filter/select files based on attributes/metadata/data of the files. This is an extremely common task utilized constantly in computing. It's likely happening several times a second even on the computer you're working with right now. 
+
+ If it were as simple to speed up this process by an order of magnitude(!) by simply keeping a text file index of the filenames and attributes, don't you think every single file system and operating system in existence would do exactly that? 
+
+ That said, of course caching the results of your specific queries could net you some small performance increases. And, as expected, file system and disk caching is a fundamental part of every modern operating system and file system. 
+
+ But your question, as you asked it, has a clear answer: No . In the general case, you're not going to get an order of magnitude faster reimplementing os.walk . You may be able to get a better amortized runtime by caching, but you're not going to be beat it by an order of magnitude if you properly include the work to build the cache in your profiling.

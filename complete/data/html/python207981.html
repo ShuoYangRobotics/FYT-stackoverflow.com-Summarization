@@ -1,0 +1,130 @@
+<h3>Question (ID-207981):</h3><h2>How to enable MySQL client auto re-connect with MySQLdb?</h2><p>I came across PHP way of doing the trick:</p>
+
+<pre><code>my_bool reconnect = 1;
+mysql_options(&amp;mysql, MYSQL_OPT_RECONNECT, &amp;reconnect);
+</code></pre>
+
+<p>but no luck with MySQLdb (python-mysql).</p>
+
+<p>Can anybody please give a clue? Thanks.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I solved this problem by creating a function that wraps the <code>cursor.execute()</code> method since that's what was throwing the <code>MySQLdb.OperationalError</code> exception. The other example above implies that it is the <code>conn.cursor()</code> method that throws this exception.</p>
+
+<pre><code>import MySQLdb
+
+class DB:
+  conn = None
+
+  def connect(self):
+    self.conn = MySQLdb.connect()
+
+  def query(self, sql):
+    try:
+      cursor = self.conn.cursor()
+      cursor.execute(sql)
+    except (AttributeError, MySQLdb.OperationalError):
+      self.connect()
+      cursor = self.conn.cursor()
+      cursor.execute(sql)
+    return cursor
+
+db = DB()
+sql = "SELECT * FROM foo"
+cur = db.query(sql)
+# wait a long time for the Mysql connection to timeout
+cur = db.query(sql)
+# still works
+</code></pre>
+<br /><b>#1</b><br /><p>If you are using ubuntu Linux there was a patch added to the python-mysql package that added the ability to set that same MYSQL_OPT_RECONNECT option (see <a href="https://launchpad.net/ubuntu/hardy/+source/python-mysqldb/1.2.2-5" rel="nofollow">here</a>).  I have not tried it though.</p>
+
+<p>Unfortunately, the patch was later removed due to a conflict with autoconnect and transations (described <a href="https://launchpad.net/ubuntu/+source/python-mysqldb" rel="nofollow">here</a>).</p>
+
+<p>The comments from that page say:
+1.2.2-7 Published in intrepid-release on 2008-06-19 </p>
+
+<p>python-mysqldb (1.2.2-7) unstable; urgency=low</p>
+
+<p>[ Sandro Tosi ]
+  * debian/control
+    - list items lines in description starts with 2 space, to avoid reformat
+      on webpages (Closes: #480341)</p>
+
+<p>[ Bernd Zeimetz ]
+  * debian/patches/02_reconnect.dpatch:
+    - Dropping patch:
+      Comment in Storm which explains the problem:</p>
+
+<pre><code>    # Here is another sad story about bad transactional behavior. MySQL
+    # offers a feature to automatically reconnect dropped connections.
+    # What sounds like a dream, is actually a nightmare for anyone who
+    # is dealing with transactions. When a reconnection happens, the
+    # currently running transaction is transparently rolled back, and
+    # everything that was being done is lost, without notice. Not only
+    # that, but the connection may be put back in AUTOCOMMIT mode, even
+    # when that's not the default MySQLdb behavior. The MySQL developers
+    # quickly understood that this is a terrible idea, and removed the
+    # behavior in MySQL 5.0.3. Unfortunately, Debian and Ubuntu still
+    # have a patch right now which *reenables* that behavior by default
+    # even past version 5.0.3.
+</code></pre>
+<br /><b>#2</b><br /><p>You other bet it to work around dropped connections yourself with code.</p>
+
+<p>One way to do it would be the following:</p>
+
+<pre><code>import MySQLdb
+
+class DB:
+    conn = None
+
+    def connect(self):
+        self.conn = MySQLdb.connect()
+
+    def cursor(self):
+        try:
+            return self.conn.cursor()
+        except (AttributeError, MySQLdb.OperationalError):
+            self.connect()
+            return self.conn.cursor()
+
+db = DB()
+cur = db.cursor()
+# wait a long time for the Mysql connection to timeout
+cur = db.cursor()
+# still works
+</code></pre>
+<br /><b>#3</b><br /><p>I had a similar problem with MySQL and Python, and the solution that worked for me was to upgrade MySQL to 5.0.27 (on Fedora Core 6; your system may work fine with a different version).</p>
+
+<p>I tried a lot of other things, including patching the Python libraries, but upgrading the database was a lot easier and (I think) a better decision.</p>
+<br /><b>#4</b><br /><p>Hmm, transactions are only an issue if you use InnoDB and transactions!  The python-mysqldb people have made a political, not technical decision to remove this option.  Screws people over who actually use this feature.</p>
+<br /><b>#5</b><br /><p>you can separate the commit and the close for the connection...that's not cute but it does it.</p>
+
+<pre><code>class SqlManager(object):
+ """
+ Class that handle the database operation
+ """
+ def __init__(self,server, database, username, pswd):
+
+      self.server = server
+      self.dataBase = database
+      self.userID = username
+      self.password = pswd
+
+def Close_Transation(self):
+      """
+      Commit the SQL Query
+      """
+      try:
+        self.conn.commit()
+      except Sql.Error, e:
+        print "-- reading SQL Error %d: %s" % (e.args[0], e.args[1])
+
+ def Close_db(self):
+    try:
+        self.conn.close()
+    except Sql.Error, e:
+        print "-- reading SQL Error %d: %s" % (e.args[0], e.args[1])
+
+ def __del__(self):
+    print "close connection with database.."
+    self.conn.close() 
+</code></pre>
+<br />

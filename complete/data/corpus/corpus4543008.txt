@@ -1,0 +1,152 @@
+Question (ID-4543008): Efficient Context-Free Grammar parser, preferably Python-friendly I am in need of parsing a small subset of English for one of my project, described as a context-free grammar with (1-level) feature structures ( example ) and I need to do it efficiently . 
+
+ Right now I'm using NLTK 's parser which produces the right output but is very slow. For my grammar of ~450 fairly ambiguous non-lexicon rules and half a million lexical entries, parsing simple sentences can take anywhere from 2 to 30 seconds, depending it seems on the number of resulting trees. Lexical entries have little to no effect on performance. 
+
+ Another problem is that loading the (25MB) grammar+lexicon at the beginning can take up to a minute. 
+
+ From what I can find in literature, the running time of the algorithm used to parse such a grammar (Earley or CKY) should be linear to the size of the grammar and cubic to the size of the input token list. My experience with NLTK indicates that ambiguity is what hurts the performance most, not the absolute size of the grammar. 
+
+ So now I'm looking for a CFG parser to replace NLTK. I've been considering PLY but I can't tell whether it supports feature structures in CFGs, which are required in my case, and the examples I've seen seem to be doing a lot of procedural parsing rather than just specifying a grammar. Can anybody show me an example of PLY both supporting feature structs and using a declarative grammar? 
+
+ I'm also fine with any other parser that can do what I need efficiently. A Python interface is preferable but not absolutely necessary. 
+ Answers (Total-8): #0 By all means take a look at Pyparsing . It's the most pythonic implementations of parsing I've come across, and it's a great design from a purely academic standpoint. 
+
+ I used both ANTLR and JavaCC to teach translator and compiler theory at a local university. They're both good and mature, but I wouldn't use them in a Python project. 
+
+ That said, unlike programming languages, natural languages are much more about the semantics than about the syntax, so you could be much better off skipping the learning curves of existing parsing tools, going with a home-brewed (top-down, backtracking, unlimited lookahead) lexical analyzer and parser, and spending the bulk of your time writing the code that figures out what a parsed, but ambiguous, natural-language sentence means. 
+ #1 Try running it on PyPy, it might be a lot faster. 
+ #2 I've used pyparsing for limited vocabulary command parsing, but here is a little framework on top of pyparsing that addresses your posted example: 
+
+ from pyparsing import *
+
+transVerb, transVerbPlural, transVerbPast, transVerbProg = (Forward() for i in range(4))
+intransVerb, intransVerbPlural, intransVerbPast, intransVerbProg = (Forward() for i in range(4))
+singNoun,pluralNoun,properNoun = (Forward() for i in range(3))
+singArticle,pluralArticle = (Forward() for i in range(2))
+verbProg = transVerbProg | intransVerbProg
+verbPlural = transVerbPlural | intransVerbPlural
+
+for expr in (transVerb, transVerbPlural, transVerbPast, transVerbProg,
+   intransVerb, intransVerbPlural, intransVerbPast, intransVerbProg,
+   singNoun, pluralNoun, properNoun, singArticle, pluralArticle):
+ expr &lt;&lt; MatchFirst([])
+
+def appendExpr(e1, s):
+ c1 = s[0]
+ e2 = Regex(r"[%s%s]%s\b" % (c1.upper(), c1.lower(), s[1:]))
+ e1.expr.exprs.append(e2)
+
+def makeVerb(s, transitive):
+ v_pl, v_sg, v_past, v_prog = s.split()
+ if transitive:
+  appendExpr(transVerb, v_sg)
+  appendExpr(transVerbPlural, v_pl)
+  appendExpr(transVerbPast, v_past)
+  appendExpr(transVerbProg, v_prog)
+ else:
+  appendExpr(intransVerb, v_sg)
+  appendExpr(intransVerbPlural, v_pl)
+  appendExpr(intransVerbPast, v_past)
+  appendExpr(intransVerbProg, v_prog)
+
+def makeNoun(s, proper=False):
+ if proper:
+  appendExpr(properNoun, s)
+ else:
+  n_sg,n_pl = (s.split() + [s+"s"])[:2]
+  appendExpr(singNoun, n_sg)
+  appendExpr(pluralNoun, n_pl)
+
+def makeArticle(s, plural=False):
+ for ss in s.split():
+  if not plural:
+   appendExpr(singArticle, ss)
+  else:
+   appendExpr(pluralArticle, ss)
+
+makeVerb("disappear disappears disappeared disappearing", transitive=False)
+makeVerb("walk walks walked walking", transitive=False)
+makeVerb("see sees saw seeing", transitive=True)
+makeVerb("like likes liked liking", transitive=True)
+
+makeNoun("dog")
+makeNoun("girl")
+makeNoun("car")
+makeNoun("child children")
+makeNoun("Kim", proper=True)
+makeNoun("Jody", proper=True)
+
+makeArticle("a the")
+makeArticle("this every")
+makeArticle("the these all some several", plural=True)
+
+transObject = (singArticle + singNoun | properNoun | Optional(pluralArticle) + pluralNoun | verbProg | "to" + verbPlural)
+sgSentence = (singArticle + singNoun | properNoun) + (intransVerb | intransVerbPast | (transVerb | transVerbPast) + transObject)
+plSentence = (Optional(pluralArticle) + pluralNoun) + (intransVerbPlural | intransVerbPast | (transVerbPlural |transVerbPast) + transObject)
+
+sentence = sgSentence | plSentence
+
+
+def test(s):
+ print s
+ try:
+  print sentence.parseString(s).asList()
+ except ParseException, pe:
+  print pe
+
+test("Kim likes cars")
+test("The girl saw the dog")
+test("The dog saw Jody")
+test("Kim likes walking")
+test("Every girl likes dogs")
+test("All dogs like children")
+test("Jody likes to walk")
+test("Dogs like walking")
+test("All dogs like walking")
+test("Every child likes Jody")
+ 
+
+ Prints: 
+
+ Kim likes cars
+['Kim', 'likes', 'cars']
+The girl saw the dog
+['The', 'girl', 'saw', 'the', 'dog']
+The dog saw Jody
+['The', 'dog', 'saw', 'Jody']
+Kim likes walking
+['Kim', 'likes', 'walking']
+Every girl likes dogs
+['Every', 'girl', 'likes', 'dogs']
+All dogs like children
+['All', 'dogs', 'like', 'children']
+Jody likes to walk
+['Jody', 'likes', 'to', 'walk']
+Dogs like walking
+['Dogs', 'like', 'walking']
+All dogs like walking
+['All', 'dogs', 'like', 'walking']
+Every child likes Jody
+['Every', 'child', 'likes', 'Jody']
+ 
+
+ This is likely to get slow as you expand the vocabulary. Half a million entries? I thought that a reasonable functional vocabulary was on the order of 5-6 thousand words. And you will be pretty limited in the sentence structures that you can handle - natural language is what NLTK is for. 
+ #3 Tooling aside... 
+
+ You may remember from theory that there are infinite grammars that define the same language. There are criteria for categorizing grammars and determining which is the "canonical" or "minimal" one for a given language, but in the end, the "best" grammar is the one that's more convenient for the task and tools at hand (remember the transformations of CFGs into LL and LR grammars?). 
+
+ Then, you probably don't need a huge lexicon to parse an sentence in English. There's a lot to be known about a word in languages like German or Latin (or even Spanish), but not in the many times arbitrary and ambiguos English. You should be able to get away with a small lexicon that contains only the key words necessary to arrive to the structure of a sentence. At any rate, the grammar you choose, no matter its size, can be cached in a way that thee tooling can directly use it (i.e., you can skip parsing the grammar). 
+
+ Given that, it could be a good idea to take a look at a simpler parser already worked on by someone else. There must be thousands of those in the literature. Studying different approaches will let you evaluate your own, and may lead you to adopt someone else's. 
+
+ Finally, as I already mentioned, interpreting natural languages is much more about artificial intelligence than about parsing. Because structure determines meaning and meaning determines structure you have to play with both at the same time. An approach I've seen in the literature since the '80s is to let different specialized agents take shots at solving the problem against a " blackboard ". With that approach syntatic and semantic analysis happen concurrently. 
+ #4 Somewhat late on this, but here are two more options for you: 
+
+ Spark is a Earley parser written in Python. 
+
+ Elkhound is a GLR parser written in C++ Elkhound uses a Bison like syntax 
+ #5 I would recommend using bitpar, a very efficient PCFG parser written in C++. I've written a shell-based Python wrapper for it, see https://github.com/andreasvc/eodop/blob/master/bitpar.py 
+ #6 I think ANTLR is the best parser-generator that I know of for Java. I don't know if Jython would provide you a good way for Python and Java to interact. 
+ #7 If it can be expressed as a PEG language (I don't think all CFGs can, but supposedly many can), then you might use pyPEG , which is supposed to be linear-time when using a packrat parsing implementation (although potentially prohibitive on memory usage). 
+
+ I don't have any experience with it as I am just starting to research parsing and compilation again after a long time away from it, but I am reading some good buzz about this relatively up-to-date technique. YMMV.

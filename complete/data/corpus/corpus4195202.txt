@@ -1,0 +1,29 @@
+Question (ID-4195202): How to deserialize 1GB of objects into Python faster than cPickle? We've got a Python-based web server that unpickles a number of large data files on startup using cPickle . The data files (pickled using HIGHEST_PROTOCOL ) are around 0.4 GB on disk and load into memory as about 1.2 GB of Python objects -- this takes about 20 seconds . We're using Python 2.6 on 64-bit Windows machines. 
+
+ The bottleneck is certainly not disk (it takes less than 0.5s to actually read that much data), but memory allocation and object creation (there are millions of objects being created). We want to reduce the 20s to decrease startup time. 
+
+ Is there any way to deserialize more than 1GB of objects into Python much faster than cPickle (like 5-10x)? Because the execution time is bound by memory allocation and object creation, I presume using another unpickling technique such as JSON wouldn't help here. 
+
+ I know some interpreted languages have a way to save their entire memory image as a disk file, so they can load it back into memory all in one go, without allocation/creation for each object. Is there a way to do this, or achieve something similar, in Python? 
+ Answers (Total-6): #0 
+ Try the marshal module - it's internal (used by the byte-compiler) and intentionally not advertised much, but it is much faster. Note that it doesn't serialize arbitrary instances like pickle, only builtin types (don't remember the exact constraints, see docs). Also note that the format isn't stable. 
+ If you need to initialize multiple processes and can tolerate one process always loaded, there is an elegant solution: load the objects in one process, and then do nothing in it except forking processes on demand. Forking is fast (copy on write) and shares the memory between all processes. 
+ If your objects contain lots of raw data like numpy arrays, you can memory-map them for much faster startup. pytables is also good for these scenarios. 
+ If you'll only use a small part of the objects, then an OO database (like Zope's) can probably help you. Though if you need them all in memory, you will just waste lots of overhead for little gain. (never used one, so this might be nonsense). 
+ Maybe other python implementations can do it? Don't know, just a thought... 
+ 
+ #1 Are you load()ing the pickled data directly from the file? What about to try to load the file into the memory and then do the load? 
+I would start with trying the cStringIO(); alternatively you may try to write your own version of StringIO that would use buffer() to slice the memory which would reduce the needed copy() operations (cStringIO still may be faster, but you'll have to try). 
+
+ There are sometimes huge performance bottlenecks when doing these kinds of operations especially on Windows platform; the Windows system is somehow very unoptimized for doing lots of small reads while UNIXes cope quite well; if load() does lot of small reads or you are calling load() several times to read the data, this would help. 
+ #2 I haven't used cPickle (or Python) but in cases like this I think the best strategy is to
+avoid unnecessary loading of the objects until they are really needed - say load after start up on a different thread, actually its usually better to avoid unnecessary loading/initialization at anytime for obvious reasons. Google 'lazy loading' or 'lazy initialization'. If you really need all the objects to do some task before server start up then maybe you can try to implement a manual custom deserialization method, in other words implement something yourself if you have intimate knowledge of the data you will deal with which can help you 'squeeze' better performance then the general tool for dealing with it. 
+ #3 Did you try sacrificing efficiency of pickling by not using HIGHEST_PROTOCOL? It isn't clear what performance costs are associated with using this protocol, but it might be worth a try. 
+ #4 Impossible to answer this without knowing more about what sort of data you are loading and how you are using it. 
+
+ If it is some sort of business logic, maybe you should try turning it into a pre-compiled module; 
+
+ If it is structured data, can you delegate it to a database and only pull what is needed? 
+
+ Does the data have a regular structure? Is there any way to divide it up and decide what is required and only then load it? 
+ #5 I'll add another answer that might be helpful - if you can, can you try to define _ slots _ on the class that is most commonly created? This may be a little limiting and impossible, however it seems to have cut the time needed for initialization on my test to about a half.

@@ -1,0 +1,117 @@
+<h3>Question (ID-4777154):</h3><h2>python: automatically printing representation of each component in an expression</h2><p>I find myself writing assertions like these:</p>
+
+<pre><code>if f(x, y) != z:
+  print(repr(x))
+  print(repr(y))
+  print(repr(z))
+  raise MyException('Expected: f(x, y) == z')
+</code></pre>
+
+<p>I was wondering if there's a way to write a function that would accept a valid Python expression and an exception class as an input, evaluate the expression, and if it finds it to be false, print out the representation of each of the lowest-level terms in the expression and raise the given exception?</p>
+
+<pre><code># validate is the mystery function
+validate('f(x, y) == z', MyException)
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>What about assertions ?</p>
+
+<pre><code>assert  f(x, y) != z, 'Expected: f(%r, %r) == %r'%(x,y,z)
+</code></pre>
+
+<p><strong>Edit</strong></p>
+
+<p>to add %r to print repr's - thanks for the comment.</p>
+<br /><b>#1</b><br /><p>Here's an implementation:</p>
+
+<pre><code>import inspect, keyword, pprint, sys, tokenize
+
+def value_in_frame(name, frame):
+    try:
+        return frame.f_locals[name]
+    except KeyError:
+        try:
+            return frame.f_globals[name]
+        except KeyError:
+            raise ValueError("Couldn't find value for %s" % name)
+
+def validate(expr, exc_class=AssertionError):
+    """Evaluate `expr` in the caller's frame, raise `exc_class` if false."""
+    frame = inspect.stack()[1][0]
+    val = eval(expr, frame.f_globals, frame.f_locals)
+    if not val:
+        rl = iter([expr]).next
+        for typ, tok, _, _, _ in tokenize.generate_tokens(rl):
+            if typ == tokenize.NAME and not keyword.iskeyword(tok):
+                try:
+                    val = value_in_frame(tok, frame)
+                except ValueError:
+                    val = '???'
+                else:
+                    val = repr(val)
+                print "  %s: %s" % (tok, val)
+        raise exc_class("Failed to validate: %s" % expr)
+
+if __name__ == '__main__':
+    a = b = 3
+    validate("a + b == 5")
+</code></pre>
+<br /><b>#2</b><br /><p>This would be possible to do. You can use the Python compiler (details differ between versions, so this is just an overview) to compile the given expression into an AST. Then you can compile the AST into a code object and evaluate it (or just call <code>eval</code> in the first place, whatever). Then, if the value is falsy, inspect the AST to see how the expression is constructed. Print out the value of each item in the expression that's accessed by name according to the AST.</p>
+<br /><b>#3</b><br /><p>There might be a way to hack up something to do what you ask, but the alternatives are, at least, much easier:</p>
+
+<ol>
+<li><p>As you have now, manually expanding the values of interest.  This is likely to be more reliable, especially for complex expressions, because it's easier for you to say what's interesting than for the computer to deduce it.  In particular, you might want to include a value that's not even in the expression.</p>
+
+<pre><code>if f(x, y) != z:
+  raise MyException("Unexpected: the foobar is glowing; " +
+                    "f(%r, %r) != %r" % (x, y, z))
+</code></pre>
+
+<p>Here, you seem to want x and y but not (the result of calling) f(x, y), while in other cases that might be flipped, or you might want all three.  An algorithm will have a hard time determining your preference.</p></li>
+<li><p>You can start pdb at the point where you detect the failure, examine whatever you like (even up the call stack), and then resume "normal" execution.  This is only possible in some contexts; e.g. probably not for a web app.</p>
+
+<pre><code>if f(x, y) != z:
+  import pdb
+  pdb.set_trace()
+  raise MyException("Unexpected: ...")
+</code></pre></li>
+<li><p>The logging module instead of print statements or in the exception message.</p></li>
+</ol>
+<br /><b>#4</b><br /><p>The <code>nose</code> test runner has a plug-in called "failure detail" which provides precisely this service: <a href="http://somethingaboutorange.com/mrl/projects/nose/0.11.1/plugins/failuredetail.html" rel="nofollow">http://somethingaboutorange.com/mrl/projects/nose/0.11.1/plugins/failuredetail.html</a>  .  This solution is better than what you've asked for, because the expression is not a string, it's an actual assertion that is introspected later to find the source code to analyze.</p>
+
+<p>An example is in the <a href="http://somethingaboutorange.com/mrl/projects/nose/0.9.3/#assert-introspection" rel="nofollow">older docs</a>:</p>
+
+<blockquote>
+  <p>In other words if you have a test
+  like:</p>
+</blockquote>
+
+<pre><code>def test_integers():
+    a = 2
+    assert a == 4, "assert 2 is 4"
+</code></pre>
+
+<blockquote>
+  <p>You will get output like:</p>
+</blockquote>
+
+<pre><code>File "/path/to/file.py", line XX, in test_integers:
+      assert a == 4, "assert 2 is 4" 
+AssertionError: assert 2 is 4
+  &gt;&gt;  assert 2 == 4, "assert 2 is 4"
+</code></pre>
+<br /><b>#5</b><br /><p>You could do it the other way round:</p>
+
+<pre><code>expr = 'f(%r, %r) != %r' % (x,y,z)
+
+if eval(expr):
+    raise MyException(expr)
+</code></pre>
+
+<p>Or in other words:</p>
+
+<pre><code>def validate(expr,myexception):
+    if eval(expr):
+        raise myexception(expr)
+</code></pre>
+
+<p>Pretty dirty though :)</p>
+<br />

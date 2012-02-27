@@ -1,0 +1,156 @@
+Question (ID-6335839): Python how to read N number of lines at a time I am writing a code to take an enormous textfile (several GB) N lines at a time, process that batch, and move onto the next N lines until I have completed the entire file. (I don't care if the last batch isn't the perfect size). 
+
+ I have been reading about using itertools islice for this operation. I think I am halfway there: 
+
+ from itertools import islice
+N = 16
+infile = open("my_very_large_text_file", "r")
+lines_gen = islice(infile, N)
+
+for lines in lines_gen:
+  ...process my lines...
+ 
+
+ The trouble is that I would like to process the next batch of 16 lines (I guess I am imagining something like "pop"). Any help? 
+
+ There were some posts similar to this question, but I am new to python and the explanations were confusing. Please provide comments to code / links to well commented code.
+Thanks 
+
+ EDIT: Please clearly comment/explain your code, I have a lot to learn! I have been looking up other pages, but they offer quick and dirty solutions without explanations! 
+ Answers (Total-6): #0 islice() can be used to get the next n items of an iterator. Thus, list(islice(f, n)) will return a list of the next n lines of the file f . Using this inside a loop will give you the file in chunks of n lines. At the end of the file, the list might be shorter, and finally the call will return an empty list. 
+
+ with open(...) as f:
+ while True:
+  next_n_lines = list(islice(f, n))
+  if not next_n_lines:
+   break
+  # process next_n_lines
+ 
+
+ An alternative is to use the grouper pattern : 
+
+ with open(...) as f:
+ for next_n_lines in izip_longest(*[f] * n):
+  # process next_n_lines
+ 
+ #1 Since the requirement was added that there be statistically uniform distribution of the lines selected from the file, I offer this simple approach. 
+
+ """randsamp - extract a random subset of n lines from a large file"""
+
+import random
+
+def scan_linepos(path):
+ """return a list of seek offsets of the beginning of each line"""
+ linepos = []
+ offset = 0
+ with open(path) as inf:  
+  # WARNING: CPython 2.7 file.tell() is not accurate on file.next()
+  for line in inf:
+   linepos.append(offset)
+   offset += len(line)
+ return linepos
+
+def sample_lines(path, linepos, nsamp):
+ """return nsamp lines from path where line offsets are in linepos"""
+ offsets = random.sample(linepos, nsamp)
+ offsets.sort() # this may make file reads more efficient
+
+ lines = []
+ with open(path) as inf:
+  for offset in offsets:
+   inf.seek(offset)
+   lines.append(inf.readline())
+ return lines
+
+dataset = 'big_data.txt'
+nsamp = 5
+linepos = scan_linepos(dataset) # the scan only need be done once
+
+lines = sample_lines(dataset, linepos, nsamp)
+print 'selecting %d lines from a file of %d' % (nsamp, len(linepos))
+print ''.join(lines)
+ 
+
+ I tested it on a mock data file of 3 million lines comprising 1.7GB on disk. The scan_linepos dominated the runtime taking about 20 seconds on my not-so-hot desktop. 
+
+ Just to check the performance of sample_lines I used the timeit module as so 
+
+ import timeit
+t = timeit.Timer('sample_lines(dataset, linepos, nsamp)', 
+  'from __main__ import sample_lines, dataset, linepos, nsamp')
+trials = 10 ** 4
+elapsed = t.timeit(number=trials)
+print u'%dk trials in %.2f seconds, %.2fµs per trial' % (trials/1000,
+  elapsed, (elapsed/trials) * (10 ** 6))
+ 
+
+ For various values of nsamp ; when nsamp was 100, a single sample_lines completed in 460µs and scaled linearly up to 10k samples at 47ms per call. 
+
+ The natural next question is how good is Python&#39;s random number generator from module random? , and the answer is "sub-cryptographic but certainly fine for bioinformatics". 
+ #2 Used chunker function from What is the most “pythonic” way to iterate over a list in chunks? : 
+
+ from itertools import izip_longest
+
+def grouper(iterable, n, fillvalue=None):
+ "grouper(3, 'ABCDEFG', 'x') --&gt; ABC DEF Gxx"
+ args = [iter(iterable)] * n
+ return izip_longest(*args, fillvalue=fillvalue)
+
+
+with open(filename) as f:
+ for lines in grouper(f, chunk_size, ""): #for every chunk_sized chunk
+  """process lines like 
+  lines[0], lines[1] , ... , lines[chunk_size-1]"""
+ 
+ #3 Here is another way using groupby : 
+
+ from itertools import count, groupby
+
+N = 16
+with open('test') as f:
+ for g, group in groupby(f, key=lambda _, c=count(): c.next()/N):
+  print list(group)
+ 
+
+ How it works: 
+
+ Basically groupby() will group the lines by the return value of the key parameter and the key parameter is the lambda function lambda _, c=count(): c.next()/N and using the fact that the c argument will be bound to count() when the function will be defined so each time groupby() will call the lambda function and evaluate the return value to determine the grouper that will group the lines so : 
+
+ # 1 iteration.
+c.next() =&gt; 0
+0 / 16 =&gt; 0
+# 2 iteration.
+c.next() =&gt; 1
+1 / 16 =&gt; 0
+...
+# Start of the second grouper.
+c.next() =&gt; 16
+16/16 =&gt; 1 
+...
+ 
+ #4 The question appears to presume that there is efficiency to be gained by reading an "enormous textfile" in blocks of N lines at a time. This adds an application layer of buffering over the already highly optimized stdio library, adds complexity, and probably buys you absolutely nothing. 
+
+ Thus: 
+
+ with open('my_very_large_text_file') as f:
+ for line in f:
+  process(line)
+ 
+
+ is probably superior to any alternative in time, space, complexity and readability. 
+
+ See also Rob Pike's first two rules , Jackson's Two Rules , and PEP-20 The Zen of Python . If you really just wanted to play with islice you should have left out the large file stuff. 
+ #5 Assuming "batch" means to want to process all 16 recs at one time instead of individually, read the file one record at a time and update a counter; when the counter hits 16, process that group.  interim_list = []
+infile = open("my_very_large_text_file", "r")
+ctr = 0
+for rec in infile:
+ interim_list.append(rec)
+ ctr += 1
+ if ctr > 15:
+  process_list(interim_list)
+  interim_list = []
+  ctr = 0 
+
+ the final group 
+
+ process_list(interim_list)

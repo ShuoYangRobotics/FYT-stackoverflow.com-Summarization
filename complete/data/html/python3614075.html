@@ -1,0 +1,157 @@
+<h3>Question (ID-3614075):</h3><h2>Why is my code stopping?</h2><p>Hey I've encountered an issue where my program stops iterating through the file at the 57802 record for some reason I cannot figure out.  I put a heartbeat section in so I would be able to see which line it is on and it helped but now I am stuck as to why it stops here.  I thought it was a memory issue but I just ran it on my 6GB memory computer and it still stopped.</p>
+
+<p>Is there a better way to do anything I am doing below?
+My goal is to read the file (if you need me to send it to you I can 15MB text log)
+find a match based on the regex expression and print the matching line.  More to come but that's as far as I have gotten.  I am using python 2.6</p>
+
+<p>Any ideas would help and code comments also! I am a python noob and am still learning.</p>
+
+<pre><code>import sys, os, os.path, operator
+import re, time, fileinput
+
+infile = os.path.join("C:\\","Python26","Scripts","stdout.log")
+
+start = time.clock()
+
+filename  = open(infile,"r")
+
+match = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d{3} +\w+ +\[([\w.]+)\] ((\w+).?)+:\d+ - (\w+)_SEARCH:(.+)')
+
+count = 0
+heartbeat = 0
+for line in filename:
+    heartbeat = heartbeat + 1
+    print heartbeat
+    lookup = match.search(line)
+    if lookup:
+        count = count + 1
+        print line
+end = time.clock()
+elapsed = end-start
+print "Finished processing at:",elapsed,"secs. Count of records =",count,"."
+
+filename.close()
+</code></pre>
+
+<p>This is line 57802 where it fails:</p>
+
+<pre><code>2010-08-06 08:15:15,390 DEBUG [ah_admin] com.thg.struts2.SecurityInterceptor.intercept:46 - Action not SecurityAware; skipping privilege check.
+</code></pre>
+
+<p>This is a matching line:</p>
+
+<pre><code>2010-08-06 09:27:29,545 INFO  [patrick.phelan] com.thg.sam.actions.marketmaterial.MarketMaterialAction.result:223 - MARKET_MATERIAL_SEARCH:{"_appInfo":{"_appId":21,"_companyDivisionId":42,"_environment":"PRODUCTION"},"_description":"symlin","_createdBy":"","_fieldType":"GEO","_geoIds":["Illinois"],"_brandIds":[2883],"_archived":"ACTIVE","_expired":"UNEXPIRED","_customized":"CUSTOMIZED","_webVisible":"VISIBLE_ONLY"}
+</code></pre>
+
+<p>Sample data just the first 5 lines:</p>
+
+<pre><code>2010-08-06 00:00:00,035 DEBUG [] com.thg.sam.jobs.PlanFormularyLoadJob.executeInternal:67 - Entered into PlanFormularyLoadJob: executeInternal
+2010-08-06 00:00:00,039 DEBUG [] com.thg.ftpComponent.service.JScapeFtpService.open:153 - Opening FTP connection to sdrive/hibbert@tccfp01.hibbertnet.com:21
+2010-08-06 00:00:00,040 DEBUG [] com.thg.sam.email.EmailUtils.sendEmail:206 - org.apache.commons.mail.MultiPartEmail@446e79
+2010-08-06 00:00:00,045 DEBUG [] com.thg.sam.services.OrderService.getOrdersWithStatus:121 - Orders list size=13
+2010-08-06 00:00:00,045 DEBUG [] com.thg.ftpComponent.service.JScapeFtpService.open:153 - Opening FTP connection to sdrive/hibbert@tccfp01.hibbertnet.com:21
+</code></pre>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>What does the input line that gives you trouble look like? I'd try printing that out. I suspect your CPU is pegged while this is running. </p>
+
+<p>Nested regexps, like you have can have <a href="http://www.regular-expressions.info/catastrophic.html" rel="nofollow">VERY</a> bad performance when they don't match quickly.</p>
+
+<pre><code>((\w+).?)+:
+</code></pre>
+
+<p>Imagine a string that doesn't have the : in it but is fairly long. You'll end up in a world of backtracking as the regexp tries EVERY combination of ways to separate word characters between \w and . and THEN tries to group them in every way possible. If you can be more specific in your pattern it'll pay off big time. </p>
+<br /><b>#1</b><br /><p>Your problem is definitely the part @paulrubel pointed out:</p>
+
+<pre><code>((\w+).?)+:\d+
+</code></pre>
+
+<p>Now that you've added sample data, it's obvious that the <code>.</code> is supposed to match a literal dot, which means you should have escaped it (<code>\.</code>).  Also, you don't need the inner set of parentheses, and the outer set should be non-capturing, but it's the basic structure that's killing you; there are too many arrangements of word characters and dots it has to try before giving up.  The other lines all fail before that part of the regex is attempted, which is why you don't have any problem with them.</p>
+
+<p>When I try it in RegexBuddy, your regex matches the good line in 186 steps, and gives up trying on line 57802 after 1,000,000 steps.  When I escape the dot, the good line only takes 90 steps to match, but it still times out on line 57802.  But now I know that part of the regex can only match word characters and dots.  Once it has consumed all of those it can, the next bit has to match <code>:\d+</code>; if it doesn't, I know there's no point trying other arrangements.  I can use an atomic group to tell it not to bother:</p>
+
+<pre><code>(?&gt;(?:\w+\.?)+):\d+
+</code></pre>
+
+<p>With that change, the good line matches in 83 steps, and line 57802 only takes 66 steps to report failure.  But it's not always feasible to use atomic groups, so you should try to make your regex conform to the actual structure of the text it's matching.  In this case you're matching what looks like a Java class name (some word characters, followed by zero or more instances of (a dot and some more word characters)) followed by a colon and and a line number:</p>
+
+<pre><code>\w+(?:\.\w+)*:\d+
+</code></pre>
+
+<p>When I plug that into the regex, it matches the good line in 80 steps, and rejects line 57802 in 67 steps--the atomic group isn't even needed.</p>
+<br /><b>#2</b><br /><p>you compiled your regex but never use it?</p>
+
+<pre><code>lookup = re.search(match,line)
+</code></pre>
+
+<p>should be</p>
+
+<pre><code>lookup = match.search(line)
+</code></pre>
+
+<p>and you should use <code>os.path.join()</code></p>
+
+<pre><code>infile = os.path.join("C:\\","Python26","Scripts","stdout.log")
+</code></pre>
+
+<p>Update:</p>
+
+<p>Your regular expression can be simpler.Just check for the date time stamp. Or else, don't use regular expression at all. Say your date and time starts at beginning of line</p>
+
+<pre><code>for line in open("stdout.log"):
+    s = line.split()
+    D,T=s[0],s[1]
+    # use the time module and strptime to check valid date/time
+    # or you can split "-" on D and T and do manual check using &gt; or &lt; and math
+</code></pre>
+<br /><b>#3</b><br /><p>Your pattern contains the fixed string SEARCH_ and a bunch of complicated expressions (including captures) that are really going to hammer the regex engine.. but you don't do anything with the captured text so all you want to know 'is does it match?'  </p>
+
+<p>It may be simpler and quicker to just search for the fixed pattern on each line. </p>
+
+<pre><code>if '_SEARCH:' in line:
+    print line
+    count += 1
+</code></pre>
+<br /><b>#4</b><br /><p>Try using <a href="http://docs.python.org/library/pdb.html" rel="nofollow">pdb</a>. If you put <code>pdb.set_trace()</code> in your heartbeat shortly before it stops, you can look at the specific line it's stopping on and see what each of your lines of code does with that line.</p>
+
+<p>Edit: An example of pdb use:</p>
+
+<pre><code>import pdb
+for i in range(50):
+    print i
+    if i == 12:
+        pdb.set_trace()
+</code></pre>
+
+<p>Run that script, and you'll get something like the following:</p>
+
+<pre><code>0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+&gt; &lt;stdin&gt;(1)&lt;module&gt;()
+(Pdb)
+</code></pre>
+
+<p>Now you can evaluate Python expressions from the context of i=12.</p>
+
+<pre><code>(Pdb) print i
+12
+</code></pre>
+
+<p>Use that, but put the <code>pdb.set_trace()</code> in your loop after you increment heartbeat, if <code>heartbeat == 57802</code>. Then you can print out line with <code>p line</code>, the result of your regex search with <code>p match.search(line)</code>, etc.</p>
+<br /><b>#5</b><br /><p>It might be a memory issue anyway. With huge files it's probably better to use the <code>fileinput</code> module instead like this:</p>
+
+<pre><code>import fileinput
+for line in fileinput.input([infile]):
+    lookup = re.search(match, line)
+     # etc.
+</code></pre>
+<br />

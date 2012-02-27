@@ -1,0 +1,152 @@
+<h3>Question (ID-764710):</h3><h2>SQLite Performance Benchmark -- why is :memory: so slow...only 1.5X as fast as disk?</h2><h2>Why is :memory: in sqlite so slow?</h2>
+
+<p>I've been trying to see if there are any performance improvements gained by using in-memory sqlite vs. disk based sqlite. Basically I'd like to trade startup time and memory to get extremely rapid queries which do <em>not</em> hit disk during the course of the application. </p>
+
+<p>However, the following benchmark gives me only a factor of 1.5X in improved speed. Here, I'm generating 1M rows of random data and loading it into both a disk and memory based version of the same table. I then run random queries on both dbs, returning sets of size approx 300k. I expected the memory based version to be considerably faster, but as mentioned I'm only getting 1.5X speedups. </p>
+
+<p>I experimented with several other sizes of dbs and query sets; the advantage of :memory: <em>does</em> seem to go up as the number of rows in the db increases. I'm not sure why the advantage is so small, though I had a few hypotheses: </p>
+
+<ul>
+<li>the table used isn't big enough (in rows) to make :memory: a huge winner</li>
+<li>more joins/tables would make the :memory: advantage more apparent</li>
+<li>there is some kind of caching going on at the connection or OS level such that the previous results are accessible somehow, corrupting the benchmark</li>
+<li>there is some kind of hidden disk access going on that I'm not seeing (I haven't tried lsof yet, but I did turn off the PRAGMAs for journaling)</li>
+</ul>
+
+<p>Am I doing something wrong here? Any thoughts on why :memory: isn't producing nearly instant lookups? Here's the benchmark: </p>
+
+<pre><code>==&gt; sqlite_memory_vs_disk_benchmark.py &lt;==
+
+#!/usr/bin/env python
+"""Attempt to see whether :memory: offers significant performance benefits.
+
+"""
+import os
+import time
+import sqlite3
+import numpy as np
+
+def load_mat(conn,mat):
+    c = conn.cursor()
+
+    #Try to avoid hitting disk, trading safety for speed.
+    #http://stackoverflow.com/questions/304393
+    c.execute('PRAGMA temp_store=MEMORY;')
+    c.execute('PRAGMA journal_mode=MEMORY;')
+
+    # Make a demo table
+    c.execute('create table if not exists demo (id1 int, id2 int, val real);')
+    c.execute('create index id1_index on demo (id1);')
+    c.execute('create index id2_index on demo (id2);')
+    for row in mat:
+        c.execute('insert into demo values(?,?,?);', (row[0],row[1],row[2]))
+    conn.commit()
+
+def querytime(conn,query):
+    start = time.time()
+    foo = conn.execute(query).fetchall()
+    diff = time.time() - start
+    return diff
+
+#1) Build some fake data with 3 columns: int, int, float
+nn   = 1000000 #numrows
+cmax = 700    #num uniques in 1st col
+gmax = 5000   #num uniques in 2nd col
+
+mat = np.zeros((nn,3),dtype='object')
+mat[:,0] = np.random.randint(0,cmax,nn)
+mat[:,1] = np.random.randint(0,gmax,nn)
+mat[:,2] = np.random.uniform(0,1,nn)
+
+#2) Load it into both dbs &amp; build indices
+try: os.unlink('foo.sqlite')
+except OSError: pass
+
+conn_mem = sqlite3.connect(":memory:")
+conn_disk = sqlite3.connect('foo.sqlite')
+load_mat(conn_mem,mat)
+load_mat(conn_disk,mat)
+del mat
+
+#3) Execute a series of random queries and see how long it takes each of these
+numqs = 10
+numqrows = 300000 #max number of ids of each kind
+results = np.zeros((numqs,3))
+for qq in range(numqs):
+    qsize = np.random.randint(1,numqrows,1)
+    id1a = np.sort(np.random.permutation(np.arange(cmax))[0:qsize]) #ensure uniqueness of ids queried
+    id2a = np.sort(np.random.permutation(np.arange(gmax))[0:qsize])
+    id1s = ','.join([str(xx) for xx in id1a])
+    id2s = ','.join([str(xx) for xx in id2a])
+    query = 'select * from demo where id1 in (%s) AND id2 in (%s);' % (id1s,id2s)
+
+    results[qq,0] = round(querytime(conn_disk,query),4)
+    results[qq,1] = round(querytime(conn_mem,query),4)
+    results[qq,2] = int(qsize)
+
+#4) Now look at the results
+print "  disk | memory | qsize"
+print "-----------------------"
+for row in results:
+    print "%.4f | %.4f | %d" % (row[0],row[1],row[2])
+</code></pre>
+
+<p>Here's the results. Note that disk takes about 1.5X as long as memory for a fairly wide range of query sizes. </p>
+
+<pre><code>[ramanujan:~]$python -OO sqlite_memory_vs_disk_clean.py
+  disk | memory | qsize
+-----------------------
+9.0332 | 6.8100 | 12630
+9.0905 | 6.6953 | 5894
+9.0078 | 6.8384 | 17798
+9.1179 | 6.7673 | 60850
+9.0629 | 6.8355 | 94854
+8.9688 | 6.8093 | 17940
+9.0785 | 6.6993 | 58003
+9.0309 | 6.8257 | 85663
+9.1423 | 6.7411 | 66047
+9.1814 | 6.9794 | 11345
+</code></pre>
+
+<p>Shouldn't RAM be almost instant relative to disk? What's going wrong here? </p>
+
+<h2>Edit</h2>
+
+<p>Some good suggestions here. </p>
+
+<p>I guess the main takehome point for me is that **there's probably no way to make :memory: <em>absolutely faster</em>, but there is a way to make disk access <em>relatively slower.</em> ** </p>
+
+<p>In other words, the benchmark is adequately measuring the realistic performance of memory, but not the realistic performance of disk (e.g. because the cache_size pragma is too big or because I'm not doing writes). I'll mess around with those parameters and post my findings when I get a chance.  </p>
+
+<p>That said, if there is anyone who thinks I can squeeze some more speed out of the in-memory db (other than by jacking up the cache_size and default_cache_size, which I will do), I'm all ears...</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>It has to do with the fact that SQLite has a page cache. According to the <a href="http://www.sqlite.org/compile.html" rel="nofollow">Documentation</a>, the default page cache is 2000 1K pages or about 2Mb. Since this is about 75% to 90% of your data, it isn't surprising that the two number are very similar. My guess is that in addition to the SQLite page cache, the rest of the data is still in the OS disk cache. If you got SQLite to flush the page cache (and the disk cache) you would see some really significant differences.</p>
+<br /><b>#1</b><br /><p>My question to you is, What are you trying to benchmark?</p>
+
+<p>As already mentioned, SQLite's :memory: DB is just the same as the disk-based one, i.e. paged, and the only difference is that the pages are never written to disk. So the only difference between the two are the disk writes :memory: doesn't need to do (it also doesn't need to do any disk reads either, when a disk page had to be offloaded from the cache).</p>
+
+<p>But read/writes from the cache may represent only a fraction of the query processing time, depending on the query. Your query has a where clause with two large sets of ids the selected rows must be members of, which is expensive.</p>
+
+<p>As Cary Millsap demonstrates in his blog on optimizing Oracle (here's a representative post: <a href="http://carymillsap.blogspot.com/2009/06/profiling-with-my-boy.html">http://carymillsap.blogspot.com/2009/06/profiling-with-my-boy.html</a>), you need to understand which parts of the query processing take time. Assuming the set membership tests represented 90% of the query time, and the disk-based IO 10%, going to :memory: saves only those 10%. That's an extreme example unlikely to be representative, but I hope that it illustrates that your particular query is slanting the results. Use a simpler query, and the IO parts of the query processing will increase, and thus the benefit of :memory:.</p>
+
+<p>As a final note, we've experimented with SQLite's virtual tables, where you are in charge of the actual storage, and by using C++ containers, which are typed unlike SQLite's way of storing cell values, we could see a significant improment in processing time over :memory:, but that's getting of topic a bit ;) --DD</p>
+
+<p>PS: I haven't enough Karma to comment on the most popular post of this thread,
+    so I'm commenting here :) to say that recent SQLite version don't use 1KB
+    pages by default on Windows: <a href="http://www.sqlite.org/changes.html#version_3_6_12">http://www.sqlite.org/changes.html#version_3_6_12</a></p>
+<br /><b>#2</b><br /><p>You're doing SELECTs, you're using memory cache. Try to interleave SELECTs with UPDATEs.</p>
+<br /><b>#3</b><br /><p>Memory database in SQLite is actually page cache that never touches the disk.
+So you should forget using memory db in SQLite for performance tweaks</p>
+
+<p>It's possible to turn off journal, turn off sync mode, set large page cache and you will have almost the same performance on most of operations, but durability will be lost.</p>
+
+<p>From your code it's absolutely clear that you <strong>SHOULD REUSE the command</strong> and ONLY BIND parameters, because that took <strong>more than 90%</strong> of your test performance away.</p>
+<br /><b>#4</b><br /><p>Could it be that sqlite3 isnt actually writing your data to disk from cache? which might explain why the numbers are similar.</p>
+
+<p>It could also be possible that your OS is paging due to low memory avaliable? </p>
+<br /><b>#5</b><br /><p>I note you are focussing on queries that involve relatively large data sets to return. I wonder what effect you would see with smaller sets of data? To return a single row many times might require the disk to seek a lot - the random access time for memory might be much faster.</p>
+<br /><b>#6</b><br /><p>numpy arrays are slower than dict and tuple and other object sequences until you are dealing with 5 million or more objects in a sequence. You can significantly improve the speed of processing massive amounts of data by iterating over it and using generators to avoid creating and recreating temporary large objects.</p>
+
+<p>numpy has become your limiting factor as it is designed to deliver linear performance. It is not a star with small or even large amounts of data. But numpy's performance does not turn into a curve as the data set grows. It remains a straight line.</p>
+
+<p>Besides SQLite is just a really fast database. Faster even than most server databases. It begs the question of why anyone would use NOSQL databases when a light weight super fast fault tolerant database that uses SQL has been around and put to the test in everything from browsers to mobile phones for years.</p>
+<br />

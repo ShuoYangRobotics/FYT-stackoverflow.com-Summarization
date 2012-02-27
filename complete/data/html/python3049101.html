@@ -1,0 +1,285 @@
+<h3>Question (ID-3049101):</h3><h2>floating point equality in Python and in general</h2><p>I have a piece of code that behaves differently depending on whether I go through a dictionary to get conversion factors or whether I use them directly.</p>
+
+<p>The following piece of code will print <code>1.0 == 1.0 -&gt; False</code></p>
+
+<p>But if you replace <code>factors[units_from]</code> with <code>10.0</code> and <code>factors[units_to  ]</code> with <code>1.0 / 2.54</code> it will print <code>1.0 == 1.0 -&gt; True</code></p>
+
+<pre><code>#!/usr/bin/env python
+
+base = 'cm'
+factors = {
+    'cm'        : 1.0,
+    'mm'        : 10.0,
+    'm'         : 0.01,
+    'km'        : 1.0e-5,
+    'in'        : 1.0 / 2.54,
+    'ft'        : 1.0 / 2.54 / 12.0,
+    'yd'        : 1.0 / 2.54 / 12.0 / 3.0,
+    'mile'      : 1.0 / 2.54 / 12.0 / 5280,
+    'lightyear' : 1.0 / 2.54 / 12.0 / 5280 / 5.87849981e12,
+}
+
+# convert 25.4 mm to inches
+val = 25.4
+units_from = 'mm'
+units_to = 'in'
+
+base_value = val / factors[units_from]
+ret = base_value * factors[units_to  ]
+print ret, '==', 1.0, '-&gt;', ret == 1.0
+</code></pre>
+
+<p>Let me first say that I am pretty sure what is going on here.  I have seen it before in C, just never in Python but since Python in implemented in C we're seeing it.</p>
+
+<p>I know that floating point numbers will change values going from a CPU register to cache and back.  I know that comparing what should be two equal variables will return false if one of them was paged out while the other stayed resident in a register.</p>
+
+<p><strong>Questions</strong></p>
+
+<ul>
+<li>What is the best way to avoid problems like this?... In Python or in general.</li>
+<li>Am I doing something completely wrong?</li>
+</ul>
+
+<p><strong>Side Note</strong></p>
+
+<p>This is obviously part of a stripped down example but what I'm trying to do is come with with classes of length, volume, etc that can compare against other objects of the same class but with different units.</p>
+
+<p><strong>Rhetorical Questions</strong></p>
+
+<ul>
+<li>If this is a potentially dangerous problem since it makes programs behave in an undetermanistic matter, should compilers warn or error when they detect that you're checking equality of floats</li>
+<li>Should compilers support an option to replace all float equality checks with a 'close enough' function?</li>
+<li>Do compilers already do this and I just can't find the information.</li>
+</ul>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>The difference is that if you replace <code>factors[units_to ]</code> with <code>1.0 / 2.54</code>, you're doing:</p>
+
+<pre><code>(base_value * 1.0) / 2.54
+</code></pre>
+
+<p>With the dictionary, you're doing:</p>
+
+<pre><code>base_value * (1.0 / 2.54)
+</code></pre>
+
+<p>The order of rounding matters.  This is easier to see if you do:</p>
+
+<pre><code>&gt;&gt;&gt; print (((25.4 / 10.0) * 1.0) / 2.54).__repr__()
+1.0
+&gt;&gt;&gt; print ((25.4 / 10.0) * (1.0 / 2.54)).__repr__()
+0.99999999999999989
+</code></pre>
+
+<p>Note that there is no non-deterministic or undefined behavior.  There is a standard, IEEE-754, which implementations must conform to (not to claim they always <em>do</em>).</p>
+
+<p>I don't think there should be an <em>automatic</em> close enough replacement.  That is often an effective way to deal with the problem, but it should be up to the programmer to decide if and how to use it.</p>
+
+<p>Finally, there are of course options for arbitrary-precision arithmetic, including <a href="http://code.google.com/p/python-gmp/" rel="nofollow">python-gmp</a> and <a href="http://docs.python.org/library/decimal.html" rel="nofollow">decimal</a>.  Think whether you actually <em>need</em> these, because they do have a significant performance impact.</p>
+
+<p>There is no issue with moving between regular registers and cache.  You may be thinking of the x86's 80-bit <a href="http://en.wikipedia.org/wiki/Extended_precision" rel="nofollow">extended precision</a>.</p>
+<br /><b>#1</b><br /><p>Let me first answer by saying that you should read David Goldberg's classic <a href="http://citeseer.ist.psu.edu/viewdoc/download?doi=10.1.1.102.244&amp;rep=rep1&amp;type=pdf" rel="nofollow">What Every Computer Scientist Should Know About Floating-Point Arithmetic</a>.</p>
+
+<p>As some other commentators already said, the discrepancy you notice is intrinsically due to the floating-point model and has nothing to do with registers, cache or memory. </p>
+
+<p>According to the floating-point model, 2.54 is actually represented as </p>
+
+<pre><code>&gt;&gt;&gt; 2859785763380265 * 2 ** -50
+2.54
+</code></pre>
+
+<p>This representation, however is not exact:</p>
+
+<pre><code>&gt;&gt;&gt; from fractions import Fraction
+&gt;&gt;&gt; float(Fraction(2859785763380265, 2 ** 50) - Fraction(254, 100))
+3.552713678800501e-17
+</code></pre>
+
+<p>Now, the expression you are evaluating actually is:</p>
+
+<pre><code>&gt;&gt;&gt; 25.4 / 10 * (1/2.54)
+0.99999999999999989
+</code></pre>
+
+<p>The problem lies in the 1/2.54:</p>
+
+<pre><code>&gt;&gt;&gt; Fraction.from_float(1/2.54)
+Fraction(1773070719437203, 4503599627370496)
+</code></pre>
+
+<p>But what you would expect is </p>
+
+<pre><code>&gt;&gt;&gt; 1/Fraction.from_float(2.54)
+Fraction(1125899906842624, 2859785763380265)
+</code></pre>
+
+<p>To answer your questions:</p>
+
+<ul>
+<li>It <em>is</em> a difficult problem, but is clearly deterministic, nothing mysterious there.</li>
+<li>You cannot automatically replace equality with a <em>close-enough</em> comparison. The latter requires that you specify a tolerance, which depends on the problem at hand, i.e. on what kind of precision you are expecting from your results. There are also plenty of situations where you really want equality not a <em>close-enough</em> comparison.</li>
+</ul>
+<br /><b>#2</b><br /><p>As has been shown comparing two floats (or doubles etc) can be problematic.  Generally, instead of comparing for exact equality they should be checked against an error bound.  If they are within the error bound, they are considered equal.</p>
+
+<p>That is much easier said than done.  The nature of floating point make a fixed error bound worthless.  A small error bound (like 2*float_epsilon) works well when the values are near 0.0, but will fail if the value are near 1000.  An error bound for values as large as 1,000,000.0 will be far too lax for values near 0.0.</p>
+
+<p>The best solution is know the domain of your math and pick an approriate err bound on a case by case basis.</p>
+
+<p>When this is impractical or you're being lazy, <em>Units in the Last Place</em> (ULPs) is a very novel and robust solution.  The full details are quite involved, you can read more <a href="http://www.cygnus-software.com/papers/comparingfloats/comparingfloats.htm" rel="nofollow">here</a>, more specifically <a href="http://www.cygnus-software.com/papers/comparingfloats/comparingfloats.htm" rel="nofollow">this section</a>.</p>
+
+<p>The basic idea is this, a floating point number has two pieces, mantissa and exponent.  Generally rounding errors only change the mantissa by a few <em>steps</em>.  When the value is near 0.0 those <em>steps</em> are exactly float_epsilon.  When the floating point value is nearer to 1,000,000, the steps will be nearly as large as 1.</p>
+
+<p><a href="http://code.google.com/p/googletest/" rel="nofollow">Google test</a> uses ULP to <a href="http://code.google.com/p/googletest/wiki/GoogleTestAdvancedGuide#Floating-Point_Comparison" rel="nofollow">compare floating point numbers</a>.  They chose a default of 4 ULPs for a two floating point numbers to be compared equal.  You could also use their code as reference to build your own ULP style float comparator.</p>
+<br /><b>#3</b><br /><p>Thanks for your responses.  Most were very good and provided good links so I'll just say that and answer my own question.</p>
+
+<p>Caspin posted this link...</p>
+
+<p><a href="http://www.cygnus-software.com/papers/comparingfloats/comparingfloats.htm" rel="nofollow">http://www.cygnus-software.com/papers/comparingfloats/comparingfloats.htm</a></p>
+
+<p>He also mentioned that Google Tests used ULP comparison and when I looked at the google code I saw that they mentioned the same exact link to cygnus-software.</p>
+
+<p>I wound up implementing some of the algorithms in C as a Python extension and then later found that I could do it in pure Python as well.  The code is posted below.</p>
+
+<p>In the end, I will probably just wind up adding ULP differences to my bag of tricks.</p>
+
+<p>It was interesting to see how many floating points are between what should be two equal numbers that never left memory.  One of the articles or the google code I read said that 4 was a good number... but here I was able to hit 10.</p>
+
+<pre><code>&gt;&gt;&gt; f1 = 25.4
+&gt;&gt;&gt; f2 = f1
+&gt;&gt;&gt; 
+&gt;&gt;&gt; for i in xrange(1, 11):
+...     f2 /= 10.0          # to cm
+...     f2 *= (1.0 / 2.54)  # to in
+...     f2 *= 25.4          # back to mm
+...     print 'after %2d loops there are %2d doubles between them' % (i, dulpdiff(f1, f2))
+... 
+after  1 loops there are  1 doubles between them
+after  2 loops there are  2 doubles between them
+after  3 loops there are  3 doubles between them
+after  4 loops there are  4 doubles between them
+after  5 loops there are  6 doubles between them
+after  6 loops there are  7 doubles between them
+after  7 loops there are  8 doubles between them
+after  8 loops there are 10 doubles between them
+after  9 loops there are 10 doubles between them
+after 10 loops there are 10 doubles between them
+</code></pre>
+
+<hr>
+
+<p>Also interesting is how many floating points there are between equal numbers when one of them is written out as a string and read back in.</p>
+
+<pre><code>&gt;&gt;&gt; # 0 degrees Fahrenheit is -32 / 1.8 degrees Celsius
+... f = -32 / 1.8
+&gt;&gt;&gt; s = str(f)
+&gt;&gt;&gt; s
+'-17.7777777778'
+&gt;&gt;&gt; # floats between them...
+... fulpdiff(f, float(s))
+0
+&gt;&gt;&gt; # doubles between them...
+... dulpdiff(f, float(s))
+6255L
+</code></pre>
+
+<hr>
+
+<pre><code>import struct
+from functools import partial
+
+# (c) 2010 Eric L. Frederich
+#
+# Python implementation of algorithms detailed here...
+# from http://www.cygnus-software.com/papers/comparingfloats/comparingfloats.htm
+
+def c_mem_cast(x, f=None, t=None):
+    '''
+    do a c-style memory cast
+
+    In Python...
+
+    x = 12.34
+    y = c_mem_cast(x, 'd', 'l')
+
+    ... should be equivilent to the following in c...
+
+    double x = 12.34;
+    long   y = *(long*)&amp;x;
+    '''
+    return struct.unpack(t, struct.pack(f, x))[0]
+
+dbl_to_lng = partial(c_mem_cast, f='d', t='l')
+lng_to_dbl = partial(c_mem_cast, f='l', t='d')
+flt_to_int = partial(c_mem_cast, f='f', t='i')
+int_to_flt = partial(c_mem_cast, f='i', t='f')
+
+def ulp_diff_maker(converter, negative_zero):
+    '''
+    Getting the ulp difference of floats and doubles is similar.
+    Only difference if the offset and converter.
+    '''
+    def the_diff(a, b):
+
+        # Make a integer lexicographically ordered as a twos-complement int
+        ai = converter(a)
+        if ai &lt; 0:
+            ai = negative_zero - ai
+
+        # Make b integer lexicographically ordered as a twos-complement int
+        bi = converter(b)
+        if bi &lt; 0:
+            bi = negative_zero - bi
+
+        return abs(ai - bi)
+
+    return the_diff
+
+# double ULP difference
+dulpdiff = ulp_diff_maker(dbl_to_lng, 0x8000000000000000)
+# float  ULP difference
+fulpdiff = ulp_diff_maker(flt_to_int, 0x80000000        )
+
+# default to double ULP difference
+ulpdiff = dulpdiff
+ulpdiff.__doc__ = '''
+Get the number of doubles between two doubles.
+'''
+</code></pre>
+<br /><b>#4</b><br /><p>In order to compare floats in general compare the absolute value of the difference of the floats to a chosen delta that is small enough to fit your needs. </p>
+
+<p>Rhetorical Questions</p>
+
+<ul>
+<li>This *<em>IS a dangerous problem *</em> as it might hide errors or generate infinite loops if such a comparison is used as stop criteria.</li>
+<li>Modern C/C++ compilers warn for comparison of floats for equality</li>
+<li>All static code checkers I know will output errors for the languages I use</li>
+</ul>
+
+<p>I suppose it is the same for python, as the delta to use for comparison may vary it must be up to the implementer to choose it. What means that no good default transformation can be provided fully automatically.</p>
+<br /><b>#5</b><br /><blockquote>
+  <p>What is the best way to avoid problems
+  like this?... In Python or in general.</p>
+</blockquote>
+
+<p>What problem?  You're working with physical measurements.  Unless you have some <em>really</em> sophisticated equipment, the error in your measurements is going to be several orders of magnitude higher than floating-point epsilon.  So why write code that depends on numbers being exact to 16 significant digits?</p>
+
+<blockquote>
+  <p>Should compilers support an option to
+  replace all float equality checks with
+  a 'close enough' function?</p>
+</blockquote>
+
+<p>If it did, you'd get some strange results:</p>
+
+<pre><code>&gt;&gt;&gt; float.tolerance = 1e-8    # hypothetical "close enough" definition
+&gt;&gt;&gt; a = 1.23456789
+&gt;&gt;&gt; b = 1.23456790
+&gt;&gt;&gt; c = 1.23456791
+&gt;&gt;&gt; a == b
+True
+&gt;&gt;&gt; b == c
+True
+&gt;&gt;&gt; a == c
+False
+</code></pre>
+
+<p>If you think it's hard enough to store floats in a dictionary now, try it with a non-transitive <code>==</code> operator!  And performance would suck, because the only way to guarantee <code>x == y</code> → <code>hash(x) == hash(y)</code> would be for every float to have the same hash code.  And that'd be inconsistent with ints.</p>
+<br />

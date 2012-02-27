@@ -1,0 +1,293 @@
+Question (ID-9023078): custom dict that allows delete during iteration UPDATED based on Lennart Regebro's answer 
+
+ Suppose you iterate through a dictionary, and sometimes need to delete an element. The following is very efficient: 
+
+ remove = []
+for k, v in dict_.items():
+ if condition(k, v):
+ remove.append(k)
+ continue
+ # do other things you need to do in this loop
+for k in remove:
+ del dict_[k]
+ 
+
+ The only overhead here is building the list of keys to remove; unless it grows large compared to the dictionary size, it's not an issue. However, this approach requires some extra coding, so it's not very popular. 
+
+ The popular dict comprehension approach: 
+
+ dict_ = {k : v for k, v in dict_ if not condition(k, v)}
+for k, v in dict_.items():
+ # do other things you need to do in this loop
+ 
+
+ results in a full dictionary copy, and so has the risk of a silly performance hit if dictionaries grow large or the containing function is called often. 
+
+ A much better approach is to copy the keys only rather than whole dictionary: 
+
+ for k in list(dict_.keys()):
+ if condition(k, dict_[k]):
+ del dict_[k]
+ continue
+ # do other things you need to do in this loop  
+ 
+
+ (Note that all code examples are in Python 3, so keys() , items() returns a view, not a copy.) 
+
+ In most cases, it won't hurt performance that much, since the time to check even the simplest condition (not to mention other stuff you're doing in the loop) is usually greater than the time to add one key to a list. 
+
+ Still, I am wondering if it's possible to avoid even that with a custom dictionary that allows deletions while iterating: 
+
+ for k, v in dict_.items():
+ if condition(k, v):
+ del dict_[k]
+ continue
+ # do other things you need to do in this loop
+ 
+
+ Perhaps an iterator could always look ahead, so that when the __next__ is called, the iterator knows where to go without even looking at the current element (it would only need to look at the element when it first gets to it). And if there is no next element, the iterator could just set the flag that would cause StopIteration exception raised whenever __next__ is called again. 
+
+ If the element the iterator tries to advance to turns out to be deleted, it's fine to raise an exception; there is no need to support deletions while multiple iterations are going on simultaneously. 
+
+ Are there any problems with this approach? 
+
+ One problem is that I'm not sure it can be done with no material overhead compared to the existing dict ; otherwise, it would be faster to use the list(dict_) approach! 
+
+ UPDATE: 
+
+ I tried all the versions. I don't report the timing, since they are clearly very dependent on the exact situation. But it seems safe to say that in many cases, the fastest approach is likely to be list(dict_) . After all, if you think about, the copy is the fastest operation that grows linearly with size of the list; almost any other overhead, as long as it's also proportional to the list size, is likely to be bigger. 
+
+ I really like all the ideas, but since I have to select only one, I'm accepting the context manager solution since it allows to use the dictionary as either normal or "enhanced" with very small code changes. 
+ Answers (Total-7): #0 As you note, you can store the items to delete somewhere and defer the deletion of them until later. The problem then becomes when to purge them and how to make sure that the purge method eventually gets called. The answer to this is a context manager which is also a subclass of dict . 
+
+ class dd_dict(dict): # the dd is for "deferred delete"
+ _defer = False
+ _deletes = set()
+ def __delitem__(self, key):
+  self._deletes.add(key) if self._defer else dict.__delitem__(self, key)
+ def __enter__(self):
+  self._defer = True
+ def __exit__(self, type, value, tb):
+  self._defer = False
+  for key in self._deletes:
+   dict.__delitem__(self, key)
+ 
+
+ Usage: 
+
+ # make the dict and do whatever to it
+ddd = dd_dict(a=1, b=2, c=3)
+
+# now iterate over it, deferring deletes
+with ddd:
+ for k, v in ddd.iteritems():
+  if k is "a":
+   del ddd[k]
+
+print ddd
+ 
+
+ If you're not in a with block, of course, deletes are immediate; as this is a dict subclass, it works just like a regular dict outside of a context manager. 
+
+ You could also implement this as a wrapper class for a dictionary: 
+
+ class deferring_delete(object):
+ def __init__(self, d):
+  self._dict = d
+ def __enter__(self):
+  self._deletes = set()
+  return self
+ def __exit__(self, type, value, tb):
+  for key in self._deletes:
+   del self._dict[key]
+  self._deletes = None
+ def __delitem__(self, key):
+  self._deletes.add(key)
+
+d = dict(a=1, b=2, c=3)
+
+with deferring_delete(d) as dd:
+ for k, v in d.iteritems():
+  if k is "a":
+   del dd[k] # delete through wrapper
+
+print d
+ 
+
+ It's even possible to make the wrapper class fully functional as a dictionary, if you want, though that's a fair bit more code. 
+
+ Performance-wise, this is admittedly not such a win, but I like it from a programmer-friendliness standpoint. 
+ #1 You can accomplish this by iterating over a static list of the key/value pairs of the dictionary, instead of iterating over a dictionary view. 
+
+ Basically, iterating over list(dict_.items()) instead of dict_.items() will work: 
+
+ for k, v in list(dict_.items()):
+ if condition(k, v):
+ del dict_[k]
+ continue
+ # do other things you need to do in this loop
+ 
+
+ Here is an example ( ideone ): 
+
+ dict_ = {0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e', 5: 'f', 6: 'g'}
+for k, v in list(dict_.items()):
+ if k % 2 == 0:
+  print("Deleting ", (k, v))
+  del dict_[k]
+  continue
+ print("Processing", (k, v))
+ 
+
+ and the output: 
+
+ Deleting (0, 'a')
+Processing (1, 'b')
+Deleting (2, 'c')
+Processing (3, 'd')
+Deleting (4, 'e')
+Processing (5, 'f')
+Deleting (6, 'g')
+ 
+ #2 What you need to do is to not modify the list of keys you iterating over. You can do this in three ways: 
+
+ 
+ Make a copy of the keys in a separate list and iterate over that. You can then safely delete the keys in the dictionary during iteration. This is the easiest, and fastest, unless the dictionary is huge in which case you should start thinking about using a database in any case. Code: 
+
+ for k in list(dict_):
+ if condition(k, dict_[k]):
+ del dict_[k]
+ continue
+ # do other things you need to do in this loop
+ 
+ Make a copy not of the keys you are iterating over, but a copy of the keys you are to delete. In other words, don't delete these keys while iterating instead add them to a list, then delete the keys in that list once you are finished iterating. This is slightly more complicated than 1. but much less than 3. It is also fast. This is what you do in your first example. 
+
+ delete_these = []
+for k in dict_:
+ if condition(k, dict_[k]):
+ delete_these.append(k)
+ continue
+ # do other things you need to do in this loop
+
+for k in delete_these:
+ del dict_[k]
+ 
+ The only way to avoid making some sort of new list is, as you suggest, to make a special dictionary. But that requires when you delete keys it does not actually delete the keys, but only mark them as deleted, and then delete them for real only once you call a purge method. This requires quite a lot of implementation and there are edge-cases and you'll fudge yourself by forgetting to purge, etc. And iterating over the dictionary must still include the deleted keys, which will bite you at some point. So I wouldn't recommend this. Also, however you implement this in Python, you are likely to just once again end up with a list of things to delete , so it's likely to just be a complicated and error prone version of 2. If you implement it in C, you could probably get away with the copying by adding the flags directly into the hash-key structure. But as mentioned, the problems really overshadow the benefits. 
+ 
+ #3 Naive implementation for Python 2.x and 3.x: 
+
+ import sys
+from collections import deque
+
+
+def _protect_from_delete(func):
+ def wrapper(self, *args, **kwargs):
+  try:
+   self._iterating += 1
+   for item in func(self, *args, **kwargs):
+    yield item
+  finally:
+   self._iterating -= 1
+   self._delete_pending()
+ return wrapper
+
+class DeletableDict(dict):
+ def __init__(self, *args, **kwargs):
+  super(DeletableDict, self).__init__(*args, **kwargs)
+  self._keys_to_delete = deque()
+  self._iterating = 0
+
+ if sys.version_info[0] != 3:
+  iterkeys = _protect_from_delete(dict.iterkeys)
+  itervalues = _protect_from_delete(dict.itervalues)
+  iteritems = _protect_from_delete(dict.iteritems)
+ else:
+  keys = _protect_from_delete(dict.keys)
+  values = _protect_from_delete(dict.values)
+  items = _protect_from_delete(dict.items) 
+ __iter__ = _protect_from_delete(dict.__iter__)
+
+ def __delitem__(self, key):
+  if not self._iterating:
+   return super(DeletableDict, self).__delitem__(key)
+  self._keys_to_delete.append(key)
+
+ def _delete_pending(self):
+  for key in self._keys_to_delete:
+   super(DeletableDict, self).__delitem__(key)
+  self._keys_to_delete.clear()
+
+if __name__ == '__main__':
+ dct = DeletableDict((i, i*2) for i in range(15))
+ if sys.version_info[0] != 3:
+  for k, v in dct.iteritems():
+   if k &lt; 5:
+    del dct[k]
+  print(dct)
+  for k in dct.iterkeys():
+   if k &gt; 8:
+    del dct[k]
+  print(dct)
+  for k in dct:
+   if k &lt; 8:
+    del dct[k]
+  print(dct)
+ else:
+  for k, v in dct.items():
+   if k &lt; 5:
+    del dct[k]
+  print(dct)
+ 
+
+ When iterating over keys, items or values it sets flag self._iterating . In __delitem__ it checks for ability to delete item, and stores keys in temporary queue. At the end of iterations it deletes all pending keys. 
+
+ It's very naive implementation, and I wouldn't recommend to use it in production code. 
+
+ EDIT 
+
+ Added support for Python 3 and improvements from @jsbueno comments. 
+
+ Python 3 run on Ideone.com 
+ #4 Python 3.2 has such dict in the stdlib: 
+
+ #!/usr/bin/env python3
+from collections import OrderedDict as odict
+
+d = odict(zip(range(3), "abc"))
+print(d)
+for k in d:
+ if k == 2:
+  del d[k]
+print(d)
+ 
+
+ Output 
+
+ OrderedDict([(0, 'a'), (1, 'b'), (2, 'c')])
+OrderedDict([(0, 'a'), (1, 'b')])
+ 
+
+ Iteration is performed over a linked list, see __iter__() method implementation . The deletion is safe (in Python 3.2) even though items are weak references. 
+ #5 
+ You can make a copy of the list of keys (you don't need to copy te values) at the beginning of the iteration, and iterate over those (checking that the key is there). This is inefficient if there ar a lot of keys. 
+ You can arrange embed your first example code inside a class. __iter__ and __delitem__ and other special methods need to collaborate to keep a list of items to be removed while an iteration happens. When there are no current iterations, __delitem__ can just delete an item, but when at least one iteration is happening, it should just add the key to be deleted into a list. When the last active iteration finishes, it should actually delete things. This somewhat inefficient if there's a lot of keys to remove, and will, of course, blow up if there's always at least one iteration going on. 
+ 
+ #6 This could work as a compromise between the two examples - two lines longer than the second one, but shorter and slightly faster than the first. Python 2: 
+
+ dict_ = {k : random.randint(0, 40000) for k in range(0,200000)}
+
+dict_remove = [k for k,v in dict_.iteritems() if v &lt; 3000]
+for k in dict_remove:
+ del dict_[k]
+ 
+
+ Split into a function and it's down to one line each call (whether this is more readable or not is your call): 
+
+ def dict_remove(dict_, keys):
+ for k in keys:
+  del dict_[k]
+
+dict_remove(dict_, [k for k,v in dict_.iteritems() if v &lt; 3000])
+ 
+
+ Regardless of where the code is stored, you'll have to store the keys needing deletion somewhere. The only way around that is using generator expressions, which will explode the moment you delete a key for the first time.

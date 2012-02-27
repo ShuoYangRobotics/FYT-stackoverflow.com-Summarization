@@ -1,0 +1,115 @@
+<h3>Question (ID-463963):</h3><h2>Parallel processing from a command queue on Linux (bash, python, ruby... whatever)</h2><p>I have a list/queue of 200 commands that I need to run in a shell on a Linux server. </p>
+
+<p>I only want to have a maximum of 10 processes running (from the queue) at once. Some processes will take a few seconds to complete, other processes will take much longer. </p>
+
+<p>When a process finishes I want the next command to be "popped" from the queue and executed.</p>
+
+<p>Does anyone have code to solve this problem?</p>
+
+<p><strong>Further elaboration:</strong></p>
+
+<p>There's 200 pieces of work that need to be done, in a queue of some sort. I want to have at most 10 pieces of work going on at once. When a thread finishes a piece of work it should ask the queue for the next piece of work. If there's no more work in the queue, the thread should die. When all the threads have died it means all the work has been done.</p>
+
+<p>The actual problem I'm trying to solve is using <code>imapsync</code> to synchronize 200 mailboxes from an old mail server to a new mail server. Some users have large mailboxes and take a long time tto sync, others have very small mailboxes and sync quickly.</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>On the shell, <code>xargs</code> can be used to queue parallel command processing. For example, for having always 3 sleeps in parallel, sleeping for 1 second each, and executing 10 sleeps in total do</p>
+
+<pre><code>echo {1..10} | xargs -d ' ' -n1 -P3 sh -c 'sleep 1s' _
+</code></pre>
+
+<p>And it would sleep for 4 seconds in total. If you have a list of names, and want to pass the names to commands executed, again executing 3 commands in parallel, do</p>
+
+<pre><code>cat names | xargs -n1 -P3 process_name
+</code></pre>
+
+<p>Would execute the command <code>process_name alice</code>, <code>process_name bob</code> and so on.</p>
+<br /><b>#1</b><br /><p>I would imagine you could do this using make and the make -j xx command.</p>
+
+<p>Perhaps a makefile like this</p>
+
+<pre><code>all : usera userb userc....
+
+usera:
+       imapsync usera
+userb:
+       imapsync userb
+....
+</code></pre>
+
+<p>make -j 10 -f makefile</p>
+<br /><b>#2</b><br /><p>For this kind of job PPSS is written: Parallel processing shell script. Google for this name and you will find it, I won't linkspam.</p>
+<br /><b>#3</b><br /><p><a href="https://savannah.nongnu.org/projects/parallel/" rel="nofollow">Parallel</a> is made exatcly for this purpose.</p>
+
+<pre><code>cat userlist | parallel imapsync
+</code></pre>
+
+<p>One of the beauties of <a href="https://savannah.nongnu.org/projects/parallel/" rel="nofollow">Parallel</a> compared to other solutions is that it makes sure output is not mixed. Doing <code>traceroute</code> in <a href="https://savannah.nongnu.org/projects/parallel/" rel="nofollow">Parallel</a> works fine for example:</p>
+
+<pre><code>(echo foss.org.my; echo www.debian.org; echo www.freenetproject.org) | parallel traceroute
+</code></pre>
+<br /><b>#4</b><br /><p>GNU make (and perhaps other implementations as well) has the -j argument, which governs how many jobs it will run at once. When a job completes, make will start another one.</p>
+<br /><b>#5</b><br /><p>Well, if they are largely independent of each other, I'd think in terms of:</p>
+
+<pre><code>Initialize an array of jobs pending (queue, ...) - 200 entries
+Initialize an array of jobs running - empty
+
+while (jobs still pending and queue of jobs running still has space)
+    take a job off the pending queue
+    launch it in background
+    if (queue of jobs running is full)
+        wait for a job to finish
+        remove from jobs running queue
+while (queue of jobs is not empty)
+    wait for job to finish
+    remove from jobs running queue
+</code></pre>
+
+<p>Note that the tail test in the main loop means that if the 'jobs running queue' has space when the while loop iterates - preventing premature termination of the loop.  I think the logic is sound.</p>
+
+<p>I can see how to do that in C fairly easily - it wouldn't be all that hard in Perl, either (and therefore not too hard in the other scripting languages - Python, Ruby, Tcl, etc).  I'm not at all sure I'd want to do it in shell - the <code>wait</code> command in shell waits for all children to terminate, rather than for some child to terminate.</p>
+<br /><b>#6</b><br /><p>In python, you could try:</p>
+
+<pre><code>import Queue, os, threading
+
+# synchronised queue
+queue = Queue.Queue(0)    # 0 means no maximum size
+
+# do stuff to initialise queue with strings
+# representing os commands
+queue.put('sleep 10')
+queue.put('echo Sleeping..')
+# etc
+# or use python to generate commands, e.g.
+# for username in ['joe', 'bob', 'fred']:
+#    queue.put('imapsync %s' % username)
+
+def go():
+  while True:
+    try:
+      # False here means no blocking: raise exception if queue empty
+      command = queue.get(False)
+      # Run command.  python also has subprocess module which is more
+      # featureful but I am not very familiar with it.
+      # os.system is easy :-)
+      os.system(command)
+    except Queue.Empty:
+      return
+
+for i in range(10):   # change this to run more/fewer threads
+  threading.Thread(target=go).start()
+</code></pre>
+
+<p>Untested...</p>
+
+<p>(of course, python itself is single-threaded.  You should still get the benefit of multiple threads in terms of waiting for IO, though.)</p>
+<br /><b>#7</b><br /><p>If you are going to use Python, I recommend using Twisted for this: <a href="http://twistedmatrix.com/trac/" rel="nofollow">http://twistedmatrix.com/trac/</a></p>
+
+<p>Specifically Twisted Runner: <a href="http://twistedmatrix.com/trac/wiki/TwistedRunner" rel="nofollow">http://twistedmatrix.com/trac/wiki/TwistedRunner</a></p>
+<br /><b>#8</b><br /><p>Python's <a href="http://docs.python.org/dev/library/multiprocessing.html" rel="nofollow">multiprocessing module</a> would seem to fit your issue nicely.  It's a high-level package that supports threading by process.</p>
+<br /><b>#9</b><br /><p><a href="https://savannah.gnu.org/projects/parallel" rel="nofollow">https://savannah.gnu.org/projects/parallel</a> (gnu parallel)
+and pssh might help.</p>
+<br /><b>#10</b><br /><p>Can you elaborate what you mean by <em>in parallel</em>? It sounds like you need to implement some sort of locking in the queue so your entries are not selected twice, etc and the commands run only once.</p>
+
+<p>Most queue systems cheat -- they just write a giant to-do list, then select e.g. ten items, work them, and select the next ten items. There's no parallelization.</p>
+
+<p>If you provide some more details, I'm sure we can help you out.</p>
+<br />

@@ -1,0 +1,74 @@
+<h3>Question ( ID-1812115 ) : </h3><h2>How to safely write to a file ? </h2><p>Imagine you have a library for working with some sort of XML file or configuration file. The library reads the whole file into memory and provides methods for editing the content. When you are done manipulating the content you can call a write to save the content back to file. The question is how to do this in a safe way . </p>
+<p>Overwriting the existing file ( starting to write to the original file ) is obviously not safe. If the write method fails before it is done you end up with a half written file and you have lost data . </p>
+<p>A better option would be to write to a temporary file somewhere , and when the write method has finished , you copy the temporary file to the original file . </p>
+<p>Now , if the copy somehow fails , you still have correctly saved data in the temporary file. And if the copy succeeds , you can remove the temporary file . </p>
+<p>On POSIX systems I guess you can use the rename system call which is an atomic operation. But how would you do this best on a Windows system ? In particular , how do you handle this best using Python ? </p>
+<p>Also , is there another scheme for safely writing to files ? </p>
+<br /><h3>Answers ( Total-8 ) : </h3><b># 0 </b><br /><p>If you see Python 's documentation , it clearly mentions that <span style="background-color:yellow;">os.rename</span> ( ) is an atomic operation. So in your case , writing data to a temporary file and then renaming it to the original file would be quite safe . </p>
+<p>Another way could work like this : </p>
+<ul>let original file be abc.xml create abc.xml.tmp and write new data to it rename abc.xml to abc.xml.bak rename abc.xml.tmp to abc.xml after new abc.xml is properly put in place , remove abc.xml.bak </ul>
+<p>As you can see that you have the abc.xml.bak with you which you can use to restore if there are any issues related with the tmp file and of copying it back . </p>
+<br /><b># 1 </b><br /><p>A simplistic solution. Use tempfile to create a temporary file and if writing succeeds the just rename the file to your original configuration file . </p>
+<p>For locking a file , see portalocker . </p>
+<br /><b># 2 </b><br /><p>The standard solution is this . </p>
+<ol>Write a new file with a similar name. X.ext # for example . When that file has been closed ( and perhaps even read and checksummed ) , then you two two renames . X.ext ( the original ) to X.ext ~ X.ext # ( the new one ) to X.ext ( Only for the crazy paranoids ) call the OS sync function to force dirty buffer writes . </ol>
+<p>At no time is anything lost or corruptable. The only glitch can happen during the renames. But you have n't lost anything or corrupted anything. The original is recoverable right up until the final rename . </p>
+<br /><b># 3 </b><br /><p>If you want to be POSIXly correct and save you have to : </p>
+<ol>Write to temporary file Flush and fsync the file ( or fdatasync ) Rename over the original file </ol>
+<p>Note that calling fsync has unpredictable effects on performance -- Linux on ext3 may stall for disk I/O whole numbers of seconds as a result , depending on other outstanding I/O . </p>
+<p>Notice that rename is not an atomic operation in POSIX -- at least not in relation to file data as you expect. However , most operating systems and filesystems will work this way. But it seems you missed the very large linux discussion about Ext4 and filesystem guarantees about atomicity. I do n't know exactly where to link but here is a start : ext4 and data loss . </p>
+<p>Notice however that on many systems , rename will be as safe in practice as you expect. However it is in a way not possible to get both -- performance and reliability across all possible linux confiugrations ! </p>
+<p>With a write to a temporary file , then a rename of the temporary file , one would expect the operations are dependent and would be executed in order . </p>
+<p>The issue however is that most , if not all filesystems separate metadata and data. A rename is only metadata. It may sound horrible to you , but filesystems value metadata over data ( take Journaling in HFS + or Ext3,4 for example ) ! The reason is that metadata is lighter , and if the metadata is corrupt , the whole filesystem is corrupt -- the filesystem must of course preserve it self , then preserve the user 's data , in that order . </p>
+<p>Ext4 did break the rename expectation when it first came out , however heuristics were added to resolve it. The issue is not a failed rename , but a successful rename. Ext4 might sucessfully register the rename , but fail to write out the file data if a crash comes shortly thereafter. The result is then a 0-length file and neither orignal nor new data . </p>
+<p>So in short , POSIX makes no such guarantee. Read the linked Ext4 article for more information ! </p>
+<br /><b># 4 </b><br /><p>In Win API I found quite nice function ReplaceFile that does what name suggests even with optional back-up. There is always way with DeleteFile , MoveFile combo . </p>
+<p>In general what you want to do is really good. And I can not think of any better write scheme . </p>
+<br /><b># 5 </b><br /><p>Perhaps this helps http : //stackoverflow.com/questions/489861/locking-a-file-in-python </p>
+<br /><b># 6 </b><br /><p>Per RedGlyph 's suggestion , I 'm added an implementation of ReplaceFile that uses ctypes to access the Windows APIs. I first added this to <span style="background-color:yellow;">jaraco.windows.api.filesystem</span> . </p>
+<pre><code>ReplaceFile = windll.kernel32.ReplaceFileW
+ReplaceFile.restype = BOOL
+ReplaceFile.argtypes = [
+	LPWSTR,
+	LPWSTR,
+	LPWSTR,
+	DWORD,
+	LPVOID,
+	LPVOID,
+	]
+
+REPLACEFILE_WRITE_THROUGH = 0x1
+REPLACEFILE_IGNORE_MERGE_ERRORS = 0x2
+REPLACEFILE_IGNORE_ACL_ERRORS = 0x4
+</code></pre>
+<p>I then tested the behavior using this script . </p>
+<pre><code>from jaraco.windows.api.filesystem import ReplaceFile
+import os
+
+open('orig-file', 'w').write('some content')
+open('replacing-file', 'w').write('new content')
+ReplaceFile('orig-file', 'replacing-file', 'orig-backup', 0, 0, 0)
+assert open('orig-file').read() == 'new content'
+assert open('orig-backup').read() == 'some content'
+assert not os.path.exists('replacing-file')
+</code></pre>
+<p>While this only works in Windows , it appears to have a lot of nice features that other replace routines would lack. See the API docs for details . </p>
+<br /><b># 7 </b><br /><p>You could use the <span style="background-color:yellow;">fileinput</span> module to handle the backing-up and in-place writing for you : </p>
+<pre><code>import fileinput
+for line in fileinput.input(filename,inplace=True, backup='.bak'):
+    # inplace=True causes the original file to be moved to a backup
+    # standard output is redirected to the original file.
+    # backup='.bak' specifies the extension for the backup file.
+
+    # manipulate line
+    newline=process(line)
+    print(newline)
+</code></pre>
+<p>If you need to read in the entire <span style="background-color:yellow;">contents</span> before you can write the <span style="background-color:yellow;">newline</span> 's , then you can do that first , then print entire new <span style="background-color:yellow;">contents</span> with </p>
+<pre><code>newcontents=process(contents)
+for line in fileinput.input(filename,inplace=True, backup='.bak'):
+    print(newcontents)
+    break
+</code></pre>
+<p>If the script ends abruptly , you will still have the backup . </p>
+<br />

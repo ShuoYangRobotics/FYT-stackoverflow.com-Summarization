@@ -1,0 +1,228 @@
+Question (ID-1057934): Importing methods for a Python class I wonder if it's possible to keep methods for a Python class in a different file from the class definition, something like this: 
+
+ main_module.py: 
+
+ class Instrument(Object):
+ # Some import statement?
+ def __init__(self):
+  self.flag = True
+ def direct_method(self,arg1):
+  self.external_method(arg1, arg2)
+ 
+
+ to_import_from.py: 
+
+ def external_method(self, arg1, arg2):
+ if self.flag:
+  #doing something
+#...many more methods
+ 
+
+ In my case, to_import_from.py is machine-generated, and contains many methods. I would rather not copy-paste these into main_module.py or import them one by one, but have them all recognized as methods of the Instrument class, just as if they had been defined there: 
+
+ &gt;&gt;&gt; instr = Instrument()
+&gt;&gt;&gt; instr.direct_method(arg1)
+&gt;&gt;&gt; instr.external_method(arg1, arg2)
+ 
+
+ Thanks! 
+ Answers (Total-8): #0 It's easier than you think: 
+
+ class Instrument(Object):
+ def __init__(self):
+  self.flag = True
+ def direct_method(self,arg1):
+  self.external_method(arg1, arg2)
+
+import to_import_from
+
+Instrument.external_method = to_import_from.external_method
+ 
+
+ Done! 
+
+ Although having the machine generated code generate a class definition and subclassing from it would be a neater solution. 
+ #1 I don't think what you want is directly possible in Python. 
+
+ You could, however, try one of the following. 
+
+ 
+ When generating to_import_from.py , add the non-generated stuff there too. This way,
+all methods are in the same class definition. 
+ Have to_import_from.py contain a base class definition which the the Instrument class
+inherits. 
+ 
+
+ In other words, in to_import_from.py : 
+
+ class InstrumentBase(object):
+ def external_method(self, arg1, arg2):
+  if self.flag:
+   ...
+ 
+
+ and then in main_module.py : 
+
+ import to_import_from
+
+class Instrument(to_import_from.InstrumentBase):
+ def __init__(self):
+  ...
+ 
+ #2 I'm sorry that this is kind of a "You shouldn't be putting nails in the wall" answer , but you're missing the point of python class definitions. You should rather put the class with all its methods in its own python file, and in your main_module.py do 
+
+ from instrument import Instrument
+ 
+
+ If you plan on using the methods for several classes, you should consider subclassing. In your case, the machine generated file could contain the base class that Instrument inherits from. 
+
+ Finally, give your class a good docstring that explains the API to its user, so there is no need for a "header file" used as an overview of your class. 
+ #3 you can do this with the __getattr__ method 
+
+ external.py 
+
+ def external_function(arg):
+ print("external", arg)
+ 
+
+ main.py: 
+
+ import external
+
+class Instrument(object):
+ def __getattr__(self, name):
+  if hasattr(external, name):
+   return getattr(external, name)
+  else:
+   return Object.__getattr__(self, name)
+
+ def direct_method(self, arg):
+  print("internal", arg)
+
+
+i = Instrument() 
+i.direct_method("foo")
+i.external_function("foo")
+ 
+ #4 What you're doing is extending a base class with some "machine-generated" code. 
+
+ Choice 1. Extend a base class with machine-generated code. 
+
+ machine_generated.py 
+
+ # Start of boilerplate #
+import main_module
+class Instrument_Implementation( main_module.Instrument_Abstraction ):
+ def direct_method(self,arg1): 
+  # End of boilerplate #
+  ...the real code...
+ 
+
+ Your application can then import machine_generated and use machine_generated.Instrument_Implementation . 
+
+ Choice 2. Simply use first-class functions. 
+
+ machine_generated.py 
+
+ def external_method(self, arg1, arg2):
+ ...the real code...
+ 
+
+ main_module.py 
+
+ import machine_generated
+
+class Instrument( object ):
+ def direct_method(self,arg1): 
+  return machine_generator.external_method( arg1, ... )
+ 
+
+ Your application can import main_module and use main_module.Instrument . 
+ #5 People seem to be overthinking this. Methods are just function valued local variables in class construction scope. So the following works fine: 
+
+ class Instrument(Object):
+ # load external methods
+ from to_import_from import *
+
+ def __init__(self):
+  self.flag = True
+ def direct_method(self,arg1):
+  self.external_method(arg1, arg2)
+ 
+ #6 Here's my try. I think a nicer approach could be made with metaclasses... 
+
+ to_import_from.py : 
+
+ def external_method(self, arg1, arg2):
+ if self.flag:
+  print "flag is set"
+ else :
+  print "flag is not set"
+ 
+
+ instrument.py : 
+
+ import imp
+import os
+import inspect
+import new
+
+import pdb
+
+class MethodImporter(object) :
+ def __init__(self, path_to_module) :
+  self.load_module(path_to_module)
+
+ def load_module(self, path_to_module) :
+  name = os.path.basename(path_to_module)
+  module_file = file(path_to_module,"r")
+  self.module = imp.load_module(name, module_file , path_to_module, ('','r',imp.PY_SOURCE))
+  print "Module %s imported" % self.module
+  for method_name, method_object in inspect.getmembers(self.module, inspect.isfunction) :
+   print "adding method %s to %s" % (method_name, self)
+   setattr(self, method_name, new.instancemethod(method_object, self, self.__class__))
+
+
+class Instrument(MethodImporter):
+ def __init__(self):
+  super(Instrument,self).__init__("./to_import_from.py")
+  self.flag = True
+ def direct_method(self,arg1):
+  self.external_method(arg1, arg2)
+ 
+
+ when you run this code 
+
+ arg1, arg2 = 1, 2
+instr = Instrument()
+instr.direct_method(arg1)
+instr.external_method(arg1, arg2)
+ 
+
+ here's the output : 
+
+ Module &lt;module 'to_import_from.py' from './to_import_from.pyc'&gt; imported
+adding method external_method to &lt;__main__.Instrument object at 0x2ddeb0&gt;
+flag is set
+flag is set
+ 
+ #7 Technically, yes this is possible, but solving it this way is not really idiomatic python, and there are likely better solutions. Here's an example of how to do so: 
+
+ import to_import_from
+
+class Instrument(object):
+ locals().update(dict((k,v) for (k,v) in 
+     to_import_from.__dict__.iteritems() if callable(v)))
+
+ def __init__(self):
+  self.flag = True
+ def direct_method(self,arg1):
+  self.external_method(arg1, arg2)
+ 
+
+ That will import all callable functions defined in to_import_from as methods of the Instrument class, as well as adding some more methods. Note: if you also want to copy global variables as instance variables, you'll need to refine the check. Also note that it adds all callable objects it finds in to_import_from's namespace, including imports from other modules (ie from module import some_func style imports) 
+
+ However, this isn't a terribly nice way to do it. Better would be to instead tweak your code generation to produce a class, and have your class inherit from it. This avoids the unneccessary copying of methods into Instrument's namespace, and instead uses normal inheritcance. ie: 
+
+ class Instrument(to_import_from.BaseClass):
+ # Add new methods here.

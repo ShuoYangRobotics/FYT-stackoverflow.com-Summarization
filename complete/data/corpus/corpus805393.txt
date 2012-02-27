@@ -1,0 +1,101 @@
+Question (ID-805393): What is the best way to access stored procedures in Django's ORM I am designing a fairly complex database, and know that some of my queries will be far outside the scope of Django's ORM. Has anyone integrated SP's with Django's ORM successfully? If so, what RDBMS and how did you do it? 
+ Answers (Total-6): #0 You have to use the connection utility in Django: 
+
+ from django.db import connection
+
+cursor = connection.cursor()
+cursor.execute("SQL STATEMENT CAN BE ANYTHING")
+ 
+
+ then you can fetch the data: 
+
+ cursor.fetchone()
+ 
+
+ or: 
+
+ cursor.fetchall()
+ 
+
+ More info here: http://docs.djangoproject.com/en/dev/topics/db/sql/ 
+ #1 Don't. 
+
+ Seriously. 
+
+ Move the stored procedure logic into your model where it belongs. 
+
+ Putting some code in Django and some code in the database is a maintenance nightmare. I've spent too many of my 30+ years in IT trying to clean up this kind of mess.  
+ #2 We (musicpictures.com / eviscape.com) wrote that django snippet but its not the whole story (actually that code was only tested on Oracle at that time). 
+
+ Stored procedures make sense when you want to reuse tried and tested SP code or where one SP call will be faster than multiple calls to the database - or where security requires moderated access to the database - or where the queries are very complicated / multistep. We're using a hybrid model/SP approach against both Oracle and Postgres databases. 
+
+ The trick is to make it easy to use and keep it "django" like. We use a make_instance function which takes the result of cursor and creates instances of a model populated from the cursor. This is nice because the cursor might return additional fields. Then you can use those instances in your code / templates much like normal django model objects. 
+
+  def make_instance(instance, values):
+ '''
+ Copied from eviscape.com
+
+ generates an instance for dict data coming from an sp
+
+ expects:
+  instance - empty instance of the model to generate
+  values - dictionary from a stored procedure with keys that are named like the
+   model's attributes
+ use like:
+  evis = InstanceGenerator(Evis(), evis_dict_from_SP)
+
+ &gt;&gt;&gt; make_instance(Evis(), {'evi_id': '007', 'evi_subject': 'J. Bond, Architect'})
+ &lt;Evis: J. Bond, Architect&gt;
+
+ '''
+ attributes = filter(lambda x: not x.startswith('_'), instance.__dict__.keys())
+
+ for a in attributes:
+  try:
+   # field names from oracle sp are UPPER CASE
+   # we want to put PIC_ID in pic_id etc.
+   setattr(instance, a, values[a.upper()])
+   del values[a.upper()]
+  except:
+   pass
+
+ #add any values that are not in the model as well
+ for v in values.keys():
+  setattr(instance, v, values[v])
+  #print 'setting %s to %s' % (v, values[v])
+
+ return instance
+ 
+
+ # Use it like this: 
+ pictures = [make_instance(Pictures(), item) for item in picture_dict] 
+
+ # And here are some helper functions: 
+
+ def call_an_sp(self, var):
+ cursor = connection.cursor()
+ cursor.callproc("fn_sp_name", (var,))
+ return self.fn_generic(cursor)
+
+
+def fn_generic(self, cursor):
+ msg = cursor.fetchone()[0]
+ cursor.execute('FETCH ALL IN "%s"' % msg)
+ thing = create_dict_from_cursor(cursor)
+ cursor.close()
+ return thing
+
+def create_dict_from_cursor(cursor):
+ rows = cursor.fetchall()
+ # DEBUG settings (used to) affect what gets returned. 
+ if DEBUG:
+  desc = [item[0] for item in cursor.cursor.description]
+ else:
+  desc = [item[0] for item in cursor.description]
+ return [dict(zip(desc, item)) for item in rows]
+ 
+
+ cheers, Simon. 
+ #3 Django Using Stored Procedure - will give some idea. 
+ #4 If you want to look at an actual running project that uses SP, check out minibooks . A good deal of custom SQL and uses Postgres pl/pgsql for SP. I think they're going to remove the SP eventually though (justification in trac ticket 92 ). 
+ #5 I guess the improved raw sql queryset support in Django 1.2 can make this easier as you wouldn't have to roll your own make_instance type code.

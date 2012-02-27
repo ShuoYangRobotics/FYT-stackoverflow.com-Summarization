@@ -1,0 +1,111 @@
+Question (ID-661017): Access to errno from Python? I am stuck with a fairly complex Python module that does not return useful error codes (it actually fails disturbingly silently). However, the underlying C library it calls sets errno. 
+
+ Normally errno comes in over OSError attributes, but since I don't have an exception, I can't get at it. 
+
+ Using ctypes, libc.errno doesn't work because errno is a macro in GNU libc. Python 2.6 has some affordances but Debian still uses Python 2.5. Inserting a C module into my pure Python program just to read errno disgusts me. 
+
+ Is there some way to access errno? A Linux-only solution is fine, since the library being wrapped is Linux-only. I also don't have to worry about threads, as I'm only running one thread during the time in which this can fail. 
+ Answers (Total-6): #0 Here is a snippet of code that allows to access errno : 
+
+ from ctypes import *
+
+libc = CDLL("libc.so.6")
+
+get_errno_loc = libc.__errno_location
+get_errno_loc.restype = POINTER(c_int)
+
+def errcheck(ret, func, args):
+ if ret == -1:
+  e = get_errno_loc()[0]
+  raise OSError(e)
+ return ret
+
+copen = libc.open
+copen.errcheck = errcheck
+
+print copen("nosuchfile", 0)
+ 
+
+ The important thing is that you check errno as soon as possible after your function call, otherwise it may already be overwritten. 
+ #1 Belowed code is not reliable (or comprehensive, there are a plefora of ways errno could be defined) but it should get you started (or reconsider your position on a tiny extension module (after all on Debian python setup.py install or easy_install should have no problem to build it)). From http://codespeak.net/pypy/dist/pypy/rpython/lltypesystem/ll2ctypes.py 
+
+ if not hasattr(ctypes, 'get_errno'):
+ # Python 2.5 or older
+ if sys.platform == 'win32':
+  standard_c_lib._errno.restype = ctypes.POINTER(ctypes.c_int)
+  def _where_is_errno():
+   return standard_c_lib._errno()
+
+ elif sys.platform in ('linux2', 'freebsd6'):
+  standard_c_lib.__errno_location.restype = ctypes.POINTER(ctypes.c_int)
+  def _where_is_errno():
+   return standard_c_lib.__errno_location()
+
+ elif sys.platform in ('darwin', 'freebsd7'):
+  standard_c_lib.__error.restype = ctypes.POINTER(ctypes.c_int)
+  def _where_is_errno():
+   return standard_c_lib.__error()
+ ctypes.get_errno = lambda: _where_is_errno().contents.value
+ 
+
+ Where standard_c_lib : 
+
+ def get_libc_name():
+ if sys.platform == 'win32':
+  # Parses sys.version and deduces the version of the compiler
+  import distutils.msvccompiler
+  version = distutils.msvccompiler.get_build_version()
+  if version is None:
+   # This logic works with official builds of Python.
+   if sys.version_info &lt; (2, 4):
+    clibname = 'msvcrt'
+   else:
+    clibname = 'msvcr71'
+  else:
+   if version &lt;= 6:
+    clibname = 'msvcrt'
+   else:
+    clibname = 'msvcr%d' % (version * 10)
+
+  # If python was built with in debug mode
+  import imp
+  if imp.get_suffixes()[0][0] == '_d.pyd':
+   clibname += 'd'
+
+  return clibname+'.dll'
+ else:
+  return ctypes.util.find_library('c')
+
+# Make sure the name is determined during import, not at runtime
+libc_name = get_libc_name() 
+standard_c_lib = ctypes.cdll.LoadLibrary(get_libc_name())
+ 
+ #2 It looks like you can use this patch that will provide you with ctypes.get_errno/set_errno 
+
+ http://bugs.python.org/issue1798 
+
+ This is the patch that was actually applied to the repository: 
+
+ http://svn.python.org/view?view=rev&amp;revision=63977 
+
+ Otherwise, adding a new C module that does nothing but return errno /is/ disgusting, but so is the library that you're using. I would do that in preference to patching python myself. 
+ #3 Gave up and tracked through the C headers. 
+
+ import ctypes
+c = ctypes.CDLL("libc.so.6")
+c.__errno_location.restype = ctypes.POINTER(ctypes.c_int)
+c.write(5000, "foo", 4)
+print c.__errno_location().contents # -&gt; c_long(9)
+ 
+
+ It doesn't work in the python command prompt because it resets errno to read from stdin. 
+
+ Once you know the magic word of __errno_location this looks like a common pattern. But with just errno I was pretty lost. 
+ #4 I'm not sure if this is what you and Jerub are referring to, but you could write a very short C extension that just exports errno, i.e. with the python language interface . 
+
+ Otherwise, I agree with you that having to add this small bit of compiled code is a pain. 
+ #5 ctypes actually gives a standard way to access python's c implementation, which is using errno. I haven't tested this on anything other than my (linux) system, but this should be very portable: 
+
+ ctypes.c_int.in_dll(ctypes.pythonapi,"errno") 
+
+ which returns a c_int containing the current value.

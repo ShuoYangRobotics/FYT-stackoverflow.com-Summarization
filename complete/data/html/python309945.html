@@ -1,0 +1,70 @@
+<h3>Question (ID-309945):</h3><h2>How to quote a string value explicitly (Python DB API/Psycopg2)</h2><p>For some reasons, I would like to do an explicit quoting of a string value (becoming a part of constructed SQL query) instead of waiting for implicit quotation performed by <code>cursor.execute</code> method on contents of its second parameter.</p>
+
+<p>By "implicit quotation" I mean:</p>
+
+<pre><code>value = "Unsafe string"
+query = "SELECT * FROM some_table WHERE some_char_field = %s;"
+cursor.execute( query, (value,) ) # value will be correctly quoted
+</code></pre>
+
+<p>I would prefer something like that:</p>
+
+<pre><code>value = "Unsafe string"
+query = "SELECT * FROM some_table WHERE some_char_field = %s;" % \
+    READY_TO_USE_QUOTING_FUNCTION(value)
+cursor.execute( query ) # value will be correctly quoted, too
+</code></pre>
+
+<p>Is such low level <code>READY_TO_USE_QUOTING_FUNCTION</code> expected by Python DB API specification (I couldn't find such functionality in <a href="http://www.python.org/dev/peps/pep-0249/" rel="nofollow">PEP 249</a> document). If not, maybe Psycopg2 provides such function? If not, maybe Django provides such function? I would prefer not to write such function myself...</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Ok, so I was curious and went and looked at the source of psycopg2. Turns out I didn't have to go further than the examples folder :)</p>
+
+<p>And yes, this is psycopg2-specific. Basically, if you just want to quote a string you'd do this:</p>
+
+<pre><code>from psycopg2.extensions import adapt
+
+print adapt("Hello World'; DROP DATABASE World;")
+</code></pre>
+
+<p>But what you probably want to do is to write and register your own adapter;</p>
+
+<p>In the examples folder of psycopg2 you find the file <a href="http://initd.org/svn/psycopg/psycopg2/trunk/examples/myfirstrecipe.py" rel="nofollow">'myfirstrecipe.py'</a> there is an example of how to cast and quote a specific type in a special way.</p>
+
+<p>If you have objects for the stuff you want to do, you can just create an adapter that conforms to the 'IPsycopgSQLQuote' protocol (see pydocs for the myfirstrecipe.py-example...actually that's the only reference I can find to that name) that quotes your object and then registering it like so:</p>
+
+<pre><code>from psycopg2.extensions import register_adapter
+
+register_adapter(mytype, myadapter)
+</code></pre>
+
+<p>Also, the other examples are interesting; esp. <a href="http://initd.org/svn/psycopg/psycopg2/trunk/examples/dialtone.py" rel="nofollow">'dialtone.py'</a> and <a href="http://initd.org/svn/psycopg/psycopg2/trunk/examples/simple.py" rel="nofollow">'simple.py'</a>.</p>
+<br /><b>#1</b><br /><p>You should try to avoid doing your own quoting.  Not only will it be DB-specific as people have pointed out, but flaws in quoting are the source of SQL injection bugs.</p>
+
+<p>If you don't want to pass around queries and values separately, then pass around a list of the parameters:</p>
+
+<pre><code>def make_my_query():
+    # ...
+    return sql, (value1, value2)
+
+def do_it():
+    query = make_my_query()
+    cursor.execute(*query)
+</code></pre>
+
+<p>(I probably have the syntax of cursor.execute wrong) The point here is that just because cursor.execute takes a number of arguments, that doesn't mean you have to handle them all separately.  You can deal with them as one list.</p>
+<br /><b>#2</b><br /><p>This is going to be DB dependent. In the case of MySQLdb, for example, the <code>connection</code> class has a <code>literal</code> method that will convert the value to the correct escaped representation for passing to MySQL (that's what <code>cursor.execute</code> uses).</p>
+
+<p>I imagine Postgres has something similar, but I don't think there is a function to escape values as part of the DB API 2.0 spec.</p>
+<br /><b>#3</b><br /><p>This'll be database dependent (iirc, mysql allows <code>\</code> as an escape character, while something like oracle expects quotes to be doubled: <code>'my '' quoted string'</code>).</p>
+
+<p>Someone correct me if i'm wrong, but the double-quoting method is the standard method.</p>
+
+<p>It may be worth looking at what other db abstraction libraries do (sqlalchemy, cx_Oracle, sqlite, etc).</p>
+
+<p>I've got to ask - why do you want to inline the values instead of bind them?</p>
+<br /><b>#4</b><br /><p>If you use django you might want to use the quoting function which is automatically adapted to the currently configured DBMS :</p>
+
+<pre><code>from django.db import backend
+my_quoted_variable = backend.DatabaseOperations().quote_name(myvar)
+</code></pre>
+<br /><b>#5</b><br /><p>I don't think you give any sufficient reasoning behind your avoidance to do this The Right Way. Please, use the APi as it is designed and don't try so hard to make your code less readable for the next guy and more fragile.</p>
+<br />

@@ -1,0 +1,186 @@
+Question (ID-477096): Python import coding style I've discovered a new pattern. Is this pattern well known or what is the opinion about it? 
+
+ Basically, I have a hard time scrubbing up and down source files to figure out what module imports are available and so forth, so now, instead of 
+
+ import foo
+from bar.baz import quux
+
+def myFunction():
+ foo.this.that(quux)
+ 
+
+ I move all my imports into the function where they're actually used., like this: 
+
+ def myFunction():
+ import foo
+ from bar.baz import quux
+
+ foo.this.that(quux)
+ 
+
+ This does a few things. First, I rarely accidentally pollute my modules with the contents of other modules. I could set the __all__ variable for the module, but then I'd have to update it as the module evolves, and that doesn't help the namespace pollution for code that actually lives in the module. 
+
+ Second, I rarely end up with a litany of imports at the top of my modules, half or more of which I no longer need because I've refactored it. Finally, I find this pattern MUCH easier to read, since every referenced name is right there in the function body. 
+ Answers (Total-9): #0 This does have a few disadvantages. 
+
+ Testing 
+
+ On the off chance you want to test your module through runtime modification, it may make it more difficult. Instead of doing 
+
+ import mymodule
+mymodule.othermodule = module_stub
+ 
+
+ You'll have to do 
+
+ import othermodule
+othermodule.foo = foo_stub
+ 
+
+ This means that you'll have to patch the othermodule globally, as opposed to just change what the reference in mymodule points to. 
+
+ Dependency Tracking 
+
+ This makes it non-obvious what modules your module depends on. This is especially irritating if you use many third party libraries or are re-organizing code. 
+
+ I had to maintain some legacy code that used imports inline all over the place, it made the code extremely difficult to refactor or repackage. 
+
+ Notes On Performance 
+
+ Because of the way python caches modules, there isn't a performance hit. In fact, since the module is in the local namespace, there is a slight performance benefit to importing modules in a function. 
+
+ Top Import 
+
+ import random
+
+def f():
+ L = []
+ for i in xrange(1000):
+  L.append(random.random())
+
+for i in xrange(10000):
+ f()
+
+
+$ time python test.py 
+
+real 0m1.569s
+user 0m1.560s
+sys 0m0.010s
+ 
+
+ Import in Function Body 
+
+ def f():
+ import random
+ L = []
+ for i in xrange(1000):
+  L.append(random.random())
+
+for i in xrange(10000):
+ f()
+
+$ time python test2.py
+
+real 0m1.385s
+user 0m1.380s
+sys  0m0.000s
+ 
+ #1 A few problems with this approach: 
+
+ 
+ It's not immediately obvious when opening the file which modules it depends on. 
+ It will confuse programs that have to analyze dependencies, such as py2exe , py2app etc. 
+ What about modules that you use in many functions? You will either end up with a lot of redundant imports or you'll have to have some at the top of the file and some inside functions. 
+ 
+
+ So... the preferred way is to put all imports at the top of the file. I've found that if my imports get hard to keep track of, it usually means I have too much code that I'd be better off splitting it into two or more files. 
+
+ Some situations where I have found imports inside functions to be useful: 
+
+ 
+ To deal with circular dependencies (if you really really can't avoid them) 
+ Platform specific code 
+ 
+
+ Also: putting imports inside each function is actually not appreciably slower than at the top of the file. The first time each module is loaded it is put into sys.modules , and each subsequent import costs only the time to look up the module, which is fairly fast (it is not reloaded). 
+ #2 The top-voted answer to this question is nicely formatted but absolutely wrong about permformance. Let me demonstrate 
+
+ Performance 
+
+ Top Import 
+
+ import random
+
+def f():
+ L = []
+ for i in xrange(1000):
+  L.append(random.random())
+
+
+for i in xrange(1000):
+ f()
+
+$ time python import.py
+
+real  0m0.721s
+user  0m0.412s
+sys   0m0.020s
+ 
+
+ Import in Function Body 
+
+ def f():
+ import random
+ L = []
+ for i in xrange(1000):
+  L.append(random.random())
+
+for i in xrange(1000):
+ f()
+
+$ time python import2.py
+
+real  0m0.661s
+user  0m0.404s
+sys   0m0.008s
+ 
+
+ As you can see, it can be more efficient to import the module in the function. The reason for this is simple. It moves the reference from a global reference to a local reference. This means that, for CPython at least, the compiler will emit LOAD_FAST instructions instead of LOAD_GLOBAL instructions. These are, as the name implies, faster. The other answerer artificially inflated the performance hit of looking in sys.modules by importing on every single iteration of the loop . 
+
+ As a rule, it's best to import at the top but performance is not the reason if you are accessing the module a lot of times. The reasons are that one can keep track of what a module depends on more easily and that doing so is consistent with most of the rest of the Python universe. 
+ #3 Another useful thing to note is that parts of using "import" inside of a function have been completely removed in Python 3.0. 
+
+ There is a brief mention of it under "Removed Syntax" here: 
+
+ http://docs.python.org/3.0/whatsnew/3.0.html 
+ #4 From a performance point of view, you can see this: Should Python import statements always be at the top of a module? 
+
+ In general, I only use local imports in order to break dependency cycles. 
+ #5 I believe this is a recommended approach in some cases/scenarios. For example in Google App Engine lazy-loading big modules is recommended since it will minimize the warm-up cost of instantiating new Python VMs/interpreters. Have a look at a Google Engineer's presentation describing this. However keep in mind this doesn't mean you should lazy-load all your modules. 
+ #6 You might want to take a look at Import statement overhead in the python wiki. In short: if the module has already been loaded (look at sys.modules ) your code will run slower. If your module hasn't been loaded yet, and will foo will only get loaded when needed, which can be zero times, then the overall performance will be better. 
+ #7 I would suggest that you try to avoid from foo import bar imports. I only use them inside packages, where the splitting into modules is an implementation detail and there won't be many of them anyway. 
+
+ In all other places, where you import a package, just use import foo and then reference it by the full name foo.bar . This way you can always tell where a certain element comes from and don't have to maintain the list of imported elements (in reality this will always be outdated and import no longer used elements). 
+
+ If foo is a really long name you can simplify it with import foo as f and then write f.bar . This is still far more convenient and explicit than maintaining all the from imports. 
+ #8 People have explained very well why to avoid inline-imports, but not really alternative workflows to address the reasons you want them in the first place. 
+
+ 
+ I have a hard time scrubbing up and down source files to figure out what module imports are available and so forth 
+ 
+
+ To check for unused imports I use pylint . It does static(ish)-analysis of Python code, and one of the (many) things it checks for is unused imports. For example, the following script.. 
+
+ import urllib
+import urllib2
+
+urllib.urlopen("http://stackoverflow.com")
+ 
+
+ ..would generate the following message: 
+
+ example.py:2 [W0611] Unused import urllib2
+ 
+
+ As for checking available imports, I generally rely on TextMate's (fairly simplistic) completion - when you press Esc, it completes the current word with others in the document. If I have done import urllib , urll[Esc] will expand to urllib , if not I jump to the start of the file and add the import.

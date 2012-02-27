@@ -1,0 +1,133 @@
+Question (ID-636561): How can I run an external command asynchronously from Python? I need to run a shell command asynchronously from a Python script. By this I mean that I want my Python script to continue running while the external command goes off and does whatever it needs to do. 
+
+ I read this post: 
+
+ 
+ http://stackoverflow.com/questions/89228/how-to-call-external-command-in-python 
+ 
+
+ I then went off and did some testing, and it looks like os.system() will do the job provided that I use &amp; at the end of the command so that I don't have to wait for it to return. What I am wondering is if this is the proper way to accomplish such a thing? I tried commands.call() but it will not work for me because it blocks on the external command. 
+
+ Please let me know if using os.system() for this is advisable or if I should try some other route. 
+ Answers (Total-6): #0 subprocess.Popen does exactly what you want. 
+
+ from subprocess import Popen
+p = Popen(['watch', 'ls']) # something long running
+# ... do other stuff while subprocess is running
+p.terminate()
+ 
+
+ (Edit to complete the answer from comments) 
+
+ The Popen instance can do various other things like you can poll() it to see if it is still running, and you can communicate() with it to send it data on stdin, and wait for it to terminate. 
+ #1 If you want to run many processes in parallel and then handle them when they yield results, you can use polling like in the following: 
+
+ from subprocess import Popen, PIPE
+import time
+
+running_procs = [
+ Popen(['/usr/bin/my_cmd', '-i %s' % path], stdout=PIPE, stderr=PIPE)
+ for path in '/tmp/file0 /tmp/file1 /tmp/file2'.split()]
+
+while running_procs:
+ for proc in running_procs:
+  retcode = proc.poll()
+  if retcode is not None: # Process finished.
+   running_procs.remove(proc)
+   break
+ else: # No process is done, wait a bit and check again.
+  time.sleep(.1)
+  continue
+
+ # Here, `proc` has finished with return code `retcode`
+ if retcode != 0:
+  """Error handling."""
+ handle_results(proc.stdout)
+ 
+
+ The control flow there is a little bit convoluted because I'm trying to make it small -- you can refactor to your taste. :-) 
+
+ This has the advantage of servicing the early-finishing requests first. If you call communicate on the first running process and that turns out to run the longest, the other running processes will have been sitting there idle when you could have been handling their results. 
+ #2 What I am wondering is if this [os.system()] is the proper way to accomplish such a thing? 
+
+ No. os.system() is not the proper way. That's why everyone says to use subprocess . 
+
+ For more information, read http://docs.python.org/library/os.html#os.system 
+
+ 
+ The subprocess module provides more
+ powerful facilities for spawning new
+ processes and retrieving their
+ results; using that module is
+ preferable to using this function. Use
+ the subprocess module. Check
+ especially the Replacing Older
+ Functions with the subprocess Module
+ section. 
+ 
+ #3 I've had good success with the asyncproc module, which deals nicely with the output from the processes. For example: 
+
+ import os
+from asynproc import Process
+myProc = Process("myprogram.app")
+
+while True:
+ # check to see if process has ended
+ poll = myProc.wait(os.WNOHANG)
+ if poll != None:
+  break
+ # print any new output
+ out = myProc.read()
+ if out != "":
+  print out
+ 
+ #4 Using pexpect [ http://www.noah.org/wiki/Pexpect ] with non-blocking readlines is another way to do this. Pexpect solves the deadlock problems, allows you to easily run the processes in the background, and gives easy ways to have callbacks when your process spits out predefined strings, and generally makes interacting with the process much easier. 
+ #5 I have the same problem trying to connect to an 3270 terminal using the s3270 scripting software in Python. Now I'm solving the problem with an subclass of Process that I found here: 
+
+ http://code.activestate.com/recipes/440554/ 
+
+ And here is the sample taken from file: 
+
+ def recv_some(p, t=.1, e=1, tr=5, stderr=0):
+ if tr &lt; 1:
+  tr = 1
+ x = time.time()+t
+ y = []
+ r = ''
+ pr = p.recv
+ if stderr:
+  pr = p.recv_err
+ while time.time() &lt; x or r:
+  r = pr()
+  if r is None:
+   if e:
+    raise Exception(message)
+   else:
+    break
+  elif r:
+   y.append(r)
+  else:
+   time.sleep(max((x-time.time())/tr, 0))
+ return ''.join(y)
+
+def send_all(p, data):
+ while len(data):
+  sent = p.send(data)
+  if sent is None:
+   raise Exception(message)
+  data = buffer(data, sent)
+
+if __name__ == '__main__':
+ if sys.platform == 'win32':
+  shell, commands, tail = ('cmd', ('dir /w', 'echo HELLO WORLD'), '\r\n')
+ else:
+  shell, commands, tail = ('sh', ('ls', 'echo HELLO WORLD'), '\n')
+
+ a = Popen(shell, stdin=PIPE, stdout=PIPE)
+ print recv_some(a),
+ for cmd in commands:
+  send_all(a, cmd + tail)
+  print recv_some(a),
+ send_all(a, 'exit' + tail)
+ print recv_some(a, e=0)
+ a.wait()

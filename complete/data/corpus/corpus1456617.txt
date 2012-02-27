@@ -1,0 +1,277 @@
+Question (ID-1456617): Return a random word from a word list in python I would like to retrieve a random word from a file using python, but I do not believe my following method is best or efficient. Please assist. 
+
+ import fileinput
+import _random
+file = [line for line in fileinput.input("/etc/dictionaries-common/words")]
+rand = _random.Random()
+print file[int(rand.random() * len(file))],
+ 
+ Answers (Total-9): #0 The random module defines choice(), which does what you want: 
+
+ import random
+
+words = [line.strip() for line in open('/etc/dictionaries-common/words')]
+print random.choice(words)
+ 
+
+ Note also that this assumes that each word is by itself on a line in the file. If the file is very big, or if you perform this operation frequently, you may find that constantly rereading the file impacts your application's performance negatively. 
+ #1 Another solution is to use getline 
+
+ import linecache
+import random
+line_number = random.randint(0, total_num_lines)
+linecache.getline('/etc/dictionaries-common/words', line_number)
+ 
+
+ From the documentation: 
+
+ 
+ The linecache module allows one to get
+ any line from any file, while
+ attempting to optimize internally,
+ using a cache, the common case where
+ many lines are read from a single file 
+ 
+
+ EDIT:
+You can calculate the total number once and store it, since the dictionary file is unlikely to change. 
+ #2 &gt;&gt;&gt; import random
+&gt;&gt;&gt; random.choice(list(open('/etc/dictionaries-common/words')))
+'jaundiced\n'
+ 
+
+ It is efficient human-time-wise. 
+
+ btw, your implementation coincides with the one from stdlib's random.py : 
+
+ def choice(self, seq):
+ """Choose a random element from a non-empty sequence."""
+ return seq[int(self.random() * len(seq))]
+ 
+
+ Measure time performance 
+
+ I was wondering what is the relative performance of the presented solutions. linecache -based is the obvious favorite. How much slower is the random.choice 's one-liner compared to honest algorithm implemented in select_random_line() ? 
+
+ # nadia_known_num_lines 9.6e-06 seconds 1.00
+# nadia     0.056 seconds 5843.51
+# jfs      0.062 seconds 1.10
+# dcrosta_no_strip  0.091 seconds 1.48
+# dcrosta     0.13 seconds 1.41
+# mark_ransom_no_strip 0.66 seconds 5.10
+# mark_ransom_choose_from 0.67 seconds 1.02
+# mark_ransom    0.69 seconds 1.04
+ 
+
+ (Each function is called 10 times (cached performance)). 
+
+ These result show that simple solution ( dcrosta ) is faster in this case than a more deliberate one ( mark_ransom ). 
+
+ Code that was used for comparison ( as a gist ): 
+
+ import linecache
+import random
+from timeit import default_timer
+
+
+WORDS_FILENAME = "/etc/dictionaries-common/words"
+
+
+def measure(func):
+ measure.func_to_measure.append(func)
+ return func
+measure.func_to_measure = []
+
+
+@measure
+def dcrosta():
+ words = [line.strip() for line in open(WORDS_FILENAME)]
+ return random.choice(words)
+
+
+@measure
+def dcrosta_no_strip():
+ words = [line for line in open(WORDS_FILENAME)]
+ return random.choice(words)
+
+
+def select_random_line(filename):
+ selection = None
+ count = 0
+ for line in file(filename, "r"):
+  if random.randint(0, count) == 0:
+   selection = line.strip()
+   count = count + 1
+ return selection
+
+
+@measure
+def mark_ransom():
+ return select_random_line(WORDS_FILENAME)
+
+
+def select_random_line_no_strip(filename):
+ selection = None
+ count = 0
+ for line in file(filename, "r"):
+  if random.randint(0, count) == 0:
+   selection = line
+   count = count + 1
+ return selection
+
+
+@measure
+def mark_ransom_no_strip():
+ return select_random_line_no_strip(WORDS_FILENAME)
+
+
+def choose_from(iterable):
+ """Choose a random element from a finite `iterable`.
+
+ If `iterable` is a sequence then use `random.choice()` for efficiency.
+
+ Return tuple (random element, total number of elements)
+ """
+ selection, i = None, None
+ for i, item in enumerate(iterable):
+  if random.randint(0, i) == 0:
+   selection = item
+
+ return selection, (i+1 if i is not None else 0)
+
+
+@measure
+def mark_ransom_choose_from():
+ return choose_from(open(WORDS_FILENAME))
+
+
+@measure
+def nadia():
+ global total_num_lines
+ total_num_lines = sum(1 for _ in open(WORDS_FILENAME))
+
+ line_number = random.randint(0, total_num_lines)
+ return linecache.getline(WORDS_FILENAME, line_number)
+
+
+@measure
+def nadia_known_num_lines():
+ line_number = random.randint(0, total_num_lines)
+ return linecache.getline(WORDS_FILENAME, line_number)
+
+
+@measure
+def jfs():
+ return random.choice(list(open(WORDS_FILENAME)))
+
+
+def timef(func, number=1000, timer=default_timer):
+ """Return number of seconds it takes to execute `func()`."""
+ start = timer()
+ for _ in range(number):
+  func()
+ return (timer() - start) / number
+
+
+def main():
+ # measure time
+ times = dict((f.__name__, timef(f, number=10))
+     for f in measure.func_to_measure)
+
+ # print from fastest to slowest
+ maxname_len = max(map(len, times))
+ last = None
+ for name in sorted(times, key=times.__getitem__):
+  print "%s %4.2g seconds %.2f" % (name.ljust(maxname_len), times[name],
+           last and times[name] / last or 1)
+  last = times[name]
+
+
+if __name__ == "__main__":
+ main()
+ 
+ #3 This article may help 
+
+ http://www.bryceboe.com/2009/03/23/random-lines-from-a-file/ 
+ #4 Pythonizing my answer from What’s the best way to return a random line in a text file using C? : 
+
+ import random
+
+def select_random_line(filename):
+ selection = None
+ count = 0
+ for line in file(filename, "r"):
+  if random.randint(0, count) == 0:
+   selection = line.strip()
+  count = count + 1
+ return selection
+
+print select_random_line("/etc/dictionaries-common/words")
+ 
+
+ Edit: the original version of my answer used readlines , which didn't work as I thought and was totally unnecessary. This version will iterate through the file instead of reading it all into memory, and do it in a single pass, which should make it much more efficient than any answer I've seen thus far. 
+
+ Generalized version 
+
+ import random
+
+def choose_from(iterable):
+ """Choose a random element from a finite `iterable`.
+
+ If `iterable` is a sequence then use `random.choice()` for efficiency.
+
+ Return tuple (random element, total number of elements)
+ """
+ selection, i = None, None
+ for i, item in enumerate(iterable):
+  if random.randint(0, i) == 0:
+   selection = item
+
+ return selection, (i+1 if i is not None else 0)
+ 
+
+ Examples 
+
+ print choose_from(open("/etc/dictionaries-common/words"))
+print choose_from(dict(a=1, b=2))
+print choose_from(i for i in range(10) if i % 3 == 0)
+print choose_from(i for i in range(10) if i % 11 == 0 and i) # empty
+print choose_from([0]) # one element
+chunk, n = choose_from(urllib2.urlopen("http://google.com"))
+print (chunk[:20], n)
+ 
+
+ Output 
+
+ 
+('yeps\n', 98569)
+('a', 2)
+(6, 4)
+(None, 0)
+(0, 1)
+('window._gjp && _gjp(', 10)
+ 
+ #5 You could do this without using fileinput : 
+
+ import random
+data = open("/etc/dictionaries-common/words").readlines()
+print random.choice(data)
+ 
+
+ I have also used data instead of file because file is a predefined type in Python. 
+ #6 I don't have code for you but as far as an algorithm goes: 
+
+ 
+ Find the file's size 
+ Do a random seek with the seek() function 
+ Find the next (or previous) whitespace character 
+ Return the word that starts after that whitespace character 
+ 
+ #7 Efficiency and verbosity aren't the same thing in this case. It's tempting to go for the most beautiful, pythonic approach that does everything in one or two lines but for file I/O, stick with classic fopen-style, low-level interaction, even if it does take up a few more lines of code. 
+
+ I could copy and paste some code and claim it to be my own (others can if they want) but have a look at this: http://mail.python.org/pipermail/tutor/2007-July/055635.html 
+ #8 There are a few different ways to optimize this problem. You can optimize for speed, or for space. 
+
+ If you want a quick but memory-hungry solution, read in the entire file using file.readlines() and then use random.choice() 
+
+ If you want a memory-efficient solution, first check the number of lines in the file by calling somefile.readline() repeatedly until it returns "", then generate a random number smaller then the number of lines (say, n), seek back to the beginning of the file, and finally call somefile.readline() n times. The next call to somefile.readline() will return the desired random line. This approach wastes no memory holding "unnecessary" lines. Of course, if you plan on getting lots of random lines from the file, this will be horribly inefficient, and it's better to just keep the entire file in memory, like in the first approach.

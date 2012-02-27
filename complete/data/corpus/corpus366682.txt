@@ -1,0 +1,97 @@
+Question (ID-366682): How to limit execution time of a function call in Python There is a socket related function call in my code, that function is from another module thus out of my control, the problem is that it blocks for hours occasionally, which is totally unacceptable, How can I limit the function execution time from my code? I guess the solution must utilize another thread. 
+ Answers (Total-6): #0 I'm not sure how cross-platform this might be, but using signals and alarm might be a good way of looking at this. With a little work you could make this completely generic as well and usable in any situation. 
+
+ http://docs.python.org/library/signal.html 
+
+ So your code is going to look something like this. 
+
+ import signal
+
+def signal_handler(signum, frame):
+ raise Exception("Timed out!")
+
+signal.signal(signal.SIGALRM, signal_handler)
+signal.alarm(10) # Ten seconds
+try:
+ long_function_call()
+catch Exception, msg:
+ print "Timed out!"
+ 
+ #1 An improvement on @rik.the.vik's answer would be to use the with statement to give the timeout function some syntactic sugar: 
+
+ from __future__ import with_statement # Required in 2.5
+import signal
+from contextlib import contextmanager
+
+class TimeoutException(Exception): pass
+
+@contextmanager
+def time_limit(seconds):
+ def signal_handler(signum, frame):
+  raise TimeoutException, "Timed out!"
+ signal.signal(signal.SIGALRM, signal_handler)
+ signal.alarm(seconds)
+ try:
+  yield
+ finally:
+  signal.alarm(0)
+
+
+try:
+ with time_limit(10):
+  long_function_call()
+except TimeoutException, msg:
+ print "Timed out!"
+ 
+ #2 You don't have to use threads. You can use another process to do the blocking work, for instance, maybe using the subprocess module. If you want to share data structures between different parts of your program then Twisted is a great library for giving yourself control of this, and I'd recommend it if you care about blocking and expect to have this trouble a lot. The bad news with Twisted is you have to rewrite your code to avoid any blocking, and there is a fair learning curve. 
+
+ You can use threads to avoid blocking, but I'd regard this as a last resort, since it exposes you to a whole world of pain. Read a good book on concurrency before even thinking about using threads in production, e.g. Jean Bacon's "Concurrent Systems". I work with a bunch of people who do really cool high performance stuff with threads, and we don't introduce threads into projects unless we really need them. 
+ #3 The only "safe" way to do this, in any language, is to use a secondary process to do that timeout-thing, otherwise you need to build your code in such a way that it will time out safely by itself, for instance by checking the time elapsed in a loop or similar. If changing the method isn't an option, a thread will not suffice. 
+
+ Why? Because you're risking leaving things in a bad state when you do. If the thread is simply killed mid-method, locks being held, etc. will just be held, and cannot be released. 
+
+ So look at the process way, do not look at the thread way. 
+ #4 Doing this from within a signal handler is dangerous: you might be inside an exception handler at the time the exception is raised, and leave things in a broken state. For example, 
+
+ def function_with_enforced_timeout():
+ f = open_temporary_file()
+ try:
+ ...
+ finally:
+ here()
+ unlink(f.filename)
+ 
+
+ If your exception is raised here(), the temporary file will never be deleted. 
+
+ The solution here is for asynchronous exceptions to be postponed until the code is not inside exception-handling code (an except or finally block), but Python doesn't do that. 
+
+ Note that this won't interrupt anything while executing native code; it'll only interrupt it when the function returns, so this may not help this particular case. (SIGALRM itself might interrupt the call that's blocking--but socket code typically simply retries after an EINTR.) 
+
+ Doing this with threads is a better idea, since it's more portable than signals. Since you're starting a worker thread and blocking until it finishes, there are none of the usual concurrency worries. Unfortunately, there's no way to deliver an exception asynchronously to another thread in Python (other thread APIs can do this). It'll also have the same issue with sending an exception during an exception handler, and require the same fix. 
+ #5 Here's a timeout function I think I found via google and it works for me. 
+
+ From:
+ http://code.activestate.com/recipes/473878/ 
+
+ def timeout(func, args=(), kwargs={}, timeout_duration=1, default=None):
+ '''This function will spwan a thread and run the given function using the args, kwargs and 
+ return the given default value if the timeout_duration is exceeded 
+ ''' 
+ import threading
+ class InterruptableThread(threading.Thread):
+  def __init__(self):
+   threading.Thread.__init__(self)
+   self.result = default
+  def run(self):
+   try:
+    self.result = func(*args, **kwargs)
+   except:
+    self.result = default
+ it = InterruptableThread()
+ it.start()
+ it.join(timeout_duration)
+ if it.isAlive():
+  return it.result
+ else:
+  return it.result

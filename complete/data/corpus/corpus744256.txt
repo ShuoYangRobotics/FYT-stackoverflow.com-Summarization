@@ -1,0 +1,136 @@
+Question (ID-744256): Reading Huge File in Python I have a 384MB text file with 50 million lines. Each line contains 2 space-separated integers: a key and a value. The file is sorted by key. I need an efficient way of looking up the values of a list of about 200 keys in Python. 
+
+ My current approach is included below. It takes 30 seconds. There must be more efficient Python foo to get this down to a reasonable efficiency of a couple of seconds at most. 
+
+ # list contains a sorted list of the keys we need to lookup
+# there is a sentinel at the end of list to simplify the code
+# we use pointer to iterate through the list of keys
+for line in fin:
+ line = map(int, line.split())
+ while line[0] == list[pointer].key:
+ list[pointer].value = line[1]
+ pointer += 1
+ while line[0] &gt; list[pointer].key:
+ pointer += 1
+ if pointer &gt;= len(list) - 1:
+ break # end of list; -1 is due to sentinel
+ 
+
+ Coded binary search + seek solution (thanks kigurai!): 
+
+ entries = 24935502 # number of entries
+width = 18  # fixed width of an entry in the file padded with spaces
+     # at the end of each line
+for i, search in enumerate(list): # list contains the list of search keys
+ left, right = 0, entries-1 
+ key = None
+ while key != search and left &lt;= right:
+ mid = (left + right) / 2
+ fin.seek(mid * width)
+ key, value = map(int, fin.readline().split())
+ if search &gt; key:
+  left = mid + 1
+ else:
+  right = mid - 1
+ if key != search:
+ value = None # for when search key is not found
+ search.result = value # store the result of the search
+ 
+ Answers (Total-8): #0 If you only need 200 of 50 million lines, then reading all of it into memory is a waste. I would sort the list of search keys and then apply binary search to the file using seek() or something similar. This way you would not read the entire file to memory which I think should speed things up. 
+ #1 Slight optimization of S.Lotts answer: 
+
+ from collections import defaultdict
+keyValues= defaultdict(list)
+targetKeys= # some list of keys as strings
+for line in fin:
+ key, value = line.split()
+ if key in targetKeys:
+  keyValues[key].append( value )
+ 
+
+ Since we're using a dictionary rather than a list, the keys don't have to be numbers. This saves the map() operation and a string to integer conversion for each line. If you want the keys to be numbers, do the conversion a the end, when you only have to do it once for each key, rather than for each of 50 million lines. 
+ #2 It's not clear what "list[pointer]" is all about. Consider this, however. 
+
+ from collections import defaultdict
+keyValues= defaultdict(list)
+targetKeys= # some list of keys
+for line in fin:
+ key, value = map( int, line.split())
+ if key in targetKeys:
+  keyValues[key].append( value )
+ 
+ #3 I would use memory-maping: http://docs.python.org/library/mmap.html . 
+This way you can use the file as if it's stored in memory, but the OS decides which pages should actually be read from the file. 
+ #4 If you have any control over the format of the file, the "sort and binary search" responses are correct. The detail is that this only works with records of a fixed size and offset (well, I should say it only works easily with fixed length records). 
+
+ With fixed length records, you can easily seek() around the sorted file to find your keys. 
+ #5 Here is a recursive binary search on the text file 
+
+ import os, stat
+
+class IntegerKeyTextFile(object):
+ def __init__(self, filename):
+  self.filename = filename
+  self.f = open(self.filename, 'r')
+  self.getStatinfo()
+
+ def getStatinfo(self):
+  self.statinfo = os.stat(self.filename)
+  self.size = self.statinfo[stat.ST_SIZE]
+
+ def parse(self, line):
+  key, value = line.split()
+  k = int(key)
+  v = int(value)
+  return (k,v)
+
+ def __getitem__(self, key):
+  return self.findKey(key)
+
+ def findKey(self, keyToFind, startpoint=0, endpoint=None):
+  "Recursively search a text file"
+
+  if endpoint is None:
+   endpoint = self.size
+
+  currentpoint = (startpoint + endpoint) // 2
+
+  while True:
+   self.f.seek(currentpoint)
+   if currentpoint &lt;&gt; 0:
+    # may not start at a line break! Discard.
+    baddata = self.f.readline() 
+
+   linestart = self.f.tell()
+   keyatpoint = self.f.readline()
+
+   if not keyatpoint:
+    # read returned empty - end of file
+    raise KeyError('key %d not found'%(keyToFind,))
+
+   k,v = self.parse(keyatpoint)
+
+   if k == keyToFind:
+    print 'key found at ', linestart, ' with value ', v
+    return v
+
+   if endpoint == startpoint:
+     raise KeyError('key %d not found'%(keyToFind,))
+
+   if k &gt; keyToFind:
+    return self.findKey(keyToFind, startpoint, currentpoint)
+   else:
+    return self.findKey(keyToFind, currentpoint, endpoint)
+ 
+
+ A sample text file created in jEdit seems to work:  
+
+ &gt;&gt;&gt; i = integertext.IntegerKeyTextFile('c:\\sampledata.txt')
+&gt;&gt;&gt; i[1]
+key found at 0 with value 345
+345
+ 
+
+ It could definitely be improved by caching found keys and using the cache to determine future starting seek points. 
+ #6 One possible optimization is to do a bit of buffering using the sizehint option in file.readlines(..) . This allows you to load multiple lines in memory totaling to approximately sizehint bytes. 
+ #7 You need to implement binary search using seek()

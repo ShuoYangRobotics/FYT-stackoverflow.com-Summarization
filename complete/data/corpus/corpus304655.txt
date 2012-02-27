@@ -1,0 +1,193 @@
+Question (ID-304655): The best way to invoke methods in Python class declarations? Say I am declaring a class C and a few of the declarations are very similar. I'd like to use a function f to reduce code repetition for these declarations. It's possible to just declare and use f as usual: 
+
+ &gt;&gt;&gt; class C(object):
+...  def f(num):
+...    return '&lt;' + str(num) + '&gt;'
+...  v = f(9)
+...  w = f(42)
+... 
+&gt;&gt;&gt; C.v
+'&lt;9&gt;'
+&gt;&gt;&gt; C.w
+'&lt;42&gt;'
+&gt;&gt;&gt; C.f(4)
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: unbound method f() must be called with C instance as first argument (got int instance instead)
+ 
+
+ Oops! I've inadvertently exposed f to the outside world, but it doesn't take a self argument (and can't for obvious reasons). One possibility would be to del the function after I use it: 
+
+ &gt;&gt;&gt; class C(object):
+...  def f(num):
+...    return '&lt;' + str(num) + '&gt;'
+...  v = f(9)
+...  del f
+... 
+&gt;&gt;&gt; C.v
+'&lt;9&gt;'
+&gt;&gt;&gt; C.f
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: type object 'C' has no attribute 'f'
+ 
+
+ But what if I want to use f again later, after the declaration? It won't do to delete the function. I could make it "private" (i.e., prefix its name with __ ) and give it the @staticmethod treatment, but invoking staticmethod objects through abnormal channels gets very funky: 
+
+ &gt;&gt;&gt; class C(object):
+...  @staticmethod
+...  def __f(num):
+...    return '&lt;' + str(num) + '&gt;'
+...  v = __f.__get__(1)(9) # argument to __get__ is ignored...
+... 
+&gt;&gt;&gt; C.v
+'&lt;9&gt;'
+ 
+
+ I have to use the above craziness because staticmethod objects, which are descriptors, are not themselves callable. I need to recover the function wrapped by the staticmethod object before I can call it. 
+
+ There has got to be a better way to do this. How can I cleanly declare a function in a class, use it during its declaration, and also use it later from within the class? Should I even be doing this? 
+ Answers (Total-6): #0 Quite simply, the solution is that f does not need to be a member of the class. I am assuming that your thought-process has gone through a Javaish language filter causing the mental block. It goes a little something like this: 
+
+ def f(n):
+ return '&lt;' + str(num) + '&gt;'
+
+class C(object):
+
+ v = f(9)
+ w = f(42)
+ 
+
+ Then when you want to use f again, just use it 
+
+ &gt;&gt;&gt; f(4)
+'&lt;4&gt;'
+ 
+
+ I think the moral of the tale is "In Python, you don't have to force everything into a class". 
+ #1 Extending Ali A 's answer,
+if you really want to avoid f in the module namespace (and using a non-exported name like _f, or setting __all__ isn't sufficient), then
+you could achieve this by creating the class within a closure. 
+
+ def create_C():
+ def f(num):
+  return '&lt;' + str(num) + '&gt;'
+
+ class C(object):
+  v = f(9)
+  def method_using_f(self, x): return f(x*2)
+ return C
+
+C=create_C()
+del create_C
+ 
+
+ This way C has access to f within its definition and methods, but nothing else does (barring fairly involved introspection
+of its methods ( C.method_using_f.im_func.func_closure )) 
+
+ This is probably overkill for most purposes though - documenting that f is internal by using the "_" prefix nameing convention should
+generally be sufficient. 
+
+ [Edit] One other option is to hold a reference to the pre-wrapped function object in the methods you wish to use it in. For example, by setting it as a default argument: 
+
+ class C(object):
+ def f(num):
+  return '&lt;' + str(num) + '&gt;'
+
+ v = f(9)
+ def method_using_f(self, x, f=f): return f(x*2)
+
+ del f
+ 
+
+ (Though I think the closure approach is probably better) 
+ #2 This is one possibility: 
+
+ class _C:
+ # Do most of the function definitions in here
+ @classmethod
+ def f(cls):
+  return 'boo'
+
+class C(_C):
+ # Do the subsequent decoration in here
+ v = _C.f()
+ 
+ #3 I believe you are trying to do this: 
+
+ class C():
+...  class F():
+...   def __call__(self,num):
+...    return "&lt;"+str(num)+"&gt;"
+...  f=F()
+...  v=f(9)
+&gt;&gt;&gt; C.v
+'&lt;9&gt;'
+&gt;&gt;&gt; C.f(25)
+'&lt;25&gt;'
+&gt;&gt;&gt;
+ 
+
+ Maybe there is better or more pythonic solution... 
+
+ 
+ "declare a function in a class, use it during its declaration, and also use it later from within the class" 
+ 
+ Sorry. Can't be done. 
+ 
+
+ "Can't be done" doesn't seem to get along with Python 
+ #4 One option: write a better staticmethod : 
+
+ class staticfunc(object):
+ def __init__(self, func):
+  self.func = func
+ def __call__(self, *args, **kw):
+  return self.func(*args, **kw)
+ def __repr__(self):
+  return 'staticfunc(%r)' % self.func
+ 
+ #5 Let's begin from the beginning. 
+
+ "declare a function in a class, use it during its declaration, and also use it later from within the class" 
+
+ Sorry. Can't be done. "In a class" contradicts "used during declaration". 
+
+ 
+ In a class means created as part of the declaration. 
+ Used during declaration means it exists outside the class. Often as a meta class. However, there are other ways. 
+ 
+
+ It's not clear what C.w and C.v are supposed to be. Are they just strings? If so, an external function f is the best solution. The "not clutter the namespace" is a bit specious. After all, you want to use it again. 
+
+ It's in the same module as C. That's why Python has modules. It binds the function and class together. 
+
+ import myCmod
+
+myCmod.C.w
+myCmod.C.v
+myCmod.f(42)
+ 
+
+ If w and v aren't simple strings, there's a really good solution that gives a lot of flexibility. 
+
+ Generally, for class-level ("static") variables like this, we can use other classes. It's not possible to completely achieve the desired API, but this is close. 
+
+ &gt;&gt;&gt; class F(object):
+ def __init__( self, num ):
+ 	self.value= num
+ 	self.format= "&lt;%d&gt;" % ( num, )
+
+&gt;&gt;&gt; class C(object):
+ w= F(42)
+ v= F(9)
+
+&gt;&gt;&gt; C.w
+&lt;__main__.F object at 0x00C58C30&gt;
+&gt;&gt;&gt; C.w.format
+'&lt;42&gt;'
+&gt;&gt;&gt; C.v.format
+'&lt;9&gt;'
+ 
+
+ The advantage of this is that F is a proper, first-class thing that can be extended. Not a "hidden" thing that we're trying to avoid exposing. It's a fact of life, so we might as well follow the Open/Closed principle and make it open to extension.

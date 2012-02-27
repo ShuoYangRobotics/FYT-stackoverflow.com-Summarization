@@ -1,0 +1,121 @@
+<h3>Question (ID-2164391):</h3><h2>How to get progress of os.walk in python?</h2><p>I have a piece of code which I'm using to search for the executables of game files and returning the directories.  I would really like to get some sort of progress indicator as to how far along <code>os.walk</code> is.  How would I accomplish such a thing?</p>
+
+<p>I tried doing <code>startpt = root.count(os.sep)</code> and gauging off of that but that just gives how deep <code>os.walk</code> is in a directory tree.</p>
+
+<pre><code>def locate(filelist, root=os.curdir): #Find a list of files, return directories.
+    for path, dirs, files in os.walk(os.path.abspath(root)):
+        for filename in returnMatches(filelist, [k.lower() for k in files]):
+            yield path + "\\"
+</code></pre>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>It depends!</p>
+
+<p>If the files and directories are distributed more or less evenly you could show rough process by assuming every toplevel directory is going to take the same amount of time. But if they are not distributed evenly you cannot find out about it cheaply. You either have to know roughly how populated every directory is in advance, or you have to os.walk the entire thing twice (but that is only useful if your actual processing takes much longer than the os.walk itself does).</p>
+
+<p>That is: say you have 4 toplevel directories, and each one contains 4 files. If you assume every toplevel dir takes 25% of progress, and each file takes another 25% of the progress for that dir, you can show a nice progress indicator. But if the last subdir turns out to contain many more files than the first few your progress indicator will have hit 75% before you find out about it. You cannot really fix that if the os.walk itself is the bottleneck (not your processing) and it's an arbitrary directory tree (not one where you know in advance roughly how long every subtree is going to take).</p>
+
+<p>And of course that's assuming the cost here is about the same for every file...</p>
+<br /><b>#1</b><br /><p>Just show an indeterminate progress bar (i.e. the ones that show a blob bouncing back and forth or the barber pole effect). That way users know that the program is doing something useful but doesn't mislead them as far as time to complete and such.</p>
+<br /><b>#2</b><br /><p>I figured this out.</p>
+
+<p>I used os.listdir to get a list of toplevel directories, and then used the .split function on the path that os.walk returned, returning the first level directory that it was currently in.</p>
+
+<p>That left me with a list of toplevel directories, which I could find the index of the current directory of os.walk, and compare the index returned with the length of the list, giving me a % complete. ;)</p>
+
+<p>This doesn't give me a <em>smooth</em> progress, because the level of work done in each directory can vary but smoothing out the progress indicator is of no concern for me.  But it could easily be accomplished by extending the path checking deeper into the directory structure.</p>
+
+<p>Here is the final code from getting my progress:</p>
+
+<pre><code>def locateGameDirs(filelist, root=os.curdir): #Find a list of files, return directories.
+    toplevel = [folder for folder in os.listdir(root) if os.path.isdir(os.path.join(root, folder))] #List of top-level directories
+    fileset = set(filelist)
+
+    for path, dirs, files in os.walk(os.path.abspath(root)):
+
+        curdir = path.split('\\')[1] #The directory os.walk is currently in.
+
+        try: #Thrown here because there's a nonexistant(?) first entry.
+            youarehere = toplevel.index(curdir)
+            progress = int(((youarehere)/len(toplevel))*100)
+        except:
+            pass
+
+        for filename in returnMatches(filelist, [k.lower() for k in files]):
+            yield filename, path + "\\", progress
+</code></pre>
+
+<p>And right now for debugging purposes I'm doing this further in the code:</p>
+
+<pre><code>    for wow in locateGameDirs(["wow.exe", "firefox.exe", "vlc.exe"], "C:\\"):
+    print wow
+</code></pre>
+
+<p>Is there a nice little way to get rid of that try/except?; it seems the first iteration of path gives me nothing...</p>
+<br /><b>#3</b><br /><p>Do it in two passes: first count how many total files/folders are in the tree, and then during the second pass do actual processing.</p>
+<br /><b>#4</b><br /><p>You need to know the total number of files to do a meaningful progress indicator.<br>
+You can get the number of files like this</p>
+
+<pre><code>len(list(os.walk(os.path.abspath(root))))
+</code></pre>
+
+<p>but that is going to take some time and you probably need a progress indicator for that...</p>
+
+<p>To find the number of files really quickly you'd need a filesystem which keeps track of the number of files for you.</p>
+
+<p>Perhaps you can save the total from a previous run and use that as an estimate</p>
+<br /><b>#5</b><br /><p>I suggest you avoid walking the directory.  Instead use an indexed-based app for quickly finding files.  You can use the app's command-line interface via subprocess and find the files almost instantaneously.</p>
+
+<p>On Windows, see <a href="http://www.voidtools.com/" rel="nofollow">Everything</a>.  On UNIX, check out locate.  Not sure about Mac, but I'm sure there's an option there too.</p>
+<br /><b>#6</b><br /><p>as I said in the comment, the performance bottle neck likely lies outside of the <code>locate</code> function. your <code>returnMatches</code> is a fairly expensive function. I think you'd be better off replacing it with the following code:</p>
+
+<pre><code>def locate(filelist, root=os.curdir)
+    fileset = set(filelist)            # if possible, pass the set instead of the list as a first argument
+    for path, dirs, files in os.walk(os.path.abspath(root)):
+            if any(file.lower() in fileset for file in files):
+                yield path + '\\'
+</code></pre>
+
+<p>This way you reduce the number of wasteful operations, yield once per file in the directory (which I think is what you actually indented to do) and you can forget about the progress at the same time. I don't think that progress would be an expected feature of the interface anyway.</p>
+<br /><b>#7</b><br /><p>Thinking out of the box here...what if you did it based on <strong><em>size</em></strong>:</p>
+
+<ul>
+<li>Use <strong>subprocess</strong> to run 'du -sb' and get the total_size of your root directory</li>
+<li>As you walk, check the size of each file and decrement from your total_size (giving you remaining_size)</li>
+<li>pct_complete = (total_size - remaining_size)/total_size</li>
+</ul>
+
+<p>Thoughts?</p>
+
+<p>-aj</p>
+<br /><b>#8</b><br /><p>One optimisation you could do - you are converting filelist into a set on every call to returnMatches, even though it never changes.  move the conversion to the start of the 'locate' function and pass the set in on every iteration.</p>
+<br /><b>#9</b><br /><p>Well, this was fun. Here is another silly way of doing it, but as everything else, it only calculates the right progress for uniform paths.</p>
+
+<pre><code>import os, sys, time
+
+def calc_progress(progress, root, dirs):
+    prog_start, prog_end, prog_slice = 0.0, 1.0, 1.0
+
+    current_progress = 0.0
+    parent_path, current_name = os.path.split(root)
+    data = progress.get(parent_path)
+    if data:
+        prog_start, prog_end, subdirs = data
+        i = subdirs.index(current_name)
+        prog_slice = (prog_end - prog_start) / len(subdirs)
+        current_progress = prog_slice * i + prog_start
+
+        if i == (len(subdirs) - 1):
+            del progress[parent_path]
+
+    if dirs:
+        progress[root] = (current_progress, current_progress+prog_slice, dirs)
+
+    return current_progress
+
+def walk(start_root):
+    progress = {}
+    print 'Starting with {start_root}'.format(**locals())
+
+    for root, dirs, files in os.walk(start_root):
+        print '{0}: {1:%}'.format(root[len(start_root)+1:], calc_progress(progress, root, dirs))
+</code></pre>
+<br />

@@ -1,0 +1,226 @@
+<h3>Question (ID-211695):</h3><h2>What is an easy way to create a trivial one-off Python object?</h2><p>I would like to create a trivial one-off Python object to hold some command-line options.  I would like to do something like this:</p>
+
+<pre><code>options = ??????
+options.VERBOSE = True
+options.IGNORE_WARNINGS = False
+
+# Then, elsewhere in the code...
+if options.VERBOSE:
+    ...
+</code></pre>
+
+<p>Of course I could use a dictionary, but <code>options.VERBOSE</code> is more readable and easier to type than <code>options['VERBOSE']</code>.</p>
+
+<p>I <em>thought</em> that I should be able to do</p>
+
+<pre><code>options = object()
+</code></pre>
+
+<p>, since <code>object</code> is the base type of all class objects and therefore should be something like a class with no attributes.  But it doesn't work, because an object created using <code>object()</code> doesn't have a <code>__dict__</code> member, and so one cannot add attributes to it:</p>
+
+<pre><code>options.VERBOSE = True
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: 'object' object has no attribute 'VERBOSE'
+</code></pre>
+
+<p>What is the simplest "pythonic" way to create an object that can be used this way, preferably without having to create an extra helper class?</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p>The <a href="http://docs.python.org/library/collections.html" rel="nofollow">collections module</a> has grown a <em>namedtuple</em> function in 2.6:</p>
+
+<pre><code>import collections
+opt=collections.namedtuple('options','VERBOSE IGNORE_WARNINGS')
+myoptions=opt(True, False)
+
+&gt;&gt;&gt; myoptions
+options(VERBOSE=True, IGNORE_WARNINGS=False)
+&gt;&gt;&gt; myoptions.VERBOSE
+True
+</code></pre>
+
+<p>A <em>namedtuple</em> is immutable, so you can only assign field values when you create it.</p>
+
+<p>In earlier <em>Python</em> versions, you can create an empty class:</p>
+
+<pre><code>class options(object):
+    pass
+
+myoptions=options()
+myoptions.VERBOSE=True
+myoptions.IGNORE_WARNINGS=False
+&gt;&gt;&gt; myoptions.IGNORE_WARNINGS,myoptions.VERBOSE
+(False, True)
+</code></pre>
+<br /><b>#1</b><br /><p>Why not just use <a href="http://docs.python.org/library/optparse.html#module-optparse" rel="nofollow">optparse</a>:</p>
+
+<pre><code>from optparse import OptionParser
+[...]
+parser = OptionParser()
+parser.add_option("-f", "--file", dest="filename",
+              help="write report to FILE", metavar="FILE")
+parser.add_option("-q", "--quiet",
+              action="store_false", dest="verbose", default=True,
+              help="don't print status messages to stdout")
+
+(options, args) = parser.parse_args()
+
+file = options.filename
+if options.quiet == True:
+    [...]
+</code></pre>
+<br /><b>#2</b><br /><p>If you insist on not having to define a class, you can abuse some existing classes. Most objects belong to "new-style" classes which don't have a dict, but functions can have arbitrary attributes:</p>
+
+<pre><code>&gt;&gt;&gt; x = lambda: 0   # any function will do
+&gt;&gt;&gt; x.foo = 'bar'
+&gt;&gt;&gt; x.bar = 0
+&gt;&gt;&gt; x.xyzzy = x
+&gt;&gt;&gt; x.foo
+'bar'
+&gt;&gt;&gt; x.bar
+0
+&gt;&gt;&gt; x.xyzzy
+&lt;function &lt;lambda&gt; at 0x6cf30&gt;
+</code></pre>
+
+<p>One problem is that functions already have some attributes, so dir(x) is a little messy:</p>
+
+<pre><code>&gt;&gt;&gt; dir(x)
+['__call__', '__class__', '__delattr__', '__dict__', '__doc__',
+'__get__', '__getattribute__', '__hash__', '__init__',
+'__module__', '__name__', '__new__', '__reduce__',
+'__reduce_ex__', '__repr__', '__setattr__', '__str__', 'foo',
+'func_closure', 'func_code', 'func_defaults', 'func_dict',
+'func_doc', 'func_globals', 'func_name', 'xyzzy']
+</code></pre>
+<br /><b>#3</b><br /><p>Given your requirements, I'd say the custom class is your best bet:</p>
+
+<pre><code>class options(object):
+    VERBOSE = True
+    IGNORE_WARNINGS = True
+
+if options.VERBOSE:
+    # ...
+</code></pre>
+
+<p>To be complete, another approach would be using a separate module, i.e. <code>options.py</code> to encapsulate your option defaults.</p>
+
+<p><code>options.py</code>:</p>
+
+<pre><code>VERBOSE = True
+IGNORE_WARNINGS = True
+</code></pre>
+
+<p>Then, in <code>main.py</code>:</p>
+
+<pre><code>import options
+
+if options.VERBOSE:
+    # ...
+</code></pre>
+
+<p>This has the feature of removing some clutter from your script. The default values are easy to find and change, as they are cordoned off in their own module. If later your application has grown, you can easily access the options from other modules.</p>
+
+<p>This is a pattern that I frequently use, and would heartily recommend if you don't mind your application growing larger than a single module. Or, start with a custom class, and expand to a module later if your app grows to multiple modules.</p>
+<br /><b>#4</b><br /><p>I use <a href="http://code.activestate.com/recipes/361668/" rel="nofollow">attrdict</a>:</p>
+
+<pre><code>class attrdict(dict):
+    def __init__(self, *args, **kwargs):
+        dict.__init__(self, *args, **kwargs)
+        self.__dict__ = self
+</code></pre>
+
+<p>Depending on your point of view, you probably think it's either a big kludge or quite clever. But whatever you think, it does make for nice looking code, and is compatible with a dict:</p>
+
+<pre><code>&gt;&gt;&gt; ad = attrdict({'foo': 100, 'bar': 200})
+&gt;&gt;&gt; ad.foo
+100
+&gt;&gt;&gt; ad.bar
+200
+&gt;&gt;&gt; ad.baz = 'hello'
+&gt;&gt;&gt; ad.baz
+'hello'
+&gt;&gt;&gt; ad
+{'baz': 'hello', 'foo': 100, 'bar': 200}
+&gt;&gt;&gt; isinstance(ad, dict)
+True
+</code></pre>
+<br /><b>#5</b><br /><p>As best practices go, you're really better off with one of the options in <a href="http://stackoverflow.com/questions/211695/what-is-an-easy-way-to-create-a-trivial-one-off-python-object#212299">David Eyk's answer</a>. </p>
+
+<p>However, to answer your question, you can create a one-off class using the <code>type</code> function:</p>
+
+<pre><code>options = type('Options', (object,), { 'VERBOSE': True })()
+options.IGNORE_WARNINGS = False
+</code></pre>
+
+<p>Note that you can provide an initial dictionary, or just leave it empty   .</p>
+
+<pre><code>Options = type('Options', (object,), {})
+options = Options()
+options.VERBOSE = True
+options.IGNORE_WARNINGS = False
+</code></pre>
+
+<p>Not very pythonic.</p>
+<br /><b>#6</b><br /><p>Just make a module called Options.py, and import it.  Put your default options values in there as global variables.</p>
+<br /><b>#7</b><br /><p>Simplifying <a href="http://stackoverflow.com/questions/211695/what-is-an-easy-way-to-create-a-trivial-one-off-python-object#211918">davraamides's suggestion</a>, one could use the following:</p>
+
+<pre><code>class attrdict2(object):
+    def __init__(self, *args, **kwargs):
+        self.__dict__.update(*args, **kwargs)
+</code></pre>
+
+<p>which</p>
+
+<ol>
+<li><p>Isn't so kludgy.</p></li>
+<li><p>Doesn't contaminate the namespace of each object with the standard methods of <code>dict</code>; for example, <code>ad.has_key</code> is not defined for objects of type <code>attrdict2</code>.</p></li>
+</ol>
+
+<p>By the way, it is even easier to initialize instances of <code>attrdict</code> or <code>attrdict2</code>:</p>
+
+<pre><code>&gt;&gt;&gt; ad = attrdict2(foo = 100, bar = 200)
+</code></pre>
+
+<p>Granted, <code>attrdict2</code> is not compatible with a <code>dict</code>.</p>
+
+<p>If you don't need the magic initialization behavior, you can even use</p>
+
+<pre><code>class attrdict3(object):
+    pass
+
+ad = attrdict3()
+ad.foo = 100
+ad.bar = 200
+</code></pre>
+
+<p>But I was still hoping for a solution that doesn't require an auxiliary class.</p>
+<br /><b>#8</b><br /><p>One can use</p>
+
+<pre><code>class options(object):
+    VERBOSE = True
+    IGNORE_WARNINGS = False
+
+options.VERBOSE = False
+
+if options.VERBOSE:
+    ...
+</code></pre>
+
+<p>, using the class object itself (not an instance of the class!) as the place to store individual options.  This is terse and satisfies all of the requirements, but it seems like a misuse of the class concept.  It would also lead to confusion if a user instantiated the <code>options</code> class.</p>
+
+<p>(If multiple instances of the options-holding objects were needed, this would be a very nice solution--the class definition supplies default values, which can be overridden in individual instances.)</p>
+<br /><b>#9</b><br /><p>The absolutely simplest class to do the job is:</p>
+
+<pre><code>class Struct:
+    def __init__(self, **entries): 
+        self.__dict__.update(entries)
+</code></pre>
+
+<p>It can be later used as:</p>
+
+<pre><code>john = Struct(name='john doe', salary=34000)
+print john.salary
+</code></pre>
+
+<p><code>namedtuple</code> (as another commented suggested) is a more advanced class that gives you more functionality. If you're still using Python 2.5, the implementation 2.6's <code>namedtuple</code> is based on can be found at <a href="http://code.activestate.com/recipes/500261/" rel="nofollow">http://code.activestate.com/recipes/500261/</a></p>
+<br /><b>#10</b><br /><p>simple object and named tuples are the way to go</p>
+<br />

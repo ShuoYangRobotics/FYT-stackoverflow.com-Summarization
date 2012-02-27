@@ -1,0 +1,181 @@
+<h3>Question (ID-994732):</h3><h2>How can I parse a C header file with Perl?</h2><p>I have a header file in which there is a large struct. I need to read this structure using some program and make some operations on each member of the structure and write them back.</p>
+
+<p>For example I have some structure like </p>
+
+<pre><code>const BYTE Some_Idx[] = {
+4,7,10,15,17,19,24,29,
+31,32,35,45,49,51,52,54,
+55,58,60,64,65,66,67,69,
+70,72,76,77,81,82,83,85,
+88,93,94,95,97,99,102,103,
+105,106,113,115,122,124,125,126,
+129,131,137,139,140,149,151,152,
+153,155,158,159,160,163,165,169,
+174,175,181,182,183,189,190,193,
+197,201,204,206,208,210,211,212,
+213,214,215,217,218,219,220,223,
+225,228,230,234,236,237,240,241,
+242,247,249};
+</code></pre>
+
+<p>Now, I need to read this and apply some operation on each of the member variable and create a new structure with different order, something like:</p>
+
+<pre><code>const BYTE Some_Idx_Mod_mul_2[] = {
+8,14,20, ...
+...
+484,494,498};
+</code></pre>
+
+<p>Is there any Perl library already available for this? If not Perl, something else like Python is also OK.</p>
+
+<p>Can somebody please help!!!</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>Keeping your data lying around in a header makes it trickier to get at using other programs like Perl. Another approach you might consider is to keep this data in a database or another file and regenerate your header file as-needed, maybe even as part of your build system. The reason for this is that generating C is much easier than parsing C, it's trivial to write a script that parses a text file and makes a header for you, and such a script could even be invoked from your build system. </p>
+
+<p>Assuming that you want to keep your data in a C header file, you will need one of two things to solve this problem:</p>
+
+<ul>
+<li>a quick one-off script to parse exactly (or close to exactly) the input you describe. </li>
+<li>a general, well-written script that can parse arbitrary C and work generally on to lots of different headers. </li>
+</ul>
+
+<p>The first case seems more common than the second to me, but it's hard to tell from your question if this is better solved by a script that needs to parse arbitrary C or a script that needs to parse this specific file. For code that works on your specific case, the following works for me on your input:</p>
+
+<pre><code>#!/usr/bin/perl -w
+
+use strict;
+
+open FILE, "&lt;header.h" or die $!;
+my @file = &lt;FILE&gt;;
+close FILE or die $!;
+
+my $in_block = 0;
+my $regex = 'Some_Idx\[\]';
+my $byte_line = '';
+my @byte_entries;
+foreach my $line (@file) {
+    chomp $line;
+
+    if ( $line =~ /$regex.*\{(.*)/ ) {
+    	$in_block = 1;
+    	my @digits = @{ match_digits($1) };
+    	push @digits, @byte_entries;
+    	next;
+    }
+
+    if ( $in_block ) {
+    	my @digits = @{ match_digits($line) };
+    	push @byte_entries, @digits;
+    }
+
+    if ( $line =~ /\}/ ) {
+    	$in_block = 0;
+    }
+}
+
+print "const BYTE Some_Idx_Mod_mul_2[] = {\n";
+print join ",", map { $_ * 2 } @byte_entries;
+print "};\n";
+
+sub match_digits {
+    my $text = shift;
+    my @digits;
+    while ( $text =~ /(\d+),*/g ) {
+    	push @digits, $1;
+    }
+
+    return \@digits;
+}
+</code></pre>
+
+<p>Parsing arbitrary C is a little tricky and not worth it for many applications, but maybe you need to actually do this. One trick is to let GCC do the parsing for you and read in GCC's parse tree using a CPAN module named <a href="http://search.cpan.org/~awin/GCC-TranslationUnit-1.00/TranslationUnit.pm" rel="nofollow">GCC::TranslationUnit</a>. 
+Here's the GCC command to compile the code, assuming you have a single file named test.c:</p>
+
+<p>gcc -fdump-translation-unit -c test.c </p>
+
+<p>Here's the Perl code to read in the parse tree:</p>
+
+<pre><code>  use GCC::TranslationUnit;
+
+  # echo '#include &lt;stdio.h&gt;' &gt; stdio.c
+  # gcc -fdump-translation-unit -c stdio.c
+  $node = GCC::TranslationUnit::Parser-&gt;parsefile('stdio.c.tu')-&gt;root;
+
+  # list every function/variable name
+  while($node) {
+    if($node-&gt;isa('GCC::Node::function_decl') or
+       $node-&gt;isa('GCC::Node::var_decl')) {
+      printf "%s declared in %s\n",
+        $node-&gt;name-&gt;identifier, $node-&gt;source;
+    }
+  } continue {
+    $node = $node-&gt;chain;
+  }
+</code></pre>
+<br /><b>#1</b><br /><p>Sorry if this is a stupid question, but why worry about parsing the file at all? Why not write a C program that #includes the header, processes it as required and then spits out the source for the modified header. I'm sure this would be simpler than the Perl/Python solutions, and it would be much more reliable because the header would be being parsed by the C compilers parser.</p>
+<br /><b>#2</b><br /><p>You don't really provide much information about how what is to be modified should be determined, but to address your specific example:</p>
+
+<pre><code>$ perl -pi.bak -we'if ( /const BYTE Some_Idx/ .. /;/ ) { s/Some_Idx/Some_Idx_Mod_mul_2/g; s/(\d+)/$1 * 2/ge; }' header.h
+</code></pre>
+
+<p>Breaking that down, -p says loop through input files, putting each line in <code>$_</code>, running the supplied code, then printing <code>$_</code>.  -i.bak enables in-place editing, renaming each original file with a .bak suffix and printing to a new file named whatever the original was.  -w enables warnings.  -e'....' supplies the code to be run for each input line.  header.h is the only input file.</p>
+
+<p>In the perl code, <code>if ( /const BYTE Some_Idx/ .. /;/ )</code> checks that we are in a range of lines beginning with a line matching <code>/const BYTE Some_Idx/</code> and ending with a line matching <code>/;/</code>.
+s/.../.../g does a substitution as many times as possible.  <code>/(\d+)/</code> matches a series of digits.  The /e flag says the result (<code>$1 * 2</code>) is code that should be evaluated to produce a replacement string, instead of simply a replacement string.  $1 is the digits that should be replaced.</p>
+<br /><b>#3</b><br /><p>If all you need to do is to modify structs, you can directly use regex to split and apply changes to each value in the struct, looking for the declaration and the ending }; to know when to stop.</p>
+
+<p>If you really need a more general solution you could use a parser generator, like <a href="http://pyparsing.wikispaces.com/" rel="nofollow">PyParsing</a></p>
+<br /><b>#4</b><br /><p>There is a Perl module called <a href="http://search.cpan.org/dist/Parse-RecDescent" rel="nofollow">Parse::RecDescent</a> which is a very powerful recursive descent parser generator. It comes with a bunch of examples. One of them is a <a href="http://cpansearch.perl.org/src/DCONWAY/Parse-RecDescent-1.96.0/demo/demo%5FCgrammar%5Fv2.pl" rel="nofollow">grammar that can parse C</a>.</p>
+
+<p>Now, I don't think this matters in your case, but the recursive descent parsers using Parse::RecDescent are algorithmically slower (O(n^2), I think) than tools like <a href="http://search.cpan.org/dist/Parse-Yapp" rel="nofollow">Parse::Yapp</a> or <a href="http://search.cpan.org/dist/Parse-EYapp" rel="nofollow">Parse::EYapp</a>. I haven't checked whether Parse::EYapp comes with such a C-parser example, but if so, that's the tool I'd recommend learning.</p>
+<br /><b>#5</b><br /><p>Python solution (not full, just a hint ;)) Sorry if any mistakes - not tested</p>
+
+<pre><code>import re
+text = open('your file.c').read()
+patt = r'(?is)(.*?{)(.*?)(}\s*;)'
+m = re.search(patt, text)
+g1, g2, g3 = m.group(1), m.group(2), m.group(3)
+g2 = [int(i) * 2 for i in g2.split(',')
+out = open('your file 2.c', 'w')
+out.write(g1, ','.join(g2), g3)
+out.close()
+</code></pre>
+<br /><b>#6</b><br /><p>There is a really useful Perl module called <a href="http://search.cpan.org/dist/Convert-Binary-C/lib/Convert/Binary/C.pm" rel="nofollow">Convert::Binary::C</a> that parses C header files and converts structs from/to Perl data structures.</p>
+<br /><b>#7</b><br /><p>You could always use <a href="http://perldoc.perl.org/functions/pack.html" rel="nofollow"><code>pack</code></a> / <a href="http://perldoc.perl.org/functions/unpack.html" rel="nofollow"><code>unpack</code></a>, to read, and write the data.</p>
+
+<pre><code>#! /usr/bin/env perl
+use strict;
+use warnings;
+use autodie;
+
+my @data;
+{
+  open( my $file, '&lt;', 'Some_Idx.bin' );
+
+  local $/ = \1; # read one byte at a time
+
+  while( my $byte = &lt;$file&gt; ){
+    push @data, unpack('C',$byte);
+  }
+  close( $file );
+}
+
+print join(',', @data), "\n";
+
+{
+  open( my $file, '&gt;', 'Some_Idx_Mod_mul_2.bin' );
+
+  # You have two options
+  for my $byte( @data ){
+    print $file pack 'C', $byte * 2;
+  }
+  # or
+  print $file pack 'C*', map { $_ * 2 } @data;
+
+  close( $file );
+}
+</code></pre>
+<br /><b>#8</b><br /><p>For the GCC::TranslationUnit example see hparse.pl from <a href="http://gist.github.com/395160" rel="nofollow">http://gist.github.com/395160</a>
+which will make it into C::DynaLib, and the not yet written Ctypes also.
+This parses functions for FFI's, and not bare structs contrary to Convert::Binary::C. 
+hparse will only add structs if used as func args.</p>
+<br />

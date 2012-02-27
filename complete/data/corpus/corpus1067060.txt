@@ -1,0 +1,205 @@
+Question (ID-1067060): Translating Perl to Python I found this Perl script while migrating my SQLite database to mysql 
+
+ I was wondering (since I don't know Perl) how could one rewrite this in Python? 
+
+ Bonus points for the shortest (code) answer :) 
+
+ edit : sorry I meant shortest code, not strictly shortest answer 
+
+ #! /usr/bin/perl
+
+while ($line = &lt;&gt;){
+ if (($line !~ /BEGIN TRANSACTION/) &amp;&amp; ($line !~ /COMMIT/) &amp;&amp; ($line !~ /sqlite_sequence/) &amp;&amp; ($line !~ /CREATE UNIQUE INDEX/)){
+
+  if ($line =~ /CREATE TABLE \"([a-z_]*)\"(.*)/){
+    $name = $1;
+    $sub = $2;
+    $sub =~ s/\"//g; #"
+    $line = "DROP TABLE IF EXISTS $name;\nCREATE TABLE IF NOT EXISTS $name$sub\n";
+  }
+  elsif ($line =~ /INSERT INTO \"([a-z_]*)\"(.*)/){
+    $line = "INSERT INTO $1$2\n";
+    $line =~ s/\"/\\\"/g; #"
+    $line =~ s/\"/\'/g; #"
+  }else{
+    $line =~ s/\'\'/\\\'/g; #'
+  }
+  $line =~ s/([^\\'])\'t\'(.)/$1THIS_IS_TRUE$2/g; #'
+  $line =~ s/THIS_IS_TRUE/1/g;
+  $line =~ s/([^\\'])\'f\'(.)/$1THIS_IS_FALSE$2/g; #'
+  $line =~ s/THIS_IS_FALSE/0/g;
+  $line =~ s/AUTOINCREMENT/AUTO_INCREMENT/g;
+  print $line;
+ }
+}
+ 
+
+ Some additional code was necessary to successfully migrate the sqlite database (handles one line Create table statements, foreign keys, fixes a bug in the original program that converted empty fields '' to \' . 
+
+ I posted the code on the migrating my SQLite database to mysql Question 
+ Answers (Total-8): #0 Here's a pretty literal translation with just the minimum of obvious style changes (putting all code into a function, using string rather than re operations where possible). 
+
+ import re, fileinput
+
+def main():
+ for line in fileinput.input():
+ process = False
+ for nope in ('BEGIN TRANSACTION','COMMIT',
+     'sqlite_sequence','CREATE UNIQUE INDEX'):
+  if nope in line: break
+ else:
+  process = True
+ if not process: continue
+ m = re.search('CREATE TABLE "([a-z_]*)"(.*)', line)
+ if m:
+  name, sub = m.groups()
+  line = '''DROP TABLE IF EXISTS %(name)s;
+CREATE TABLE IF NOT EXISTS %(name)s%(sub)s
+'''
+  line = line % dict(name=name, sub=sub)
+ else:
+  m = re.search('INSERT INTO "([a-z_]*)"(.*)', line)
+  if m:
+  line = 'INSERT INTO %s%s\n' % m.groups()
+  line = line.replace('"', r'\"')
+  line = line.replace('"', "'")
+ line = re.sub(r"([^'])'t'(.)", r"\1THIS_IS_TRUE\2", line)
+ line = line.replace('THIS_IS_TRUE', '1')
+ line = re.sub(r"([^'])'f'(.)", r"\1THIS_IS_FALSE\2", line)
+ line = line.replace('THIS_IS_FALSE', '0')
+ line = line.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+ print line,
+
+main()
+ 
+ #1 Alex Martelli's solution above works good, but needs some fixes and additions: 
+
+ In the lines using regular expression substitution, the insertion of the matched groups must be double-escaped OR the replacement string must be prefixed with r to mark is as regular expression: 
+
+ line = re.sub(r"([^'])'t'(.)", "\\1THIS_IS_TRUE\\2", line)
+ 
+
+ or 
+
+ line = re.sub(r"([^'])'f'(.)", r"\1THIS_IS_FALSE\2", line)
+ 
+
+ Also, this line should be added before print: 
+
+ line = line.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+ 
+
+ Last, the column names in create statements should be backticks in MySQL. Add this in line 15: 
+
+ sub = sub.replace('"','`')
+ 
+
+ Here's the complete script with modifications: 
+
+ import re, fileinput
+
+def main():
+ for line in fileinput.input():
+ process = False
+ for nope in ('BEGIN TRANSACTION','COMMIT',
+     'sqlite_sequence','CREATE UNIQUE INDEX'):
+  if nope in line: break
+ else:
+  process = True
+ if not process: continue
+ m = re.search('CREATE TABLE "([a-z_]*)"(.*)', line)
+ if m:
+  name, sub = m.groups()
+  sub = sub.replace('"','`')
+  line = '''DROP TABLE IF EXISTS %(name)s;
+CREATE TABLE IF NOT EXISTS %(name)s%(sub)s
+'''
+  line = line % dict(name=name, sub=sub)
+ else:
+  m = re.search('INSERT INTO "([a-z_]*)"(.*)', line)
+  if m:
+  line = 'INSERT INTO %s%s\n' % m.groups()
+  line = line.replace('"', r'\"')
+  line = line.replace('"', "'")
+ line = re.sub(r"([^'])'t'(.)", "\\1THIS_IS_TRUE\\2", line)
+ line = line.replace('THIS_IS_TRUE', '1')
+ line = re.sub(r"([^'])'f'(.)", "\\1THIS_IS_FALSE\\2", line)
+ line = line.replace('THIS_IS_FALSE', '0')
+ line = line.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+ if re.search('^CREATE INDEX', line):
+  line = line.replace('"','`')
+ print line,
+
+main()
+ 
+ #2 Here is a slightly better version of the original. 
+
+ #! /usr/bin/perl
+use strict;
+use warnings;
+use 5.010; # for s/\K//;
+
+while( &lt;&gt; ){
+ next if m'
+ BEGIN TRANSACTION |
+ COMMIT    |
+ sqlite_sequence  |
+ CREATE UNIQUE INDEX
+ 'x;
+
+ if( my($name,$sub) = m'CREATE TABLE \"([a-z_]*)\"(.*)' ){
+ # remove "
+ $sub =~ s/\"//g; #"
+ $_ = "DROP TABLE IF EXISTS $name;\nCREATE TABLE IF NOT EXISTS $name$sub\n";
+
+ }elsif( /INSERT INTO \"([a-z_]*)\"(.*)/ ){
+ $_ = "INSERT INTO $1$2\n";
+
+ # " =&gt; \"
+ s/\"/\\\"/g; #"
+ # " =&gt; '
+ s/\"/\'/g; #"
+
+ }else{
+ # '' =&gt; \'
+ s/\'\'/\\\'/g; #'
+ }
+
+ # 't' =&gt; 1
+ s/[^\\']\K\'t\'/1/g; #'
+
+ # 'f' =&gt; 0
+ s/[^\\']\K\'f\'/0/g; #'
+
+ s/AUTOINCREMENT/AUTO_INCREMENT/g;
+ print;
+}
+ 
+ #3 Based on http://docs.python.org/dev/howto/regex.html ... 
+
+ 
+ Replace $line =~ /.*/ with re.search(r".*", line) . 
+ $line !~ /.*/ is just !($line =~ /.*/) . 
+ Replace $line =~ s/.*/x/g with line=re.sub(r".*", "x", line) . 
+ Replace $1 through $9 inside re.sub with \1 through \9 respectively. 
+ Outside a sub, save the return value, i.e. m=re.search() , and replace $1 with the return value of m.group(1) . 
+ For "INSERT INTO $1$2\n" specifically, you can do "INSERT INTO %s%s\n" % (m.group(1), m.group(2)) . 
+ 
+ #4 I am not sure what is so hard to understand about this that it requires a snide remark as in your comment above. Note that &lt;&gt; is called the diamond operator. s/// is the substitution operator and // is the match operator m// . 
+ #5 all of scripts on this page can't deal with simple sqlite3: 
+
+ PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE Filename (
+ FilenameId INTEGER,
+ Name TEXT DEFAULT '',
+ PRIMARY KEY(FilenameId) 
+ );
+INSERT INTO "Filename" VALUES(1,'');
+INSERT INTO "Filename" VALUES(2,'bigfile1');
+INSERT INTO "Filename" VALUES(3,'%gconf-tree.xml');
+ 
+
+ None were able to reformat "table_name" into proper mysql's `table_name` . Some messed up empty string value. 
+ #6 Shortest? The tilde signifies a regex in perl. "import re" and go from there. The only key differences are that you'll be using \1 and \2 instead of $1 and $2 when you assign values, and you'll be using %s for when you're replacing regexp matches inside strings. 
+ #7 Real issue is do you know actually how to migrate the database? What is presented is merely a search and replace loop.

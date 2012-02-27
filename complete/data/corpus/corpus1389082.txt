@@ -1,0 +1,107 @@
+Question (ID-1389082): IPv6 address validation and canonicalization What libs have you used for that? How compatible are they with one another? Or did you write your own parsing routine? 
+
+ I'm particularly interested in mutually-compatible implementations for Java, C++, Python, and JavaScript, which support: 
+
+ 
+ zero compression (" :: ") 
+ IPv4-mapped addresses (" ::ffff:123.45.67.89 ") 
+ canonicalization (including to the short form, for human readability) 
+ CIDR-style netmasks (like " /64 " at the end) 
+ 
+ Answers (Total-8): #0 On POSIX systems you can use inet_pton and inet_ntop in combination to do canonicalization. You will still have to do your own CIDR parsing. Fortunately, I believe the only valid CIDR syntax for IPv6 is the /number_of_bits notation, so that's fairly easy. 
+
+ The other issue you will run into is the lack of support for interface specifications. For link-local addresses, you will see things like %eth0 on the end to specify what link they are local too. getaddrinfo will parse that but inet_pton won't. 
+
+ One strategy you could go for is using getaddrinfo to parse and inet_ntop to canonicalize. 
+
+ getaddrinfo is available for Windows. inet_pton and inet_ntop aren't. Fortunately, it isn't too hard to write code to produce a canonical form IPv6 address. It will require two passes though because the rule for 0 compression is the biggest string of 0s that occurs first. Also IPv4 form (i.e. ::127.0.0.1 ) is only used for ::IPv4 or ::ffff:IPv4 . 
+
+ I have no Windows machine to test with, but from the documentation it appears that Python on Windows supports inet_pton and inet_ntop in its socket module. 
+
+ Writing your own routine for producing a canonical form might not be a bad idea, since even if your canonical form isn't the same as everybody else's, as long as it's valid other people can parse it. But I would under no circumstances write a routine of your own to parse IPv6 addresses. 
+
+ My advice above is good for Python, C, and C++. I know little or nothing about how to solve this problem in Java or Javascript. 
+
+ EDIT : I have been examining getaddrinfo and its counterpart, getnameinfo. These are in almost all ways better than inet_pton and inet_ntop . They are thread safe, and you can pass them options ( AI_NUMERICHOST in getaddrinfo 's case, and NI_NUMERCHOST in getnameinfo 's case) to keep them from doing any kind of DNS queries. Their interface is a little complex and reminds me of an ugly Windows interface in some respects, but it's fairly easy to figure out what options to pass to get what you want. I heartily recommend them both. 
+ #1 In Java, You could use 
+
+ InetAddress.getByName(IP)
+ 
+
+ and then check for exceptions thrown by this for validating IPv6 addresses 
+
+ You could also use Sun Propreitary API if thats oK to you. THis will not perform a DNS lookup. ( They might change it/remove it without notice since its their propreitary API.This is a warning that will come when compiling a code using this ) 
+
+ boolean sun.net.util.IPAddressUtil.isIPv6LiteralAddress(String IP)
+ 
+ #2 I wrote javascript-ipv6 for this very purpose. It currently powers v6decode.com . 
+
+ Here's a short example of the API: 
+
+ var address = new v6.Address("::ffff:7b2d:4359/64");
+
+if (address.isValid()) {
+ // Do something if the address is valid
+}
+
+console.log(address.correctForm());   // "::ffff:7b2d:4359"
+console.log(address.canonicalForm());  // "0000:0000:0000:0000:0000:ffff:7b2d:4359"
+console.log(address.v4Form());    // "::ffff:123.45.67.89"
+console.log(address.subnetMask);   // "64"
+console.log(address.possibleAddresses(96)); // "4,294,967,296"
+ 
+ #3 From what I can gather, you should use getaddrinfo() on systems that have it, i.e. Linux and POSIX places. There should be no need to write your own low-level parser. 
+
+ Windows also provides getaddrinfo() , on XP and later. 
+ #4 For Python, the best solution might be IPy ( http://pypi.python.org/pypi/IPy/0.51 ) 
+ #5 getaddrinfo already returns the shortest textual form, so if you have the longer form you can canonicalize by running through getaddrinfo again. Example Python, 
+
+ import sys, socket;
+result = socket.getaddrinfo('0:0::0:1', None);
+print "family:%i socktype:%i proto:%i canonname:%s sockaddr:%s"%result[0];
+ 
+
+ Outputs the following, 
+
+ family:10 socktype:1 proto:6 canonname: sockaddr:('::1', 0, 0, 0)
+ 
+
+ IPv6 CIDR blocks don't appear to be well documented or defined so I wrote my own inet6_network implementation to handle that (C99). 
+ #6 I use a regular expression when os support may not be available - RE is available in most languages, including C/C++/Java/Python/Perl/bash/.... The following python code builds the RE at startup, the resulting RE source is a humdinger - but once compiled by the re engine is as fast as native code. 
+
+ PAT_IP4 = r'\.'.join([r'(?:\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])']*4)
+RE_IP4 = re.compile(PAT_IP4+'$')
+RE_IP6 = re.compile(     '(?:%(hex4)s:){6}%(ls32)s$'
+    '|::(?:%(hex4)s:){5}%(ls32)s$'
+    '|(?:%(hex4)s)?::(?:%(hex4)s:){4}%(ls32)s$'
+'|(?:(?:%(hex4)s:){0,1}%(hex4)s)?::(?:%(hex4)s:){3}%(ls32)s$'
+'|(?:(?:%(hex4)s:){0,2}%(hex4)s)?::(?:%(hex4)s:){2}%(ls32)s$'
+'|(?:(?:%(hex4)s:){0,3}%(hex4)s)?::%(hex4)s:%(ls32)s$'
+'|(?:(?:%(hex4)s:){0,4}%(hex4)s)?::%(ls32)s$'
+'|(?:(?:%(hex4)s:){0,5}%(hex4)s)?::%(hex4)s$'
+'|(?:(?:%(hex4)s:){0,6}%(hex4)s)?::$'
+ % {
+'ls32': r'(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|%s)'%PAT_IP4,
+'hex4': r'[0-9a-f]{1,4}'
+}, re.IGNORECASE)
+ 
+ #7 It's too bad Python 3.1 lost the ipaddr lib. 
+
+ It's still available as a third-party library: py-ipaddr available on PyPI . 
+
+ Compression 
+
+ &gt;&gt;&gt; ipaddr.IPv6Address('0:0::0:1').compressed
+'::1'
+ 
+
+ IPv4 mapping 
+
+ &gt;&gt;&gt; ipaddr.IPv6Address('::ffff:123.45.67.89').ipv4_mapped
+IPv4Address('123.45.67.89')
+ 
+
+ CIDR 
+
+ &gt;&gt;&gt; ipaddr.IPv6Network('::ffff:123.45.67.89/128')
+IPv6Network('::ffff:7b2d:4359/128')

@@ -1,0 +1,276 @@
+Question (ID-4047511): Checking if an ISBN number is correct I'm given some ISBN numbers e.g. 3-528-03851 (not valid) , 3-528-16419-0 (valid). I'm supposed to write a program which tests if the ISBN number is valid. 
+
+ Here' my code: 
+
+ def check(isbn):
+ check_digit = int(isbn[-1])
+ match = re.search(r'(\d)-(\d{3})-(\d{5})', isbn[:-1])
+
+ if match:
+  digits = match.group(1) + match.group(2) + match.group(3)
+  result = 0
+
+  for i, digit in enumerate(digits):
+   result += (i + 1) * int(digit)
+
+  return True if (result % 11) == check_digit else False
+
+ return False
+ 
+
+ I've used a regular expression to check a) if the format is valid and b) extract the digits in the ISBN string. While it seems to work, being a Python beginner I'm eager to know how I could improve my code. Suggestions? 
+ Answers (Total-8): #0 First, try to avoid code like this: 
+
+ if Action():
+ lots of code
+ return True
+return False
+ 
+
+ Flip it around, so the bulk of code isn't nested. This gives us: 
+
+ def check(isbn):
+ check_digit = int(isbn[-1])
+ match = re.search(r'(\d)-(\d{3})-(\d{5})', isbn[:-1])
+
+ if not match:
+  return False
+
+ digits = match.group(1) + match.group(2) + match.group(3)
+ result = 0
+
+ for i, digit in enumerate(digits):
+  result += (i + 1) * int(digit)
+
+ return True if (result % 11) == check_digit else False
+ 
+
+ There are some bugs in the code: 
+
+ 
+ If the check digit isn't an integer, this will raise ValueError instead of returning False: "0-123-12345-Q". 
+ If the check digit is 10 ("X"), this will raise ValueError instead of returning True. 
+ This assumes that the ISBN is always grouped as "1-123-12345-1". That's not the case; ISBNs are grouped arbitrarily. For example, the grouping "12-12345-12-1" is valid. See http://www.isbn.org/standards/home/isbn/international/html/usm4.htm . 
+ This assumes the ISBN is grouped by hyphens. Spaces are also valid. 
+ It doesn't check that there are no extra characters; '0-123-4567819' returns True, ignoring the extra 1 at the end. 
+ 
+
+ So, let's simplify this. First, remove all spaces and hyphens, and make sure the regex matches the whole line by bracing it in '^...$'. That makes sure it rejects strings which are too long. 
+
+ def check(isbn):
+ isbn = isbn.replace("-", "").replace(" ", "");
+ check_digit = int(isbn[-1])
+ match = re.search(r'^(\d{9})$', isbn[:-1])
+ if not match:
+  return False
+
+ digits = match.group(1)
+
+ result = 0
+ for i, digit in enumerate(digits):
+  result += (i + 1) * int(digit)
+
+ return True if (result % 11) == check_digit else False
+ 
+
+ Next, let's fix the "X" check digit problem. Match the check digit in the regex as well, so the entire string is validated by the regex, then convert the check digit correctly. 
+
+ def check(isbn):
+ isbn = isbn.replace("-", "").replace(" ", "").upper();
+ match = re.search(r'^(\d{9})(\d|X)$', isbn)
+ if not match:
+  return False
+
+ digits = match.group(1)
+ check_digit = 10 if match.group(2) == 'X' else int(match.group(2))
+
+ result = 0
+ for i, digit in enumerate(digits):
+  result += (i + 1) * int(digit)
+
+ return True if (result % 11) == check_digit else False
+ 
+
+ Finally, using a generator expression and max is a more idiomatic way of doing the final calculation in Python, and the final conditional can be simplified. 
+
+ def check(isbn):
+ isbn = isbn.replace("-", "").replace(" ", "").upper();
+ match = re.search(r'^(\d{9})(\d|X)$', isbn)
+ if not match:
+  return False
+
+ digits = match.group(1)
+ check_digit = 10 if match.group(2) == 'X' else int(match.group(2))
+
+ result = sum((i + 1) * int(digit) for i, digit in enumerate(digits))
+ return (result % 11) == check_digit
+ 
+ #1 Pointless improvement: replace return True if (result % 11) == check_digit else False with return (result % 11) == check_digit 
+ #2 
+ The check_digit initialization can raise a ValueError if the last character isn't a decimal digit. Why not pull out the check digit with your regex instead of using slicing? 
+ Instead of search, you should probably use match, unless you want to allow arbitrary junk as the prefix. (Also, as a rule of thumb I'd anchor the end with $ , though in your case that won't matter as your regex is fixed-width.) 
+ Instead of manually listing the groups, you could just use ''.join(match.groups()) , and pull the check_digit out afterwards. You might as well do the conversion to int s before pulling it out, as you want to convert all of them to int s anyway. 
+ your for loop could be replaced by a list/generator comprehension. Just use sum() to add up the elements. 
+ True if (expression) else False can generally be replaced with simply expression . Likewise, False if (expression) else True can always be replaced with simply not expression 
+ 
+
+ Putting that all together: 
+
+ def check(isbn):
+ match = re.match(r'(\d)-(\d{3})-(\d{5})-(\d)$', isbn)
+ if match:
+  digits = [int(x) for x in ''.join(match.groups())]
+  check_digit = digits.pop()
+  return check_digit == sum([(i + 1) * digit
+         for i, digit in enumerate(digits)]) % 11
+ return False
+ 
+
+ The last line is arguably unnecessary, as the default behavior would be to return None (which is falsy), but explicit returns from some paths and not from others looks like a bug to me, so I think it's more readable to leave it in. 
+ #3 All that regex stuff is great if you belong to the isbn.org compliance inspectorate. 
+
+ However, if you want to know if what the potential customers type into their browser is worth pushing into a query of your database of books for sale, you don't want all that nice red uniform caper. Simply throw away everything but 0-9 and X ... oh yeah nobody uses the shift key so we'd better allow x as well. Then if it's length 10 and passes the check-digit test, it's worth doing the query. 
+
+ From http://www.isbn.org/standards/home/isbn/international/html/usm4.htm 
+
+ 
+ The check digit is the last digit of
+ an ISBN. It is calculated on a modulus
+ 11 with weights 10-2, using X in lieu
+ of 10 where ten would occur as a check
+ digit. 
+ 
+ This means that each of the first nine
+ digits of the ISBN -- excluding the
+ check digit itself -- is multiplied by
+ a number ranging from 10 to 2 and that
+ the resulting sum of the products,
+ plus the check digit, must be
+ divisible by 11 without a remainder. 
+ 
+
+ which is a very long-winded way of saying "each of all the digits is multiplied by a number ranging from 10 to 1 and that the resulting sum of the products must be divisible by 11 without a remainder" 
+
+ def isbn10_ok(s):
+ data = [c for c in s if c in '0123456789Xx']
+ if len(data) != 10: return False
+ if data[-1] in 'Xx': data[-1] = 10
+ try:
+  return not sum((10 - i) * int(x) for i, x in enumerate(data)) % 11
+ except ValueError:
+  # rare case: 'X' or 'x' in first 9 "digits"
+  return False
+
+
+tests = """\
+ 3-528-03851
+ 3-528-16419-0
+ ISBN 0-8436-1072-7
+ 0864425244
+ 1864425244
+ 0864X25244
+ 1 904310 16 8
+ 0-473-07480-x
+ 0-473-07480-X
+ 0-473-07480-9
+ 0-473-07480-0
+ 123456789
+ 12345678901
+ 1234567890
+ 0000000000
+ """.splitlines()
+
+for test in tests:
+ test = test.strip()
+ print repr(test), isbn10_ok(test)
+ 
+
+ Output: 
+
+ '3-528-03851' False
+'3-528-16419-0' True
+'ISBN 0-8436-1072-7' True
+'0864425244' True
+'1864425244' False
+'0864X25244' False
+'1 904310 16 8' True
+'0-473-07480-x' True
+'0-473-07480-X' True
+'0-473-07480-9' False
+'0-473-07480-0' False
+'123456789' False
+'12345678901' False
+'1234567890' False
+'0000000000' True
+'' False
+ 
+
+ Aside: a large well-known bookselling site will accept 047307480x, 047307480X, and 0-473-07480-X but not 0-473-07480-x :-O 
+ #4 check this after you have finished ok :) 
+
+ http://www.staff.ncl.ac.uk/d.j.wilkinson/software/isbn.py 
+
+ and 
+
+ http://chrisrbennett.com/2006/11/isbn-check-methods.html 
+
+ EDIT : Sorry about the confusing i didn't see the homework tag but maybe after finishing your homework you can see what other have done before, i think you can learn a lot from others code ; sorry again :( 
+ #5 Your code is nice -- well done for writing idiomatic Python! Here are some minor things: 
+
+ 
+
+ When you see the idiom 
+
+ result = &lt;initiator&gt;
+for elt in &lt;iterable&gt;:
+ result += elt
+ 
+
+ you can replace it by a list comprehension. In this case: 
+
+ result = sum((i+1)*int(digit) for i, digit in enumerate(digits)
+ 
+
+ or even more concisely: 
+
+ return sum((i+1)*int(digit) for i, digit in enumerate(digits) % 11 == check_digit
+ 
+
+ Of course, it is a value judgement whether this is better than the original. I would personally consider the second of these to be best. 
+
+ Also, the extra parentheses in (result % 11) == check_digit are extraneous and I don't really think you need them for clarity. That leaves you overall with: 
+
+ def validate(isbn):
+ check_digit = int(isbn[-1])
+ match = re.search(r'(\d)-(\d{3})-(\d{5})', isbn[:-1])
+
+ if match:
+  digits = match.group(1) + match.group(2) + match.group(3)
+  parity = sum((i+1)*int(digit) for i, digit in enumerate(digits)
+  return parity % 11 == check_digit
+ else:
+  return False
+ 
+
+ Note that you do still need the return False to catch the case that the ISBN is not even in the right format. 
+ #6 Don't forget (though this may be outside of the scope of your assignment) to calculate the check digit of the ISBN (the final digit), to determine if the ISBN is valid and not just seemingly valid . 
+
+ There's some information about the implementation of the check digit on the ISBN.org website , and implementation should be fairly straightforward. Wikipedia offers one such example (presuming you've already converted any ASCII "X" to a decimal 10): 
+
+ bool is_isbn_valid(char digits[10]) {
+ int i, a = 0, b = 0;
+ for (i = 0; i &lt; 10; i++) {
+  a += digits[i]; // Assumed already converted from ASCII to 0..10
+  b += a;
+ }
+ return b % 11 == 0;
+}
+ 
+
+ Applying this for your assignment is left, well, as an exercise for you. 
+ #7 Your check digit can take on the values 0-10, based on the fact that it's modulo-11. There's a problem with the line: 
+
+  check_digit = int(isbn[-1]) 
+ 
+
+ as this works only for the digits 0-9. You'll need something for the case when the digit is 'X', and also for the error condition when it isn't any of the above - otherwise your program will crash.

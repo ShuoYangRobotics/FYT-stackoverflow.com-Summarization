@@ -1,0 +1,237 @@
+<h3>Question (ID-4051261):</h3><h2>Handle a blocking function call in Python</h2><p>I'm working with the <a href="http://gnuradio.org/redmine/wiki/gnuradio" rel="nofollow">Gnuradio framework</a>. I handle flowgraphs I generate to send/receive signals. These flowgraphs initialize and start, but they don't return the control flow to my application:</p>
+
+<p>I imported <code>time</code></p>
+
+<pre><code>while time.time() &lt; endtime:
+        # invoke GRC flowgraph for 1st sequence
+        if not seq1_sent:
+            tb = send_seq_2.top_block()
+            tb.Run(True)
+            seq1_sent = True
+            if time.time() &lt; endtime:
+                break
+
+        # invoke GRC flowgraph for 2nd sequence
+        if not seq2_sent:
+            tb = send_seq_2.top_block()
+            tb.Run(True)
+            seq2_sent = True
+            if time.time() &lt; endtime:
+                break
+</code></pre>
+
+<p>The problem is: only the first if statement invokes the flow-graph (that interacts with the hardware). I'm stuck in this. I could use a Thread, but I'm unexperienced how to timeout threads in Python. I doubt that this is possible, because it seems killing threads isn't within the APIs. This script only has to work on Linux...</p>
+
+<p>How do you handle blocking functions with Python properly - without killing the whole program. 
+Another more concrete example for this problem is:</p>
+
+<pre><code>import signal, os
+
+def handler(signum, frame):
+        # print 'Signal handler called with signal', signum
+        #raise IOError("Couldn't open device!")
+        import time
+        print "wait"
+        time.sleep(3)
+
+
+def foo():
+    # Set the signal handler and a 5-second alarm
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(3)
+
+    # This open() may hang indefinitely
+    fd = os.open('/dev/ttys0', os.O_RDWR)
+    signal.alarm(0)          # Disable the alarm
+
+
+foo()
+print "hallo"
+</code></pre>
+
+<p>How do I still get <code>print "hallo"</code>. ;)</p>
+
+<p>Thanks,
+Marius</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>IIUC, each top_block has a stop method. So you actually can run the top_block in a thread, and issue a stop if the timeout has arrived. It would be better if the top_block's wait() also had a timeout, but alas, it doesn't.</p>
+
+<p>In the main thread, you then need to wait for two cases: a) the top_block completes, and b) the timeout expires. Busy-waits are evil :-), so you should use the thread's join-with-timeout to wait for the thread. If the thread is still alive after the join, you need to stop the top_run.</p>
+<br /><b>#1</b><br /><p>You can set a signal alarm that will interrupt your call with a timeout:</p>
+
+<p><a href="http://docs.python.org/library/signal.html" rel="nofollow">http://docs.python.org/library/signal.html</a></p>
+
+<pre><code>signal.alarm(1) # 1 second
+
+my_blocking_call()
+signal.alarm(0)
+</code></pre>
+
+<p>You can also set a signal handler if you want to make sure it won't destroy your application:</p>
+
+<pre><code>def my_handler(signum, frame):
+    pass
+
+signal.signal(signal.SIGALRM, my_handler)
+</code></pre>
+
+<p><strong>EDIT:</strong>
+What's wrong with this piece of code ? This should not abort your application:</p>
+
+<pre><code>import signal, time
+
+def handler(signum, frame):
+    print "Timed-out"
+
+def foo():
+    # Set the signal handler and a 5-second alarm
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(3)
+
+    # This open() may hang indefinitely
+    time.sleep(5)
+    signal.alarm(0)          # Disable the alarm
+
+
+foo()
+print "hallo"
+</code></pre>
+
+<p>The thing is: </p>
+
+<ol>
+<li><p>The default handler for SIGALRM is to abort the application, if you set your handler then it should no longer stop the application.</p></li>
+<li><p>Receiving a signal usually interrupts system calls (then unblocks your application)</p></li>
+</ol>
+<br /><b>#2</b><br /><p>First of all - the use of signals should be avoided at all cost:</p>
+
+<p>1) It may lead to a deadlock. SIGALRM may reach the process BEFORE the blocking syscall (imagine super-high load in the system!) and the syscall will not be interrupted. Deadlock.</p>
+
+<p>2) Playing with signals may have some nasty non-local consequences. For example, syscalls in other threads may be interrupted which usually is not what you want. Normally syscalls are restarted when (not a deadly) signal is received. When you set up a signal handler it automatically turns off this behavior for the whole process, or thread group so to say. Check 'man siginterrupt' on that.</p>
+
+<p>Believe me - I met two problems before and they are not fun at all.</p>
+
+<p>In some cases the blocking can be avoided explicitely - I strongly recommend using select() and friends (check select module in Python) to handle blocking writes and reads. This will not solve blocking open() call, though.</p>
+
+<p>For that I've tested this solution and it works well for named pipes. It opens in a non-blocking way, then turns it off and uses select() call to eventually timeout if nothing is available.</p>
+
+<pre><code>import sys, os, select, fcntl
+
+f = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK)
+
+flags = fcntl.fcntl(f, fcntl.F_GETFL, 0)
+fcntl.fcntl(f, fcntl.F_SETFL, flags &amp; ~os.O_NONBLOCK)
+
+r, w, e = select.select([f], [], [], 2.0)
+
+if r == [f]:
+    print 'ready'
+    print os.read(f, 100)
+else:
+    print 'unready'
+
+os.close(f)
+</code></pre>
+
+<p>Test this with:</p>
+
+<pre><code>mkfifo /tmp/fifo
+python &lt;code_above.py&gt; /tmp/fifo (1st terminal)
+echo abcd &gt; /tmp/fifo (2nd terminal)
+</code></pre>
+
+<p>With some additional effort select() call can be used as a main loop of the whole program, aggregating all events - you can use libev or libevent, or some Python wrappers around them.</p>
+
+<p>When you can't explicitely force non-blocking behavior, say you just use an external library, then it's going to be much harder. Threads may do, but obviously it is not a state-of-the-art solution, usually being just wrong.</p>
+
+<p>I'm afraid that in general you can't solve this in a robust way - it really depends on WHAT you block.</p>
+<br /><b>#3</b><br /><p>you could try using Deferred execution... Twisted framework uses them alot</p>
+
+<p><a href="http://www6.uniovi.es/python/pycon/papers/deferex/" rel="nofollow">http://www6.uniovi.es/python/pycon/papers/deferex/</a></p>
+<br /><b>#4</b><br /><p>You mention killing threads in Python - this is partialy possible although you can kill/interrupt another thread only when Python code runs, not in C code, so this may not help you as you want.</p>
+
+<p>see this answer to another question:
+<a href="http://stackoverflow.com/questions/605013/python-how-to-send-packets-in-multi-thread-and-then-the-thread-kill-itself/605865#605865">http://stackoverflow.com/questions/605013/python-how-to-send-packets-in-multi-thread-and-then-the-thread-kill-itself/605865#605865</a></p>
+
+<p>or google for killable python threads for more details like this:
+<a href="http://code.activestate.com/recipes/496960-thread2-killable-threads/" rel="nofollow">http://code.activestate.com/recipes/496960-thread2-killable-threads/</a></p>
+<br /><b>#5</b><br /><pre><code>if not seq1_sent:
+        tb = send_seq_2.top_block()
+        tb.Run(True)
+        seq1_sent = True
+        if time.time() &lt; endtime:
+            break
+</code></pre>
+
+<p>If the 'if time.time() &lt; endtime:' then you will break out of the loop and the seq2_sent stuff will never be hit, maybe you mean 'time.time() > endtime' in that test?</p>
+<br /><b>#6</b><br /><p>The easy part of your question related to the signal handling.  From the perspective of the Python runtime a signal which has been received while the interpreter was making a system call is presented to your Python code as an OSError exception with an <code>errno</code> attributed corresponding to <code>errno.EINTR</code></p>
+
+<p>So this probably works roughly as you intended:</p>
+
+<pre><code>    #!/usr/bin/env python
+    import signal, os, errno, time
+
+    def handler(signum, frame):
+            # print 'Signal handler called with signal', signum
+            #raise IOError("Couldn't open device!")
+            print "timed out"
+            time.sleep(3)
+
+
+    def foo():
+        # Set the signal handler and a 5-second alarm
+        signal.signal(signal.SIGALRM, handler)
+
+        try:
+            signal.alarm(3)
+            # This open() may hang indefinitely
+            fd = os.open('/dev/ttys0', os.O_RDWR)
+        except OSError, e:
+            if e.errno != errno.EINTR:
+                raise e
+        signal.alarm(0)          # Disable the alarm
+
+    foo()
+    print "hallo"
+</code></pre>
+
+<p>Note I've moved the import of <code>time</code> out of the function definition as it seems to be poor form to hide imports in that way.  It's not at all clear to me why you're sleeping in your signal handler and, in fact, it seems like a rather bad idea.</p>
+
+<p>The key point I'm trying to make is that any (non-ignored) signal will interrupt your main line of Python code execution.  Your handler will be invoked with arguments indicating which signal number triggered the execution (allowing for one Python function to be used for handling many different signals) and a frame object (which could be used for debugging or instrumentation of some sort).</p>
+
+<p>Because the main flow through the code is interrupted it's necessary for you to wrap that code in your exception handling in order to regain control after such events have occurred.  (Incidentally if you're writing code in C you'd have the same concern; you have to be prepared for any of your library functions with underlying system calls to return errors and handle EINTR in the system errno by looping back to retry or branching to some alternative in your main line (such as proceeding to some other file, or without any file/input, etc).</p>
+
+<p>As others have indicated in their responses to your question, basing your approach in SIGALARM is likely to be fraught with portability and reliability issues.  Worse, some of these issues may be race conditions that you'll never encounter in your testing environment and may only occur under conditions that are extremely hard to reproduce.  The ugly details tend to be in cases of re-entrancy --- what happens if signals are dispatched during execution of your signal handler?</p>
+
+<p>I've used SIGALARM in some scripts and it hasn't been an issue for me, under Linux.  The code I was working on was suitable to the task.  It might be adequate for your needs.</p>
+
+<p>Your primary question is difficult to answer without knowing more about how this Gnuradio code behaves, what sorts of objects you instantiate from it, and what sorts of objects they return.</p>
+
+<p>Glancing at the docs to which you've linked, I see that they don't seem to offer any sort of "timeout" argument or setting that could be used to limit blocking behavior directly.  In the table under "Controlling Flow Graphs" I see that they specifically say that <code>.run()</code> can execute indefinitely or until SIGINT is received.  I also note that <code>.start()</code> can start threads in your application and, it seems, returns control to your Python code line while those are running.  (That seems to depend on the nature of your flow graphs, which I don't understand sufficiently).</p>
+
+<p>It sounds like you could create your flow graphs, <code>.start()</code> them, and then (after some time processing or sleeping in your main line of Python code) call the <code>.lock()</code> method on your controlling object (tb?).  This, I'm guessing, puts the Python representation of the state ... the Python object ... into a quiescent mode to allow you to query the state or, as they say, reconfigure your flow graph.  If you call <code>.run()</code> it will call <code>.wait()</code> after it calls <code>.start()</code>; and <code>.wait()</code> will apparently run until either all blocks "indicate they are done" or until you call the object's <code>.stop()</code> method.</p>
+
+<p>So it sounds like you want to use <code>.start()</code> and neither <code>.run()</code> nor <code>.wait()</code>; then call <code>.stop()</code> after doing any other processing (including <code>time.sleep()</code>).</p>
+
+<p>Perhaps something as simple as:</p>
+
+<pre><code>    tb = send_seq_2.top_block()
+    tb.start()
+    time.sleep(endtime - time.time())
+    tb.stop()
+    seq1_sent = True
+    tb = send_seq_2.top_block()
+    tb.start()
+    seq2_sent = True
+</code></pre>
+
+<p>.. though I'm suspicious of my <code>time.sleep()</code> there.  Perhaps you want to do something else where you query the <code>tb</code> object's state (perhaps entailing sleeping for smaller intervals, calling its <code>.lock()</code> method, and accessing attributes that I know nothing about and then calling its <code>.unlock()</code> before sleeping again.</p>
+<br /><b>#7</b><br /><p>If you want to set a timeout on a blocking function, threading.Thread as the method join(timeout) which blocks until the timeout.</p>
+
+<p>Basically, something like that should do what you want :</p>
+
+<pre><code>import threading
+my_thread = threading.Thread(target=send_seq_2.top_block)
+my_thread.start()
+my_thread.join(TIMEOUT)
+</code></pre>
+<br />

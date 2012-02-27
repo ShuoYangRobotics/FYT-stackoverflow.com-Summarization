@@ -1,0 +1,124 @@
+<h3>Question (ID-854906):</h3><h2>Is this Python producer-consumer lockless approach thread-safe?</h2><p>I recently wrote a program that used a simple producer/consumer pattern. It initially had a bug related to improper use of threading.Lock that I eventually fixed. But it made me think whether it's possible to implement producer/consumer pattern in a lockless manner.</p>
+
+<p>Requirements in my case were simple:</p>
+
+<ul>
+<li>One producer thread.</li>
+<li>One consumer thread.</li>
+<li>Queue has place for only one item.</li>
+<li>Producer can produce next item before the current one is consumed. The current item is therefore lost, but that's OK for me.</li>
+<li>Consumer can consume current item before the next one is produced. The current item is therefore consumed twice (or more), but that's OK for me.</li>
+</ul>
+
+<p>So I wrote this:</p>
+
+<pre><code>QUEUE_ITEM = None
+
+# this is executed in one threading.Thread object
+def producer():
+    global QUEUE_ITEM
+    while True:
+        i = produce_item()
+        QUEUE_ITEM = i
+
+# this is executed in another threading.Thread object
+def consumer():
+    global QUEUE_ITEM
+    while True:
+        i = QUEUE_ITEM
+        consume_item(i)
+</code></pre>
+
+<p>My question is: Is this code thread-safe?</p>
+
+<p>Immediate comment: this code isn't really lockless - I use CPython and it has GIL.</p>
+
+<p>I tested the code a little and it seems to work. It translates to some LOAD and STORE ops which are atomic because of GIL. But I also know that <code>del x</code> operation isn't atomic when x implements <code>__del__</code> method. So if my item has a <code>__del__</code> method and some nasty scheduling happens, things may break. Or not?</p>
+
+<p>Another question is: What kind of restrictions (for example on produced items' type) do I have to impose to make the above code work fine?</p>
+
+<p>My questions are only about theoretical possibility to exploit CPython's and GIL's quirks in order to come up with lockless (i.e. no locks like threading.Lock explicitly in code) solution.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Trickery will bite you.  Just use Queue to communicate between threads.</p>
+<br /><b>#1</b><br /><p>Yes this will work in the way that you described:</p>
+
+<ol>
+<li>That the producer may produce a skippable element.</li>
+<li>That the consumer may consume the same element.</li>
+</ol>
+
+<blockquote>
+  <p>But I also know that del x operation isn't atomic when x implements <strong>del</strong> method. So if my item has a <strong>del</strong> method and some nasty scheduling happens, things may break. </p>
+</blockquote>
+
+<p>I don't see a "del" here. If a del happens in consume_item then the <strong>del</strong> may occur in the producer thread. I don't think this would be a "problem".</p>
+
+<p>Don't bother using this though. You will end up using up CPU on pointless polling cycles, and it is not any faster than using a queue with locks since Python already has a global lock.</p>
+<br /><b>#2</b><br /><p>This is not <em>really</em> thread safe because producer could overwrite <code>QUEUE_ITEM</code> before consumer has consumed it and consumer could consume <code>QUEUE_ITEM</code> twice.  As you mentioned, you're OK with that but most people aren't.</p>
+
+<p>Someone with more knowledge of cpython internals will have to answer you more theoretical questions.</p>
+<br /><b>#3</b><br /><p>I think it's possible that a thread is interrupted while producing/consuming, especially if the items are big objects.
+Edit: this is just a wild guess. I'm no expert.</p>
+
+<p>Also the threads may produce/consume any number of items before the other one starts running.</p>
+<br /><b>#4</b><br /><p>You can use a list as the queue as long as you stick to append/pop since both are atomic.</p>
+
+<pre><code>QUEUE = []
+
+# this is executed in one threading.Thread object
+def producer():
+    global QUEUE
+    while True:
+        i = produce_item()
+        QUEUE.append(i)
+
+# this is executed in another threading.Thread object
+def consumer():
+    global QUEUE
+    while True:
+        try:
+            i = QUEUE.pop(0)
+        except IndexError:
+            # queue is empty
+            continue
+
+        consume_item(i)
+</code></pre>
+
+<p>In a class scope like below, you can even clear the queue.</p>
+
+<pre><code>class Atomic(object):
+    def __init__(self):
+        self.queue = []
+
+    # this is executed in one threading.Thread object
+    def producer(self):
+        while True:
+            i = produce_item()
+            self.queue.append(i)
+
+    # this is executed in another threading.Thread object
+    def consumer(self):
+        while True:
+            try:
+                i = self.queue.pop(0)
+            except IndexError:
+                # queue is empty
+                continue
+
+            consume_item(i)
+
+    # There's the possibility producer is still working on it's current item.
+    def clear_queue(self):
+        self.queue = []
+</code></pre>
+
+<p>You'll have to find out which list operations are atomic by looking at the bytecode generated.</p>
+<br /><b>#5</b><br /><p>The <code>__del__</code> could be a problem as You said. It could be avoided, if only there was a way to prevent the garbage collector from invoking the <code>__del__</code> method on the old object before We finish assigning the new one to the <code>QUEUE_ITEM</code>. We would need something like:</p>
+
+<pre><code>increase the reference counter on the old object
+assign a new one to `QUEUE_ITEM`
+decrease the reference counter on the old object
+</code></pre>
+
+<p>I'm afraid, I don't know if it is possible, though.</p>
+<br />

@@ -1,0 +1,116 @@
+<h3>Question ( ID-132058 ) : </h3><h2>Showing the <span style="background-color:yellow;">stack</span> trace from a <span style="background-color:yellow;">running</span> Python application </h2><p>I have this Python application that <span style="background-color:yellow;">gets</span> stuck from time to time and I ca n't find out where . </p>
+<p>Is there any way to <span style="background-color:yellow;">signal</span> Python interpreter to show you the exact <span style="background-color:yellow;">code</span> that 's <span style="background-color:yellow;">running</span> ? </p>
+<p>Some kind of on-the-fly <span style="background-color:yellow;">stacktrace</span> ? </p>
+<br /><h3>Answers ( Total-14 ) : </h3><b># 0 </b><br /><p>I have module I use for situations like this - where a process will be <span style="background-color:yellow;">running</span> for a long time but <span style="background-color:yellow;">gets</span> stuck sometimes for unknown and irreproducable reasons. Its a bit hacky , and only works on unix ( requires <span style="background-color:yellow;">signals</span> ) : </p>
+<pre><code>import code, traceback, signal
+
+def debug(sig, frame):
+    """Interrupt running process, and provide a python prompt for
+    interactive debugging."""
+    d={'_frame':frame}         # Allow access to frame object.
+    d.update(frame.f_globals)  # Unless shadowed by global
+    d.update(frame.f_locals)
+
+    i = code.InteractiveConsole(d)
+    message  = "Signal recieved : entering python shell.\nTraceback:\n"
+    message += ''.join(traceback.format_stack(frame))
+    i.interact(message)
+
+def listen():
+    signal.signal(signal.SIGUSR1, debug)  # Register handler
+</code></pre>
+<p>To use , just call the <span style="background-color:yellow;">listen</span> ( ) function at some point when your program starts up ( You could even stick it in site.py to have all python programs use it ) , and let it <span style="background-color:yellow;">run.</span> At any point , send the process a SIGUSR1 <span style="background-color:yellow;">signal</span> , using <span style="background-color:yellow;">kill</span> , or in python : </p>
+<pre><code>    os.kill(pid, signal.SIGUSR1)
+</code></pre>
+<p>This will cause the program to break to a python console at the point it is currently at , showing you the <span style="background-color:yellow;">stack</span> trace , and letting you manipulate the variables. Use control-d ( EOF ) to continue <span style="background-color:yellow;">running</span> ( though note that you will probably interrupt any I/O etc at the point you <span style="background-color:yellow;">signal</span> , so it is n't fully non-intrusive . </p>
+<p>I 've another script that <span style="background-color:yellow;">does</span> the same thing , except it communicates with the <span style="background-color:yellow;">running</span> process through a pipe ( to allow for <span style="background-color:yellow;">debugging</span> backgrounded processes etc ) . Its a bit large to post here , but I 've added it as a python cookbook recipe here </p>
+<p>[ Edit ] added remote <span style="background-color:yellow;">debug</span> recipe </p>
+<br /><b># 1 </b><br /><p>The suggestion to install a <span style="background-color:yellow;">signal</span> handler is a good one , and I use it a lot. For example , bzr by <span style="background-color:yellow;">default</span> installs a SIGQUIT handler that invokes pdb.set_trace ( ) to immediately <span style="background-color:yellow;">drop</span> you into a pdb prompt. ( See the bzrlib.breakin module 's source for the exact <span style="background-color:yellow;">details.</span> ) With pdb you can not only <span style="background-color:yellow;">get</span> the current <span style="background-color:yellow;">stack</span> trace but also inspect variables , etc . </p>
+<p>However , sometimes I need to <span style="background-color:yellow;">debug</span> a process that I <span style="background-color:yellow;">did</span> n't have the foresight to install the <span style="background-color:yellow;">signal</span> handler in. On linux , you can attach gdb to the process and <span style="background-color:yellow;">get</span> a python <span style="background-color:yellow;">stack</span> trace with some gdb macros. Put http : //svn.python.org/projects/python/trunk/Misc/gdbinit in ~ /.gdbinit , then : </p>
+<ul>Attach gdb : gdb -p PID Get the python <span style="background-color:yellow;">stack</span> trace : pystack </ul>
+<p>It 's not totally reliable unfortunately , but it works most of the time . </p>
+<p>Finally , attaching strace can often give you a good idea what a process is <span style="background-color:yellow;">doing</span> . </p>
+<br /><b># 2 </b><br /><pre><code>>>> import traceback
+>>> def x():
+>>>    print traceback.extract_stack()
+
+>>> x()
+[('<stdin>', 1, '<module>', None), ('<stdin>', 2, 'x', None)]
+</code></pre>
+<p>You can also nicely format the <span style="background-color:yellow;">stack</span> trace , see the <span style="background-color:yellow;">docs</span> . </p>
+<p>Edit : To simulate Java 's behavior , as suggested by @ Douglas Leeder , add this : </p>
+<pre><code>import signal
+import traceback
+
+signal.signal(signal.SIGUSR1, lambda sig, stack: traceback.print_stack(stack))
+</code></pre>
+<p>to the startup <span style="background-color:yellow;">code</span> in your application. Then you can print the <span style="background-color:yellow;">stack</span> by sending SIGUSR1 to the <span style="background-color:yellow;">running</span> Python process . </p>
+<br /><b># 3 </b><br /><p>I am almost always <span style="background-color:yellow;">dealing</span> with multiple threads and main thread is generally not <span style="background-color:yellow;">doing</span> much , so what is most interesting is to <span style="background-color:yellow;">dump</span> all the <span style="background-color:yellow;">stacks</span> ( which is more like the Java 's <span style="background-color:yellow;">dump</span> ) . Here is an implementation based on this blog : </p>
+<pre><code>def dumpstacks(signal, frame):
+    id2name = dict([(th.ident, th.name) for th in threading.enumerate()])
+    code = []
+    for threadId, stack in sys._current_frames().items():
+        code.append("\n# Thread: %s(%d)" % (id2name.get(threadId,""), threadId))
+        for filename, lineno, name, line in traceback.extract_stack(stack):
+            code.append('File: "%s", line %d, in %s' % (filename, lineno, name))
+            if line:
+                code.append("  %s" % (line.strip()))
+    print "\n".join(code)
+
+import signal
+signal.signal(signal.SIGQUIT, dumpstacks)
+</code></pre>
+<br /><b># 4 </b><br /><p>The <span style="background-color:yellow;">traceback</span> module has some nice functions , among them : print_stack : </p>
+<pre><code>import traceback
+
+traceback.print_stack()
+</code></pre>
+<br /><b># 5 </b><br /><p>What really helped me here is spiv 's tip ( which I would vote up and comment on if I had the reputation points ) for <span style="background-color:yellow;">getting</span> a <span style="background-color:yellow;">stack</span> trace out of an unprepared Python process. Except it <span style="background-color:yellow;">did</span> n't work until I modified the gdbinit script . So : </p>
+<ul><span style="background-color:yellow;">download</span> http : //svn.python.org/projects/python/trunk/Misc/gdbinit and put it in ~ /.gdbinit edit it , changing PyEval_EvalFrame to PyEval_EvalFrameEx [ edit : no longer needed ; the linked file already has this change as of 2010-01-14 ] Attach gdb : gdb -p PID Get the python <span style="background-color:yellow;">stack</span> trace : pystack </ul>
+<br /><b># 6 </b><br /><p>python -dv yourscript.py </p>
+<p>That will make the interpreter to <span style="background-color:yellow;">run</span> in <span style="background-color:yellow;">debug</span> mode and to give you a trace of what the interpreter is <span style="background-color:yellow;">doing</span> . </p>
+<p>If you want to interactively <span style="background-color:yellow;">debug</span> the <span style="background-color:yellow;">code</span> you should <span style="background-color:yellow;">run</span> it like this : </p>
+<p>python -m pdb yourscript.py </p>
+<p>That tells the python interpreter to <span style="background-color:yellow;">run</span> your script with the module " pdb " which is the python <span style="background-color:yellow;">debugger</span> , if you <span style="background-color:yellow;">run</span> it like that the interpreter will be executed in interactive mode , much like GDB </p>
+<br /><b># 7 </b><br /><p>It 's worth looking at Pydb , " an expanded version of the Python <span style="background-color:yellow;">debugger</span> loosely based on the gdb command set " . It includes <span style="background-color:yellow;">signal</span> managers which can take care of starting the <span style="background-color:yellow;">debugger</span> when a specified <span style="background-color:yellow;">signal</span> is sent . </p>
+<p>A 2006 Summer of Code project looked at adding remote-debugging features to pydb in a module called mpdb . </p>
+<br /><b># 8 </b><br /><p>I would add this as a comment to haridsv 's response , but I lack the reputation to <span style="background-color:yellow;">do</span> so : </p>
+<p>Some of us are still stuck on a version of Python older than 2.6 ( required for Thread.ident ) , so I got the <span style="background-color:yellow;">code</span> working in Python 2.5 ( though without the thread name being <span style="background-color:yellow;">displayed</span> ) as such : </p>
+<pre><code>import traceback
+import sys
+def dumpstacks(signal, frame):
+    code = []
+    for threadId, stack in sys._current_frames().items():
+            code.append("\n# Thread: %d" % (threadId))
+        for filename, lineno, name, line in traceback.extract_stack(stack):
+            code.append('File: "%s", line %d, in %s' % (filename, lineno, name))
+            if line:
+                code.append("  %s" % (line.strip()))
+    print "\n".join(code)
+
+import signal
+signal.signal(signal.SIGQUIT, dumpstacks)
+</code></pre>
+<br /><b># 9 </b><br /><p>On Solaris , you can use pstack ( 1 ) No changes to the python <span style="background-color:yellow;">code</span> are necessary. eg . </p>
+<pre><code># pstack 16000 | grep : | head
+16000: /usr/bin/python2.6 /usr/lib/pkg.depotd --cfg svc:/application/pkg/serv
+[ /usr/lib/python2.6/vendor-packages/cherrypy/process/wspbus.py:282 (_wait) ]
+[ /usr/lib/python2.6/vendor-packages/cherrypy/process/wspbus.py:295 (wait) ]
+[ /usr/lib/python2.6/vendor-packages/cherrypy/process/wspbus.py:242 (block) ]
+[ /usr/lib/python2.6/vendor-packages/cherrypy/_init_.py:249 (quickstart) ]
+[ /usr/lib/pkg.depotd:890 (<module>) ]
+[ /usr/lib/python2.6/threading.py:256 (wait) ]
+[ /usr/lib/python2.6/Queue.py:177 (get) ]
+[ /usr/lib/python2.6/vendor-packages/pkg/server/depot.py:2142 (run) ]
+[ /usr/lib/python2.6/threading.py:477 (run)
+etc.
+</code></pre>
+<br /><b># 10 </b><br /><p>I <span style="background-color:yellow;">do</span> n't know of anything similar to java 's response to SIGQUIT , so you might have to build it in to your application. Maybe you could make a server in another thread that can <span style="background-color:yellow;">get</span> a <span style="background-color:yellow;">stacktrace</span> on response to a <span style="background-color:yellow;">message</span> of some kind ? </p>
+<br /><b># 11 </b><br /><p>There is no way to hook into a <span style="background-color:yellow;">running</span> python process and <span style="background-color:yellow;">get</span> reasonable results. What I <span style="background-color:yellow;">do</span> if processes lock up is hooking strace in and trying to figure out what exactly is happening . </p>
+<p>Unfortunately often strace is the observer that " fixes " race conditions so that the output is useless there too . </p>
+<br /><b># 12 </b><br /><p>Take a look at the new faulthandler module . </p>
+<br /><b># 13 </b><br /><p>use the inspect module . </p>
+<blockquote>import inspect help ( inspect.stack ) Help on function <span style="background-color:yellow;">stack</span> in module inspect : </blockquote>
+<p><span style="background-color:yellow;">stack</span> ( context = 1 ) Return a list of records for the <span style="background-color:yellow;">stack</span> above the caller 's frame . </p>
+<p>I find it very helpful indeed . </p>
+<br />

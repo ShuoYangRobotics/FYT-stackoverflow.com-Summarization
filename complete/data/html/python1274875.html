@@ -1,0 +1,134 @@
+<h3>Question (ID-1274875):</h3><h2>Returning None or a tuple and unpacking</h2><p>I am always annoyed by this fact:</p>
+
+<pre><code>$ cat foo.py
+def foo(flag):
+    if flag:
+        return (1,2)
+    else:
+        return None
+
+first, second = foo(True)
+first, second = foo(False)
+
+$ python foo.py
+Traceback (most recent call last):
+  File "foo.py", line 8, in &lt;module&gt;
+    first, second = foo(False)
+TypeError: 'NoneType' object is not iterable
+</code></pre>
+
+<p>The fact is that in order to correctly unpack without troubles I have either to catch the TypeError or to have something like</p>
+
+<pre><code>values = foo(False)
+if values is not None:
+    first, second = values
+</code></pre>
+
+<p>Which is kind of annoying. Is there a trick to improve this situation (e.g. to so set both first and second to None without having foo returning (None, None)) or a suggestion about the best design strategy for cases like the one I present ? *variables maybe ?</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>I don't see what is wrong with returning (None,None). It is much cleaner than the solutions suggested here which involve far more changes in your code. </p>
+
+<p>It also doesn't make sense that you want None to automagically be split into 2 variables.</p>
+<br /><b>#1</b><br /><p>Well, you could do...</p>
+
+<pre><code>first,second = foo(True) or (None,None)
+first,second = foo(False) or (None,None)
+</code></pre>
+
+<p>but as far as I know there's no simpler way to expand None to fill in the entirety of a tuple.</p>
+<br /><b>#2</b><br /><p>I don't think there's a trick. You can simplify your calling code to:</p>
+
+<pre><code>values = foo(False)
+if values:
+    first, second = values
+</code></pre>
+
+<p>or even:</p>
+
+<pre><code>values = foo(False)
+first, second = values or (first_default, second_default)
+</code></pre>
+
+<p>where first_default and second_default are values you'd give to first and second as defaults.</p>
+<br /><b>#3</b><br /><p>I think there is a problem of <strong>abstraction</strong>.  </p>
+
+<p>A function should maintain some level of abstraction, that helps in reducing complexity of the code.<br />
+In this case, either the function is not maintaining the right abstraction, either the caller is not respecting it.</p>
+
+<p>The function could have been something like <code>get_point2d()</code>; in this case, the level of the abstraction is on the tuple, and therefore returning None would be a good way to signal some particular case (e.g. non-existing entity). The error in this case would be to expect two items, while actually the only thing you know is that the function returns one object (with information related to a 2d point).  </p>
+
+<p>But it could also have been something like <code>get_two_values_from_db()</code>; in this case the abstraction would be broken by returning None, because the function (as the name suggest) <em>should return two values and not one</em>!</p>
+
+<p>Either way, the main goal of using a function - reducing complexity - is, at least partially, lost. </p>
+
+<p>Note that this issue would not appear clearly with the original name; that's also why it is always important to give good names to function and methods.</p>
+<br /><b>#4</b><br /><p>You should be careful with the <code>x or y</code> style of solution.  They work, but they're a bit broader than your original specification.  Essentially, what if <code>foo(True)</code> returns an empty tuple <code>()</code>?  As long as you know that it's OK to treat that as <code>(None, None)</code>, you're good with the solutions provided.</p>
+
+<p>If this were a common scenario, I'd probably write a utility function like:</p>
+
+<pre><code># needs a better name! :)
+def to_tup(t):
+    return t if t is not None else (None, None)
+
+first, second = to_tup(foo(True))
+first, second = to_tup(foo(False))
+</code></pre>
+<br /><b>#5</b><br /><pre><code>def foo(flag):
+    return ((1,2) if flag else (None, None))
+</code></pre>
+<br /><b>#6</b><br /><p>OK, I would just return (None, None), but as long as we are in whacko-land (heh), here is a way using a subclass of tuple.  In the else case, you don't return None, but instead return an empty container, which seems to be in the spirit of things.  The container's "iterator" unpacks None values when empty.  Demonstrates the iterator protocol anyway...</p>
+
+<p>Tested using v2.5.2:</p>
+
+<pre><code>class Tuple(tuple):
+    def __iter__(self):
+        if self:
+            # If Tuple has contents, return normal tuple iterator...
+            return super(Tuple, self).__iter__()
+        else:
+            # Else return a bogus iterator that returns None twice...
+            class Nonerizer(object):
+                def __init__(self):
+                    self.x=0
+                def __iter__(self):
+                    return self
+                def next(self):
+                    if self.x &lt; 2:
+                        self.x += 1
+                        return None
+                    else:
+                        raise StopIteration
+            return Nonerizer()
+
+
+def foo(flag):
+    if flag:
+        return Tuple((1,2))
+    else:
+        return Tuple()  # It's not None, but it's an empty container.
+
+first, second = foo(True)
+print first, second
+first, second = foo(False)
+print first, second
+</code></pre>
+
+<p>Output is the desired:</p>
+
+<pre><code>1 2
+None None
+</code></pre>
+<br /><b>#7</b><br /><p>How about this:</p>
+
+<pre><code>$ cat foo.py 
+def foo(flag):
+    if flag:
+        return (1,2)
+    else:
+        return (None,)*2
+
+first, second = foo(True)
+first, second = foo(False)
+</code></pre>
+
+<p><strong>Edit:</strong> Just to be clear, the only change is to replace <code>return None</code> with <code>return (None,)*2</code>.  I am extremely surprised that no one else has thought of this.  (Or if they have, I would like to know why they didn't use it.)</p>
+<br />

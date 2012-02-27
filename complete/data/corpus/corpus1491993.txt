@@ -1,0 +1,93 @@
+Question (ID-1491993): Download multiple pages concurrently? I'd like to write a script in Python that can grab url's from a database, and download web pages concurrently to speed things instead of waiting for each page to download one after the other. 
+
+ According to this thread , Python doesn't allow this because of something called Global Interpreter Lock that prevents lauching the same script multiple times. 
+
+ Before investing time learning the Twisted framework, I'd like to make sure there isn't an easier way to do what I need to do above. 
+
+ Thank you for any tip. 
+ Answers (Total-7): #0 Don't worry about GIL. In your case it doesn't matter. 
+
+ Easiest way to do what you want is to create thread pool, using threading module and one of thread pool implementations from ASPN . Each thread from that pool can use httplib to download your web pages. 
+
+ Another option is to use PyCURL module -- it supports parallel downlaods natively, so you don't have to implement it yourself. 
+ #1 GIL prevents you from effectively doing processor load balancing with threads. As this is not processor loads balancing but preventing one IO wait from stopping the whole download, the GIL is not relevant here. *) 
+
+ So all you need to do is create several processes that download at the same time. You can do that with the threading module or the multiprocessing module. 
+
+ *) Well... unless you have Gigabit connections and your problem is really that your processor gets overloaded before your net does. But that's obviously not the case here. 
+ #2 I recently solved this same problem. One thing to consider is that some people don't take kindly to having their servers bogged down and will block an IP address that does so. The standard courtesy that I've heard is about 3 seconds between page requests, but this is flexible. 
+
+ If you are downloading from multiple websites you can group your URLs by domain and create one thread per. Then in your thread you can do something like this: 
+
+ for url in urls:
+ timer = time.time()
+ # ... get your content ...
+ # perhaps put content in a queue to be written back to 
+ # your database if it doesn't allow concurrent writes.
+ while time.time() - timer &lt; 3.0:
+  time.sleep(0.5)
+ 
+
+ Sometimes just getting your response will take the full 3 seconds and you don't have to worry about it. 
+
+ Granted, this won't help you at all if you're only downloading from one site, but it may keep you from getting blocked. 
+
+ My machine handles about 200 threads before the overhead of managing them slowed the process down. I ended up at something like 40-50 pages per second. 
+ #3 urllib &amp; threading (or multiprocessing ) packages has all you need to do the "spider" you need. 
+
+ What you have to do is get urls from DB, and for each url start a thread or process that 
+grabs the url. 
+
+ just as example (misses Data Base urls retrieving): 
+
+ #!/usr/bin/env python
+import Queue
+import threading
+import urllib2
+import time
+
+hosts = ["http://yahoo.com", "http://google.com", "http://amazon.com",
+ "http://ibm.com", "http://apple.com"]
+
+queue = Queue.Queue()
+
+class ThreadUrl(threading.Thread):
+ """Threaded Url Grab"""
+ def __init__(self, queue):
+  threading.Thread.__init__(self)
+  self.queue = queue
+
+ def run(self):
+  while True:
+   #grabs host from queue
+   host = self.queue.get()
+
+   #grabs urls of hosts and prints first 1024 bytes of page
+   url = urllib2.urlopen(host)
+   print url.read(1024)
+
+   #signals to queue job is done
+   self.queue.task_done()
+
+start = time.time()
+def main():
+
+ #spawn a pool of threads, and pass them queue instance
+ for i in range(5):
+  t = ThreadUrl(queue)
+  t.setDaemon(True)
+  t.start()
+
+ #populate queue with data
+ for host in hosts:
+  queue.put(host)
+
+ #wait on the queue until everything has been processed
+ queue.join()
+
+main()
+print "Elapsed Time: %s" % (time.time() - start)
+ 
+ #4 You can have a look at the multiprocessing package which avoid the GIL lock problem. 
+ #5 Downloading is IO, which may be done asynchronously using non-blocking sockets or twisted. Both of these solutions will be much more efficient than threading or multiprocessing. 
+ #6 Nowadays there are excellent Python libs that do this for you - urllib3 and requests

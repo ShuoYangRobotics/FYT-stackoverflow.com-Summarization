@@ -1,0 +1,190 @@
+Question (ID-1517862): Using lookahead with generators I have implemented a generator-based scanner in Python that tokenizes a string into tuples of the form (token type, token value) : 
+
+ for token in scan("a(b)"):
+ print token
+ 
+
+ would print 
+
+ ("literal", "a")
+("l_paren", "(")
+...
+ 
+
+ The next task implies parsing the token stream and for that, I need be able to look one item ahead from the current one without moving the pointer ahead as well. The fact that iterators and generators do not provide the complete sequence of items at once but each item as needed makes lookaheads a bit trickier compared to lists, since the next item is not known unless __next__() is called. 
+
+ What could a straightforward implementation of a generator-based lookahead look like? Currently I'm using a workaround which implies making a list out of the generator: 
+
+ token_list = [token for token in scan(string)]
+ 
+
+ The lookahead then is easily implemented by something like that: 
+
+ try:
+ next_token = token_list[index + 1]
+except: IndexError:
+ next_token = None
+ 
+
+ Of course this just works fine. But thinking that over, my second question arises: Is there really a point of making scan() a generator in the first place? 
+
+ Thanks in advance! 
+
+ Regards, 
+
+ jena 
+ Answers (Total-7): #0 You can write a wrapper that buffers some number of items from the generator, and provides a lookahead() function to peek at those buffered items: 
+
+ class Lookahead:
+ def __init__(self, iter):
+  self.iter = iter
+  self.buffer = []
+
+ def __iter__(self):
+  return self
+
+ def next(self):
+  if self.buffer:
+   return self.buffer.pop(0)
+  else:
+   return self.iter.next()
+
+ def lookahead(self, n):
+  """Return an item n entries ahead in the iteration."""
+  while n &gt;= len(self.buffer):
+   try:
+    self.buffer.append(self.iter.next())
+   except StopIteration:
+    return None
+  return self.buffer[n]
+ 
+ #1 Pretty good answers there, but my favorite approach would be to use itertools.tee -- given an iterator, it returns two (or more if requested) that can be advanced independently. It buffers in memory just as much as needed (i.e., not much, if the iterators don't get very "out of step" from each other). E.g.: 
+
+ import itertools
+import collections
+
+class IteratorWithLookahead(collections.Iterator):
+ def __init__(self, it):
+ self.it, self.nextit = itertools.tee(iter(it))
+ self._advance()
+ def _advance(self):
+ self.lookahead = next(self.nextit, None)
+ def __next__(self):
+ self._advance()
+ return next(self.it)
+ 
+
+ You can wrap any iterator with this class, and then use the .lookahead attribute of the wrapper to know what the next item to be returned in the future will be. I like to leave all the real logic to itertools.tee and just provide this thin glue!-) 
+ #2 It's not pretty, but this may do what you want: 
+
+ def paired_iter(it):
+ token = it.next()
+ for lookahead in it:
+  yield (token, lookahead)
+  token = lookahead
+ yield (token, None)
+
+def scan(s):
+ for c in s:
+  yield c
+
+for this_token, next_token in paired_iter(scan("ABCDEF")):
+ print "this:%s next:%s" % (this_token, next_token)
+ 
+
+ Prints: 
+
+ this:A next:B
+this:B next:C
+this:C next:D
+this:D next:E
+this:E next:F
+this:F next:None
+ 
+ #3 Here is an example that allows a single item to be sent back to the generator 
+
+ def gen():
+ for i in range(100):
+  v=yield i   # when you call next(), v will be set to None
+  if v:
+   yield None  # this yields None to send() call
+   v=yield v  # so this yield is for the first next() after send()
+
+g=gen()
+
+x=g.next()
+print 0,x
+
+x=g.next()
+print 1,x
+
+x=g.next()
+print 2,x # oops push it back
+
+x=g.send(x)
+
+x=g.next()
+print 3,x # x should be 2 again
+
+x=g.next()
+print 4,x
+ 
+ #4 Since you say you are tokenizing a string and not a general iterable, I suggest the simplest solution of just expanding your tokenizer to return a 3-tuple:
+ (token_type, token_value, token_index) , where token_index is the index of the token in the string. Then you can look forward, backward, or anywhere else in the string. Just don't go past the end. Simplest and most flexible solution I think. 
+
+ Also, you needn't use a list comprehension to create a list from a generator. Just call the list() constructor on it: 
+
+ token_list = list(scan(string))
+ 
+ #5 Paul's is a good answer. A class based approach with arbitrary lookahead might look something like: 
+
+ class lookahead(object):
+ def __init__(self, generator, lookahead_count=1):
+  self.gen = iter(generator)
+  self.look_count = lookahead_count
+
+ def __iter__(self):
+  self.lookahead = []
+  self.stopped = False
+  try:
+   for i in range(self.look_count):
+    self.lookahead.append(self.gen.next())
+  except StopIteration:
+   self.stopped = True
+  return self
+
+ def next(self):
+  if not self.stopped:
+   try:
+    self.lookahead.append(self.gen.next())
+   except StopIteration:
+    self.stopped = True
+  if self.lookahead != []:
+   return self.lookahead.pop(0)
+  else:
+   raise StopIteration
+
+x = lookahead("abcdef", 3)
+for i in x:
+ print i, x.lookahead
+ 
+ #6 How I would write it concisely, if I just needed 1 element's worth of lookahead: 
+
+ SEQUENCE_END = object()
+
+def lookahead(iterable):
+ iter = iter(iterable)
+ current = next(iter)
+ for ahead in iter:
+  yield current,ahead
+  current = ahead
+ yield current,SEQUENCE_END
+ 
+
+ Example: 
+
+ &gt;&gt;&gt; for x,ahead in lookahead(range(3)):
+&gt;&gt;&gt;  print(x,ahead)
+0, 1
+1, 2
+2, &lt;object SEQUENCE_END&gt;

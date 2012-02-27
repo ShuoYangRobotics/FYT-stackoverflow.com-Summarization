@@ -1,0 +1,92 @@
+<h3>Question (ID-781896):</h3><h2>Penalties of a script constantly looping in the background</h2><p>I know this topic has been <a href="http://stackoverflow.com/questions/680921#681336">discussed</a> in the <a href="http://stackoverflow.com/questions/379231">past</a>, but I am a tiny bit paranoid about resource usage.</p>
+
+<p>I am looking into writing a daemon for queing jobs to archive files into zip files for a web app i am working on. It would behave something like this:</p>
+
+<pre><code>while True:
+    while morejobs():
+        zipfile()
+    sleep(15seconds)
+</code></pre>
+
+<p>What sort of resources would be consumed by a process constantly looping away in the background (provided there is nothing to zip)? Is there anything i should be aware of or careful of?
+<br/><br/>
+<h2> Edit:</h2> It looks like most of the answers are concerned about the duration of the sleep.  I blindly set it to sleep (in the code example) for 15 milliseconds at a time. I actually intended it to be 15 seconds, and i have 'updated' the code to reflect that.</p>
+
+<p><h2> Edit Again:</h2> What would be the lowest reasonable  time for the script to be sleeping? Is 5 seconds to low? I have no idea what the load of this app would be or how often new jobs would be added to the queue.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Sleep involves no overhead.  The Linux OS uses a very simple signal to wake a sleeping process.</p>
+
+<p>What you're showing is the "busy-waiting" design pattern.</p>
+
+<p>To eliminate overhead, you want to be woken ONLY when there's work to do.</p>
+
+<p>Ways to do this.</p>
+
+<ol>
+<li><p>Wait on read.</p></li>
+<li><p>Wait on a select function call.  See <a href="http://docs.python.org/library/select.html" rel="nofollow">http://docs.python.org/library/select.html</a></p></li>
+<li><p>Wait for a lock to be released.  See <a href="http://docs.python.org/library/posixfile.html" rel="nofollow">http://docs.python.org/library/posixfile.html</a>.</p></li>
+</ol>
+
+<p>Of these, waiting on a read is perhaps easiest.  Reading from a pipe or a socket is what you want to do.  </p>
+
+<p>I'm guessing that you have a "multiple-writers-single-reader" design pattern.  In this case, there are two candidate solutions.</p>
+
+<ol>
+<li><p>Multiple requests per socket.  This is the FTP-like solution where you write a simple server that listens for connections on one socket and opens a dedicated connection for each client.  Then you use select to determine which client is sending a file.</p></li>
+<li><p>Single request per socket.  This is the HTTP-like solution where you receive requests in some socket and the request is a big flood of data.  When the request is all finished, the socket is closed so another client can get it.</p></li>
+</ol>
+
+<p>In these two cases, you're not sleeping --  you're waiting for I/O's to complete.</p>
+<br /><b>#1</b><br /><p>Instead of sleeping for 15 seconds, it might be better to have a callback which restarts your job when new files arrive.</p>
+
+<ul>
+<li>Process available files</li>
+<li>Check for new files every 60 seconds or whatever interval you choose</li>
+<li>When a new file arrives, process it and any others which may have arrived since the last interval</li>
+</ul>
+<br /><b>#2</b><br /><p>Why not just use a cron job to run a script every minute or so? At least you are not depending on your own loop to be continuously running in the background.</p>
+<br /><b>#3</b><br /><p>If it takes (and these figures are examples) 20 seconds for a file to arrive and 5 seconds for you to process it, what is the harm in your process waiting for, on average, another 7.5 seconds before it even detects that the file is there?</p>
+
+<p>A sleeping process should have as close to zero impact on the CPU as it is possible to get.</p>
+
+<p>So no, I would not be concerned about this aspect at all.</p>
+
+<p>The one thing you should be concerned about is how to restart the process automatically if it fails. I would run a cron job every 5 minutes (your choice of actual frequency) to kill off the old copy (politely, and only if it's running) and then start a new one. That way, there'll only be a 5-minute downtime at most if something goes wrong.</p>
+
+<p>I say politely because the old one may be in the middle of processing files and you should not interrupt that unless it's recoverable.</p>
+<br /><b>#4</b><br /><p>As an alternative you can lower the priority of your process.
+(I'm only familiar with the windows method)</p>
+
+<p>On Windows:</p>
+
+<pre><code>def setpriority(pid=None,priority=1):
+    """ Set The Priority of a Windows Process.  Priority is a value between 0-5 where
+        2 is normal priority.  Default sets the priority of the current
+        python process but can take any valid process ID. """
+
+    import win32api,win32process,win32con
+
+    priorityclasses = [win32process.IDLE_PRIORITY_CLASS,
+                       win32process.BELOW_NORMAL_PRIORITY_CLASS,
+                       win32process.NORMAL_PRIORITY_CLASS,
+                       win32process.ABOVE_NORMAL_PRIORITY_CLASS,
+                       win32process.HIGH_PRIORITY_CLASS,
+                       win32process.REALTIME_PRIORITY_CLASS]
+    if pid == None:
+        pid = win32api.GetCurrentProcessId()
+    handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
+    win32process.SetPriorityClass(handle, priorityclasses[priority])
+</code></pre>
+
+<p>from:
+<a href="http://code.activestate.com/recipes/496767/" rel="nofollow">http://code.activestate.com/recipes/496767/</a></p>
+<br /><b>#5</b><br /><p>This has the potential to hammer your CPU, even when there is nothing to process.</p>
+
+<p><strong>Edit:</strong> Actually <a href="http://docs.python.org/library/time.html#time.sleep" rel="nofollow"><code>sleep()</code></a> takes an argument as a number of seconds, not milliseconds so I don't think the CPU is going to be a problem.  Still, perhaps you could use a cron job to schedule something like this.</p>
+<br /><b>#6</b><br /><p>Besides the cost of hammering your cpu, there is the cost of the <em>morejobs()</em> call. You can mitigate by using a higher value for <em>sleep()</em>, or you can use some sort of mailbox that receives requests and then fires the <em>zipfile()</em> operation.</p>
+
+<p>It is normal for some operations to have a background thread scheduled that temporarily checks for something. In this case the best is to use sensible values for <em>sleep()</em>.</p>
+<br /><b>#7</b><br /><p>"A thousand reasoned opinions are worth one measurement". </p>
+
+<p>Just try it.</p>
+<br />

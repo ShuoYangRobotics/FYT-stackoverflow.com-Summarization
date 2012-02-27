@@ -1,0 +1,240 @@
+<h3>Question (ID-4492559):</h3><h2>Python code to get current function into a variable?</h2><p>How can I get a variable that contains the currently executing function in Python? I don't want the function's name. I know I can use <code>inspect.stack</code> to get the current function name. I want the actual callable object. Can this be done without using <code>inspect.stack</code> to retrieve the function's name and then <code>eval</code>ing the name to get the callable object?</p>
+
+<p><strong>Edit:</strong> I have a reason to do this, but it's not even a remotely good one. I'm using <a href="http://micheles.googlecode.com/hg/plac/doc/plac.html" rel="nofollow">plac</a> to parse command-line arguments. You use it by doing <code>plac.call(main)</code>, which generates an ArgumentParser object from the function signature of "main". Inside "main", if there is a problem with the arguments, I want to exit with an error message that includes the help text from the ArgumentParser object, which means that I need to directly access this object by calling <code>plac.parser_from(main).print_help()</code>. It would be nice to be able to say instead: <code>plac.parser_from(get_current_function()).print_help()</code>, so that I am not relying on the function being named "main". Right now, my implementation of "get_current_function" would be:</p>
+
+<pre><code>import inspect    
+def get_current_function():
+    return eval(inspect.stack()[1][3])
+</code></pre>
+
+<p>But this implementation relies on the function having a name, which I suppose is not too onerous. I'm never going to do <code>plac.call(lambda ...)</code>.</p>
+
+<p>In the long run, it might be more useful to ask the author of plac to implement a print_help method to print the help text of the function that was most-recently called using plac, or something similar.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>I recently spent a lot of time trying to do something like this and ended up walking away from it. There's a lot of corner cases. </p>
+
+<p>If you just want the lowest level of the call stack, you can just reference the name that is used in the <code>def</code> statement. This will be bound to the function that you want through lexical closure.</p>
+
+<p>For example:</p>
+
+<pre><code>def recursive(*args, **kwargs):
+    me = recursive
+</code></pre>
+
+<p><code>me</code> will now refer to the function in question regardless of the scope that the function is called from so long as it is not redefined in the scope where the definition occurs. Is there some reason why this won't work?</p>
+
+<p>To get a function that is executing higher up the call stack, I couldn't think of anything that can be reliably done.</p>
+<br /><b>#1</b><br /><p>This is what you asked for, as close as I can come. Tested in python versions 2.4, 2.6, 3.0.</p>
+
+<pre><code>#!/usr/bin/python
+def getfunc():
+    from inspect import currentframe, getframeinfo
+    caller = currentframe().f_back
+    func_name = getframeinfo(caller)[2]
+    caller = caller.f_back
+    from pprint import pprint
+    func = caller.f_locals.get(
+            func_name, caller.f_globals.get(
+                func_name
+        )
+    )
+
+    return func
+
+def main():
+    def inner1():
+        def inner2():
+            print("Current function is %s" % getfunc())
+        print("Current function is %s" % getfunc())
+        inner2()
+    print("Current function is %s" % getfunc())
+    inner1()
+
+
+#entry point: parse arguments and call main()
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+<p>Output:</p>
+
+<pre><code>Current function is &lt;function main at 0x2aec09fe2ed8&gt;
+Current function is &lt;function inner1 at 0x2aec09fe2f50&gt;
+Current function is &lt;function inner2 at 0x2aec0a0635f0&gt;
+</code></pre>
+<br /><b>#2</b><br /><p>The stack frame tells us what code object we're in. If we can find a function object that refers to that code object in its <code>func_code</code> attribute, we have found the function.</p>
+
+<p>Fortunately, we can ask the garbage collector which objects hold a reference to our code object, and sift through those, rather than having to traverse every active object in the Python world. There are typically only a handful of references to a code object.</p>
+
+<p>Now, functions can share code objects, and do in the case where you return a function <em>from</em> a function, i.e. a closure. When there's more than one function using a given code object, we can't tell which function it is, so we return <code>None</code>.</p>
+
+<pre><code>import inspect, gc
+
+def giveupthefunc():
+    frame = inspect.currentframe(1)
+    code  = frame.f_code
+    globs = frame.f_globals
+    functype = type(lambda: 0)
+    funcs = []
+    for func in gc.get_referrers(code):
+        if type(func) is functype:
+            if getattr(func, "func_code", None) is code:
+                if getattr(func, "func_globals", None) is globs:
+                    funcs.append(func)
+                    if len(funcs) &gt; 1:
+                        return None
+    return funcs[0] if funcs else None
+</code></pre>
+
+<p>Some test cases:</p>
+
+<pre><code>def foo():
+    return giveupthefunc()
+
+zed = lambda: giveupthefunc()
+
+bar, foo = foo, None
+
+print bar()
+print zed()
+</code></pre>
+
+<p>I'm not sure about the performance characteristics of this, but i think it should be fine for your use case.</p>
+<br /><b>#3</b><br /><p>Here's another possibility: a decorator that implicitly passes a reference to the called function as the first argument (similar to <code>self</code> in bound instance methods). You have to decorate each function that you want to receive such a reference, but "explicit is better than implicit" as they say. </p>
+
+<p>Of course, it has all the disadvantage of decorators: another function call slightly degrades performance, and the signature of the wrapped function is no longer visible.</p>
+
+<pre><code>import functools
+
+def gottahavethatfunc(func):
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(func, *args, **kwargs)
+
+    return wrapper
+</code></pre>
+
+<p>The test case illustrates that the decorated function still gets the reference to itself even if you change the name to which the function is bound. This is because you're only changing the binding of the wrapper function. It also illustrates its use with a lambda.</p>
+
+<pre><code>@gottahavethatfunc
+def quux(me):
+    return me
+
+zoom = gottahavethatfunc(lambda me: me)
+
+baz, quux = quux, None
+
+print baz()
+print zoom()
+</code></pre>
+
+<p>When using this decorator with an instance or class method, the method should accept the function reference as the first argument and the traditional <code>self</code> as the second.</p>
+
+<pre><code>class Demo(object):
+
+    @gottahavethatfunc
+    def method(me, self):
+        return me
+
+print Demo().method()
+</code></pre>
+<br /><b>#4</b><br /><p>The call stack does not keep a reference to the function itself - 
+although the running frame as a reference to the code object that is the code associated to a given function.</p>
+
+<p>(Functions are objects with code, and some information about their environment, such as closures, name, globals dictionary, doc string, default parameters and so on).</p>
+
+<p>Therefore if you are running a regular function, you are better of using its own name on the globals dictionary to call itself, as has been pointed out.</p>
+
+<p>If you are running some dynamic, or lambda code, in which you can't use the function name, the only solution is to rebuild another function object which re-uses thre currently running code object and call that new function instead.</p>
+
+<p>You will loose a couple of things, like default arguments, and it may be hard to get it working with closures (although it can be done).</p>
+
+<p>I have written a blog post on doing exactly that - calling anonymous functions from within themselves - I hope the code in there can help you:</p>
+
+<p><a href="http://metapython.blogspot.com/2010/11/recursive-lambda-functions.html" rel="nofollow">http://metapython.blogspot.com/2010/11/recursive-lambda-functions.html</a></p>
+
+<p>On a side note: avoid the use o inspect.stack -- it is too slow, as it rebuilds a lot of information each time it is called. prefer to use inspect.currentframe to deal with code frames instead.</p>
+
+<p>This may sounds complicated, but the code itself is very short - I am pasting it bellow. The post above contains more information on how this works.</p>
+
+<pre><code>from inspect import currentframe
+from types import FunctionType
+
+lambda_cache = {}
+
+def myself (*args, **kw):
+    caller_frame = currentframe(1)
+    code = caller_frame.f_code
+    if not code in lambda_cache:
+        lambda_cache[code] = FunctionType(code, caller_frame.f_globals)
+    return lambda_cache[code](*args, **kw)
+
+if __name__ == "__main__":
+    print "Factorial of 5", (lambda n: n * myself(n - 1) if n &gt; 1 else 1)(5)
+</code></pre>
+
+<p>If you really need the original function itself, the "myself" function above could be made to search on some scopes (like the calling function global dictionary) for a function object which code object would match with the one retrieved from the frame, instead of creating a new function.</p>
+<br /><b>#5</b><br /><p>OK after reading the question and comments again, I think this is a decent test case:</p>
+
+<pre><code>def foo(n):
+  """ print numbers from 0 to n """
+  if n: foo(n-1)
+  print n
+
+g = foo    # assign name 'g' to function object
+foo = None # clobber name 'foo' which refers to function object
+g(10)      # dies with TypeError because function object tries to call NoneType
+</code></pre>
+
+<p>I tried solving it by using a decorator to temporarily clobber the global namespace and reassigning the function object to the original name of the function:</p>
+
+<pre><code>def selfbind(f):
+   """ Ensures that f's original function name is always defined as f when f is executed """
+   oname = f.__name__
+   def g(*args, **kwargs):
+
+      # Clobber global namespace
+      had_key = None
+      if globals().has_key(oname):
+         had_key = True
+         key = globals()[oname]
+      globals()[oname] = g
+
+      # Run function in modified environment
+      result = f(*args, **kwargs)
+
+      # Restore global namespace
+      if had_key: 
+         globals()[oname] = key
+      else:
+         del globals()[oname]
+
+      return result
+
+   return g
+
+@selfbind
+def foo(n):
+   if n: foo(n-1)
+   print n
+
+g = foo   # assign name 'g' to function object
+foo = 2   # calling 'foo' now fails since foo is an int
+g(10)     # print from 0..10, even though foo is now an int
+print foo # prints 2 (the new value of Foo)
+</code></pre>
+
+<p>I'm sure I haven't thought through all the use cases. The biggest problem I see is the function object intentionally changing what its own name points to (an operation which would be overwritten by the decorator), but that should be ok as long as the recursive function doesn't redefine its own name in the middle of recursing.</p>
+
+<p>Still not sure I'd ever need to do this, but thinking about was interesting.</p>
+<br /><b>#6</b><br /><p>I just define in the beginning of each function a "keyword" which is just a reference to the actual name of the function. I just do this for any function, if it needs it or not:</p>
+
+<pre><code>def test():
+    this=test
+    if not hasattr(this,'cnt'):
+        this.cnt=0
+    else:
+        this.cnt+=1
+    print this.cnt
+</code></pre>
+<br />

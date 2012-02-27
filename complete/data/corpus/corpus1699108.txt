@@ -1,0 +1,112 @@
+Question (ID-1699108): Local import statements in Python I think putting the import statement as close to the fragment that uses it helps readability by making its dependencies more clear. Will Python cache this? Should I care? Is this a bad idea? 
+
+ def Process():
+ import StringIO
+ file_handle=StringIO.StringIO('hello world')
+ #do more stuff
+
+for i in xrange(10): Process()
+ 
+
+ A little more justification: it's for methods which use arcane bits of the library, but when I refactor the method into another file, I don't realize I missed the external dependency until I get a runtime error. 
+ Answers (Total-6): #0 The other answers evince a mild confusion as to how import really works. 
+
+ This statement: 
+
+ import foo
+ 
+
+ is roughly equivalent to this statement: 
+
+ foo = __import__('foo', globals(), locals(), [], -1)
+ 
+
+ That is, it creates a variable in the current scope with the same name as the requested module, and assigns it the result of calling __import__() with that module name and a boatload of default arguments. 
+
+ The __import__() function handles conceptually converts a string ( 'foo' ) into a module object. Modules are cached in sys.modules , and that's the first place __import__() looks--if sys.modules has an entry for 'foo' , that's what __import__('foo') will return, whatever it is. It really doesn't care about the type. You can see this in action yourself; try running the following code: 
+
+ import sys
+sys.modules['boop'] = (1, 2, 3)
+import boop
+print boop
+ 
+
+ Leaving aside stylistic concerns for the moment, having an import statement inside a function works how you'd want. If the module has never been imported before, it gets imported and cached in sys.modules. It then assigns the module to the local variable with that name. It does not not not modify any module-level state. It does possibly modify some global state (adding a new entry to sys.modules). 
+
+ That said, I almost never use "import" inside a function. If importing the module creates a noticeable slowdown in your program--like it performs a long computation in its static initialization, or it's simply a massive module--and your program rarely actually needs the module for anything, it's perfectly fine to have the import only inside the functions in which it's used. (If this was distasteful, Guido would jump in his time machine and change Python to prevent us from doing it.) But as a rule, I and the general Python community put all our import statements at the top of the module in module scope. 
+ #1 I've done this, and then wished I hadn't. Ordinarily, if I'm writing a function, and that function needs to use StringIO , I can look at the top of the module, see if it's being imported, and then add it if it's not. 
+
+ Suppose I don't do this; suppose I add it locally within my function. And then suppose at someone point I, or someone else, adds a bunch of other functions that use StringIO . That person is going to look at the top of the module and add import StringIO . Now your function contains code that's not only unexpected but redundant. 
+
+ Also, it violates what I think is a pretty important principle: don't directly modify module-level state from inside a function. 
+
+ Edit: 
+
+ Actually, it turns out that all of the above is nonsense. 
+
+ Importing a module doesn't modify module-level state (it initializes the module being imported, if nothing else has yet, but that's not at all the same thing). Importing a module that you've already imported elsewhere costs you nothing except a lookup to sys.modules and creating a variable in the local scope. 
+
+ Knowing this, I feel kind of dumb fixing all of the places in my code where I fixed it, but that's my cross to bear. 
+ #2 Please see PEP 8 : 
+
+ 
+ Imports are always put at the top of
+ the file, just after any module
+  comments and docstrings, and before module globals and constants. 
+ 
+
+ Please note that this is purely a stylistic choice as Python will treat all import statements the same regardless of where they are declared in the source file. Still I would recommend that you follow common practice as this will make your code more readable to others. 
+ #3 Style aside, it is true that an imported module will only be imported once (unless reload is called on said module). However, each call to import Foo will have implicitly check to see if that module is already loaded (by checking sys.modules ). 
+
+ Consider also the "disassembly" of two otherwise equal functions where one tries to import a module and the other doesn't: 
+
+ &gt;&gt;&gt; def Foo():
+...  import random
+...  return random.randint(1,100)
+... 
+&gt;&gt;&gt; dis.dis(Foo)
+ 2   0 LOAD_CONST    1 (-1)
+    3 LOAD_CONST    0 (None)
+    6 IMPORT_NAME    0 (random)
+    9 STORE_FAST    0 (random)
+
+ 3   12 LOAD_FAST    0 (random)
+    15 LOAD_ATTR    1 (randint)
+    18 LOAD_CONST    2 (1)
+    21 LOAD_CONST    3 (100)
+    24 CALL_FUNCTION   2
+    27 RETURN_VALUE  
+&gt;&gt;&gt; def Bar():
+...  return random.randint(1,100)
+... 
+&gt;&gt;&gt; dis.dis(Bar)
+ 2   0 LOAD_GLOBAL    0 (random)
+    3 LOAD_ATTR    1 (randint)
+    6 LOAD_CONST    1 (1)
+    9 LOAD_CONST    2 (100)
+    12 CALL_FUNCTION   2
+    15 RETURN_VALUE
+ 
+
+ I'm not sure how much more the bytecode gets translated for the virtual machine, but if this was an important inner loop to your program, you'd certainly want to put some weight on the Bar approach over the Foo approach. 
+
+ A quick and dirty timeit test does show a modest speed improvement when using Bar : 
+
+ $ python -m timeit -s "from a import Foo,Bar" -n 200000 "Foo()"
+200000 loops, best of 3: 10.3 usec per loop
+$ python -m timeit -s "from a import Foo,Bar" -n 200000 "Bar()"
+200000 loops, best of 3: 6.45 usec per loop
+ 
+ #4 When the python interpreter hits an import statement, it starts reading all the function definitions in the file that is being imported. This explains why sometimes, imports can take a while. 
+
+ The idea behind doing all the importing at the start IS a stylistic convention as Andrew Hare points out. However, you have to keep in mind that by doing so, you are implicitly making the interpreter check if this file has already been imported after the first time you import it. It also becomes a problem when your code file becomes large and you want to "upgrade" your code to remove or replace certain dependencies. This will require you to search your whole code file to find all the places where you have imported this module. 
+
+ I would suggest following convention and keeping the imports at the top of your code file. If you really do want to keep track of dependencies for functions, then I would suggest adding them in the docstring for that function. 
+ #5 I can see two ways when you need to import it locally 
+
+ 
+ For testing purpose or for temporary usage, you need to import something, in that case you should put import at the place of usage. 
+ Sometime to avoid cyclic dependency you will need to import it inside a function but that would mean you have problem else where. 
+ 
+
+ Otherwise always put it at top for efficiency and consistency sake.

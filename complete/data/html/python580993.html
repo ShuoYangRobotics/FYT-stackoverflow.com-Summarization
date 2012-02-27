@@ -1,0 +1,112 @@
+<h3>Question (ID-580993):</h3><h2>regex '|' operator vs separate runs for each sub-expression</h2><p>I've got a fairly large string (~700k) against which I need to run 10 regexes and count all the matches of any of the regexes.  My quick and dirty impl was to do something like re.search('(expr1)|(expr2)|...'), but I was wondering if we'd see any performance gains by matching in a loop instead:</p>
+
+<p>In other words, I want to compare the performance of:</p>
+
+<pre><code>def CountMatchesInBigstring(bigstring, my_regexes):
+  """Counts how many of the expressions in my_regexes match bigstring."""
+  count = 0
+  combined_expr = '|'.join(['(%s)' % r for r in my_regexes])
+  matches = re.search(combined_expr, bigstring)
+  if matches:
+    count += NumMatches(matches)
+  return count
+</code></pre>
+
+<p>vs</p>
+
+<pre><code>def CountMatchesInBigstring(bigstring, my_regexes):
+  """Counts how many of the expressions in my_regexes match bigstring."""
+  count = 0
+  for reg in my_regexes:
+    matches = re.search(reg, bigstring)
+    if matches:
+      count += NumMatches(matches)
+  return count
+</code></pre>
+
+<p>I'll stop being lazy and run some tests tomorrow (and post the results), but I wondered whether the answer will jump out to someone who actually understands how regexes work :)</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>The two things will give slightly different results, unless it is guaranteed that a match will match one and only one regex. Otherwise if something matches 2 it will be counted twice.</p>
+
+<p>In theory your solution ought to be quicker (if the expression are mutually exclusive) because the regex compiler ought to be able to make a more efficient search state machine, so only one pass is needed. I would expect the difference to be tiny though, unless the expressions are very similar. </p>
+
+<p>Also, if it were a huge string (bigger than 700k) there might be gains from doing one pass, and so a factor of n fewer memory swaps would be needed (to disk or cpu cache).</p>
+
+<p>My bet is in your tests it isn't really noticeable though. I'm interested in the actual result - please do post the results.</p>
+<br /><b>#1</b><br /><p>To understand how re module works - compile _sre.c in debug mode (put #define VERBOSE at 103 line in _sre.c and recompile python). After this you ill see something like this:</p>
+
+<pre>
+<code>
+>>> import re
+>>> p = re.compile('(a)|(b)|(c)')
+>>> p.search('a'); print '\n\n'; p.search('b')
+|0xb7f9ab10|(nil)|SEARCH
+prefix = (nil) 0 0
+charset = (nil)
+|0xb7f9ab1a|0xb7fb75f4|SEARCH
+|0xb7f9ab1a|0xb7fb75f4|ENTER
+allocating sre_match_context in 0 (32)
+allocate/grow stack 1064
+|0xb7f9ab1c|0xb7fb75f4|BRANCH
+allocating sre_match_context in 32 (32)
+|0xb7f9ab20|0xb7fb75f4|MARK 0
+|0xb7f9ab24|0xb7fb75f4|LITERAL 97
+|0xb7f9ab28|0xb7fb75f5|MARK 1
+|0xb7f9ab2c|0xb7fb75f5|JUMP 20
+|0xb7f9ab56|0xb7fb75f5|SUCCESS
+discard data from 32 (32)
+looking up sre_match_context at 0
+|0xb7f9ab1c|0xb7fb75f4|JUMP_BRANCH
+discard data from 0 (32)
+|0xb7f9ab10|0xb7fb75f5|END
+
+
+
+
+|0xb7f9ab10|(nil)|SEARCH
+prefix = (nil) 0 0
+charset = (nil)
+|0xb7f9ab1a|0xb7fb7614|SEARCH
+|0xb7f9ab1a|0xb7fb7614|ENTER
+allocating sre_match_context in 0 (32)
+allocate/grow stack 1064
+|0xb7f9ab1c|0xb7fb7614|BRANCH
+allocating sre_match_context in 32 (32)
+|0xb7f9ab20|0xb7fb7614|MARK 0
+|0xb7f9ab24|0xb7fb7614|LITERAL 97
+discard data from 32 (32)
+looking up sre_match_context at 0
+|0xb7f9ab1c|0xb7fb7614|JUMP_BRANCH
+allocating sre_match_context in 32 (32)
+|0xb7f9ab32|0xb7fb7614|MARK 2
+|0xb7f9ab36|0xb7fb7614|LITERAL 98
+|0xb7f9ab3a|0xb7fb7615|MARK 3
+|0xb7f9ab3e|0xb7fb7615|JUMP 11
+|0xb7f9ab56|0xb7fb7615|SUCCESS
+discard data from 32 (32)
+looking up sre_match_context at 0
+|0xb7f9ab2e|0xb7fb7614|JUMP_BRANCH
+discard data from 0 (32)
+|0xb7f9ab10|0xb7fb7615|END
+
+>>>                                      
+</code>
+</pre>
+<br /><b>#2</b><br /><p>I suspect that the regex will also do what you are trying to do ... only much better :)</p>
+
+<p>so the "|" would win</p>
+<br /><b>#3</b><br /><p>I agree with amartynov but I wanted to add that you also might consider compiling the regex first (re.compile()), esp. in the second variant as then you might save some setup time in the loop. Maybe you can measure this as well while you are on it.</p>
+
+<p>The reason I think the one shot performs better is that I assume that it's fully done in C space and not so much python code needs to be interpreted.</p>
+
+<p>But looking forward to numbers.</p>
+<br /><b>#4</b><br /><p>A single compile and search should yield faster results, on a lower scale of expressions the gain could be negligible but the more you run through the greater gain.  Think of it as compiling once and matching vs compiling 10 times and matching.</p>
+<br /><b>#5</b><br /><p>I believe your first implementation will be faster:</p>
+
+<ul>
+<li>One of the key principles for Python performance is "move logic to the C level" -- meaning built-in functions (written in C) are faster than pure-Python implementations. So, when the loop is performed by the built-in Regex module, it should be faster</li>
+<li>One regex can search for multiple pattens in one pass, meaning it only has to run through your file contents once, whereas multiple regex will have to read the whole file multiple times.</li>
+</ul>
+<br /><b>#6</b><br /><p>The fewer passes the better:  It'll just use more memory, which is typically not an issue.</p>
+
+<p>If anything can be left to the interpreter to handle, it will always find a faster solution (both in time to implement and time to execute) than the typical human counterpart.</p>
+<br />

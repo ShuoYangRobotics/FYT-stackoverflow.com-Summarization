@@ -1,0 +1,74 @@
+<h3>Question (ID-742):</h3><h2>Class views in Django</h2><p><a href="http://www.djangoproject.com/" rel="nofollow">Django</a> view points to a function, which can be a problem if you want to change only a bit of functionality. Yes, I could have million keyword arguments and even more if statements in the function, but I was thinking more of an object oriented approach.</p>
+
+<p>For example, I have a page that displays a user. This page is very similar to page that displays a group, but it's still not so similar to just use another data model. Group also has members etc...</p>
+
+<p>One way would be to point views to class methods and then extend that class. Has anyone tried this approach or has any other idea? </p><br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>I've created and used my own generic view classes, defining <strong><code>__call__</code></strong> so an instance of the class is callable.  I really like it; while Django's generic views allow some customization through keyword arguments, OO generic views (if their behavior is split into a number of separate methods) can have much more fine-grained customization via subclassing, which lets me repeat myself a lot less.  (I get tired of rewriting the same create/update view logic anytime I need to tweak something Django's generic views don't quite allow).</p>
+
+<p>I've posted some code at <a href="http://www.djangosnippets.org/snippets/1009/" rel="nofollow">djangosnippets.org</a>.</p>
+
+<p>The only real downside I see is the proliferation of internal method calls, which may impact performance somewhat. I don't think this is much of a concern; it's rare that Python code execution would be your performance bottleneck in a web app.</p>
+
+<p><strong>UPDATE</strong>: Django's own <a href="http://docs.djangoproject.com/en/dev/topics/class-based-views/" rel="nofollow">generic views</a> are now class-based.</p>
+
+<p><strong>UPDATE</strong>: FWIW, I've changed my opinion on class-based views since this answer was written. After having used them extensively on a couple of projects, I feel they tend to lead to code that is satisfyingly DRY to write, but very hard to read and maintain later, because functionality is spread across so many different places, and subclasses are so dependent on every implementation detail of the superclasses and mixins. I now feel that <a href="https://docs.djangoproject.com/en/dev/ref/template-response/" rel="nofollow">TemplateResponse</a> and view decorators is a better answer for decomposing view code.</p>
+<br /><b>#1</b><br /><p>If you're simply displaying data from models, why not use the <a href="http://www.djangoproject.com/documentation/generic_views/" rel="nofollow">Django Generic Views</a>? They're designed to let you easy show data from a model without having to write your own view and stuff about mapping URL paramaters to views, fetching data, handling edge cases, rendering output, etc.</p><br /><b>#2</b><br /><p>I needed to use class based views, but I wanted to be able to use the full name of the class in my URLconf without always having to instantiate the view class before using it. What helped me was a surprisingly simple metaclass:</p>
+
+<pre><code>class CallableViewClass(type):
+    def __call__(cls, *args, **kwargs):
+        if args and isinstance(args[0], HttpRequest):
+            instance = super(CallableViewClass, cls).__call__()
+            return instance.__call__(*args, **kwargs)
+        else:
+            instance = super(CallableViewClass, cls).__call__(*args, **kwargs)
+            return instance
+
+
+class View(object):
+    __metaclass__ = CallableViewClass
+
+    def __call__(self, request, *args, **kwargs):
+        if hasattr(self, request.method):
+            handler = getattr(self, request.method)
+            if hasattr(handler, '__call__'):
+                return handler(request, *args, **kwargs)
+        return HttpResponseBadRequest('Method Not Allowed', status=405)
+</code></pre>
+
+<p>I can now both instantiate view classes and use the instances as view functions, OR I can simply point my URLconf to my class and have the metaclass instantiate (and call) the view class for me. This works by checking the first argument to <code>__call__</code> – if it's a <code>HttpRequest</code>, it must be an actual HTTP request because it would be nonsense to attept to instantiate a view class with an <code>HttpRequest</code> instance.</p>
+
+<pre><code>class MyView(View):
+    def __init__(self, arg=None):
+        self.arg = arg
+    def GET(request):
+        return HttpResponse(self.arg or 'no args provided')
+
+@login_required
+class MyOtherView(View):
+    def POST(request):
+        pass
+
+# And all the following work as expected.
+urlpatterns = patterns(''
+    url(r'^myview1$', 'myapp.views.MyView', name='myview1'),
+    url(r'^myview2$', myapp.views.MyView, name='myview2'),
+    url(r'^myview3$', myapp.views.MyView('foobar'), name='myview3'),
+    url(r'^myotherview$', 'myapp.views.MyOtherView', name='otherview'),
+)
+</code></pre>
+
+<p>(I posted a snippet for this at <a href="http://djangosnippets.org/snippets/2041/" rel="nofollow">http://djangosnippets.org/snippets/2041/</a>)</p>
+<br /><b>#3</b><br /><p>Sounds to me like you're trying to combine things that shouldn't be combined.  If you need to do different processing in your view depending on if it's a User or Group object you're trying to look at then you should use two different view functions.</p>
+
+<p>On the other hand there can be common idioms you'd want to extract out of your object_detail type views... perhaps you could use a decorator or just helper functions?</p>
+
+<p>-Dan</p><br /><b>#4</b><br /><p>Unless you want to do something a little complex, using the generic views are the way to go.  They are far more powerful than their name implies, and if you are just displaying model data generic views will do the job.</p>
+<br /><b>#5</b><br /><p>You can always create a class, override the <em><code>__call__</code></em> function and then point the URL file to an instance of the class. You can take a look at the <a href="http://code.djangoproject.com/browser/django/trunk/django/contrib/formtools/wizard.py" rel="nofollow">FormWizard</a> class to see how this is done.</p>
+<br /><b>#6</b><br /><p>If you want to share common functionality between pages I suggest you look at custom tags. They're quite <a href="http://www.djangoproject.com/documentation/templates_python/#extending-the-template-system" rel="nofollow">easy to create</a>, and are very powerful.</p>
+
+<p>Also, <a href="http://www.djangoproject.com/documentation/templates/#extends" rel="nofollow">templates can extend from other templates</a>. This allows you to have a base template to set up the layout of the page and to share this between other templates which fill in the blanks. You can nest templates to any depth; allowing you to specify the layout on separate groups of related pages in one place.</p>
+<br /><b>#7</b><br /><p>Generic views will usually be the way to go, but ultimately you're free to handle URLs however you want. FormWizard does things in a class-based way, as do some apps for RESTful APIs.</p>
+
+<p>Basically with a URL you are given a bunch of variables and place to provide a callable, what callable you provide is completely up to you - the standard way is to provide a function - but ultimately Django puts no restrictions on what you do.</p>
+
+<p>I do agree that a few more examples of how to do this would be good, FormWizard is probably the place to start though.</p>
+<br />

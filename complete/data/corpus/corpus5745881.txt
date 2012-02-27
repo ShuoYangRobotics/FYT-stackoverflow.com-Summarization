@@ -1,0 +1,196 @@
+Question (ID-5745881): Fast way to remove a few items from a list/queue This is a follow up to a similar question which asked the best way to write 
+
+ for item in somelist:
+ if determine(item):
+   code_to_remove_item
+ 
+
+ and it seems the consensus was on something like 
+
+ somelist[:] = [x for x in somelist if not determine(x)]
+ 
+
+ However, I think if you are only removing a few items, most of the items are being copied into the same object, and perhaps that is slow. In an answer to another related question , someone suggests: 
+
+ for item in reversed(somelist):
+ if determine(item):
+  somelist.remove(item)
+ 
+
+ However, here the list.remove will search for the item, which is O(N) in the length of the list. May be we are limited in that the list is represented as an array, rather than a linked list, so removing items will need to move everything after it. However, it is suggested here that collections.dequeue is represented as a doubly linked list. It should then be possible to remove in O(1) while iterating. How would we actually accomplish this? 
+
+ Update :
+I did some time testing as well, with the following code: 
+
+ import timeit
+setup = """
+import random
+random.seed(1)
+b = [(random.random(),random.random()) for i in xrange(1000)]
+c = []
+def tokeep(x):
+  return (x[1]&gt;.45) and (x[1]&lt;.5)
+"""
+listcomp = """
+c[:] = [x for x in b if tokeep(x)]
+"""
+filt = """
+c = filter(tokeep, b)
+"""
+print "list comp = ", timeit.timeit(listcomp,setup, number = 10000)
+print "filtering = ", timeit.timeit(filt,setup, number = 10000)
+ 
+
+ and got: 
+
+ list comp = 4.01255393028
+filtering = 3.59962391853
+ 
+ Answers (Total-6): #0 The list comprehension is the asymptotically optimal solution: 
+
+ somelist = [x for x in somelist if not determine(x)]
+ 
+
+ It only makes one pass over the list, so runs in O(n) time. Since you need to call determine() on each object, any algorithm will require at least O(n) operations. The list comprehension does have to do some copying, but it's only copying references to the objects not copying the objects themselves. 
+
+ Removing items from a list in Python is O(n), so anything with a remove, pop, or del inside the loop will be O(n**2). 
+
+ Also, in CPython list comprehensions are faster than for loops. 
+ #1 If you need to remove item in O(1) you can use HashMaps 
+ #2 Since list.remove is equivalent to del list[list.index(x)] , you could do: 
+
+ for idx, item in enumerate(somelist):
+ if determine(item):
+  del somelist[idx]
+ 
+
+ But: you should not modify the list while iterating over it. It will bite you, sooner or later. Use filter or list comprehension first, and optimise later. 
+ #3 A deque is optimized for head and tail removal, not for arbitrary removal in the middle. The removal itself is fast, but you still have to traverse the list to the removal point. If you're iterating through the entire length, then the only difference between filtering a deque and filtering a list (using filter or a comprehension) is the overhead of copying, which at worst is a constant multiple; it's still a O(n) operation. Also, note that the objects in the list aren't being copied -- just the references to them. So it's not that much overhead. 
+
+ It's possible that you could avoid copying like so, but I have no particular reason to believe this is faster than a straightforward list comprehension -- it's probably not: 
+
+ write_i = 0
+for read_i in range(len(L)):
+ L[write_i] = L[read_i]
+ if L[read_i] not in ['a', 'c']:
+   write_i += 1
+del L[write_i:]
+ 
+ #4 What about using filter ? It retains or removes elements based on a predicate , which seems to be exactly what you're trying to do. 
+
+ &gt;&gt;&gt; def f(x): return x % 2 != 0 and x % 3 != 0
+...
+&gt;&gt;&gt; filter(f, range(2, 25))
+[5, 7, 11, 13, 17, 19, 23]
+ 
+ #5 I took a stab at this. My solution is slower, but requires less memory overhead (i.e. doesn't create a new array). It might even be faster in some circumstances! 
+
+ This code has been edited since its first posting 
+
+ I had problems with timeit, I might be doing this wrong. 
+
+ import timeit
+setup = """
+
+import random
+random.seed(1)
+global b
+setup_b = [(random.random(), random.random()) for i in xrange(1000)]
+c = []
+def tokeep(x):
+  return (x[1]&gt;.45) and (x[1]&lt;.5)
+
+
+# define and call to turn into psyco bytecode (if using psyco)
+b = setup_b[:]
+def listcomp():
+ c[:] = [x for x in b if tokeep(x)]
+listcomp()
+
+b = setup_b[:]
+def filt():
+ c = filter(tokeep, b)
+filt()
+
+b = setup_b[:]
+def forfilt():
+ marked = (i for i, x in enumerate(b) if tokeep(x))
+ shift = 0
+ for n in marked:
+  del b[n - shift]
+  shift += 1
+forfilt()
+
+b = setup_b[:]
+def forfiltCheating():
+ marked = (i for i, x in enumerate(b) if (x[1] &gt; .45) and (x[1] &lt; .5))
+
+ shift = 0
+ for n in marked:
+  del b[n - shift]
+  shift += 1
+forfiltCheating()
+
+"""
+
+listcomp = """
+b = setup_b[:]
+
+listcomp()
+"""
+
+filt = """
+b = setup_b[:]
+
+filt()
+"""
+
+forfilt = """
+b = setup_b[:]
+
+forfilt()
+"""
+
+forfiltCheating = '''
+b = setup_b[:]
+
+forfiltCheating()
+'''
+
+psycosetup = '''
+
+import psyco
+psyco.full()
+
+
+'''
+
+print "list comp = ", timeit.timeit(listcomp, setup, number = 10000)
+print "filtering = ", timeit.timeit(filt, setup, number = 10000)
+print 'forfilter = ', timeit.timeit(forfilt, setup, number = 10000)
+print 'forfiltCheating = ', timeit.timeit(forfiltCheating, setup, number = 10000)
+
+
+print '\nnow with psyco \n'
+print "list comp = ", timeit.timeit(listcomp, psycosetup + setup, number = 10000)
+print "filtering = ", timeit.timeit(filt, psycosetup + setup, number = 10000)
+print 'forfilter = ', timeit.timeit(forfilt, psycosetup + setup, number = 10000)
+print 'forfiltCheating = ', timeit.timeit(forfiltCheating, psycosetup + setup, number = 10000)
+ 
+
+ And here are the results 
+
+ list comp = 6.56407690048
+filtering = 5.64738512039
+forfilter = 7.31555104256
+forfiltCheating = 4.8994679451
+
+now with psyco 
+
+list comp = 8.0485959053
+filtering = 7.79016900063
+forfilter = 9.00477004051
+forfiltCheating = 4.90830993652
+ 
+
+ I must be doing something wrong with psyco, because it is actually running slower.

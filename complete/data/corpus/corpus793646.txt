@@ -1,0 +1,244 @@
+Question (ID-793646): How epoll detect clientside close in Python? Here is my server 
+
+ 
+""Server using epoll method"""
+
+import os
+import select
+import socket
+import time
+
+from oodict import OODict
+
+addr = ('localhost', 8989)
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(addr)
+s.listen(8)
+s.setblocking(0) # Non blocking socket server
+epoll = select.epoll()
+epoll.register(s.fileno(), select.EPOLLIN) # Level triggerred
+
+cs = {}
+data = ''
+while True:
+ time.sleep(1)
+ events = epoll.poll(1) # Timeout 1 second
+ print 'Polling %d events' % len(events)
+ for fileno, event in events:
+  if fileno == s.fileno():
+   sk, addr = s.accept()
+   sk.setblocking(0)
+   print addr
+   cs[sk.fileno()] = sk
+   epoll.register(sk.fileno(), select.EPOLLIN)
+
+  elif event & select.EPOLLIN:
+   data = cs[fileno].recv(4)
+   print 'recv ', data
+   epoll.modify(fileno, select.EPOLLOUT)
+  elif event & select.EPOLLOUT:
+   print 'send ', data
+   cs[fileno].send(data)
+   data = ''
+   epoll.modify(fileno, select.EPOLLIN)
+
+  elif event & select.EPOLLERR:
+   print 'err'
+   epoll.unregister(fileno)
+ 
+
+ client side input 
+
+ 
+ideer@ideer:/home/chenz/source/ideerfs$ telnet localhost 8989
+Trying ::1...
+Trying 127.0.0.1...
+Connected to localhost.
+Escape character is '^]'.
+123456
+123456
+^]
+
+telnet> q
+Connection closed.
+ 
+
+ server side output 
+
+ 
+
+ideer@ideer:/chenz/source/ideerfs$ python epoll.py 
+Polling 0 events
+Polling 0 events
+Polling 1 events
+('127.0.0.1', 53975)
+Polling 0 events
+Polling 1 events
+recv 1234
+Polling 1 events
+send 1234
+Polling 1 events
+recv 56
+
+Polling 1 events
+send 56
+
+Polling 0 events
+Polling 0 events
+Polling 0 events
+Polling 1 events
+recv 
+Polling 1 events
+send 
+Polling 1 events
+recv 
+Polling 1 events
+send 
+Polling 1 events
+recv 
+Polling 1 events
+send 
+Polling 1 events
+recv 
+^CTraceback (most recent call last):
+ File "epoll.py", line 23, in 
+ time.sleep(1)
+KeyboardInterrupt
+
+ 
+
+ It's strange that after the client has closed the connection, epoll still can poll recv and send events! Why does EPOLLERR event never happen? it's the same if you use EPOLLHUP. 
+
+ I notice that the EPOLLERR event only happens when you try to write a closed connection. 
+Besides this, is there another way to tell that whether the connection has been closed or not? 
+
+ Is it correct to treat the connection as closed if you get nothing in a EPOLLIN event? 
+
+ Regards,
+Chenz 
+ Answers (Total-8): #0 My ad-hoc solution to bypass this problem 
+
+ --- epoll_demo.py.orig 2009-04-28 18:11:32.000000000 +0800
++++ epoll_demo.py 2009-04-28 18:12:56.000000000 +0800
+@@ -18,6 +18,7 @@
+ epoll.register(s.fileno(), select.EPOLLIN) # Level triggerred
+
+ cs = {}
++en = {}
+ data = ''
+ while True:
+  time.sleep(1)
+@@ -29,10 +30,18 @@
+    sk.setblocking(0)
+    print addr
+    cs[sk.fileno()] = sk
++   en[sk.fileno()] = 0
+    epoll.register(sk.fileno(), select.EPOLLIN)
+
+   elif event &amp; select.EPOLLIN:
+    data = cs[fileno].recv(4)
++   if not data:
++    en[fileno] += 1
++    if en[fileno] &gt;= 3:
++     print 'closed'
++     epoll.unregister(fileno)
++    continue
++   en[fileno] = 0
+    print 'recv ', data
+    epoll.modify(fileno, select.EPOLLOUT)
+   elif event &amp; select.EPOLLOUT:
+ 
+ #1 EPOLLERR and EPOLLHUP never happens in the code pasted in the post is because they've always occurred in conjunction with an EPOLLIN or an EPOLLOUT (several of these can be set at once), so the if/then/else have always picked up an EPOLLIN or EPOLLOUT.        
+
+ Experimenting I've found that EPOLLHUP only happens in conjunction with EPOLLERR, the reason for this may be the way python interfaces with epoll and lowlevel IO, normally recv would return a -1 and set errno to EAGAIN when nothing is available on a non-blocking recv, however python uses '' (nothing returned) to signal EOF. 
+
+ Closing your telnet-session only closes that end of the tcp-connection, so it's still perfectly valid to call recv on your side, there may be pending data in the tcp receive buffers which your application hasn't read yet so that won't trigger an error-condition. 
+
+ It seems that EPOLLIN and a recv that returns an empty string is indicative of the other end having closed the connection, however, using an older version of python (before epoll were introduced) and plain select on a pipe, I've experienced that a read that returned '' did not indicate EOF just a lack of available data. 
+ #2 Don't you just need to combine the masks together to make use of EPOLLHUP and EPOLLIN at the same time: 
+
+ 
+ 
+epoll.register(sk.fileno(), select.EPOLLIN | select.EPOLLHUP)
+ 
+ 
+
+ Though to be honest I'm not really familiar with the epoll library, so it's just a suggestion really... 
+ #3 After I move select.EPOLLHUP handling code to the line before select.EPOLLIN, hup event still
+cant be got in 'telnet'. But by coincidence I found that if I use my own client script, there 
+are hup events! strange... 
+
+ And according to man epoll_ctl 
+
+  EPOLLRDHUP (since Linux 2.6.17)
+   Stream socket peer closed connection, or shut down writing half of connection. (This flag is especially useful for writing simple code to
+   detect peer shutdown when using Edge Triggered monitoring.)
+
+ EPOLLERR
+   Error condition happened on the associated file descriptor. epoll_wait(2) will always wait for this event; it is not necessary to set it
+   in events.
+
+ EPOLLHUP
+   Hang up happened on the associated file descriptor. epoll_wait(2) will always wait for this event; it is not necessary to set it in
+   events.
+ 
+
+ Seems there shall be a EPOLLRDHUP event when remote side closed connection, which is not implemented by python, don't know why 
+ #4 If the socket is still open but no read/write available epoll.poll will timeout. 
+
+ If data if available from the peer, you get an EPOLLIN and data will be available. 
+
+ If the socket is closed by the peer, you will get an EPOLLIN but when you read it it will return "". 
+
+ you could then close the socket by shutting it down and picking up the resulting EPOLLHUP event to clean up your internal structures. 
+
+ or perform cleanup and unregister the epoll. 
+
+ 
+ elif event &amp; select.EPOLLIN: 
+ 
+ data = cs[fileno].recv(4) 
+ 
+ if not data: 
+ 
+ epoll.modify(fileno, 0) 
+ 
+ cs[fileno].shutdown(socket.SHUT_RDWR) 
+ 
+ #5 The EPOLLRDHUP flag is not defined in Python for no reason. If your Linux kernel is >= 2.6.17, you can define it and register your socket in epoll like this: 
+
+ import select
+if not "EPOLLRDHUP" in dir(select):
+ select.EPOLLRDHUP = 0x2000
+...
+epoll.register(socket.fileno(), select.EPOLLIN | select.EPOLLRDHUP)
+ 
+
+ You can then catch the event you need using the same flag ( EPOLLRDHUP ): 
+
+ elif event &amp; select.EPOLLRDHUP:
+  print "Stream socket peer closed connection"
+  # try shutdown on both side, then close the socket:
+  socket.close()
+  epoll.unregister(socket.fileno())
+ 
+
+ For more info you can check selectmodule.c in python's repository: 
+ #6 I have another approach.. 
+
+ try:
+ data = s.recv(4096)
+except socket.error:
+ if e[0] in (errno.EWOULDBLOCK, errno.EAGAIN): # since this is a non-blocking socket..
+  return # no error
+ else:
+  # error
+  socket.close()
+
+if not data: #closed either
+ socket.close() 
+ 
+ #7 if event &amp; select.EPOLLHUP:
+ epoll.unregister(fd)

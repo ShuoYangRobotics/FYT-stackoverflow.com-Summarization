@@ -1,0 +1,207 @@
+<h3>Question (ID-1325673):</h3><h2>python: How to add property to a class dynamically?</h2><p>The goal is to create a mock class which behaves like a db resultset.</p>
+
+<p>So for example, if a database query returns, using a dict expression, {'ab':100, 'cd':200}, then I would to see </p>
+
+<pre><code>&gt;&gt;&gt; dummy.ab
+100
+</code></pre>
+
+<p>So, at the beginning I thought I maybe able to do it this way</p>
+
+<pre><code>ks = ['ab', 'cd']
+vs = [12, 34]
+class C(dict):
+    def __init__(self, ks, vs):
+        for i, k in enumerate(ks):
+                self[k] = vs[i]
+                setattr(self, k, property(lambda x: vs[i], self.fn_readyonly))
+
+    def fn_readonly(self, v)
+        raise "It is ready only"
+
+if __name__ == "__main__":
+    c = C(ks, vs)
+    print c.ab
+</code></pre>
+
+<p>but "c.ab" returns a property object instead.</p>
+
+<p>Replace the setattr line with </p>
+
+<pre><code>k = property(lambda x: vs[i])
+</code></pre>
+
+<p>It is of no use at all.</p>
+
+<p>So what is the right way to create an instance property in runtime?</p>
+
+<p>P.S. I am aware of an alternative <a href="http://stackoverflow.com/questions/371753/python-using-getattribute-method">here</a></p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>A bit late, but I've discovered that it is in fact possible to add a property to a class dynamically.  You just have to add it to the CLASS, not the object.</p>
+
+<pre><code>&gt;&gt;&gt; class Foo(object):
+...     def add_property(self, name, func):
+...         setattr(self.__class__, name, property(func))
+... 
+&gt;&gt;&gt; foo = Foo()
+&gt;&gt;&gt; foo.a = 3
+&gt;&gt;&gt; foo.add_property('b', lambda self: self.a + 1)
+&gt;&gt;&gt; foo.b
+4
+</code></pre>
+<br /><b>#1</b><br /><p>It seems you could solve this problem much more simply with a <a href="http://docs.python.org/library/collections.html#collections.namedtuple" rel="nofollow"><code>namedtuple</code></a>, since you know the entire list of fields ahead of time.</p>
+
+<pre><code>from collections import namedtuple
+
+Foo = namedtuple('Foo', ['bar', 'quux'])
+
+foo = Foo(bar=13, quux=74)
+print foo.bar, foo.quux
+
+foo2 = Foo()  # error
+</code></pre>
+
+<p>If you absolutely need to write your own setter, you'll have to do the metaprogramming at the class level; <code>property()</code> doesn't work on instances.</p>
+<br /><b>#2</b><br /><p>You don't need to use a property for that. Just override <code>__setattr__</code> to make them read only.</p>
+
+<pre><code>class C(object):
+    def __init__(self, keys, values):
+        for (key, value) in zip(keys, values):
+            self.__dict__[key] = value
+
+    def __setattr__(self, name, value):
+        raise "It's read only!"
+</code></pre>
+
+<p>Tada.</p>
+
+<pre><code>&gt;&gt;&gt; c = C('abc', [1,2,3])
+&gt;&gt;&gt; c.a
+1
+&gt;&gt;&gt; c.b
+2
+&gt;&gt;&gt; c.c
+3
+&gt;&gt;&gt; c.d
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+AttributeError: 'C' object has no attribute 'd'
+&gt;&gt;&gt; c.d = 42
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "&lt;stdin&gt;", line 6, in __setattr__
+Exception: It's read only!
+&gt;&gt;&gt; c.a = 'blah'
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "&lt;stdin&gt;", line 6, in __setattr__
+Exception: It's read only!
+</code></pre>
+<br /><b>#3</b><br /><p>Not sure if I completely understand the question, but you can modify instance properties at runtime with the built-in <code>__dict__</code> of your class:</p>
+
+<pre><code>class C(object):
+    def __init__(self, ks, vs):
+        self.__dict__ = dict(zip(ks, vs))
+
+
+if __name__ == "__main__":
+    ks = ['ab', 'cd']
+    vs = [12, 34]
+    c = C(ks, vs)
+    print(c.ab) # 12
+</code></pre>
+<br /><b>#4</b><br /><p>You cannot add a new property() to an instance at runtime, because properties are data descriptors.  Instead you must dynamically create a new class, or over <strong>getattribute</strong> in order to process data descriptors on instances.</p>
+<br /><b>#5</b><br /><p>Only way to dynamically attach a property is to create a new class and its instance with your new property.  </p>
+
+<pre><code>class Holder: p = property(lambda x: vs[i], self.fn_readonly)
+setattr(self, k, Holder().p)
+</code></pre>
+<br /><b>#6</b><br /><p>The best way to achieve is by defining <code>__slots__</code>. That way your instances can't have new attributes.</p>
+
+<pre><code>ks = ['ab', 'cd']
+vs = [12, 34]
+
+class C(dict):
+    __slots__ = []
+    def __init__(self, ks, vs): self.update(zip(ks, vs))
+    def __getattr__(self, key): return self[key]
+
+if __name__ == "__main__":
+    c = C(ks, vs)
+    print c.ab
+</code></pre>
+
+<p>That prints <code>12</code></p>
+
+<pre><code>    c.ab = 33
+</code></pre>
+
+<p>That gives: <code>AttributeError: 'C' object has no attribute 'ab'</code></p>
+<br /><b>#7</b><br /><blockquote>
+  <p>The goal is to create a mock class which behaves like a db resultset.</p>
+</blockquote>
+
+<p>So what you want is a dictionary where you can spell a['b'] as a.b?</p>
+
+<p>That's easy:</p>
+
+<pre><code>class atdict(dict):
+    __getattr__= dict.__getitem__
+    __setattr__= dict.__setitem__
+    __delattr__= dict.__delitem__
+</code></pre>
+<br /><b>#8</b><br /><p>This seems to work(but see below):</p>
+
+<pre><code>class data(dict,object):
+    def __init__(self,*args,**argd):
+        dict.__init__(self,*args,**argd)
+        self.__dict__.update(self)
+    def __setattr__(self,name,value):
+        raise AttributeError,"Attribute '%s' of '%s' object cannot be set"%(name,self.__class__.__name__)
+    def __delattr__(self,name):
+        raise AttributeError,"Attribute '%s' of '%s' object cannot be deleted"%(name,self.__class__.__name__)
+</code></pre>
+
+<p>If you need more complex behavior, feel free to edit your answer.</p>
+
+<h2>edit</h2>
+
+<p>The following would probably be more memory-efficient for large datasets:</p>
+
+<pre><code>class data(dict,object):
+    def __init__(self,*args,**argd):
+        dict.__init__(self,*args,**argd)
+    def __getattr__(self,name):
+        return self[name]
+    def __setattr__(self,name,value):
+        raise AttributeError,"Attribute '%s' of '%s' object cannot be set"%(name,self.__class__.__name__)
+    def __delattr__(self,name):
+        raise AttributeError,"Attribute '%s' of '%s' object cannot be deleted"%(name,self.__class__.__name__)
+</code></pre>
+<br /><b>#9</b><br /><p>I asked a similary question <a href="http://stackoverflow.com/questions/1264833/python-class-factory-to-produce-simple-struct-like-classes">on this Stack Overflow post</a> to create a class factory which created simple types. The outcome was <a href="http://stackoverflow.com/questions/1264833/python-class-factory-to-produce-simple-struct-like-classes/1275088#1275088">this answer</a> which had a working version of the class factory.
+Here is a snippet of the answer:</p>
+
+<pre><code>def Struct(*args, **kwargs):
+    def init(self, *iargs, **ikwargs):
+        for k,v in kwargs.items():
+            setattr(self, k, v)
+        for i in range(len(iargs)):
+            setattr(self, args[i], iargs[i])
+        for k,v in ikwargs.items():
+            setattr(self, k, v)
+
+    name = kwargs.pop("name", "MyStruct")
+    kwargs.update(dict((k, None) for k in args))
+    return type(name, (object,), {'__init__': init, '__slots__': kwargs.keys()})
+
+&gt;&gt;&gt; Person = Struct('fname', 'age')
+&gt;&gt;&gt; person1 = Person('Kevin', 25)
+&gt;&gt;&gt; person2 = Person(age=42, fname='Terry')
+&gt;&gt;&gt; person1.age += 10
+&gt;&gt;&gt; person2.age -= 10
+&gt;&gt;&gt; person1.fname, person1.age, person2.fname, person2.age
+('Kevin', 35, 'Terry', 32)
+&gt;&gt;&gt;
+</code></pre>
+
+<p>You could use some variation of this to create default values which is your goal (there is also an answer in that question which deals with this).</p>
+<br />

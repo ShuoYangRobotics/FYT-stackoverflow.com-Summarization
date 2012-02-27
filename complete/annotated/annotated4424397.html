@@ -1,0 +1,141 @@
+<h3>Question ( ID-4424397 ) : </h3><h2>python <span style="background-color:yellow;">data</span> type to track <span style="background-color:yellow;">duplicates</span> </h2><p>I often keep track of <span style="background-color:yellow;">duplicates</span> with something like this : </p>
+<pre><code>processed = set() 
+for big_string in strings_generator:
+    if big_string not in processed:
+        processed.add(big_string)
+        process(big_string)
+</code></pre>
+<p>I am <span style="background-color:yellow;">dealing</span> with massive amounts of <span style="background-color:yellow;">data</span> so <span style="background-color:yellow;">do</span> n't want to maintain the processed set in memory. I have a version that uses sqlite to store the <span style="background-color:yellow;">data</span> on <span style="background-color:yellow;">disk</span> , but then this process runs much slower . </p>
+<p>To cut <span style="background-color:yellow;">down</span> on memory use what <span style="background-color:yellow;">do</span> you think of using hashes like this : </p>
+<pre><code>processed = set() 
+for big_string in string_generator:
+    key = hash(big_string)
+    if key not in ignored:
+        processed.add(key)
+        process(big_string)    
+</code></pre>
+<p>The <span style="background-color:yellow;">drawback</span> is I could lose <span style="background-color:yellow;">data</span> through occasional hash collisions . 1 collision in 1 billion hashes would not be a problem for my use . </p>
+<p>I tried the md5 hash but found generating the hashes became a bottleneck . </p>
+<p>What would you suggest instead ? </p>
+<br /><h3>Answers ( Total-10 ) : </h3><b># 0 </b><br /><p>I 'm going to assume you are hashing web pages. You have to hash at most 55 billion web pages ( and that measure almost certainly overlooks some overlap ) . </p>
+<p></p>
+<p></p>
+<p>Since there is a speed issue , but no real cryptographic concern , we can use a &gt ; 66-bits non-cryptographic hash with the nice collision <span style="background-color:yellow;">distribution</span> property outlined above . </p>
+<p>It looks like we are looking for the 128-bit version of the Murmur3 hash. People have been reporting speed increases upwards of 12x comparing Murmur3_128 to MD5 on a 64-bit machine. You can use this library to <span style="background-color:yellow;">do</span> your speed tests. See also this related answer , which : </p>
+<ul>
+<li>shows speed test results in the range of python's <code>str_hash</code>, which speed you have already deemed acceptable <a href="http://stackoverflow.com/a/8606962/47978">elsewhere</a> – though python's <code>hash</code> is a 32-bit hash leaving you only <code>2ˆ32/(10ˆ9)</code> (that is only 4) values stored with a less than one in a billion chance of collision.</li>
+<li>spawned a <a href="https://github.com/phensley/python-smhasher" rel="nofollow">library of python bindings</a> that you should be able to use directly.</li>
+</ul>
+<p>Finally , I hope to have outlined the reasoning that could allow you to compare with other functions of varied size should you feel the need for it ( e.g. if you up your collision tolerance , if the size of your indexed set is smaller than the whole Internet , etc , ... ) . </p>
+<br /><b># 1 </b><br /><p>You have to <span style="background-color:yellow;">decide</span> which is more important : space or time . </p>
+<p>If time , then you need to create unique representations of your <span style="background-color:yellow;">large_item</span> which take as little space as possible ( probably some str value ) that is easy ( i.e. quick ) to calculate and will not have collisions , and store them in a set . </p>
+<p>If space , find the quickest <span style="background-color:yellow;">disk-backed</span> solution you can and store the smallest possible unique value that will identify a <span style="background-color:yellow;">large_item</span> . </p>
+<p>So either way , you want small unique identifiers -- <span style="background-color:yellow;">depending</span> on the nature of <span style="background-color:yellow;">large_item</span> this may be a big win , or not possible . </p>
+<p>Update </p>
+<blockquote>they are strings of html content </blockquote>
+<p>Perhaps a hybrid solution then : Keep a set in memory of the normal Python hash , while also keeping the actual html content on <span style="background-color:yellow;">disk</span> , <span style="background-color:yellow;">keyed</span> by that hash ; when you check to see if the current <span style="background-color:yellow;">large_item</span> is in the set and get a positive , <span style="background-color:yellow;">double-check</span> with the <span style="background-color:yellow;">disk-backed</span> solution to see if it 's a real hit or not , then skip or process as appropriate. Something like this : </p>
+<pre><code>import dbf
+on_disk = dbf.Table('/tmp/processed_items', 'hash N(17,0); value M')
+index = on_disk.create_index(lambda rec: rec.hash)
+
+fast_check = set()
+def slow_check(hashed, item):
+    matches = on_disk.search((hashed,))
+    for record in matches:
+        if item == record.value:
+            return True
+    return False
+
+for large_item in many_items:
+    hashed = hash(large_item) # only calculate once
+    if hashed not in fast_check or not slow_check(hashed, large_item):
+        on_disk.append((hashed, large_item))
+        fast_check.add(hashed)
+        process(large_item)    
+</code></pre>
+<p>FYI : <span style="background-color:yellow;">dbf</span> is a module I wrote which you can find on PyPI </p>
+<br /><b># 2 </b><br /><p>If many_items already resides in memory , you are not creating another copy of the <span style="background-color:yellow;">large_item.</span> You are just storing a reference to it in the ignored set . </p>
+<p>If many_items is a file or some other generator , you 'll have to look at other alternatives . </p>
+<p>Eg if many_items is a file , perhaps you can store a pointer to the item in the file instead of the actual item </p>
+<br /><b># 3 </b><br /><p>As you have already seen few options but unfortunately none of them can fully address the situation partly because </p>
+<ol>Memory Constraint , to store entire object in memory No perfect Hash function , and for huge <span style="background-color:yellow;">data</span> set change of collision is there . Better Hash functions ( md5 ) are slower Use of <span style="background-color:yellow;">database</span> like sqlite would actually make things slower </ol>
+<p>As I read this following excerpt </p>
+<blockquote>I have a version that uses sqlite to store the <span style="background-color:yellow;">data</span> on <span style="background-color:yellow;">disk</span> , but then this process runs much slower . </blockquote>
+<p>I feel if you work on this , it might help you marginally. Here how it should be </p>
+<ol>Use tmpfs to create a ramdisk. tmpfs has several advantages over other implementation because it supports swapping of less-used space to swap space . Store the sqlite <span style="background-color:yellow;">database</span> on the ramdisk . Change the size of the ramdisk and profile your code to check your performance . </ol>
+<p>I suppose you already have a working code to save your <span style="background-color:yellow;">data</span> in sqllite. You only need to <span style="background-color:yellow;">define</span> a tmpfs and use the path to store your <span style="background-color:yellow;">database</span> . </p>
+<p>Caveat : This is a linux only solution </p>
+<br /><b># 4 </b><br /><p>a bloom filter ? http : //en.wikipedia.org/wiki/Bloom_filter </p>
+<br /><b># 5 </b><br /><p>well you can always <span style="background-color:yellow;">decorate</span> <span style="background-color:yellow;">large_item</span> with a processed flag. Or something similar . </p>
+<br /><b># 6 </b><br /><p>You can give a try to the str type __hash__ function . </p>
+<pre><code>In [1]: hash('http://stackoverflow.com')
+Out[1]: -5768830964305142685 
+</code></pre>
+<p>It 's <span style="background-color:yellow;">definitely</span> not a cryptographic hash function , but with a little chance you wo n't have too much collision. It works as <span style="background-color:yellow;">described</span> here : http : //effbot.org/zone/python-hash.htm . </p>
+<br /><b># 7 </b><br /><p>I suggest you profile standard Python hash functions and choose the fastest : they are all " safe " against collisions enough for your application . </p>
+<p>Here are some benchmarks for hash , md5 and sha1 : </p>
+<pre><code>In [37]: very_long_string = 'x' * 1000000
+In [39]: %timeit hash(very_long_string)
+10000000 loops, best of 3: 86 ns per loop
+
+In [40]: from hashlib import md5, sha1
+
+In [42]: %timeit md5(very_long_string).hexdigest()
+100 loops, best of 3: 2.01 ms per loop
+
+In [43]: %timeit sha1(very_long_string).hexdigest()
+100 loops, best of 3: 2.54 ms per loop
+</code></pre>
+<p>md5 and sha1 are comparable in speed. hash is 20k times faster for this string and it <span style="background-color:yellow;">does</span> not seem to <span style="background-color:yellow;">depend</span> much on the size of the string itself . </p>
+<br /><b># 8 </b><br /><p>how <span style="background-color:yellow;">does</span> your sql lite version work ? If you insert all your strings <span style="background-color:yellow;">into</span> a <span style="background-color:yellow;">database</span> table and then run the query " select <span style="background-color:yellow;">distinct</span> <span style="background-color:yellow;">big_string</span> from table_name " , the <span style="background-color:yellow;">database</span> should optimize it for you . </p>
+<p>Another option for you would be to use hadoop . </p>
+<p>Another option could be to split the strings <span style="background-color:yellow;">into</span> partitions such that each partition is small enough to fit in memory. then you only need to check for <span style="background-color:yellow;">duplicates</span> within each partition. the formula you use to <span style="background-color:yellow;">decide</span> the partition will choose the same partition for each <span style="background-color:yellow;">duplicate.</span> the easiest way is to just look at the first few <span style="background-color:yellow;">digits</span> of the string e.g. : </p>
+<pre><code>d=defaultdict(int)
+for big_string in strings_generator:
+    d[big_string[:4]]+=1
+print d
+</code></pre>
+<p>now you can <span style="background-color:yellow;">decide</span> on your partitions , go through the generator again and write each <span style="background-color:yellow;">big_string</span> to a file that has the start of the <span style="background-color:yellow;">big_string</span> in the <span style="background-color:yellow;">filename.</span> Now you could just use your original method on each file and just loop through all the files </p>
+<br /><b># 9 </b><br /><p>This can be achieved much more easily by performing simpler checks first , then investigating these cases with more elaborate checks. The example below contains extracts of your code , but it is performing the checks on much smaller sets of <span style="background-color:yellow;">data.</span> It <span style="background-color:yellow;">does</span> this by first matching on a simple case that is cheap to check. And if you find that a ( filesize , checksum ) pairs are not <span style="background-color:yellow;">discriminating</span> enough you can easily change it for a more cheap , yet vigorous check . </p>
+<pre><code># Need to define the following functions
+def GetFileSize(filename):
+    pass
+def GenerateChecksum(filename):
+    pass
+def LoadBigString(filename):
+    pass
+
+# Returns a list of duplicates pairs.
+def GetDuplicates(filename_list):
+    duplicates = list()
+    # Stores arrays of filename, mapping a quick hash to a list of filenames.
+    filename_lists_by_quick_checks = dict()
+    for filename in filename_list:
+        quickcheck = GetQuickCheck(filename)
+        if not filename_lists_by_quick_checks.has_key(quickcheck):
+            filename_lists_by_quick_checks[quickcheck] = list()
+        filename_lists_by_quick_checks[quickcheck].append(filename)
+    for quickcheck, filename_list in filename_lists.iteritems():
+        big_strings = GetBigStrings(filename_list)
+        duplicates.extend(GetBigstringDuplicates(big_strings))
+    return duplicates
+
+def GetBigstringDuplicates(strings_generator):
+    processed = set()
+    for big_string in strings_generator:
+        if big_sring not in processed:
+            processed.add(big_string)
+            process(big_string)
+
+# Returns a tuple containing (filesize, checksum).
+def GetQuickCheck(filename):
+    return (GetFileSize(filename), GenerateChecksum(filename))
+
+# Returns a list of big_strings from a list of filenames.
+def GetBigStrings(file_list):
+    big_strings = list()
+    for filename in file_list:
+        big_strings.append(LoadBigString(filename))
+    return big_strings
+</code></pre>
+<br />

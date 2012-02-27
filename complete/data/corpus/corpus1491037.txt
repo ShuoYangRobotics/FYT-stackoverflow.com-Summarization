@@ -1,0 +1,177 @@
+Question (ID-1491037): Mapping std::map to Python Sometimes it makes sense to have a key-ordered dictionary. In C++, this is often implemented with a Red-black tree. But any self-balancing binary search tree will do (fwiw, Knuth is particularly clear on this subject). The best solution I've been able to come up with so far is to take R. McGraw's AVL-tree type and create a wrapper class that basically implements the STL map interface (also counting on the handy ordering of pairs (two element tuples) in Python). Such a tuple basically corresponds to std::map::value_type. 
+
+ Yes, there's Python's bisect module, and while that is logarithmic at insertion time in the same way that self-balancing binary trees are logarithmic at insertion time (right?), frankly I just want an object. Called OrderedDict or something (and no, the Python 3.1 OrderedDict doesn't qualify -- that's for 'insertion-time' ordering -- and frankly what insertion-time ordering has to do with ordering is not quite obvious). 
+
+ Note, a key-ordered dictionary is highly useful in many industries (in finance for instance, it's ordinary to keep track of price books of data, which are basically ordered dictionaries of price -> quantity, aggregated order information, etc.). 
+
+ If anyone has any other ideas, that's great. All I know is I just got five million times smarter by Alex Martelli's 'answers' here. So I thought I'd ask. 
+ Answers (Total-6): #0 I got exactly the same need, and Alex Martelli's answer has totally convinced me: best is keeping a dictionary and a list of partially sorted keys, then sort when needed. This is efficient because of the very particular behaviour of python's sort algorithm (AKA Timsort).
+ http://stackoverflow.com/questions/1319763/key-ordered-dict-in-python 
+
+ I tested his implementation and mine, and his was best (because he does not insert in the middle of the list) 
+
+ (I strongly advise you to read the paper linked in AM's comment about the timsort, which is a pearl). 
+ #1 Maybe this will help you. 
+
+ http://pypi.python.org/pypi/rbtree/0.8.0 
+ #2 As you said, you can roll your own implementation with bisect: 
+
+ class OrderedDict:
+ def __init__(self, keyvalues_iter):
+ self.__srtlst__ = sorted(keyvalues_iter)
+ def __len__(self):
+ return len(self.__srtlst__)
+ def __contains__(self, key):
+ index = bisect(self.__srtlst__, key)
+ if index&lt;len(self.__srtlst__) and self.__srtlst__[index][0] == key:
+  return True
+ else:
+  return False 
+ def __getitem__(self, key):
+ index = bisect(self.__srtlst__, key)
+ if index&lt;len(self.__srtlst__) and self.__srtlst__[index][0] == key:
+  return self.__srtlst__[index][1]
+ else:
+  raise KeyError(key)
+ def __setitem__(sekf, key, value):
+ index = bisect(self.__srtlst__, key)
+ if index&lt;len(self.__srtlst__) and self.__srtlst__[index][0] == key:
+  self.__srtlst__[index][1] = value
+ else:
+  self.__srtlst__[index]=(key, value)
+ def __delitem__(sekf, key, value):
+ index = bisect(self.__srtlst__, key)
+ if index&lt;len(self.__srtlst__) and self.__srtlst__[index][0] == key:
+  del __srtlst__[index]
+ else:
+  raise KeyError(key)
+ def __iter__(self):
+  return (v for k,v in self.__srtlst__)
+ def clear(self):
+  self.__srtlst__ = []
+ def get(self, key, default=None):
+ index = bisect(self.__srtlst__, key)
+ if index&lt;len(self.__srtlst__) and self.__srtlst__[index][0] == key:
+  return self.__srtlst__[index][1]
+ else:
+  return default
+ def items(self):
+  return self.__srtlst__[:]
+ def iteritems(self):
+ return iter(self.__srtlst__)
+ def iterkeys(self):
+ return (k for k,v in self.__srtlst__)
+ def itervalues(self):
+ return (v for k,v in self.__srtlst__)
+ def keys(self):
+ return [k for k,v in self.__srtlst__]
+ def values(self):
+ return [v for k,v in self.__srtlst__]
+ def setdefault(self, key, default):
+ index = bisect(self.__srtlst__, key)
+ if index&lt;len(self.__srtlst__) and self.__srtlst__[index][0] == key:
+  return self.__srtlst__[index][1]
+ else:
+  self.__srtlst__[index]=(key, default)
+  return default
+ def update(self, other):
+ #a more efficient implementation could be done merging the sorted lists
+ for k, v in other.iteritems():
+  self[k] = v
+ 
+
+ hmmm... it seems that I already did that for you, d'oh! 
+ #3 Lists are a miserable substitute for a tree. 
+
+ Insertions need to move the whole list around to make space; deletions need to move the list back down. Adding or deleting stuff in batch is fine when it's possible, but it's very often not, or takes unnatural contortions to arrange it. A fundamental attribute of a tree is that insertions and deletions are O(log n); no amount of handwaving will turn O(n) into O(log n). 
+
+ Inserting an item into a tree when you already know where it's going to go is O(1). Equivalently, deleting an item from a tree based on its node is also O(1). std::map supports both of these. These are both O(n) with a list. 
+
+ Another fundamental property of a tree is that iterating over a range of values is O(1) per iteration. Combining list and dict loses this, because each iteration needs to do a dict lookup. (The list-of-tuples approach doesn't have this problem.) 
+
+ Trees are among the most basic of data types. Python's lack of a tree container type is a wart. Maybe there's a third-party library implementing one (eg. the one linked by Mr. "Unknown", which I havn't tried so I can't vouch for), but there's no standard Python type for it. 
+ #4 For a list that stays sorted, you can try module heapq. 
+ #5 I stumbled on this question needing an OrderedMap myself, and found to my horror that the accepted answer is complete garbage. So I rolled my own, in case anyone finds it useful: 
+
+ from bisect import *
+
+class OrderedMap:
+ """Much less efficient than a dict, 
+ but keys don't need to be hashable."""
+ __default_arg = object()
+ def __init__(self, keyvalues_iter = None):
+  self.clear()
+  if keyvalues_iter is not None:
+   self.update(keyvalues_iter)
+ def clear(self):
+  self.__keys = []
+  self.__values = []
+ def __index(self, key):
+  if self.__keys:
+   index = bisect(self.__keys, key)-1
+   if self.__keys[index] == key:
+    return index
+  raise KeyError(key)
+ def __len__(self):
+  return len(self.__keys)
+ def __contains__(self, key):
+  try:
+   self.__index(key)
+   return True
+  except KeyError:
+   return False
+ def __getitem__(self, key):
+  index = self.__index(key)
+  return self.__values[index]
+ def __setitem__(self, key, value):
+  try:
+   index = self.__index(key)
+   # exists
+   self.__values[index] = value
+  except KeyError:
+   # new
+   index = bisect(self.__keys, key)
+   self.__keys.insert(index, key)
+   self.__values.insert(index, value)
+ def __delitem__(self, key):
+  index = self.__index(key)
+  self.__keys.pop(index)
+  self.__values.pop(index)
+ def __iter__(self):
+  return iter(self.__keys)
+ def get(self, key, default=__default_arg):
+  try:
+   return self[key]
+  except KeyError:
+   if default != OrderedMap.__default_arg:
+    return default
+   raise
+ def setdefault(self, key, default = None):
+  try:
+   return self[key]
+  except KeyError:
+   if default != OrderedMap.__default_arg:
+    self[key] = default
+    return default
+   raise
+ def items(self):
+  return zip(self.__keys, self.__values)
+ def iteritems(self):
+  return iter((self.__keys[x], self.__values[x])
+     for x in xrange(len(self)))
+ def keys(self):
+  return self.__keys[:]
+ def iterkeys(self):
+  return iter(self.__keys)
+ def values(self):
+  return self.__values[:]
+ def itervalues(self):
+  return iter(self.__values)
+ def update(self, other):
+  for k, v in other.iteritems():
+   self[k] = v
+ def __repr__(self):
+  s = ", ".join("%s: %s" % (repr(self.__keys[x]),
+         repr(self.__values[x]))
+      for x in xrange(len(self)))
+  return "OrderedMap{%s}" % (s,)

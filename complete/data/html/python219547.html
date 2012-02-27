@@ -1,0 +1,140 @@
+<h3>Question (ID-219547):</h3><h2>I’m stunned: weird problem with python and sockets + threads</h2><p>I have a python script that is a http-server: <a href="http://paste2.org/p/89701" rel="nofollow">http://paste2.org/p/89701</a>, when benchmarking it against ApacheBench (ab) with a concurrency level (-c switch) that is lower then or equal to the value i specified in the socket.listen()-call in the sourcecode everything works fine, but as soon as put the concurrency level in apache bench above the value in the socket.listen()-call performance drops through the floor, some example:</p>
+
+<ul>
+<li>socket.listen(<strong>10</strong>) and ab -n 50 -c <strong>10</strong> <a href="http://localhost/" rel="nofollow">http://localhost/</a> = <strong>1200req/s</strong></li>
+<li>socket.listen(<strong>10</strong>) and ab -n 50 -c <strong>11</strong> <a href="http://localhost/" rel="nofollow">http://localhost/</a> = <strong>40req/s</strong></li>
+<li>socket.listen(<strong>100</strong>) and ab -n 5000 -c <strong>100</strong> <a href="http://localhost/" rel="nofollow">http://localhost/</a> = <strong>1000req/s</strong></li>
+<li>socket.listen(<strong>100</strong>) and ab -n 5000 -c <strong>101</strong> <a href="http://localhost/" rel="nofollow">http://localhost/</a> = <strong>32req/s</strong></li>
+</ul>
+
+<p>Nothing changes in the code between the two calls, I can’t figure out what is wrong - been at this problem for one day now. Also note that: The multiplexing version of the same code (I wrote to compare to the threaded version) works FINE no matter what socket.listen() is set to or what the concurrency (-c switch) in apache is set to.</p>
+
+<p><em>I've spent a day on IRC/python docs, posted on comp.lang.python and on my blog - I can't find ANYONE that even has an idea what could be wrong. Help me!</em></p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>I cannot confirm your results, and your server is coded fishy. I whipped up my own server and do not have this problem either. Let's move the discussion to a simpler level:</p>
+
+<pre><code>import thread, socket, Queue
+
+connections = Queue.Queue()
+num_threads = 10
+backlog = 10
+
+def request():
+    while 1:
+        conn = connections.get()
+        data = ''
+        while '\r\n\r\n' not in data:
+            data += conn.recv(4048)
+        conn.sendall('HTTP/1.1 200 OK\r\n\r\nHello World')
+        conn.close()
+
+if __name__ == '__main__':
+    for _ in range(num_threads):
+        thread.start_new_thread(request, ())
+
+    acceptor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    acceptor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    acceptor.bind(('', 1234))
+    acceptor.listen(backlog)
+    while 1:
+        conn, addr = acceptor.accept()
+        connections.put(conn)
+</code></pre>
+
+<p>which on my machine does:</p>
+
+<pre><code>ab -n 10000 -c 10 http://127.0.0.1:1234/ --&gt; 8695.03 [#/sec]
+ab -n 10000 -c 11 http://127.0.0.1:1234/ --&gt; 8529.41 [#/sec]
+</code></pre>
+<br /><b>#1</b><br /><p>For the heck of it I also implemented an asynchronous version:</p>
+
+<pre><code>import socket, Queue, select
+
+class Request(object):
+    def __init__(self, conn):
+        self.conn = conn
+        self.fileno = conn.fileno
+        self.perform = self._perform().next
+
+    def _perform(self):
+        data = self.conn.recv(4048)
+        while '\r\n\r\n' not in data:
+            msg = self.conn.recv(4048)
+            if msg:
+                data += msg
+                yield
+            else:
+                break
+        reading.remove(self)
+        writing.append(self)
+
+        data = 'HTTP/1.1 200 OK\r\n\r\nHello World'
+        while data:
+            sent = self.conn.send(data)
+            data = data[sent:]
+            yield
+        writing.remove(self)
+        self.conn.close()
+
+class Acceptor:
+    def __init__(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('', 1234))
+        sock.listen(10)
+        self.sock = sock
+        self.fileno = sock.fileno
+
+    def perform(self):
+        conn, addr = self.sock.accept()
+        reading.append(Request(conn))
+
+if __name__ == '__main__':
+    reading = [Acceptor()]
+    writing = list()
+
+    while 1:
+        readable, writable, error = select.select(reading, writing, [])
+        for action in readable + writable:
+            try: action.perform()
+            except StopIteration: pass
+</code></pre>
+
+<p>which performs:</p>
+
+<pre><code>ab -n 10000 -c 10 http://127.0.0.1:1234/ --&gt; 16822.13 [#/sec]
+ab -n 10000 -c 11 http://127.0.0.1:1234/ --&gt; 15704.41 [#/sec]
+</code></pre>
+<br /><b>#2</b><br /><p>rcar: Yes <em>some</em> performance hit, of course - but dropping from 1400req/s to 32req/s because I make ONE more request then what the backlog can handle? And by using that logic the multiplexing server should suffer from the same performance hit - since it only can "accept" one connection at a time also I don't use a different process to handle the connections in the multiplexing version - it's all done in the main loop. The multiplexing code looks like this: <a href="http://paste2.org/p/89734" rel="nofollow">http://paste2.org/p/89734</a> which is very similair to the threaded code.</p>
+<br /><b>#3</b><br /><p>I found <a href="http://www.mail-archive.com/dev@tomcat.apache.org/msg22589.html" rel="nofollow">this article</a> on backlog on tomcat / java which gives an interesting insight in the backlog:</p>
+
+<blockquote>
+  <p>for example, if all threads are busy
+  in java handling requests, the kernel
+  will handle SYN and TCP handshakes
+  until its backlog is full. when the
+  backlog is full, it will simply drop
+  future SYN requests. it will not send
+  a RST, ie causing "Connection refused"
+  on the client, instead the client will
+  assume the package was lost and
+  retransmit the SYN. hopefully, the
+  backlog queue will have cleared up by
+  then.</p>
+</blockquote>
+
+<p>As I interpret it, by asking ab to create more simultaneous connection than your
+socket is configured to handle packets get dropped, not refused, and I do not know
+how ab handles that. It may be that it retransmits the SYN, but possibly after waiting
+a while. This may even be specced somewhere (TCP protocol?).</p>
+
+<p>As said, I do not know but I hope this hints at the cause. </p>
+
+<p>Good luck!</p>
+<br /><b>#4</b><br /><p>extraneon.myopenid.com: Thanks for the article, it was a good read - but then the problem would show up in both the single-threaded multiplexing version and the multithreaded version of the code? it doesn't, i'm going crazy over this ;(</p>
+<br /><b>#5</b><br /><p>it looks like you're not really getting concurrency.  apparently, when you do socket.accept(), the main thread doesn't go immediately back to waiting for the next connection.  maybe your connection-handling thread is only python code, so you're getting sequentialized by the SIL (single interpreder lock).</p>
+
+<p>if there's not heavy communications between threads, better use a multi-process scheme (with a pool of pre-spawned processes, of course)</p>
+<br /><b>#6</b><br /><p>Ok, so I ran the code on a totally different server - (a vps I got at slicehost), not a single problem (everything works as expected) so honestly I think it's something wrong with my laptop now ;p </p>
+
+<p>Thanks for everyones help though!</p>
+<br />

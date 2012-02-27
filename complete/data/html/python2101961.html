@@ -1,0 +1,265 @@
+<h3>Question (ID-2101961):</h3><h2>Python state-machine design</h2><p>Related to this <strong><a href="http://stackoverflow.com/questions/1647631/c-state-machine-design">SO question (C state-machine design)</a></strong>, could you SO folks share with me (and the community!) your Python state-machine design techniques?</p>
+
+<p><strong>Update3</strong>: At the moment, I am going for an engine based on the following:</p>
+
+<pre><code>class TrackInfoHandler(object):
+    def __init__(self):
+        self._state="begin"
+        self._acc=""
+
+    ## ================================== Event callbacks
+
+    def startElement(self, name, attrs):
+        self._dispatch(("startElement", name, attrs))
+
+    def characters(self, ch):
+        self._acc+=ch
+
+    def endElement(self, name):
+        self._dispatch(("endElement", self._acc))
+        self._acc=""
+
+    ## ===================================
+    def _missingState(self, _event):
+        raise HandlerException("missing state(%s)" % self._state)
+
+    def _dispatch(self, event):
+        methodName="st_"+self._state
+        getattr(self, methodName, self._missingState)(event)
+
+    ## =================================== State related callbacks
+</code></pre>
+
+<p>But I am sure there are tons of ways of going at it whilst leveraging Python's dynamic nature (e.g. dynamic dispatching).</p>
+
+<p><strong>Update2</strong>: I am after design techniques for the "engine" that receives the "events" and "dispatches" against those based on the "state" of the machine.</p>
+<br /><h3>Answers (Total-9):</h3><b>#0</b><br /><p>I don't really get the question.  The <strong>State</strong> Design pattern is pretty clear.  See the <a href="http://rads.stackoverflow.com/amzn/click/0201633612" rel="nofollow">Design Patterns book</a>.</p>
+
+<pre><code>class SuperState( object ):
+    def someStatefulMethod( self ):
+        raise NotImplementedError()
+    def transitionRule( self, input ):
+        raise NotImplementedError()
+
+class SomeState( SuperState ):
+    def someStatefulMethod( self ):
+        actually do something()
+    def transitionRule( self, input ):
+        return NextState()
+</code></pre>
+
+<p>That's pretty common boilerplate, used in Java, C++, Python (and I'm sure other languages, also).</p>
+
+<p>If your state transition rules happen to be trivial, there are some optimizations to push the transition rule itself into the superclass.</p>
+
+<p>Note that we need to have forward references, so we refer to classes by name, and use <code>eval</code> to translate a class name to an actual class.  The alternative is to make the transition rules instance variables instead of class variables and then create the instances after all the classes are defined.</p>
+
+<pre><code>class State( object ):
+    def transitionRule( self, input ):
+        return eval(self.map[input])()
+
+class S1( State ): 
+    map = { "input": "S2", "other": "S3" }
+    pass # Overrides to state-specific methods
+
+class S2( State ):
+    map = { "foo": "S1", "bar": "S2" }
+
+class S3( State ):
+    map = { "quux": "S1" }
+</code></pre>
+
+<p>In some cases, your event isn't as simple as testing objects for equality, so a more general transition rule is to use a proper list of function-object pairs.</p>
+
+<pre><code>class State( object ):
+    def transitionRule( self, input ):
+        next_states = [ s for f,s in self.map if f(input)  ]
+        assert len(next_states) &gt;= 1, "faulty transition rule"
+        return eval(next_states[0])()
+
+class S1( State ):
+    map = [ (lambda x: x == "input", "S2"), (lambda x: x == "other", "S3" ) ]
+
+class S2( State ):
+    map = [ (lambda x: "bar" &lt;= x &lt;= "foo", "S3"), (lambda x: True, "S1") ]
+</code></pre>
+
+<p>Since the rules are evaluated sequentially, this allows a "default" rule.</p>
+<br /><b>#1</b><br /><p>In the April, 2009 issue of Python Magazine, I wrote an article on embedding a State DSL within Python, using pyparsing and imputil.  This code would allow you to write the module trafficLight.pystate:</p>
+
+<pre><code># trafficLight.pystate
+
+# define state machine
+statemachine TrafficLight:
+    Red -&gt; Green
+    Green -&gt; Yellow
+    Yellow -&gt; Red
+
+# define some class level constants
+Red.carsCanGo = False
+Yellow.carsCanGo = True
+Green.carsCanGo = True
+
+Red.delay = wait(20)
+Yellow.delay = wait(3)
+Green.delay = wait(15)
+</code></pre>
+
+<p>and the DSL compiler would create all the necessary TrafficLight, Red, Yellow, and Green classes, and the proper state transition methods.  Code could call these classes using something like this:</p>
+
+<pre><code>import statemachine
+import trafficLight
+
+tl = trafficLight.Red()
+for i in range(6):
+    print tl, "GO" if tl.carsCanGo else "STOP"
+    tl.delay()
+    tl = tl.next_state()
+</code></pre>
+
+<p>(Unfortunately, imputil has been dropped in Python 3.)</p>
+<br /><b>#2</b><br /><p>There is <a href="http://wiki.python.org/moin/PythonDecoratorLibrary#StateMachineImplementaion" rel="nofollow">this design pattern</a> for using decorators to implement state machines.  From the description on the page: </p>
+
+<blockquote>
+  <p>Decorators are used to specify which methods are the event handlers for the class.</p>
+</blockquote>
+
+<p>There is example code on the page as well (it is quite long so I won't paste it here).</p>
+<br /><b>#3</b><br /><p>I think S. Lott's answer is a much better way to implement a state machine, but if you still want to continue with your approach, using <code>(state,event)</code> as the key for your <code>dict</code> is better. Modifying your code:</p>
+
+<pre><code>class HandlerFsm(object):
+
+  _fsm = {
+    ("state_a","event"): "next_state",
+    #...
+  }
+</code></pre>
+<br /><b>#4</b><br /><p>I think that the tool <a href="http://code.google.com/p/pyscxml/" rel="nofollow">PySCXML</a> needs a closer look too.
+This project uses the W3C definition: <a href="http://www.w3.org/TR/scxml/" rel="nofollow">State Chart XML (SCXML)</a>: State Machine Notation for Control Abstraction</p>
+
+<blockquote>
+  <p>SCXML provides a generic state-machine based execution environment based on CCXML and Harel State Tables</p>
+</blockquote>
+
+<p>Currently, SCXML is a working draft; but chances are quite high that it is getting a W3C recommendation soon (It is the 9th draft).</p>
+
+<p>Another interesting point to highlight is that there is an Apache Commons project aimed at creating and maintaining a Java SCXML engine capable of executing a state machine defined using a SCXML document, while abstracting out the environment interfaces... 
+And for certain other tools supporting this technology will emerge in future when SCXML is leaving it's draft-status...</p>
+<br /><b>#5</b><br /><p>I wouldn't think to reach for a finite state machine for handling XML. The usual way to do this, I think, is to use a stack:</p>
+
+<pre><code>class TrackInfoHandler(object):
+    def __init__(self):
+        self._stack=[]
+
+    ## ================================== Event callbacks
+
+    def startElement(self, name, attrs):
+        cls = self.elementClasses[name]
+        self._stack.append(cls(**attrs))
+
+    def characters(self, ch):
+        self._stack[-1].addCharacters(ch)
+
+    def endElement(self, name):
+        e = self._stack.pop()
+        e.close()
+        if self._stack:
+            self._stack[-1].addElement(e)
+</code></pre>
+
+<p>For each kind of element, you just need a class that supports the <code>addCharacters</code>, <code>addElement</code>, and <code>close</code> methods.</p>
+
+<p><strong>EDIT:</strong> To clarify, yes I do mean to argue that finite state machines are usually the wrong answer, that as a general-purpose programming technique they're rubbish and you should stay away.</p>
+
+<p>There are a few really well-understood, cleanly-delineated problems for which FSMs are a nice solution. <code>lex</code>, for example, is good stuff.</p>
+
+<p>That said, FSMs typically don't cope well with change. Suppose someday you want to add a bit of state, perhaps a "have we seen element X yet?" flag. In the code above, you add a boolean attribute to the appropriate element class and you're done. In a finite state machine, you double the number of states and transitions.</p>
+
+<p>Problems that require finite state at first very often evolve to require even more state, like maybe a <em>number</em>, at which point either your FSM scheme is toast, or worse, you evolve it into some kind of generalized state machine, and at that point you're really in trouble. The further you go, the more your rules start to act like code—but code in a slow interpreted language you invented that nobody else knows, for which there's no debugger and no tools.</p>
+<br /><b>#6</b><br /><p>It probably depends on how complex your state machine is. For simple state machines, a dict of dicts (of event-keys to state-keys for DFAs, or event-keys to lists/sets/tuples of state-keys for NFAs) will probably be the simplest thing to write and understand.</p>
+
+<p>For more complex state machines, I've heard good things about <a href="http://smc.sourceforge.net/" rel="nofollow">SMC</a>, which can compile declarative state machine descriptions to code in a wide variety of languages, including Python.</p>
+<br /><b>#7</b><br /><p>Check <a href="http://www.ibm.com/developerworks/linux/library/l-python-state.html" rel="nofollow">this</a> and <a href="http://www.ibm.com/developerworks/library/l-pygen.html" rel="nofollow">this</a>.</p>
+<br /><b>#8</b><br /><p>The following code is a really simple solution. The only interesting part is:</p>
+
+<pre><code>   def next_state(self,cls):
+      self.__class__ = cls
+</code></pre>
+
+<p>All the logic for each state is contained in a separate class. The 'state' is changed by replacing the '<a href="http://docs.python.org/library/stdtypes.html#instance.__class__" rel="nofollow">__class__</a>' of the running instance.</p>
+
+<pre><code>#!/usr/bin/env python
+
+class State(object):
+   call = 0 # shared state variable
+   def next_state(self,cls):
+      print '-&gt; %s' % (cls.__name__,),
+      self.__class__ = cls
+
+   def show_state(self,i):
+      print '%2d:%2d:%s' % (self.call,i,self.__class__.__name__),
+
+class State1(State):
+   __call = 0  # state variable
+   def __call__(self,ok):
+      self.show_state(self.__call)
+      self.call += 1
+      self.__call += 1
+      # transition
+      if ok: self.next_state(State2)
+      print '' # force new line
+
+class State2(State):
+   __call = 0
+   def __call__(self,ok):
+      self.show_state(self.__call)
+      self.call += 1
+      self.__call += 1
+      # transition
+      if ok: self.next_state(State3)
+      else: self.next_state(State1)
+      print '' # force new line
+
+class State3(State):
+   __call = 0
+   def __call__(self,ok):
+      self.show_state(self.__call)
+      self.call += 1
+      self.__call += 1
+      # transition
+      if not ok: self.next_state(State2)
+      print '' # force new line
+
+if __name__ == '__main__':
+   sm = State1()
+   for v in [1,1,1,0,0,0,1,1,0,1,1,0,0,1,0,0,1,0,0]:
+      sm(v)
+   print '---------'
+   print vars(sm
+</code></pre>
+
+<p>Result:</p>
+
+<pre><code> 0: 0:State1 -&gt; State2 
+ 1: 0:State2 -&gt; State3 
+ 2: 0:State3 
+ 3: 1:State3 -&gt; State2 
+ 4: 1:State2 -&gt; State1 
+ 5: 1:State1 
+ 6: 2:State1 -&gt; State2 
+ 7: 2:State2 -&gt; State3 
+ 8: 2:State3 -&gt; State2 
+ 9: 3:State2 -&gt; State3 
+10: 3:State3 
+11: 4:State3 -&gt; State2 
+12: 4:State2 -&gt; State1 
+13: 3:State1 -&gt; State2 
+14: 5:State2 -&gt; State1 
+15: 4:State1 
+16: 5:State1 -&gt; State2 
+17: 6:State2 -&gt; State1 
+18: 6:State1 
+---------
+{'_State1__call': 7, 'call': 19, '_State3__call': 5, '_State2__call': 7}
+</code></pre>
+<br />

@@ -1,0 +1,324 @@
+Question (ID-2114659): How to serialize db.Model objects to json? When using 
+
+ from django.utils import simplejson
+ 
+
+ on objects of types that derive from db.Model it throws exceptions. How to circumvent this? 
+ Answers (Total-6): #0 Ok - my python not great so any help would be appreciated - You dont need to write a parser - this is the solution: 
+
+ add this utlity class http://code.google.com/p/google-app-engine-samples/source/browse/trunk/geochat/json.py?r=55 
+
+ import datetime 
+ import time 
+
+ from google.appengine.api import users 
+ from google.appengine.ext import db 
+
+#this is a mod on the orinal file for some reason it includes its own simplejson files i have ref django!
+ from django.utils import simplejson 
+
+ class GqlEncoder(simplejson.JSONEncoder): 
+
+ """Extends JSONEncoder to add support for GQL results and properties. 
+
+ Adds support to simplejson JSONEncoders for GQL results and properties by 
+ overriding JSONEncoder's default method. 
+ """ 
+
+ # TODO Improve coverage for all of App Engine's Property types. 
+
+ def default(self, obj): 
+
+  """Tests the input object, obj, to encode as JSON.""" 
+
+  if hasattr(obj, '__json__'): 
+  return getattr(obj, '__json__')() 
+
+  if isinstance(obj, db.GqlQuery): 
+  return list(obj) 
+
+  elif isinstance(obj, db.Model): 
+  properties = obj.properties().items() 
+  output = {} 
+  for field, value in properties: 
+   output[field] = getattr(obj, field) 
+  return output 
+
+  elif isinstance(obj, datetime.datetime): 
+  output = {} 
+  fields = ['day', 'hour', 'microsecond', 'minute', 'month', 'second', 
+   'year'] 
+  methods = ['ctime', 'isocalendar', 'isoformat', 'isoweekday', 
+   'timetuple'] 
+  for field in fields: 
+   output[field] = getattr(obj, field) 
+  for method in methods: 
+   output[method] = getattr(obj, method)() 
+  output['epoch'] = time.mktime(obj.timetuple()) 
+  return output 
+
+  elif isinstance(obj, time.struct_time): 
+  return list(obj) 
+
+  elif isinstance(obj, users.User): 
+  output = {} 
+  methods = ['nickname', 'email', 'auth_domain'] 
+  for method in methods: 
+   output[method] = getattr(obj, method)() 
+  return output 
+
+  return simplejson.JSONEncoder.default(self, obj) 
+
+
+ def encode(input): 
+ """Encode an input GQL object as JSON 
+
+  Args: 
+  input: A GQL object or DB property. 
+
+  Returns: 
+  A JSON string based on the input object. 
+
+  Raises: 
+  TypeError: Typically occurs when an input object contains an unsupported 
+   type. 
+  """ 
+ return GqlEncoder().encode(input) 
+ 
+
+ save as json.py 
+
+ TO USE 
+
+ import cgi
+import os
+import json 
+
+from google.appengine.ext.webapp import template
+from google.appengine.api import users
+from google.appengine.ext import webapp
+from google.appengine.ext.webapp.util import run_wsgi_app
+from google.appengine.ext import db
+
+
+class Greeting(db.Model):
+ author = db.UserProperty()
+ content = db.StringProperty(multiline=True)
+ date = db.DateTimeProperty(auto_now_add=True)
+
+class MainPage(webapp.RequestHandler):
+ def get(self):
+  greetings_query = Greeting.all().order('-date')
+  greetings = greetings_query.fetch(5)
+
+  if users.get_current_user():
+   url = users.create_logout_url(self.request.uri)
+   url_linktext = 'Logout'
+  else:
+   url = users.create_login_url(self.request.uri)
+   url_linktext = 'Login'
+
+  template_values = {
+   'greetings': greetings,
+   'url': url,
+   'url_linktext': url_linktext,
+   }
+
+  path = os.path.join(os.path.dirname(__file__), 'index.html')
+  self.response.out.write(template.render(path, template_values))
+
+
+class Guestbook(webapp.RequestHandler):
+ def post(self):
+  greeting = Greeting()
+
+  if users.get_current_user():
+   greeting.author = users.get_current_user()
+
+  greeting.content = self.request.get('content')
+  greeting.put()
+  self.redirect('/')
+
+
+
+#here i return my json feed - simple implementaion for example
+class FeedHandler(webapp.RequestHandler):
+
+ def get(self):
+ """Retrieve a feed"""
+ user = None
+
+ greetings_query = Greeting.all().order('-date')
+ rs= greetings_query.fetch(5)
+#this is the part that calls the encoder - dosnt cause an exception
+ data = json.encode(rs)
+
+
+
+#roll out to browser -might need to check my headers etc
+ self.response.headers['Content-Type'] = 'application/json; charset=utf-8' 
+ self.response.out.write(data)
+
+
+
+
+application = webapp.WSGIApplication(
+          [
+          ('/', MainPage),
+          ('/sign',Guestbook),
+          ('/feed',FeedHandler),
+          ], debug=True
+         )
+
+def main():
+ run_wsgi_app(application)
+
+if __name__ == "__main__":
+ main()
+ 
+
+ This is the browser response: 
+
+ 
+ [{"content": "", "date": {"ctime": "Sat Jan 23 02:40:22 2010", "hour": 2, "isoweekday": 6, "month": 1, "second": 22, "microsecond": 434000, "isocalendar": [2010, 3, 6], "timetuple": [2010, 1, 23, 2, 40, 22, 5, 23, -1], "year": 2010, "epoch": 1264214422.0, "isoformat": "2010-01-23T02:40:22.434000", "day": 23, "minute": 40}, "author": {"nickname": "test@example.com", "email": "test@example.com", "auth_domain": "gmail.com"}}, {"content": "", "date": {"ctime": "Sat Jan 23 01:12:43 2010", "hour": 1, "isoweekday": 6, "month": 1, "second": 43, "microsecond": 972000, "isocalendar": [2010, 3, 6], "timetuple": [2010, 1, 23, 1, 12, 43, 5, 23, -1], "year": 2010, "epoch": 1264209163.0, "isoformat": "2010-01-23T01:12:43.972000", "day": 23, "minute": 12}, "author": {"nickname": "test@example.com", "email": "test@example.com", "auth_domain": "gmail.com"}}, {"content": "test", "date": {"ctime": "Fri Jan 22 22:32:13 2010", "hour": 22, "isoweekday": 5, "month": 1, "second": 13, "microsecond": 659000, "isocalendar": [2010, 3, 5], "timetuple": [2010, 1, 22, 22, 32, 13, 4, 22, -1], "year": 2010, "epoch": 1264199533.0, "isoformat": "2010-01-22T22:32:13.659000", "day": 22, "minute": 32}, "author": {"nickname": "test@example.com", "email": "test@example.com", "auth_domain": "gmail.com"}}, {"content": "", "date": {"ctime": "Fri Jan 22 22:29:49 2010", "hour": 22, "isoweekday": 5, "month": 1, "second": 49, "microsecond": 358000, "isocalendar": [2010, 3, 5], "timetuple": [2010, 1, 22, 22, 29, 49, 4, 22, -1], "year": 2010, "epoch": 1264199389.0, "isoformat": "2010-01-22T22:29:49.358000", "day": 22, "minute": 29}, "author": {"nickname": "test@example.com", "email": "test@example.com", "auth_domain": "gmail.com"}}, {"content": "ah it works!\r\n", "date": {"ctime": "Fri Jan 22 22:29:22 2010", "hour": 22, "isoweekday": 5, "month": 1, "second": 22, "microsecond": 995000, "isocalendar": [2010, 3, 5], "timetuple": [2010, 1, 22, 22, 29, 22, 4, 22, -1], "year": 2010, "epoch": 1264199362.0, "isoformat": "2010-01-22T22:29:22.995000", "day": 22, "minute": 29}, "author": {"nickname": "test@example.com", "email": "test@example.com", "auth_domain": "gmail.com"}}] 
+ 
+ #1 The example provided by Jader Dias works fine for my concern after some twaeking. Remove the encode method as it contains a circular reference. The adjusted class should look like: 
+
+ import datetime 
+import time 
+
+from google.appengine.api import users 
+from google.appengine.ext import db 
+from django.utils import simplejson 
+
+
+class GqlEncoder(simplejson.JSONEncoder): 
+
+ """Extends JSONEncoder to add support for GQL results and properties. 
+
+ Adds support to simplejson JSONEncoders for GQL results and properties by 
+ overriding JSONEncoder's default method. 
+ """ 
+
+ # TODO Improve coverage for all of App Engine's Property types. 
+
+ def default(self, obj): 
+
+  """Tests the input object, obj, to encode as JSON.""" 
+
+  if hasattr(obj, '__json__'): 
+   return getattr(obj, '__json__')() 
+
+  if isinstance(obj, db.GqlQuery): 
+   return list(obj) 
+
+  elif isinstance(obj, db.Model): 
+   properties = obj.properties().items() 
+   output = {} 
+   for field, value in properties: 
+    output[field] = getattr(obj, field) 
+   return output 
+
+  elif isinstance(obj, datetime.datetime): 
+   output = {} 
+   fields = ['day', 'hour', 'microsecond', 'minute', 'month', 'second', 'year'] 
+   methods = ['ctime', 'isocalendar', 'isoformat', 'isoweekday', 'timetuple'] 
+   for field in fields: 
+    output[field] = getattr(obj, field) 
+   for method in methods: 
+    output[method] = getattr(obj, method)() 
+   output['epoch'] = time.mktime(obj.timetuple()) 
+   return output 
+
+  elif isinstance(obj, time.struct_time): 
+   return list(obj) 
+
+  elif isinstance(obj, users.User): 
+   output = {} 
+   methods = ['nickname', 'email', 'auth_domain'] 
+   for method in methods: 
+    output[method] = getattr(obj, method)() 
+   return output 
+
+  return simplejson.JSONEncoder.default(self, obj) 
+ 
+
+ As I've saved this class in a file called utils.py and when appropriate I import it using 
+
+ import utils
+ 
+
+ Then I just call utils.GqlEncoder().encode(results), for example: 
+
+ query = User.all()
+results = query.fetch(10)
+
+self.response.headers['Content-Type'] = "text/plain" # Alt. application/json
+self.response.out.write( utils.GqlEncoder().encode(results) )
+ 
+
+ The result should look something like this (I've added some line feeds in order to make it a bit easier to read): 
+
+ [
+{"date": {"ctime": "Tue Feb 23 10:41:21 2010", "hour": 10, "isoweekday": 2, "month": 2, 
+  "second": 21, "microsecond": 495535, "isocalendar": [2010, 8, 2], "timetuple": [2010, 2, 23, 10, 41, 21, 1, 54, -1], 
+  "year": 2010, "epoch": 1266921681.0, "isoformat": "2010-02-23T10:41:21.495535", "day": 23, "minute": 41}, 
+"claimed_id": "https:\/\/www.google.com\/accounts\/o8\/id?id=abcdefghijklmnopqrstuvxyz", 
+"display_name": "Alfred E Neumann", 
+"email": null, 
+"full_name": "Alfred E Neumann"
+}, 
+{"date": {"ctime": "Tue Feb 23 11:00:54 2010", "hour": 11, "isoweekday": 2, "month": 2, 
+  "second": 54, "microsecond": 805261, "isocalendar": [2010, 8, 2], "timetuple": [2010, 2, 23, 11, 0, 54, 1, 54, -1], 
+  "year": 2010, "epoch": 1266922854.0, "isoformat": "2010-02-23T11:00:54.805261", "day": 23, "minute": 0}, 
+"claimed_id": "http:\/\/openid.domain.net\/john", 
+"display_name": "", 
+"email": "jp@domain.net", 
+"full_name": "John Parnefjord"
+}
+]
+ 
+ #2 json cannot be used to serialize anything more than basic types such as dicts, lists, ints/longs, and strings (this is not comprehensive). For example, even these simple commands do not work: 
+
+ import json
+json.dumps(object())
+ 
+
+ If you want to serialize django objects, you should refer to the django documentation on serialization , which will use their own libraries, but they do do support json. 
+ #3 Since I could not find an appropriate solution I wrote my own, which is not exactly a JSON serializer, but a Javascript serializer 
+
+ from google.appengine.ext import db
+from google.appengine.api.datastore_types import *
+
+def dumpStr(obj):
+ return "'" + obj + "'"
+
+def dumps(obj):
+ if isinstance(obj, str):
+  return dumpStr(obj)
+ elif obj == None:
+  return None
+ elif isinstance(obj, list):
+  items = [];
+  for item in obj:
+   items.append(dumps(item))
+  return '[' + ','.join(items) + ']'
+ elif isinstance(obj, datetime.datetime):
+  return "new Date('%s')" % obj.ctime()
+ properties = [];
+ for property in dir(obj):
+  if property[0] != '_':
+   value = obj.__getattribute__(property)
+   valueClass = str(value.__class__)
+   if not(('function' in valueClass) or ('built' in valueClass) or ('method' in valueClass)):
+    value = dumps(value)
+    if value != None:
+     properties.append("'" + property + "':" + value)
+ if len(properties) == 0:
+  return str(obj)
+ else:
+  return '{' + ','.join(properties) + '}'
+ 
+ #4 I got demented for a few days trying to do this myself - I want to use jqGrid for jQuery, and I seriously need some method of returning GQL results as JSON without hand-cranking them every time. However it looks like I'm not the only one on this journey, and the App Engine blog gave me the answer I need: there's a new project called ProtoRPC , which takes a little effort to learn and apply, but since it's intended to become part of the SDK I suggest that it's the way to go. It does what I want anyway. 
+ #5 From what i can understand - and i am new to python - with google app engine the work around is to serialize the model object to a dictioanry python object and then use simple json to dump it as a json string - this makes no sense to me - maybe someone has the know to serialise to a ditionary (pickel?)
+Any help on this would be HELP! not to impressed that google app engine has no inbuilt solution for this.

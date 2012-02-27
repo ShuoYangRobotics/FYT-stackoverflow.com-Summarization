@@ -1,0 +1,160 @@
+Question (ID-295438): How can one mock/stub python module like urllib I need to test a function that needs to query a page on an external server using urllib.urlopen (it also uses urllib.urlencode). The server could be down, the page could change; I can't rely on it for a test. 
+
+ What is the best way to control what urllib.urlopen returns? 
+ Answers (Total-6): #0 Another simple approach is to have your test override urllib's urlopen() function. For example, if your module has 
+
+ import urllib
+
+def some_function_that_uses_urllib():
+ ...
+ urllib.urlopen()
+ ...
+ 
+
+ You could define your test like this: 
+
+ import mymodule
+
+def dummy_urlopen(url):
+ ...
+
+mymodule.urllib.urlopen = dummy_urlopen
+ 
+
+ Then, when your tests invoke functions in mymodule, dummy_urlopen() will be called instead of the real urlopen(). Dynamic languages like Python make it super easy to stub out methods and classes for testing. 
+
+ See my blog posts at http://visionandexecution.org for more information about stubbing out dependencies for tests. 
+ #1 Did you give Mox a look? It should do everything you need? Here is a simple interactive session illustrating the solution you need: 
+
+ &gt;&gt;&gt; import urllib
+&gt;&gt;&gt; # check that it works
+&gt;&gt;&gt; urllib.urlopen('http://www.google.com/')
+&lt;addinfourl at 3082723820L ...&gt;
+&gt;&gt;&gt; # check what happens when it doesn't
+&gt;&gt;&gt; urllib.urlopen('http://hopefully.doesnotexist.com/')
+#-- snip --
+IOError: [Errno socket error] (-2, 'Name or service not known')
+
+&gt;&gt;&gt; # OK, let's mock it up
+&gt;&gt;&gt; import mox
+&gt;&gt;&gt; m = mox.Mox()
+&gt;&gt;&gt; m.StubOutWithMock(urllib, 'urlopen')
+&gt;&gt;&gt; # We can be verbose if we want to :)
+&gt;&gt;&gt; urllib.urlopen(mox.IgnoreArg()).AndRaise(
+... IOError('socket error', (-2, 'Name or service not known')))
+
+&gt;&gt;&gt; # Let's check if it works
+&gt;&gt;&gt; m.ReplayAll()
+&gt;&gt;&gt; urllib.urlopen('http://www.google.com/')
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ File "/usr/lib/python2.5/site-packages/mox.py", line 568, in __call__
+ raise expected_method._exception
+IOError: [Errno socket error] (-2, 'Name or service not known')
+
+&gt;&gt;&gt; # yay! now unset everything
+&gt;&gt;&gt; m.UnsetStubs()
+&gt;&gt;&gt; m.VerifyAll()
+&gt;&gt;&gt; # and check that it still works
+&gt;&gt;&gt; urllib.urlopen('http://www.google.com/')
+&lt;addinfourl at 3076773548L ...&gt;
+ 
+ #2 I am using Mock's patch decorator: 
+
+ from mock import patch
+
+[...]
+
+@patch('urllib.urlopen')
+def test_foo(self, urlopen_mock):
+ urlopen_mock.return_value = MyUrlOpenMock()
+ 
+ #3 Probably the best way to handle this is to split up the code, so that logic that processes the page contents is split from the code that fetches the page. 
+
+ Then pass an instance of the fetcher code into the processing logic, then you can easily replace it with a mock fetcher for the unit test. 
+
+ e.g. 
+
+ class Processor(oject):
+ def __init__(self, fetcher):
+  self.m_fetcher = fetcher
+
+ def doProcessing(self):
+  ## use self.m_fetcher to get page contents
+
+class RealFetcher(object):
+ def fetchPage(self, url):
+  ## get real contents
+
+class FakeFetcher(object):
+ def fetchPage(self, url):
+  ## Return whatever fake contents are required for this test
+ 
+ #4 The simplest way is to change your function so that it doesn't necessarily use urllib.urlopen. Let's say this is your original function: 
+
+ def my_grabber(arg1, arg2, arg3):
+ # .. do some stuff ..
+ url = make_url_somehow()
+ data = urllib.urlopen(url)
+ # .. do something with data ..
+ return answer
+ 
+
+ Add an argument which is the function to use to open the URL. Then you can provide a mock function to do whatever you need: 
+
+ def my_grabber(arg1, arg2, arg3, urlopen=urllib.urlopen):
+ # .. do some stuff ..
+ url = make_url_somehow()
+ data = urlopen(url)
+ # .. do something with data ..
+ return answer
+
+def test_my_grabber():
+ my_grabber(arg1, arg2, arg3, urlopen=my_mock_open)
+ 
+ #5 In case you don't want to even load the module: 
+
+ import sys,types
+class MockCallable():
+ """ Mocks a function, can be enquired on how many calls it received """
+ def __init__(self, result):
+ self.result = result
+ self._calls = []
+
+ def __call__(self, *arguments):
+ """Mock callable"""
+ self._calls.append(arguments)
+ return self.result
+
+ def called(self):
+ """docstring for called"""
+ return self._calls
+
+class StubModule(types.ModuleType, object):
+ """ Uses a stub instead of loading libraries """
+
+ def __init__(self, moduleName):
+ self.__name__ = moduleName
+ sys.modules[moduleName] = self
+
+ def __repr__(self):
+ name = self.__name__
+ mocks = ', '.join(set(dir(self)) - set(['__name__']))
+ return "&lt;StubModule: %(name)s; mocks: %(mocks)s&gt;" % locals()
+
+class StubObject(object):
+ pass
+ 
+
+ And then: 
+
+ &gt;&gt;&gt; urllib = StubModule("urllib")
+&gt;&gt;&gt; import urllib # won't actually load urllib
+
+&gt;&gt;&gt; urls.urlopen = MockCallable(StubObject())
+
+&gt;&gt;&gt; example = urllib.urlopen('http://example.com')
+&gt;&gt;&gt; example.read = MockCallable('foo')
+
+&gt;&gt;&gt; print(example.read())
+'foo'

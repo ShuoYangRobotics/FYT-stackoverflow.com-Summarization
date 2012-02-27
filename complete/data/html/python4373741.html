@@ -1,0 +1,238 @@
+<h3>Question (ID-4373741):</h3><h2>How can I randomly place several non-colliding rects?</h2><p>I'm working on some 2D games with Pygame.  I need to place several objects at the same time randomly <strong>without them intersecting</strong>.  I have tried a few obvious methods but they didn't work.</p>
+
+<p>Obvious methods follow (in pseudo): <br></p>
+
+<pre><code>create list of objects
+for object in list:
+    for other object in list:
+        if object collides with other object:
+            create new list of objects
+</code></pre>
+
+<p>That method took forever.</p>
+
+<p>Other method I tried:</p>
+
+<pre><code>create list of objects
+for object in list:
+    for other object in list:
+        if object collides with other object:
+             remove object from list
+</code></pre>
+
+<p>That method returned near empty lists.</p>
+
+<p>I'm dealing with a list that is anywhere from 2 - 20 objects large.  Any suggestions?</p>
+
+<p><strong>EDIT:</strong> The rectangles are all random different sizes.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p><strong>Update</strong></p>
+
+<p>I've changed my answer a bit to address the OP's follow-up question about whether it could be modified to instead generate random non-colliding <em>squares</em> rather than arbitrarily rectangles. I did this in the simplest way I could that would work, which was to post-process the output of my original answer and turn it into square sub-regions. I also updated the optional visualization code to show both kinds of output. Obviously this sort of filtering could be extended to do other tasks such as insetting each rectangle or square to prevent them from touching each other.</p>
+
+<p>Unlike many of the answers already posted randomly generate rectangles and reject any that collide with those already created, which sounds both somewhat slow and computationally expensive. To avoid those issues, the approach I would take would be to only generate ones that don't overlap.</p>
+
+<p>That makes what you want to do a relatively simple and fast area subdivision problem. Below is one implementation of how this could be done. It starts with a rectangle defining the outer boundary which it divides into four smaller non-overlapping rectangles. That is accomplished by choosing a semi-random interior point and using it along with the four existing corner points of the outer rectangle to form the four subsections.</p>
+
+<p>Most of the action take place in the <code>quadsect()</code> function. The choice of the interior point is crucial in determining what the output looks like. You can constrain it any way you wish, such as only selecting one that would result in sub-rectangles of at least a certain minimum width or height or no bigger than some amount. In the sample code in my answer, it's defined as the center point ± 1/3 of the width and height of the outer rectangle, but basically any interior point would work to some degree.</p>
+
+<p>Since this algorithm generates sub-rectangles very rapidly, it's OK to spend some computational time determining a good interior divisor point.</p>
+
+<p>To help visualize the results of this approach, there's some extra non-essential code at the very end that uses the <code>PIL</code> (Python Imaging Library) module to create an image file displaying the rectangles generated during some test runs I made.</p>
+
+<p>Anyway, here's the latest version of the code and output samples:</p>
+
+<pre><code>import random
+random.seed()
+randint = random.randint
+
+class Point(object):
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+    @staticmethod
+    def from_point(other):
+        return Point(other.x, other.y)
+
+class Rect(object):
+    def __init__(self, x1, y1, x2, y2):
+        minx, maxx = (x1,x2) if x1 &lt; x2 else (x2,x1)
+        miny, maxy = (y1,y2) if y1 &lt; y2 else (y2,y1)
+        self.min = Point(minx, miny)
+        self.max = Point(maxx, maxy)
+
+    @staticmethod
+    def from_points(p1, p2):
+        return Rect(p1.x, p1.y, p2.x, p2.y)
+
+    def __str__(self):
+        return 'Rect({:d}, {:d}, {:d}, {:d})'.format(self.min.x, self.min.y,
+                                                     self.max.x, self.max.x)
+    width  = property(lambda self: self.max.x - self.min.x)
+    height = property(lambda self: self.max.y - self.min.y)
+
+plus_or_minus = lambda v: v * [-1,1][(randint(0,99) % 2)]
+
+def quadsect(rect, factor):
+    """ Divide given rectangle into four non-overlapping sub-rectangles """
+    # pick a point in the interior of given rectangle
+    w, h = rect.width, rect.height # cache properties
+    center = Point(rect.min.x + (w // 2), rect.min.y + (h // 2))
+    delta = Point(plus_or_minus(randint(0, w // factor)),
+                  plus_or_minus(randint(0, h // factor)))
+    interior = Point(center.x + delta.x, center.y + delta.y)
+
+    # create rectangles from the interior point and the corners of the outer one
+    rect1 = Rect(interior.x, interior.y, rect.min.x, rect.min.y)
+    rect2 = Rect(interior.x, interior.y, rect.max.x, rect.min.y)
+    rect3 = Rect(interior.x, interior.y, rect.max.x, rect.max.y)
+    rect4 = Rect(interior.x, interior.y, rect.min.x, rect.max.y)
+
+    return [rect1,rect2,rect3,rect4]
+
+def square_sub_region(rect):
+    """ Determine a square that fits inside the given rectangle """
+    w, h = rect.width, rect.height # cache properties
+    if w &lt; h:
+        offset = (h - w) // 2
+        return Rect(rect.min.x, rect.min.y+offset, rect.max.x, rect.min.y+offset+w)
+    else:
+        offset = (w - h) // 2
+        return Rect(rect.min.x+offset, rect.min.y, rect.min.x+offset+h, rect.max.y)
+
+num_rects = 20
+region = Rect(0, 0, 640, 480)
+rects = [region] # seed output list
+
+# generate at least the number wanted
+while len(rects) &lt; num_rects:
+    sub_rects = []
+    for rect in rects:
+        sub_rects.extend(quadsect(rect, 3))
+    rects = sub_rects
+
+random.shuffle(rects) # mix them up
+sample = random.sample(rects, num_rects) # select the desired number
+print '%d out of the %d rectangles selected' % (num_rects, len(rects))
+
+#################################################
+# optional - create an image file showing results
+
+from PIL import Image, ImageDraw
+BLACK, DARKGRAY, GRAY, LIGHTGRAY, WHITE = (0, 64, 128, 192, 255)
+imgx = region.max.x+1
+imgy = region.max.y+1
+image = Image.new("L", (imgx, imgy), WHITE) # greyscale image
+draw = ImageDraw.Draw(image)
+
+def draw_rect(rect, fill=None, outline=WHITE):
+    draw.rectangle([(rect.min.x, rect.min.y), (rect.max.x, rect.max.y)],
+                   fill=fill, outline=outline)
+
+# first draw all the rectanges generated
+for rect in rects:
+    draw_rect(rect, outline=LIGHTGRAY)
+
+# then draw the random sample of them selected
+for rect in sample:
+    draw_rect(rect, fill=(LIGHTGRAY+WHITE)//2, outline=WHITE)
+
+# and lastly convert the those into squares and re-draw them in anothe color
+for rect in sample:
+    sq = square_sub_region(rect)
+    draw_rect(sq, fill=GRAY, outline=WHITE)
+
+image.save("sq_quadsections.png", "PNG")
+print 'image saved'
+</code></pre>
+
+<p>Output Sample 1</p>
+
+<p><img src="http://dl.dropbox.com/u/5508445/stackoverflow/sq_quadsections1.png" alt="Output Sample 1"></p>
+
+<p>Output Sample 2</p>
+
+<p><img src="http://dl.dropbox.com/u/5508445/stackoverflow/sq_quadsections2.png" alt="Output Sample 2"></p>
+<br /><b>#1</b><br /><p>Three ideas:</p>
+
+<h3>Decrease the size of your objects</h3>
+
+<p>The first method fails because hitting a random array of 20 non-overlapping objects is highly improbable (actually <code>(1-p)^20</code>, where <code>0&lt;p&lt;1</code> is the probability of two objects colliding). If you could dramatically (orders-of-magnitude drama) decrease their size, it might help.</p>
+
+<h3>Pick them one by one</h3>
+
+<p>The most obvious improvement would be:</p>
+
+<pre><code>while len(rectangles)&lt;N:
+    new_rectangle=get_random_rectangle()
+    for rectangle in rectangles:
+        if not any(intersects (rectangle, new_rectangle) for rectangle in rectangles)
+            rectangles.add(new_rectangle)
+</code></pre>
+
+<p>This would greatly improve your performance, as having a single intersection will not force you to generate a whole new set, just to pick a different single rectangle.</p>
+
+<h3>Pre-calculation</h3>
+
+<p>How often will you be using these sets in your game? Using a different set every second is a different scenario than using a set once in an hour. If you don't use these sets too often, pre-calculate s large-enough set so that the gamer would probably never see the same set twice. When pre-calculating, you don't care too much for the time spent (so you can even use your inefficient first algorithm). </p>
+
+<p>Even if you actually need these rectangles at run time, it might be a good idea to calculate them a bit before you need them, when the CPU is idle for some reason, so that you'll always have a set ready in hand.</p>
+
+<p>At run time, just pick a set at random. This is probably the best approach for real-time gaming.</p>
+
+<p><strong>Note:</strong>
+This solution assumes that you rectangles are kept in a space-saving manner, e.g. pairs of <code>(x, y)</code> coordinates. These pairs consume very little space, and you can actually save thousands, and even millions, in a file with reasonable size.</p>
+
+<p><strong>Useful links:</strong></p>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/716558/place-random-non-overlapping-rectangles-on-a-panel">Place random non-overlapping rectangles on a panel</a> </li>
+<li><a href="http://stackoverflow.com/questions/2246150/minimizing-overlap-in-random-rectangles">minimizing overlap in random rectangles</a></li>
+</ul>
+<br /><b>#2</b><br /><pre><code>list_of_objects = []
+for i in range(20):
+    while True:
+        new_object = create_object()
+        if not any(collides(new_object, x) for x in list_of_objects):
+            break
+    list_of_objects.append(new_object)
+</code></pre>
+
+<p>I assume you already have the <code>create_object()</code> and <code>collides()</code> functions</p>
+
+<p>You may also need to decrease the size of the rects if this loops too many times</p>
+<br /><b>#3</b><br /><p>Did you try:</p>
+
+<pre><code>Until there are enough objects:
+    create new object
+    if it doesn't collide with anything in the list:
+        add it to the list
+</code></pre>
+
+<p>No sense recreating the entire list, or taking out everything that's involved in a collision.</p>
+
+<p>Another idea is to "fix" collisions by either of the following approaches:</p>
+
+<p>1) Find the center of the region of intersection, and adjust the appropriate corner of each intersecting rect to that point, such that they now touch on corner/edge instead of intersecting.</p>
+
+<p>2) When a rectangle collides with something, randomly generate a sub-region of that rectangle and try that instead.</p>
+<br /><b>#4</b><br /><p>an alternative pseudocode, to those already mentioned:</p>
+
+<pre><code>while not enough objects:
+  place object randomly
+  if overlaps with anything else:
+    reduce size until it fits or has zero size
+  if zero size: 
+    remove
+</code></pre>
+
+<p>Or something like that.</p>
+
+<p>But this has the advantage of possibly creating some smaller objects than you intended, and creating objects which almost intersect (i.e. touch).</p>
+
+<p>If it's a map for the player to traverse, they may still not be able to traverse it because their path could be blocked.</p>
+<br /><b>#5</b><br /><p>There is a very simple approximation to your problem which worked fine for me:
+- Define a grid. For instance a 100 pixel grid writes (x,y) -> (int(x/100),int(y/100)). The grid elements do not overlap.
+- Either put each object in a different grid (randomly inside the grid will look prettier), either put randomly a few objects in each grid, if you can allow a few objects to overlap.</p>
+
+<p>I used this to randomly generate a 2D map (Zelda like). My objects' images are smaller than &lt;100*100>, so I used grid of size &lt;500*500> and allowed for 1-6 objects in each grid.</p>
+<br />

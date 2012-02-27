@@ -1,0 +1,63 @@
+<h3>Question (ID-2023608):</h3><h2>check what files are open in Python</h2><p>I'm getting an error in a program that is supposed to run for a long time that too many files are open. Is there any way I can keep track of which files are open so I can print that list out occasionally and see where the problem is?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I ended up wrapping the built-in file object at the entry point of my program. I found out that I wasn't closing my loggers.</p>
+
+<pre><code>import __builtin__
+openfiles = set()
+oldfile = __builtin__.file
+class newfile(oldfile):
+    def __init__(self, *args):
+        self.x = args[0]
+        print "### OPENING %s ###" % str(self.x)            
+        oldfile.__init__(self, *args)
+        openfiles.add(self)
+
+    def close(self):
+        print "### CLOSING %S ###" % str(self.x)
+        oldfile.close(self)
+        openfiles.remove(self)
+oldopen = __builtin__.open
+def newopen(*args):
+    return newfile(*args)
+__builtin__.file = newfile
+__builtin__.open = newopen
+
+def printOpenFiles():
+    print "### %d OPEN FILES: [%s]" % (len(openfiles), ", ".join(f.x for f in openfiles))
+</code></pre>
+<br /><b>#1</b><br /><p>On Linux, you can look at the contents of <code>/proc/self/fd</code>:</p>
+
+<pre><code>$ ls -l /proc/self/fd/
+total 0
+lrwx------ 1 foo users 64 Jan  7 15:15 0 -&gt; /dev/pts/3
+lrwx------ 1 foo users 64 Jan  7 15:15 1 -&gt; /dev/pts/3
+lrwx------ 1 foo users 64 Jan  7 15:15 2 -&gt; /dev/pts/3
+lr-x------ 1 foo users 64 Jan  7 15:15 3 -&gt; /proc/9527/fd
+</code></pre>
+<br /><b>#2</b><br /><p>On Linux, you can use <code>lsof</code> to show all files opened by a process.</p>
+<br /><b>#3</b><br /><p>On Windows, you can use <a href="http://technet.microsoft.com/en-us/sysinternals/bb896653.aspx" rel="nofollow">Process Explorer</a> to show all file handles owned by a process.</p>
+<br /><b>#4</b><br /><p>I'd guess that you are leaking file descriptors. You probably want to look through your code to make sure that you are closing all of the files that you open.</p>
+<br /><b>#5</b><br /><p>Although the solutions above that wrap opens are useful for one's own code, I was debugging my client to a third party library including some c extension code, so I needed a more direct way. The following routine works under darwin, and (I hope) other unix-like environments:</p>
+
+<pre><code>def get_open_fds():
+    '''
+    return the number of open file descriptors for current process
+
+    .. warning: will only work on UNIX-like os-es.
+    '''
+    import subprocess
+    import os
+
+    pid = os.getpid()
+    procs = subprocess.check_output( 
+        [ "lsof", '-w', '-Ff', "-p", str( pid ) ] )
+
+    nprocs = len( 
+        filter( 
+            lambda s: s and s[ 0 ] == 'f' and s[1: ].isdigit(),
+            procs.split( '\n' ) )
+        )
+    return nprocs
+</code></pre>
+
+<p>If anyone can extend to be portable to windows, I'd be grateful.</p>
+<br />

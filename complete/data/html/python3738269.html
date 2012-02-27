@@ -1,0 +1,182 @@
+<h3>Question (ID-3738269):</h3><h2>How to insert arrays into a database?</h2><p><a href="http://stackoverflow.com/questions/3684484">In my previous question</a> a lot of users wanted me to give some more data to toy with. So I got working on exporting all my data and processing it with Python, but then I realized: where do I leave all this data? </p>
+
+<p>Well I decided the best thing would be to stick them in a database, so at least I don't have <a href="http://cid-0e685da213fd5935.skydrive.live.com/redir.aspx?page=browse&amp;resid=E685DA213FD5935!148&amp;type=6&amp;authkey=WOUgehAzQ!o%24&amp;Bsrc=EMSHGM&amp;Bpub=SN.Notifications" rel="nofollow">to parse the raw files</a> every time. But since I know nothing about databases this is turning out to be quite confusing.  I tried some tutorials to create a sqlite database, add a table and field and try to insert my numpy.arrays, but it can't get it to work. </p>
+
+<p>Typically my results per dog look like this: 
+<img src="http://i.stack.imgur.com/2403W.png" alt="alt text"></p>
+
+<p>So I have 35 different dogs and each dog has 24 measurement. Each measurement itself has an unknown amount of contacts. Each measurement consists out of a 3D array (248 frames of the whole plate [255x63]) and a 2D array (the maximal values for each sensor of the plate [255x63]). Storing one value in a database wasn't a problem, but getting my 2D arrays in there didn't seem to work.</p>
+
+<p>So my question is how should I order this in a database and insert my arrays into it?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>You'll probably want to start out with a <code>dogs</code> table containing all the flat (non array) data for each dog, things which each dog has <em>one</em> of, like a name, a sex, and an age:</p>
+
+<pre><code>CREATE TABLE `dogs` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(64),
+  `age` INT UNSIGNED,
+  `sex` ENUM('Male','Female')
+);
+</code></pre>
+
+<p>From there, each dog "has many" measurements, so you need a <code>dog_mesaurements</code> table to store the 24 measurements:</p>
+
+<pre><code>CREATE TABLE `dog_measurements` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `dog_id` INT UNSIGNED NOT NULL,
+  `paw` ENUM ('Front Left','Front Right','Rear Left','Rear Right'),
+  `taken_at` DATETIME NOT NULL
+);
+</code></pre>
+
+<p>Then whenever you take a measurement, you <code>INSERT INTO dog_measurements (dog_id,taken_at) VALUES (*?*, NOW());</code> where * <em>?</em> * is the dog's ID from the <code>dogs</code> table.</p>
+
+<p>You'll then want tables to store the actual frames for each measurement, something like:</p>
+
+<pre><code>CREATE TABLE `dog_measurement_data` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `dog_measurement_id` INT UNSIGNED NOT NULL,
+  `frame` INT UNSIGNED,
+  `sensor_row` INT UNSIGNED,
+  `sensor_col` INT UNSIGNED,
+  `value` NUMBER
+);
+</code></pre>
+
+<p>That way, for each of the 250 frames, you loop through each of the 63 sensors, and store the value for that sensor with the frame number into the database:</p>
+
+<pre><code>INSERT INTO `dog_measurement_data` (`dog_measurement_id`,`frame`,`sensor_row`,`sensor_col`,`value`) VALUES
+(*measurement_id?*, *frame_number?*, *sensor_row?*, *sensor_col?*, *value?*)
+</code></pre>
+
+<p>Obviously replace *measurement_id?*, *frame_number?*, *sensor_number?*, <em>value?</em> with real values :-)</p>
+
+<p>So basically, each <code>dog_measurement_data</code> is a <em>single sensor value for a given frame</em>. That way, to get all the sensor values for all a given frame, you would:</p>
+
+<pre><code>SELECT `sensor_row`,sensor_col`,`value` FROM `dog_measurement_data`
+WHERE `dog_measurement_id`=*some measurement id* AND `frame`=*some frame number*
+ORDER BY `sensor_row`,`sensor_col`
+</code></pre>
+
+<p>And this will give you all the rows and cols for that frame.</p>
+<br /><b>#1</b><br /><p>I think you are not able to figure out how to put 2D data in database.</p>
+
+<p>If you think of relation between 2 columns, you can think of it as 2D data with 1st column as X axis data and 2nd column as Y axis data. Similarly for 3D data.</p>
+
+<p>Finally your db should look like this:</p>
+
+<pre><code>Table: Dogs
+    Columns: DogId, DogName -- contains data for each dog
+
+Table: Measurements
+    Columns: DogId, MeasurementId, 3D_DataId, 2D_DataId -- contains measurements of each dog
+
+Table: 3D_data
+    Columns: 3D_DataId, 3D_X, 3D_Y, 3D_Z -- contains all 3D data of a measurement
+
+Table: 2D_data
+    Columns: 2D_DataId, 2D_X, 2D_Y -- contains all 2D data of a measurement
+</code></pre>
+
+<p>Also you may want to store your 3D data and 2D data in an order. In that case, you will have to add a column to store that order in table of 3D data and 2D data</p>
+<br /><b>#2</b><br /><p><a href="http://www.djangoproject.com/" rel="nofollow">Django</a> has a library for encapsulating all the database work into Python classes, so you don't have to mess with raw SQL until you have to do something really clever.  Even though Django is a framework for web applications, you can <a href="http://stackoverflow.com/questions/302651/use-only-some-parts-of-django">use the database ORM by itself</a>.</p>
+
+<p>Josh's models would look like this in Python using Django:</p>
+
+<pre><code>from django.db import models
+
+class Dog(models.Model):
+    # Might want to look at storing birthday instead of age.
+    # If you track age, you probably need another field telling
+    # you when in the year age goes up by 1... and at that point,
+    # you're really storing a birthday.
+    name = models.CharField(max_length=64)
+    age = models.IntegerField()
+    genders = [
+        ('M', 'Male'),
+        ('F', 'Female'),
+    ]
+    gender = models.CharField(max_length=1, choices=genders)
+
+class Measurement(models.Model):
+    dog = models.ForeignKey(Dog, related_name="measurements")
+    paws = [
+        ('FL', 'Front Left'),
+        ('FR', 'Front Right'),
+        ('RL', 'Rear Left'),
+        ('RR', 'Rear Right'),
+    ]
+    paw = models.CharField(max_length=2, choices=paws)
+    taken_at = models.DateTimeField(default=date, auto_now_add=True)
+
+class Measurement_Point(models.Model):
+    measurement = models.ForeignKey(Measurement, related_name="data_points")
+    frame = models.IntegerField()
+    sensor_row = models.PositiveIntegerField()
+    sensor_col = models.PositiveIntegerField()
+    value = models.FloatField()
+
+    class Meta:
+        ordering = ['frame', 'sensor_row', 'sensor_col']
+</code></pre>
+
+<p>The <code>id</code> fields are created automatically.</p>
+
+<p>Then you can do things like:</p>
+
+<pre><code>dog = Dog()
+dog.name = "Pochi"
+dog.age = 3
+dog.gender = 'M'
+# dog.gender will return 'M', and dog.get_gender_display() will return 'Male'
+dog.save()
+
+# Or, written another way:
+dog = Dog.objects.create(name="Fido", age=3, sex='M')
+</code></pre>
+
+<p>To take a measurement:</p>
+
+<pre><code>measurement = dog.measurements.create(paw='FL')
+for frame in range(248):
+    for row in range(255):
+        for col in range(63):
+            measurement.data_points.create(frame=frame, sensor_row=row, 
+                sensor_col=col, value=myData[frame][row][col])
+</code></pre>
+
+<p>Finally, to get a frame:</p>
+
+<pre><code># For the sake of argument, assuming the dogs have unique names.
+# If not, you'll need some more fields in the Dog model to disambiguate.
+dog = Dog.objects.get(name="Pochi", sex='M')
+# For example, grab the latest measurement...
+measurement = dog.measurements.all().order_by('-taken_at')[0]
+# `theFrameNumber` has to be set somewhere...
+theFrame = measurement.filter(frame=theFrameNumber).values_list('value')
+</code></pre>
+
+<p>Note: this will return a list of tuples (e.g. <code>[(1.5,), (1.8,), ... ]</code>), since <code>values_list()</code> can retrieve multiple fields at once.  I'm not familiar with NumPy, but I'd imagine it's got a function similar to Matlab's <code>reshape</code> function for remapping vectors to matrices.</p>
+<br /><b>#3</b><br /><p>The only thing I would add to Josh's answer is that if you don't need to query individual frames or sensors, just store the arrays as BLOBs in the dog_measurement_data table.  I have done this before with large binary set of sensor data and it worked out well.  You basically query the 2d and 3d arrays with each measurement and manipulate them in code instead of the database.</p>
+<br /><b>#4</b><br /><p>I've benefited a lot from the <a href="http://sqlalchemy.org" rel="nofollow"><code>sqlalchemy</code> package</a>; it is an Object Relational Mapper. What this means is that you can create a very clear and distinct separation between your objects and your data:</p>
+
+<blockquote>
+  <p>SQL databases behave less like object
+  collections the more size and
+  performance start to matter; object
+  collections behave less like tables
+  and rows the more abstraction starts
+  to matter. SQLAlchemy aims to
+  accommodate both of these principles.</p>
+</blockquote>
+
+<p>You can create a objects representing your different nouns (Dog, Measurement, Plate, etc). Then you create a table via <code>sqlalchemy</code> constructs which will contain all the data that you want to associate with, say, a <code>Dog</code> object. Finally you create a <code>mapper</code> between the <code>Dog</code> object and the <code>dog_table</code>.</p>
+
+<p>This is difficult to understand without an example, and I will not reproduce one here. Instead, please start by reading <a href="http://www.rmunn.com/sqlalchemy-tutorial/tutorial.html" rel="nofollow">this case study</a> and then study <a href="http://www.sqlalchemy.org/docs/orm/tutorial.html" rel="nofollow">this tutorial</a>.</p>
+
+<p>Once you can think of your <code>Dogs</code> and <code>Measurements</code> as you do in the real world (that is, the objects themselves) you can start factoring out the data that makes them up.</p>
+
+<p>Finally, try not to marry your data with an specific format (as you do currently by using <code>numpy</code> arrays). Instead, you can think of the simple numbers and then transform them on demand to the specific format your current application demands (along the lines of a Model-View-Controller paradigm).</p>
+
+<p>Good luck!</p>
+<br /><b>#5</b><br /><p>From your description, I would highly recommend looking into <a href="http://www.pytables.org/moin" rel="nofollow">PyTables</a>.  It's not a relational database in the traditional sense, it has most of the features you're likely to be using (e.g. querying) while allowing easy storage of large, multidimensional datasets and their attributes.   As an added bonus, it's tightly integrated with numpy.</p>
+<br />

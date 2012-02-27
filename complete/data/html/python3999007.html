@@ -1,0 +1,122 @@
+<h3>Question (ID-3999007):</h3><h2>How do I limit a file size when writing to files in python</h2><p>I am using the output streams from the io module and writing to files. I want to be able to detect when I have written 1G of data to a file and then start writing to a second file. I can't seem to figure out how to determine how much data I have written to the file.</p>
+
+<p>Is there something easy built in to io? Or might I have to count the bytes before each write manually?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>See the Python documentation for <a href="http://docs.python.org/library/stdtypes.html#file-objects" rel="nofollow">File Objects</a>, specifically <a href="http://docs.python.org/library/stdtypes.html#file.tell" rel="nofollow">tell</a>().</p>
+
+<p>Example:</p>
+
+<pre><code>&gt;&gt;&gt; f=open('test.txt','w')
+&gt;&gt;&gt; f.write(10*'a')
+&gt;&gt;&gt; f.tell()
+10L
+&gt;&gt;&gt; f.write(100*'a')
+&gt;&gt;&gt; f.tell()
+110L
+</code></pre>
+<br /><b>#1</b><br /><p>See the tell() method on the stream object.</p>
+<br /><b>#2</b><br /><p>if you are using this file for a logging purpose i suggest using the <a href="http://docs.python.org/library/logging.html#rotating-file-handler" rel="nofollow">RotatingFileHandler</a> in logging module like this:</p>
+
+<pre><code>import logging
+
+file_name = 'test.log'
+
+test_logger = logging.getLogger('Test')
+handler = logging.handlers.RotatingFileHandler(file_name, maxBytes=10**9)
+test_logger.addHandler(handler)
+</code></pre>
+
+<p>N.B: you can also use this method even if you don't use it for logging if you like doing hacks :)</p>
+<br /><b>#3</b><br /><p>I recommend counting. There's no internal language counter that I'm aware of. Somebody else mentioned using <code>tell()</code>, but an internal counter will take roughly the same amount of work and eliminate the constant OS calls.</p>
+
+<pre><code>#pseudocode
+if (written + sizeOfNew &gt; 1G) {
+    rotateFile()
+}
+</code></pre>
+<br /><b>#4</b><br /><p>One fairly straight-forward approach is to subclass the builtin <code>file</code> class and have it keep track of the amount of output which is written to the file. Below is a some sample code showing how that might be done and it appears to mostly work. </p>
+
+<p>I say mostly because the size of the files produced is sometimes slightly over the maximum while testing it, but that's because for the test the file was opened in text mode and on Windows all the <code>'\n'</code> linefeed characters are being converted into <code>'\r\n'</code> (carriage-return, linefeed) pairs, which throws the size accumulator off. Also, as currently written, the <code>bufsize</code> argument that the standard <code>file()</code> and <code>open()</code> functions acceppt is not supported, so the system's default size and mode get used.</p>
+
+<p>Depending on exactly what you're doing the size issue may or may not be big problem -- for large maximum sizes it might thrown be off significantly. If anyone has a good platform-independent fix for this, by all means let it be known.</p>
+
+<pre><code>import os.path
+verbose = False
+
+class LtdSizeFile(file):
+    ''' A file subclass which  limits size of file written to approximately "maxsize" bytes '''
+    def __init__(self, filename, mode='wt', maxsize=None):
+        self.root, self.ext = os.path.splitext(filename)
+        self.num = 1
+        self.size = 0
+        if maxsize is not None and maxsize &lt; 1:
+            raise ValueError('"maxsize: argument should be a positive number')
+        self.maxsize = maxsize
+        file.__init__(self, self._getfilename(), mode)
+        if verbose: print 'file "%s" opened' % self._getfilename()
+
+    def close(self):
+        file.close(self)
+        self.size = 0
+        if verbose: print 'file "%s" closed' % self._getfilename()
+
+    def write(self, text):
+        lentext =len(text)
+        if self.maxsize is None or self.size+lentext &lt;= self.maxsize:
+            file.write(self, text)
+            self.size += lentext
+        else:
+            self.close()
+            self.num += 1
+            file.__init__(self, self._getfilename(), self.mode)
+            if verbose: print 'file "%s" opened' % self._getfilename()
+            self.num += 1
+            file.write(self, text)
+            self.size += lentext
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+    def _getfilename(self):
+        return '{0}{1}{2}'.format(self.root, self.num if self.num &gt; 1 else '', self.ext)
+
+if __name__=='__main__':
+    import random
+    import string
+
+    def randomword():
+        letters = []
+        for i in range(random.randrange(2,7)):
+            letters.append(random.choice(string.lowercase))
+        return ''.join(letters)
+
+    def randomsentence():
+        words = []
+        for i in range(random.randrange(2,10)):
+            words.append(randomword())
+        words[0] = words[0].capitalize()
+        words[-1] = ''.join([words[-1], '.\n'])
+        return ' '.join(words)
+
+    lsfile = LtdSizeFile('LtdSizeTest.txt', 'wt', 100)
+    for i in range(100):
+        sentence = randomsentence()
+        if verbose: print '  writing: {!r}'.format(sentence)
+        lsfile.write(sentence)
+
+    lsfile.close()
+</code></pre>
+<br /><b>#5</b><br /><p>I noticed an ambiguity in your question. Do you want the file to be (a) over (b) under (c) exactly 1GiB large, before switching?</p>
+
+<p>It's easy to tell if you've gone over. <code>tell()</code> is sufficient for that kind of thing; just check <code>if tell() &gt; 1024*1024*1024:</code> and you'll know.</p>
+
+<p>Checking if you're under 1GiB, but will go over 1GiB on your next write, is a similar technique. <code>if len(data_to_write) + tell &gt; 1024*1024*1024:</code> will suffice.</p>
+
+<p>The trickiest thing to do is to get the file to exactly 1GiB. You will need to <code>tell()</code> the length of the file, and then partition your data appropriately in order to hit the mark precisely.</p>
+
+<p>Regardless of exactly which semantics you want, <code>tell()</code> is always going to be at least as slow as doing the counting yourself, and possibly slower. This doesn't mean that it's the wrong thing to do; if you're writing the file from a thread, then you almost certainly will want to <code>tell()</code> rather than hope that you've correctly preempted other threads writing to the same file. (And do your locks, etc., but that's another question.)</p>
+
+<p>By the way, I noticed a definite direction in your last couple questions. Are you aware of #twisted and #python IRC channels on Freenode (irc.freenode.net)? You will get timelier, more useful answers.</p>
+
+<p>~ C.</p>
+<br />

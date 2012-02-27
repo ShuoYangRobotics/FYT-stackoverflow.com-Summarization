@@ -1,0 +1,126 @@
+Question (ID-1626326): How to manage local vs production settings in Django? A Django newbie question: 
+What is the recommended way of handling settings for local development and the production server? Some of them (like Constants, etc) can be changed/accessed in both, but some of them (like paths to static files) need to remain different, and hence should not be overwritten everytime the new code is deployed... 
+
+ Currently, I am adding all constants to settings.py. But every time I change some constant locally, I have to copy it to the production server and edit the file for production specific changes... :( 
+ Answers (Total-9): #0 settings.py 
+
+ try:
+ from local_settings import *
+except ImportError, e:
+ pass
+ 
+
+ You can override what needed in local_settings.py; it should stay out of your version control then. But since you mention copying I'm guessing you use none ;) 
+ #1 I use a settings_local.py and a settings_production.py. After trying several options I've found that it's easy to waste time with complex solutions when simply having two settings files feels easy and fast. 
+
+ When you use mod_python/mod_wsgi for your Django project you need to point it to your settings file. If you point it to app/settings_local.py on your local server and app/settings_production.py on your production server then life becomes easy. Just edit the appropriate settings file and restart the server (Django development server will restart automatically). 
+ #2 I use a slightly modified version of the "if DEBUG" style of settings that Harper Shelby posted. Obviously depending on the environment (win/linux/etc.) the code might need to be tweaked a bit. 
+
+ I was in the past using the "if DEBUG" but I found that occasionally I needed to do testing with DEUBG set to False. What I really wanted to distinguish if the environment was production or development, which gave me the freedom to choose the DEBUG level. 
+
+ PRODUCTION_SERVERS = ['WEBSERVER1','WEBSERVER2',]
+if os.environ['COMPUTERNAME'] in PRODUCTION_SERVERS:
+ PRODUCTION = True
+else:
+ PRODUCTION = False
+
+DEBUG = not PRODUCTION
+TEMPLATE_DEBUG = DEBUG
+
+# ...
+
+if PRODUCTION:
+ DATABASE_HOST = '192.168.1.1'
+else:
+ DATABASE_HOST = 'localhost'
+ 
+
+ I'd still consider this way of settings a work in progress. I haven't seen any one way to handling Django settings that covered all the bases and at the same time wasn't a total hassle to setup (I'm not down with the 5x settings files methods). 
+ #3 Remember that settings.py is a live code file. Assuming that you don't have DEBUG set on production (which is a best practice), you can do something like: 
+
+ if DEBUG:
+ STATIC_PATH = /path/to/dev/files
+else:
+ STATIC_PATH = /path/to/production/files
+ 
+
+ Pretty basic, but you could, in theory, go up to any level of complexity based on just the value of DEBUG - or any other variable or code check you wanted to use. 
+ #4 My solution to that problem is also somewhat of a mix of some solutions already stated here: 
+
+ 
+ I keep a file called local_settings.py that has the content USING_LOCAL = True in dev and USING_LOCAL = False in prod 
+ In settings.py I do an import on that file to get the USING_LOCAL setting 
+ 
+
+ I then base all my environment-dependent settings on that one: 
+
+ DEBUG = USING_LOCAL
+if USING_LOCAL:
+ # dev database settings
+else:
+ # prod database settings
+ 
+
+ I prefer this to having two separate settings.py files that I need to maintain as I can keep my settings structured in a single file easier than having them spread across several files. Like this, when I update a setting I don't forget to do it for both environments. 
+
+ Of course that every method has its disadvantages and this one is no exception. The problem here is that I can't overwrite the local_settings.py file whenever I push my changes into production, meaning I can't just copy all files blindly, but that's something I can live with. 
+ #5 You might want to look at this question: http://stackoverflow.com/questions/1406892/elegantly-handle-site-specific-settings-configuration-in-svn-hg-git-etc 
+ #6 I use a variation of what jpartogi mentioned above, that I find a little shorter: 
+
+ import platform
+from django.core.management import execute_manager 
+
+computername = platform.node()
+
+try:
+ settings = __import__(computername + '_settings')
+except ImportError: 
+ import sys
+ sys.stderr.write("Error: Can't find the file '%r_settings.py' in the directory containing %r. It appears you've customized things.\nYou'll have to run django-admin.py, passing it your settings module.\n(If the file local_settings.py does indeed exist, it's causing an ImportError somehow.)\n" % (computername, __file__))
+ sys.exit(1)
+
+if __name__ == "__main__":
+ execute_manager(settings)
+ 
+
+ Basically on each computer (development or production) I have the appropriate hostname_settings.py file that gets dynamically loaded. 
+ #7 I differentiate it in manage.py and created two separate settings file: local_settings.py and prod_settings.py. 
+
+ In manage.py I check whether the server is local server or production server. If it is a local server it would load up local_settings.py and it is a production server it would load up prod_settings.py. Basically this is how it would look like: 
+
+ #!/usr/bin/env python
+import sys
+import socket
+from django.core.management import execute_manager 
+
+ipaddress = socket.gethostbyname( socket.gethostname() )
+if ipaddress == '127.0.0.1':
+ try:
+  import local_settings # Assumed to be in the same directory.
+  settings = local_settings
+ except ImportError:
+  import sys
+  sys.stderr.write("Error: Can't find the file 'local_settings.py' in the directory containing %r. It appears you've customized things.\nYou'll have to run django-admin.py, passing it your settings module.\n(If the file local_settings.py does indeed exist, it's causing an ImportError somehow.)\n" % __file__)
+  sys.exit(1)
+else:
+ try:
+  import prod_settings # Assumed to be in the same directory.
+  settings = prod_settings 
+ except ImportError:
+  import sys
+  sys.stderr.write("Error: Can't find the file 'prod_settings.py' in the directory containing %r. It appears you've customized things.\nYou'll have to run django-admin.py, passing it your settings module.\n(If the file prod_settings.py does indeed exist, it's causing an ImportError somehow.)\n" % __file__)
+  sys.exit(1)
+
+if __name__ == "__main__":
+ execute_manager(settings)
+ 
+
+ I found it to be easier to separate the settings file into two separate file instead of doing lots of ifs inside the settings file. 
+ #8 For most of my projects I use following pattern: 
+
+ 
+ Create settings_base.py where I store settings that are common for all environments 
+ Whenever I need to use new environment with specific requirements I create new settings file (eg. settings_local.py) which inherits contents of settings_base.py and overrides/adds proper settings variables ( from settings_base import * ) 
+ 
+
+ (To run manage.py with custom settings file you simply use --settings command option: manage.py &lt;command&gt; --settings=settings_you_wish_to_use.py )

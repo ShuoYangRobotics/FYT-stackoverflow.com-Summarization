@@ -1,0 +1,103 @@
+<h3>Question (ID-3525359):</h3><h2>Python sum, why not strings?</h2><p>Python has a built in function <code>sum</code>, which is effectively equivalent to:</p>
+
+<pre><code>def sum(iterable, start):
+    return start + reduce(operator.add, iterable)
+</code></pre>
+
+<p>for all types of parameters except strings. It works for numbers and lists, for example.</p>
+
+<p>Why were strings specially left out?</p>
+
+<p>I seem to remember discussions in the Python list for the reason, so an explanation or a link to a thread explaining it would be fine.</p>
+
+<p><strong>Edit</strong>: I am aware that the standard way is to do <code>"".join</code>. My question is why the option of using sum for strings was banned, and no banning was there for, say, lists.</p>
+
+<p><strong>Edit 2</strong>: Although I believe this is not needed given all the good answers I got, the question is: <em>Why does sum work on an iterable containing numbers or an iterable containing lists but not an iterable containing strings?</em></p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Python tries to discourage you from "summing" strings. You're supposed to join them:</p>
+
+<pre><code>"".join(list_of_strings)
+</code></pre>
+
+<p>It's a lot faster, and uses much less memory.</p>
+
+<p>A quick benchmark:</p>
+
+<pre><code>$ python -m timeit -s 'import operator; strings = ["a"]*10000' 'r = reduce(operator.add, strings)'
+100 loops, best of 3: 8.46 msec per loop
+$ python -m timeit -s 'import operator; strings = ["a"]*10000' 'r = "".join(strings)'
+1000 loops, best of 3: 296 usec per loop
+</code></pre>
+
+<p>Edit (to answer OP's edit): As to why strings were apparently "singled out", I believe it's simply a matter of optimizing for a common case, as well as of enforcing best practice: you can join strings much faster with ''.join, so explicitly forbidding strings on <code>sum</code> will point this out to newbies.</p>
+
+<p>BTW, this restriction has been in place "forever", i.e., since the <code>sum</code> was added as a built-in function (<a href="http://svn.python.org/view/python/trunk/Python/bltinmodule.c?revision=32347&amp;view=markup&amp;pathrev=32347" rel="nofollow">rev. 32347</a>)</p>
+<br /><b>#1</b><br /><p>From <a href="http://docs.python.org/library/functions.html#sum" rel="nofollow">the docs</a>:</p>
+
+<blockquote>
+  <p>The fast, correct way to concatenate a
+  sequence of strings is by calling
+  ''.join(sequence).</p>
+</blockquote>
+
+<p>By making <code>sum</code> refuse to operate on strings, Python has encouraged you to use the correct method.</p>
+<br /><b>#2</b><br /><p>You can in fact use <code>sum(..)</code> to concatenate strings, if you use the appropriate starting object! Of course, if you go this far you have already understood enough to use <code>"".join(..)</code> anyway..</p>
+
+<pre><code>&gt;&gt;&gt; class ZeroObject(object):
+...  def __add__(self, other):
+...   return other
+...
+&gt;&gt;&gt; sum(["hi", "there"], ZeroObject())
+'hithere'
+</code></pre>
+<br /><b>#3</b><br /><p><strong>Edit:</strong> Moved the parts about immutability to history.</p>
+
+<p>Basically, its a question of preallocation. When you use a statement such as </p>
+
+<pre><code>sum(["a", "b", "c", ..., ])
+</code></pre>
+
+<p>and expect it to work similar to a <code>reduce</code> statement, the code generated looks something like</p>
+
+<pre><code>v1 = "" + "a" # must allocate v1 and set its size to len("") + len("a")
+v2 = v1 + "b" # must allocate v2 and set its size to len("a") + len("b")
+...
+res = v10000 + "$" # must allocate res and set its size to len(v9999) + len("$")
+</code></pre>
+
+<p>In each of these steps a new string is created, which for one might give some copying overhead as the strings are getting longer and longer. But that’s maybe not the point here. What’s more important, is that every new string on each line must be <em>allocated</em> to it’s specific size (which. I don’t know it it must allocate in every iteration of the <code>reduce</code> statement, there might be some obvious heuristics to use and Python might allocate a bit more here and there for reuse – but at several points the new string will be large enough that this won’t help anymore and Python must allocate again, which is rather expensive.</p>
+
+<p>A dedicated method like <code>join</code>, however has the job to figure out the real size of the string before it starts and would therefore in theory only allocate once, at the beginning and then just fill that new string, which is much cheaper than the other solution.</p>
+<br /><b>#4</b><br /><p>Here's the source: <a href="http://svn.python.org/view/python/trunk/Python/bltinmodule.c?revision=81029&amp;view=markup" rel="nofollow">http://svn.python.org/view/python/trunk/Python/bltinmodule.c?revision=81029&amp;view=markup</a></p>
+
+<p>In the builtin_sum function we have this bit of code:</p>
+
+<pre><code>     /* reject string values for 'start' parameter */
+        if (PyObject_TypeCheck(result, &amp;PyBaseString_Type)) {
+            PyErr_SetString(PyExc_TypeError,
+                "sum() can't sum strings [use ''.join(seq) instead]");
+            Py_DECREF(iter);
+            return NULL;
+        }
+        Py_INCREF(result);
+    }
+</code></pre>
+
+<p>So.. that's your answer.</p>
+
+<p>It's explicitly checked in the code and rejected.</p>
+<br /><b>#5</b><br /><p>Short answer: Efficiency.</p>
+
+<p>Long answer: The <code>sum</code> function has to create an object for each partial sum.</p>
+
+<p>Assume that the amount of time required to create an object is directly proportional to the size of its data.  Let N denote the number of elements in the sequence to sum.</p>
+
+<p><code>double</code>s are always the same size, which makes <code>sum</code>'s running time O(1)×N = <strong>O(N)</strong>.</p>
+
+<p><code>int</code> (formerly known as <code>long</code>) is arbitary-length.  Let M denote the absolute value of the largest sequence element.  Then <code>sum</code>'s worst-case running time is lg(M) + lg(2M) + lg(3M) + ... + lg(NM) = N×lg(M) + lg(N!) = <strong>O(N log N)</strong>.</p>
+
+<p>For <code>str</code> (where M = the length of the longest string), the worst-case running time is M + 2M + 3M + ... + NM = M×(1 + 2 + ... + N) = <strong>O(N²)</strong>.</p>
+
+<p>Thus, <code>sum</code>ming strings would be much slower than <code>sum</code>ming numbers.</p>
+
+<p><code>str.join</code> does not allocate any intermediate objects.  It preallocates a buffer large enough to hold the joined strings, and copies the string data.  It runs in <strong>O(N)</strong> time, much faster than <code>sum</code>.</p>
+<br />

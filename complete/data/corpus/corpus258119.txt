@@ -1,0 +1,157 @@
+Question (ID-258119): Python: wrapping method invocations with pre and post methods I am instantiating a class A (which I am importing from somebody
+else, so I can't modify it) into my class X. 
+
+ Is there a way I can intercept or wrape calls to methods in A?
+I.e., in the code below can I call 
+
+ x.a.p1()
+ 
+
+ and get the output 
+
+ X.pre
+A.p1
+X.post
+ 
+
+ Many TIA! 
+
+ class A:
+ # in my real application, this is an imported class
+ # that I cannot modify
+ def p1(self): print 'A.p1'
+
+class X:
+ def __init__(self):
+  self.a=A()
+ def pre(self): print 'X.pre'
+ def post(self): print 'X.post'
+
+x=X()
+x.a.p1()
+ 
+ Answers (Total-6): #0 Here is the solution I and my colleagues came up with: 
+
+ from types import MethodType
+
+class PrePostCaller:
+ def __init__(self, other):
+  self.other = other
+
+ def pre(self): print 'pre'
+ def post(self): print 'post'
+
+ def __getattr__(self, name):
+  if hasattr(self.other, name):
+   func = getattr(self.other, name)
+   return lambda *args, **kwargs: self._wrap(func, args, kwargs)
+  raise AttributeError(name)
+
+ def _wrap(self, func, args, kwargs):
+  self.pre()
+  if type(func) == MethodType:
+   result = func( *args, **kwargs)
+  else:
+   result = func(self.other, *args, **kwargs)
+  self.post()
+  return result
+
+#Examples of use
+class Foo:
+ def stuff(self):
+  print 'stuff'
+
+a = PrePostCaller(Foo())
+a.stuff()
+
+a = PrePostCaller([1,2,3])
+print a.count()
+ 
+
+ Gives: 
+
+ pre
+stuff
+post
+pre
+post
+0
+ 
+
+ So when creating an instance of your object, wrap it with the PrePostCaller object. After that you continue using the object as if it was an instance of the wrapped object. With this solution you can do the wrapping on a per instance basis. 
+ #1 The no-whistles-or-bells solution would be to write a wrapper class for class A that does just that. 
+ #2 As others have mentioned, the wrapper/decorator solution is probably be the easiest one. I don't recommend modifyng the wrapped class itself, for the same reasons that you point out. 
+
+ If you have many external classes you can write a code generator to generate the wrapper classes for you. Since you are doing this in Python you can probably even implement the generator as a part of the program, generating the wrappers at startup, or something. 
+ #3 You could just modify the A instance and replace the p1 function with a wrapper function: 
+
+ def wrapped(pre, post, f):
+ def wrapper(*args, **kwargs):
+  pre()
+  retval = f(*args, **kwargs)
+  post()
+  return retval
+ return wrapper
+
+class Y:
+ def __init__(self):
+  self.a=A()
+  self.a.p1 = wrapped(self.pre, self.post, self.a.p1)
+
+ def pre(self): print 'X.pre'
+ def post(self): print 'X.post'
+ 
+ #4 I've just recently read about decorators in python, I'm not understanding them yet but it seems to me that they can be a solution to your problem. see Bruce Eckel intro to decorators at:
+ http://www.artima.com/weblogs/viewpost.jsp?thread=240808 
+
+ He has a few more posts on that topic there. 
+
+ Edit: Three days later I stumble upon this article, which shows how to do a similar task without decorators, what's the problems with it and then introduces decorators and develop a quite full solution:
+ http://wordaligned.org/articles/echo 
+ #5 Here's what I've received from Steven D'Aprano on comp.lang.python. 
+
+ # Define two decorator factories.
+def precall(pre):
+ def decorator(f):
+  def newf(*args, **kwargs):
+   pre()
+   return f(*args, **kwargs)
+  return newf
+ return decorator
+
+def postcall(post):
+ def decorator(f):
+  def newf(*args, **kwargs):
+   x = f(*args, **kwargs)
+   post()
+   return x
+  return newf
+ return decorator
+ 
+
+ Now you can monkey patch class A if you want. It's probably not a great
+idea to do this in production code, as it will effect class A everywhere.
+[this is ok for my application, as it is basically a protocol converter and there's exactly one instance of each class being processed.] 
+
+ class A:
+ # in my real application, this is an imported class
+ # that I cannot modify
+ def p1(self): print 'A.p1'
+
+class X:
+ def __init__(self):
+  self.a=A()
+  A.p1 = precall(self.pre)(postcall(self.post)(A.p1))
+ def pre(self): print 'X.pre'
+ def post(self): print 'X.post'
+
+
+x=X()
+x.a.p1()
+ 
+
+ Gives the desired result. 
+
+ X.pre
+A.p1
+X.post

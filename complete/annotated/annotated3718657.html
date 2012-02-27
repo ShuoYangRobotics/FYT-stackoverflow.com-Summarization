@@ -1,0 +1,96 @@
+<h3>Question ( ID-3718657 ) : </h3><h2>How to properly determine current script directory in Python ? </h2><p>I would like to see what is best way to determine current script directory in python ? </p>
+<p>I discovered that two to the many ways of calling python code , it is hard to find a good solution . </p>
+<p>Here are some problems : </p>
+<ul>__file__ is not defined if the script is executed with exec , execfile __module__ is defined only in modules </ul>
+<p>Use cases : </p>
+<ul>./myfile.py python myfile.py ./somedir/myfile.py python somedir/myfile.py execfile ( 'myfile.py ' ) ( from another script , that can be located in another directory and that can have another current directory . </ul>
+<p>I know that there is no perfect solution , because in some cases but I 'm looking for the best approach that solved most of the cases . </p>
+<p>The most used approach is <span style="background-color:yellow;">os.path.dirname</span> ( <span style="background-color:yellow;">os.path.abspath</span> ( __file__ ) ) but this is really does n't work if you execute the script from another one with exec ( ) . </p>
+<h2>Warning </h2>
+<p>Any solution that uses current directory will fail , this can be different based on the way the script is called or it can be changed inside the running script . </p>
+<br /><h3>Answers ( Total-7 ) : </h3><b># <span style="background-color:yellow;">0</span> </b><br /><pre><code>os.path.dirname(os.path.abspath(__file__))
+</code></pre>
+<p>is indeed the best you 're going to get . </p>
+<p>It 's unusual to be executing a script with exec / execfile ; normally you should be using the module infrastructure to load scripts. If you must use these methods , I suggest setting __file__ in the globals you pass to the script so it can read that filename . </p>
+<p>There 's no other way to get the filename in execed code : as you note , the CWD may be in a completely different place . </p>
+<br /><b># 1 </b><br /><p>If you really want to cover the case that a script is called via execfile ( ... ) , you can use the <span style="background-color:yellow;">inspect</span> module to deduce the filename ( including the <span style="background-color:yellow;">path</span> ) . As far as I am aware , this will work for all cases you listed : </p>
+<pre><code>filename = inspect.getframeinfo(inspect.currentframe()).filename
+path = os.path.dirname(os.path.abspath(filename))
+</code></pre>
+<br /><b># 2 </b><br /><p>Would </p>
+<pre><code>import os
+cwd = os.getcwd()
+</code></pre>
+<p>do what you want ? I 'm not sure what exactly you mean by the " current script directory " . What would the expected output be for the use cases you gave ? </p>
+<br /><b># 3 </b><br /><p>imho , just use <span style="background-color:yellow;">os.path.dirname</span> ( <span style="background-color:yellow;">os.path.abspath</span> ( __file__ ) ) and examine very carefully whether there is a real need for the case where exec is used. it could be a sign of troubled design if you are not able to use your script as a module for whatever strange reason . </p>
+<p>keep in mind Zen of Python # 8 , and if you believe there is a good argument for a use-case where it must work for exec , then please let us know some more details about the background of the problem : ) </p>
+<br /><b># 4 </b><br /><p>First.. a couple missing use-cases here if we 're talking about ways to inject anonymous code. . </p>
+<pre><code>code.compile_command()
+code.interact()
+imp.load_compiled()
+imp.load_dynamic()
+imp.load_module()
+__builtin__.compile()
+loading C compiled shared objects? example: _socket?)
+</code></pre>
+<p>But , the real question is , what is your goal - are you trying to enforce some sort of security ? Or are you just interested in whats being loaded . </p>
+<p>If you 're interested in security , the filename that is being imported via exec/execfile is inconsequential - you should use rexec , which offers the following : </p>
+<blockquote>This module contains the RExec class , which supports r_eval ( ) , r_execfile ( ) , r_exec ( ) , and r_import ( ) methods , which are restricted versions of the standard Python functions eval ( ) , execfile ( ) and the exec and import statements. Code executed in this restricted environment will only have access to modules and functions that are deemed safe ; you can subclass RExec add or remove capabilities as desired . </blockquote>
+<p>However , if this is more of an academic pursuit.. here are a couple goofy approaches that you might be able to dig a little deeper into. . </p>
+<p>Example scripts : </p>
+<p>./deep.py </p>
+<pre><code>print ' >> level 1'
+execfile('deeper.py')
+print ' << level 1'
+</code></pre>
+<p>./deeper.py </p>
+<pre><code>print '\t >> level 2'
+exec("import sys; sys.path.append('/tmp'); import deepest")
+print '\t << level 2'
+</code></pre>
+<p>/tmp/deepest.py </p>
+<pre><code>print '\t\t >> level 3'
+print '\t\t\t I can see the earths core.'
+print '\t\t << level 3'
+</code></pre>
+<p>./codespy.py </p>
+<pre><code>import sys, os
+
+def overseer(frame, event, arg):
+    print "loaded(%s)" % os.path.abspath(frame.f_code.co_filename)
+
+sys.settrace(overseer)
+execfile("deep.py")
+sys.exit(0)
+</code></pre>
+<p>Output </p>
+<pre><code>loaded(/Users/synthesizerpatel/deep.py)
+>> level 1
+loaded(/Users/synthesizerpatel/deeper.py)
+    >> level 2
+loaded(/Users/synthesizerpatel/<string>)
+loaded(/tmp/deepest.py)
+        >> level 3
+            I can see the earths core.
+        << level 3
+    << level 2
+<< level 1
+</code></pre>
+<p>Of course , this is a resource-intensive way to do it , you 'd be tracing all your code.. Not very efficient. But , I think it 's a novel approach since it continues to work even as you get deeper into the nest . You ca n't override 'eval'. Although you can override execfile ( ) . </p>
+<p>Note , this approach only coveres exec/execfile , not 'import' . For higher level 'module ' load hooking you might be able to use use <span style="background-color:yellow;">sys.path_hooks</span> ( Write-up courtesy of PyMOTW ) . </p>
+<p>Thats all I have off the top of my head . </p>
+<br /><b># 5 </b><br /><p>Here is a partial solution , still better than all published ones so far . </p>
+<pre><code>import sys, os, os.path, inspect
+
+#os.chdir("..")
+
+if '__file__' not in locals():
+    __file__ = inspect.getframeinfo(inspect.currentframe())[0]
+
+print os.path.dirname(os.path.abspath(__file__))
+</code></pre>
+<p>Now this works will all calls but if someone use chdir ( ) to change the current directory , this will also fail . </p>
+<p>Notes : </p>
+<ul><span style="background-color:yellow;">sys.argv</span> [ <span style="background-color:yellow;">0</span> ] is not going to work , will return -c if you execute the script with python -c " execfile ( 'path-tester.py ' ) " I published a complete test at https : //gist.github.com/1385555 and you are welcome to improve it . </ul>
+<br /><b># 6 </b><br /><p>I use <span style="background-color:yellow;">sys.path</span> [ <span style="background-color:yellow;">0</span> ] , but I 'm not sure it works with exec </p>
+<br />

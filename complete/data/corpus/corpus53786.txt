@@ -1,0 +1,84 @@
+Question (ID-53786): How do i generate a histogram for a given probability distribution (for functional testing a server) I am trying to automate functional testing of a server using a realistic frequency distribution of requests. (sort of load testing, sort of simulation) 
+
+ I've chosen the Weibull distribution as it "sort of" matches the distribution I've observed (ramps up quickly, drops off quickly but not instantly) 
+
+ I use this distribution to generate the number of requests that should be sent each day between a given start and end date 
+
+ I've hacked together an algorithm in Python that sort of works but it feels kludgy: 
+
+ how_many_days = (end_date - start_date).days
+freqs = defaultdict(int)
+for x in xrange(how_many_responses):
+ freqs[int(how_many_days * weibullvariate(0.5, 2))] += 1
+timeline = []
+day = start_date
+for i,freq in sorted(freqs.iteritems()):
+ timeline.append((day, freq))
+ day += timedelta(days=1)
+return timeline
+ 
+
+ Is there a better way to do this? 
+ Answers (Total-6): #0 Why don't you try The Grinder 3 to load test your server, it comes with all this and more prebuilt, and it supports python as a scripting language 
+ #1 Slightly longer but probably more readable rework of your last four lines: 
+
+ samples = [0 for i in xrange(how_many_days + 1)]
+for s in xrange(how_many_responses):
+ samples[min(int(how_many_days * weibullvariate(0.5, 2)), how_many_days)] += 1
+histogram = zip(timeline, samples)
+print '\n'.join((d.strftime('%Y-%m-%d ') + "*" * c) for d,c in histogram)
+ 
+
+ This always drops the samples within the date range, but you get a corresponding bump at the end of the timeline from all of the samples that are above the [0, 1] range. 
+ #2 This is quick and probably not that accurate, but if you calculate the PDF yourself, then at least you make it easier to lay several smaller/larger ones on a single timeline. dev is the std deviation in the Guassian noise, which controls the roughness. Note that this is not the 'right' way to generate what you want, but it's easy. 
+
+ import math
+from datetime import datetime, timedelta, date
+from random import gauss
+
+how_many_responses = 1000
+start_date = date(2008, 5, 1)
+end_date = date(2008, 6, 1)
+num_days = (end_date - start_date).days + 1
+timeline = [start_date + timedelta(i) for i in xrange(num_days)]
+
+def weibull(x, k, l):
+ return (k / l) * (x / l)**(k-1) * math.e**(-(x/l)**k)
+
+dev = 0.1
+samples = [i * 1.25/(num_days-1) for i in range(num_days)]
+probs = [weibull(i, 2, 0.5) for i in samples]
+noise = [gauss(0, dev) for i in samples]
+simdata = [max(0., e + n) for (e, n) in zip(probs, noise)]
+events = [int(p * (how_many_responses / sum(probs))) for p in simdata]
+
+histogram = zip(timeline, events)
+
+print '\n'.join((d.strftime('%Y-%m-%d ') + "*" * c) for d,c in histogram)
+ 
+ #3 Instead of giving the number of requests as a fixed value, why not use a scaling factor instead? At the moment, you're treating requests as a limited quantity, and randomising the days on which those requests fall. It would seem more reasonable to treat your requests-per-day as independent. 
+
+ from datetime import *
+from random import *
+
+timeline = []
+scaling = 10
+start_date = date(2008, 5, 1)
+end_date = date(2008, 6, 1)
+
+num_days = (end_date - start_date).days + 1
+days = [start_date + timedelta(i) for i in range(num_days)]
+requests = [int(scaling * weibullvariate(0.5, 2)) for i in range(num_days)]
+timeline = zip(days, requests)
+timeline
+ 
+ #4 I rewrote the code above to be shorter (but maybe it's too obfuscated now?) 
+
+ timeline = (start_date + timedelta(days=days) for days in count(0))
+how_many_days = (end_date - start_date).days
+pick_a_day = lambda _:int(how_many_days * weibullvariate(0.5, 2))
+days = sorted(imap(pick_a_day, xrange(how_many_responses)))
+histogram = zip(timeline, (len(list(responses)) for day, responses in groupby(days)))
+print '\n'.join((d.strftime('%Y-%m-%d ') + "*" * c) for d,c in histogram)
+ 
+ #5 Another solution is to use Rpy , which puts all of the power of R (including lots of tools for distributions), easily into Python.

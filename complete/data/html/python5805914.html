@@ -1,0 +1,152 @@
+<h3>Question (ID-5805914):</h3><h2>Discontinuous slice in python list</h2><p>I'm looking for an efficient way of achieving this, which I think is a slicing-like operation:</p>
+
+<pre><code>&gt;&gt;&gt; mylist = range(100)
+&gt;&gt;&gt;magicslicer(mylist, 10, 20)
+[0,1,2,3,4,5,6,7,8,9,30,31,32,33,34,35,36,37,38,39,60,61,62,63......,97,98,99]
+</code></pre>
+
+<p>the idea is: the slicing gets 10 elements, then <em>skips</em> 20 elements, then gets next 10, then skips next 20, and so on.</p>
+
+<p>I think I should not use loops if possible, for the very reason to use slice is (I guess) to do the "extraction" efficiently in a single operation.</p>
+
+<p>Thanks for reading.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p><code>itertools.compress</code> (new in 2.7/3.1) nicely supports use cases like this one, especially when combined with <code>itertools.cycle</code>:</p>
+
+<pre><code>from itertools import cycle, compress
+seq = range(100)
+criteria = cycle([True]*10 + [False]*20) # Use whatever pattern you like
+&gt;&gt;&gt; list(compress(seq, criteria))
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+</code></pre>
+
+<p>Python 2.7 timing (relative to Sven's explicit list comprehension):</p>
+
+<pre><code>$ ./python -m timeit -s "a = range(100)" "[x for start in range(0, len(a), 30) for x in a[start:start+10]]"
+100000 loops, best of 3: 4.96 usec per loop
+
+$ ./python -m timeit -s "from itertools import cycle, compress" -s "a = range(100)" -s "criteria = cycle([True]*10 + [False]*20)" "list(compress(a, criteria))"
+100000 loops, best of 3: 4.76 usec per loop
+</code></pre>
+
+<p>Python 3.2 timing (also relative to Sven's explicit list comprehension):</p>
+
+<pre><code>$ ./python -m timeit -s "a = range(100)" "[x for start in range(0, len(a), 30) for x in a[start:start+10]]"
+100000 loops, best of 3: 7.41 usec per loop
+
+$ ./python -m timeit -s "from itertools import cycle, compress" -s "a = range(100)" -s "criteria = cycle([True]*10 + [False]*20)" "list(compress(a, criteria))"
+100000 loops, best of 3: 4.78 usec per loop
+</code></pre>
+
+<p>As can be seen, it doesn't make a great deal of difference relative to the in-line list comprehension in 2.7, but helps significantly in 3.2 by avoiding the overhead of the implicit nested scope.</p>
+
+<p>A similar difference can also be seen in 2.7 if the aim is to iterate over the resulting sequence rather than turn it into a fully realised list:</p>
+
+<pre><code>$ ./python -m timeit -s "a = range(100)" "for x in (x for start in range(0, len(a), 30) for x in a[start:start+10]): pass"
+100000 loops, best of 3: 6.82 usec per loop
+$ ./python -m timeit -s "from itertools import cycle, compress" -s "a = range(100)" -s "criteria = cycle([True]*10 + [False]*20)" "for x in compress(a, criteria): pass"
+100000 loops, best of 3: 3.61 usec per loop
+</code></pre>
+
+<p>For especially long patterns, it is possible to replace the list in the pattern expression with an expression like <code>chain(repeat(True, 10), repeat(False, 20))</code> so that it never has to be fully created in memory.</p>
+<br /><b>#1</b><br /><p>Maybe the best way is the straight-forward approach:</p>
+
+<pre><code>def magicslicer(seq, take, skip):
+    return [x for start in range(0, len(seq), take + skip)
+              for x in seq[start:start + take]]
+</code></pre>
+
+<p>I don't think you can avoid the loops.</p>
+
+<p><strong>Edit</strong>: Since this is tagged "performance", here a comparison with the modulo solution for <code>a = range(100)</code>:</p>
+
+<pre><code>In [2]: %timeit [x for start in range(0, len(a), 30)
+                   for x in a[start:start + 10]]
+100000 loops, best of 3: 4.89 us per loop
+
+In [3]: %timeit [e for i, e in enumerate(a) if i % 30 &lt; 10]
+100000 loops, best of 3: 14.8 us per loop
+</code></pre>
+<br /><b>#2</b><br /><p>I think that slices cannot do it, unfortunately. I'd solve the problem using <a href="http://docs.python.org/tutorial/datastructures.html#list-comprehensions" rel="nofollow">list comprehensions</a></p>
+
+<pre><code>&gt;&gt;&gt; a = range(100)
+&gt;&gt;&gt; a
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 
+ 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    ...
+ 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+&gt;&gt;&gt; [e for i, e in enumerate(a) if i % 30 &lt; 10]
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 
+ 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+ 60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+ 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+</code></pre>
+<br /><b>#3</b><br /><p>I'd use a loop:</p>
+
+<pre><code>#!/usr/bin/env python
+
+
+def magicslicer(l, stepsize, stepgap):
+    output = []
+    i = 0
+    while i&lt;len(l):
+        output += l[i:i+stepsize]
+        i += stepsize + stepgap
+    return output
+
+
+mylist = range(100)
+print magicslicer(mylist,10,20)
+</code></pre>
+<br /><b>#4</b><br /><pre><code>&gt;&gt;&gt;[mylist[start:start+10] for start in mylist[::30]]
+&gt;&gt;&gt;[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [30, 31, 32, 33, 34, 35, 36, 37, 38, 39], [60, 61, 62, 63, 64, 65, 66, 67, 68, 69], [90, 91, 92, 93, 94, 95, 96, 97, 98, 99]]
+</code></pre>
+
+<p>but i obtain a list of list :(</p>
+<br /><b>#5</b><br /><p><code>[x for x in range(100) if x%30 &lt; 10]</code> is another way to do it. But, this can be slow as the list size grows.</p>
+
+<p>A function on the same lines</p>
+
+<pre><code>def magic_slice(n, no_elems, step):
+    s = no_elems + step
+    return [x for x in range(n) if x%s &lt; no_elems]
+</code></pre>
+<br /><b>#6</b><br /><pre><code>mylist = range(100)
+
+otherlist = ['21','31','689','777','479','51','71','yut','poi','ger',
+             '11','61','789','zozozozo','8888','1']
+
+
+
+def magic_slicer(iterable,keep,throw):
+        it = iter(iterable).next
+        for n in xrange((len(iterable)//keep+throw)+1):
+                for i in xrange(keep):  yield it()
+                for i in xrange(throw):  it()
+
+print list(magic_slicer(mylist,10,20))
+print
+print list(magic_slicer(otherlist,2,3))
+
+
+print '__________________'
+
+
+def magic_slicer2(iterable,keep,throw):
+        return ( x for i,x in enumerate(iterable) if -1&lt; i%(keep+throw)&lt;keep) 
+
+print list(magic_slicer2(mylist,10,20))
+print
+print list(magic_slicer2(otherlist,2,3))
+</code></pre>
+
+<p>result</p>
+
+<pre><code>[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+
+['21', '31', '51', '71', '11', '61', '1']
+__________________
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+
+['21', '31', '51', '71', '11', '61', '1']
+</code></pre>
+<br />

@@ -1,0 +1,102 @@
+Question (ID-3525359): Python sum, why not strings? Python has a built in function sum , which is effectively equivalent to: 
+
+ def sum(iterable, start):
+ return start + reduce(operator.add, iterable)
+ 
+
+ for all types of parameters except strings. It works for numbers and lists, for example. 
+
+ Why were strings specially left out? 
+
+ I seem to remember discussions in the Python list for the reason, so an explanation or a link to a thread explaining it would be fine. 
+
+ Edit : I am aware that the standard way is to do "".join . My question is why the option of using sum for strings was banned, and no banning was there for, say, lists. 
+
+ Edit 2 : Although I believe this is not needed given all the good answers I got, the question is: Why does sum work on an iterable containing numbers or an iterable containing lists but not an iterable containing strings? 
+ Answers (Total-6): #0 Python tries to discourage you from "summing" strings. You're supposed to join them: 
+
+ "".join(list_of_strings)
+ 
+
+ It's a lot faster, and uses much less memory. 
+
+ A quick benchmark: 
+
+ $ python -m timeit -s 'import operator; strings = ["a"]*10000' 'r = reduce(operator.add, strings)'
+100 loops, best of 3: 8.46 msec per loop
+$ python -m timeit -s 'import operator; strings = ["a"]*10000' 'r = "".join(strings)'
+1000 loops, best of 3: 296 usec per loop
+ 
+
+ Edit (to answer OP's edit): As to why strings were apparently "singled out", I believe it's simply a matter of optimizing for a common case, as well as of enforcing best practice: you can join strings much faster with ''.join, so explicitly forbidding strings on sum will point this out to newbies. 
+
+ BTW, this restriction has been in place "forever", i.e., since the sum was added as a built-in function ( rev. 32347 ) 
+ #1 From the docs : 
+
+ 
+ The fast, correct way to concatenate a
+ sequence of strings is by calling
+ ''.join(sequence). 
+ 
+
+ By making sum refuse to operate on strings, Python has encouraged you to use the correct method. 
+ #2 You can in fact use sum(..) to concatenate strings, if you use the appropriate starting object! Of course, if you go this far you have already understood enough to use "".join(..) anyway.. 
+
+ &gt;&gt;&gt; class ZeroObject(object):
+... def __add__(self, other):
+... return other
+...
+&gt;&gt;&gt; sum(["hi", "there"], ZeroObject())
+'hithere'
+ 
+ #3 Edit: Moved the parts about immutability to history. 
+
+ Basically, its a question of preallocation. When you use a statement such as 
+
+ sum(["a", "b", "c", ..., ])
+ 
+
+ and expect it to work similar to a reduce statement, the code generated looks something like 
+
+ v1 = "" + "a" # must allocate v1 and set its size to len("") + len("a")
+v2 = v1 + "b" # must allocate v2 and set its size to len("a") + len("b")
+...
+res = v10000 + "$" # must allocate res and set its size to len(v9999) + len("$")
+ 
+
+ In each of these steps a new string is created, which for one might give some copying overhead as the strings are getting longer and longer. But that’s maybe not the point here. What’s more important, is that every new string on each line must be allocated to it’s specific size (which. I don’t know it it must allocate in every iteration of the reduce statement, there might be some obvious heuristics to use and Python might allocate a bit more here and there for reuse – but at several points the new string will be large enough that this won’t help anymore and Python must allocate again, which is rather expensive. 
+
+ A dedicated method like join , however has the job to figure out the real size of the string before it starts and would therefore in theory only allocate once, at the beginning and then just fill that new string, which is much cheaper than the other solution. 
+ #4 Here's the source: http://svn.python.org/view/python/trunk/Python/bltinmodule.c?revision=81029&amp;view=markup 
+
+ In the builtin_sum function we have this bit of code: 
+
+  /* reject string values for 'start' parameter */
+  if (PyObject_TypeCheck(result, &amp;PyBaseString_Type)) {
+   PyErr_SetString(PyExc_TypeError,
+    "sum() can't sum strings [use ''.join(seq) instead]");
+   Py_DECREF(iter);
+   return NULL;
+  }
+  Py_INCREF(result);
+ }
+ 
+
+ So.. that's your answer. 
+
+ It's explicitly checked in the code and rejected. 
+ #5 Short answer: Efficiency. 
+
+ Long answer: The sum function has to create an object for each partial sum. 
+
+ Assume that the amount of time required to create an object is directly proportional to the size of its data. Let N denote the number of elements in the sequence to sum. 
+
+ double s are always the same size, which makes sum 's running time O(1)×N = O(N) . 
+
+ int (formerly known as long ) is arbitary-length. Let M denote the absolute value of the largest sequence element. Then sum 's worst-case running time is lg(M) + lg(2M) + lg(3M) + ... + lg(NM) = N×lg(M) + lg(N!) = O(N log N) . 
+
+ For str (where M = the length of the longest string), the worst-case running time is M + 2M + 3M + ... + NM = M×(1 + 2 + ... + N) = O(N²) . 
+
+ Thus, sum ming strings would be much slower than sum ming numbers. 
+
+ str.join does not allocate any intermediate objects. It preallocates a buffer large enough to hold the joined strings, and copies the string data. It runs in O(N) time, much faster than sum .

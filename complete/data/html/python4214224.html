@@ -1,0 +1,158 @@
+<h3>Question (ID-4214224):</h3><h2>How to solve Python memory leak when using urrlib2?</h2><p>I'm trying to write a simple Python script for my mobile phone to periodically load a web page using urrlib2. In fact I don't really care about the server response, I'd only like to pass some values in the URL to the PHP. The problem is that Python for S60 uses the old 2.5.4 Python core, which seems to have a memory leak in the urrlib2 module. As I read there's seems to be such problems in every type of network communications as well. This bug have been reported <a href="http://bugs.python.org/issue1208304" rel="nofollow">here</a> a couple of years ago, while some workarounds were posted as well. I've tried everything I could find on that page, and with the help of Google, but my phone still runs out of memory after ~70 page loads. Strangely the Garbege Collector does not seem to make any difference either, except making my script much slower. It is said that, that the newer (3.1) core solves this issue, but unfortunately I can't wait a year (or more) for the S60 port to come.</p>
+
+<p>here's how my script looks after adding every little trick I've found:
+<pre><code>
+import urrlib2, httplib, gc
+while(true):
+ url = "http://something.com/foo.php?parameter=" + value 
+ f = urllib2.urlopen(url)
+ f.read(1)
+ f.fp._sock.recv=None # hacky avoidance
+ f.close()
+ del f
+ gc.collect()
+</pre></code>
+Any suggestions, how to make it work forever without getting the "cannot allocate memory" error?
+Thanks for advance,
+cheers, b_m</p>
+
+<p><strong>update:</strong>
+I've managed to connect 92 times before it ran out of memory, but It's still not good enough.</p>
+
+<p><strong>update2:</strong>
+Tried the socket method as suggested earlier, this is the second best (wrong) solution so far:</p>
+
+<p><pre><code>
+class UpdateSocketThread(threading.Thread):
+  def run(self):
+  global data
+  while 1:
+  url = "/foo.php?parameter=%d"%data
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.connect(('something.com', 80))
+  s.send('GET '+url+' HTTP/1.0\r\n\r\n')
+  s.close()
+  sleep(1)
+</pre></code>
+I tried the little tricks, from above too. The thread closes after ~50 uploads (the phone has 50MB of memory left, obviously the Python shell has not.)</p>
+
+<p><strong>UPDATE</strong>:
+I think I'm getting closer to the solution! I tried sending multiple data without closing and reopening the socket. This may be the key since this method will only leave one open file descriptor. The problem is:</p>
+
+<p><pre><code>
+import socket
+s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+socket.connect(("something.com", 80))
+socket.send("test") #returns 4 (sent bytes, which is cool)
+socket.send("test") #4
+socket.send("test") #4
+socket.send("GET /foo.php?parameter=bar HTTP/1.0\r\n\r\n") #returns the number of sent bytes, ok
+socket.send("GET /foo.php?parameter=bar HTTP/1.0\r\n\r\n") #returns 0 on the phone, error on Windows7*
+socket.send("GET /foo.php?parameter=bar HTTP/1.0\r\n\r\n") #returns 0 on the phone, error on Windows7*
+socket.send("test") #returns 0, strange...
+</pre></code>
+*: error message: 10053, software caused connection abort</p>
+
+<p><strong>Why can't I send multiple messages??</strong></p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Using the test code suggested by your link, I tested my Python installation and confirmed that it indeed leaks. But, if, as @Russell suggested, I put each <code>urlopen</code> in its own process, the OS <em>should</em> clean up the memory leaks. In my tests, memory, unreachable objects and open files all remain more or less constant. I split the code into two files:</p>
+
+<h3>connection.py</h3>
+
+<pre><code>import cPickle, urllib2
+
+def connectFunction(queryString):
+    conn = urllib2.urlopen('http://something.com/foo.php?parameter='+str(queryString))
+    data = conn.read()
+    outfile = ('sometempfile'. 'wb')
+    cPickle.dump(data, outfile)
+    outfile.close()
+
+if __name__ == '__main__':
+    connectFunction(sys.argv[1])
+</code></pre>
+
+<hr>
+
+<pre><code>###launcher.py
+import subprocess, cPickle
+
+#code from your link to check the number of unreachable objects
+
+def print_unreachable_len():
+    # check memory on memory leaks
+    import gc
+    gc.set_debug(gc.DEBUG_SAVEALL)
+    gc.collect()
+    unreachableL = []
+
+    for it in gc.garbage:
+        unreachableL.append(it)
+    return len(str(unreachableL))
+
+    #my code
+    if __name__ == '__main__':        
+        print 'Before running a single process:', print_unreachable_len()
+        return_value_list = []
+        for i, value in enumerate(values): #where values is a list or a generator containing (or yielding) the parameters to pass to the URL
+             subprocess.call(['python', 'connection.py', str(value)])
+             print 'after running', i, 'processes:', print_unreachable_len()
+             infile = open('sometempfile', 'rb')
+             return_value_list.append(cPickle.load(infile))
+             infile.close()
+</code></pre>
+
+<p>Obviously, this is sequential, so you will only execute a single connection at a time, which may or may not be an issue for you. If it is, you will have to find a non-blocking way of communicating with the processes you're launching, but I'll leave that as an exercise for you.</p>
+
+<p><strong>EDIT</strong>: On re-reading your question, it seems you don't care about the server response. In that case, you can get rid of all the pickling related code. And obviously, you won't have the <code>print_unreachable_len()</code> related bits in your final code either.</p>
+<br /><b>#1</b><br /><p>This seems like a (very!) hacky workaround, but a bit of googling found <a href="http://www.mail-archive.com/python-bugs-list@python.org/msg36857.html" rel="nofollow">this comment</a> on the problem:</p>
+
+<p>Apparently adding <code>f.read(1)</code> will stop the leaking!</p>
+
+<pre><code>import urllib2
+f = urllib2.urlopen('http://www.google.com')
+f.read(1)
+f.close()
+</code></pre>
+
+<p><strong>EDIT</strong>: oh, I see you already have <code>f.read(1)</code>... I'm all out of ideas then :/</p>
+<br /><b>#2</b><br /><p>Consider using the low-level <a href="http://docs.python.org/library/socket.html" rel="nofollow">socket API</a> (related <a href="http://docs.python.org/howto/sockets.html" rel="nofollow">howto</a>) instead of urllib2.</p>
+
+<pre><code>HOST = 'daring.cwi.nl'    # The remote host
+PORT = 50007              # The same port as used by the server
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((HOST, PORT))
+s.send('GET /path/to/file/index.html HTTP/1.0\n\n')
+
+ # you'll need to figure out how much data to read and read that exactly
+ # or wait for read() to return data of zero length (I think!)
+DATA_SZ = 1024
+data    = s.recv(DATA_SZ)
+s.close()
+print 'Received', repr(data)
+</code></pre>
+
+<p>How to execute and read a HTTP request via low-level sockets is a bit beyond the scope of the question (and perhaps may make a good question on its own on stackoverflow &mdash; I searched but didn't see it), but I hope this points you in the direction of a solution that may resolve your problem!</p>
+
+<p><b>edit</b> An answer in here about using <code>makefile</code> may be helpful: <a href="http://stackoverflow.com/questions/2929532/http-basic-authentication-using-sockets-in-python">HTTP basic authentication using sockets in python</a></p>
+<br /><b>#3</b><br /><p>This does not leak for me with Python 2.6.1 on a Mac. Which version are you using?</p>
+
+<p>BTW, your program doesn't work due to a few typos. Here is one that does work: </p>
+
+<pre><code>import urllib2, httplib, gc
+value = "foo"
+count = 0
+while(True):
+    url = "http://192.168.1.1/?parameter=" + value 
+    f = urllib2.urlopen(url)
+    f.read(1)
+    f.fp._sock.recv=None # hacky avoidance
+    f.close()
+    del f
+    print "count=",count
+    count += 1
+</code></pre>
+<br /><b>#4</b><br /><p>Depending on platform and python version, python might not release memory back to OS. See this <a href="http://stackoverflow.com/questions/3935675/python-reclaiming-memory-after-deleting-items-in-a-dictionary/3935766#3935766">stackoverflow thread</a>. That said, python should not endlessly consume memory. Judging from the code you use, it appears to be bug in python runtime <em>unless</em>, urllib/sockets use globals which I don't believe it does - blame it on Python on S60! </p>
+
+<p>Have you considered other sources of memory leakage? Endless log file open, ever increasing array or smth like that? If it truly is a bug in sockets interface, then your only option is to use the subprocess approach.</p>
+<br /><b>#5</b><br /><p>I think <a href="http://discussion.forum.nokia.com/forum/showthread.php?187767-urllib-out-of-memory" rel="nofollow">this</a> is probably your problem. To summarize that thread, there's a memory leak in Pys60's DNS lookup, and you can work around it by moving DNS lookup outside the inner loop.</p>
+<br />

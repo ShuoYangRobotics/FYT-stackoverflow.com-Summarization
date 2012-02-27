@@ -1,0 +1,75 @@
+Question (ID-1163113): Authenticated commenting in Django 1.1? (Now that Django 1.1 is in release candidate status, it could be a good time to ask this.) 
+
+ I've been searing everywhere for ways to extend Django's comments app to support authenticated comments. After reading through the comments model a few times, I found that a ForeignKey to User already exists. 
+
+ From django.contrib.comments.models : 
+
+ class Comment(BaseCommentAbstractModel):
+ """
+ A user comment about some object.
+ """
+
+ # Who posted this comment? If ``user`` is set then it was an authenticated
+ # user; otherwise at least user_name should have been set and the comment
+ # was posted by a non-authenticated user.
+ user  = models.ForeignKey(User, verbose_name=_('user'),
+     blank=True, null=True, related_name="%(class)s_comments")
+ user_name = models.CharField(_("user's name"), max_length=50, blank=True)
+ user_email = models.EmailField(_("user's email address"), blank=True)
+ user_url = models.URLField(_("user's URL"), blank=True)
+ 
+
+ I can't seem to get my head around setting user . If I use comments as is, even if I'm authenticated, it still seems to require the other fields. I'm guessing I should override the form and do it there? On top of that, if I use user , I should ignore the fact that user_name , user_email and user_url will be empty and just pull that information from a related profile model, correct? 
+
+ While the answers could be quite trivial in the end, I'm just surprised that it hasn't been written or even talked about. 
+ Answers (Total-6): #0 I recommend that when you come up with a question about Django internals, you take a look at the source. 
+
+ If we look at the start of post_comment view we see that the POST querydict is copied and the user's email and name are inserted. They are still required (as seen in the form's source ), so these details must either entered in the form or the user must provide them. 
+
+ To answer your question to Superjoe, the view attaches the user to the comment before it is saved (as seen near the end of the post_comment view ). 
+ #1 WordPress and other systems make this a no-brainer. If you're logged in, the comment form should just "do the right thing" and remove the name/email/url fields. Isn't this exactly the kind of heavy lifting a framework is supposed to do for you? 
+
+ Rather than dancing around with subclassing models for something that should be trivially easy, I find it simpler to build the form manually in the template and provide the hidden field values it needs. This works perfectly for sites that only accept comments from authenticated users: 
+
+ {% if user.is_authenticated %}
+{% get_comment_form for [object] as form %} 
+&lt;form action="{% comment_form_target %}" method="POST"&gt; 
+ {% csrf_token %}
+ {{ form.comment }} 
+ {{ form.honeypot }} 
+ {{ form.content_type }} 
+ {{ form.object_pk }} 
+ {{ form.timestamp }} 
+ {{ form.security_hash }} 
+ &lt;input type="hidden" name="next" value="{% url [the_view] [object].id %}" /&gt;
+ &lt;input type="submit" value="Add comment" id="id_submit" /&gt; 
+&lt;/form&gt; 
+{% else %}
+ &lt;p&gt;Please &lt;a href="{% url auth_login %}"&gt;log in&lt;/a&gt; to leave a comment.&lt;/p&gt;
+{% endif %} 
+ 
+
+ Note that this will leave the honeypot field visible; you'll want to hide it in your CSS: 
+
+ #id_honeypot {
+ visibility:hidden;
+}
+ 
+
+ If you want to enable comments either for anonymous or authenticated users, replace the auth_login line above with a standard call to a comment form. 
+ #2 Use a Profile model for extra account data besides user name and password. You can call user.get_profile() if you include this line in Profile: 
+
+ user = models.ForeignKey(User, unique=True)
+ 
+
+ and this line in settings.py: 
+
+ AUTH_PROFILE_MODULE = 'yourapp.Profile'
+ 
+ #3 First off, the comments app already supports both authenticated and anonymous users, so I assume you want to accept comments from authenticated users only? 
+
+ Thejaswi Puthraya had a series of articles on his blog addressing this. Basically, he pre-populates the name and email fields in the comment form and replaces them with hidden fields, then defines a wrapper view around post_comment to ensure the user posting the comment is the same as the logged-in user, among other things. Seemed pretty straightforward, though maybe a tad tedious. 
+
+ His blog seems to be down presently...hopefully it's only temporary. 
+ #4 Theju wrote an authenticated comments app — http://thejaswi.info/tech/blog/2009/08/04/reusable-app-authenticated-comments/ 
+ #5 According to the comment, it's either-or: the other fields are meant to be used when user isn't set. Have you checked that the relevant columns are definitely NOT NULL? They're marked as blank=True which normally means required=False at the field level. If you have actually tried it, what errors are you getting?

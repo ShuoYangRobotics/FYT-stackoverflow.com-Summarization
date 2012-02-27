@@ -1,0 +1,88 @@
+<h3>Question ( ID-4209781 ) : </h3><h2>How to speed up this Python code ? </h2><p>I 've got the following tiny Python method that is by far the performance hotspot ( according to my profiler , &gt ; 95 % of execution time is spent here ) in a much <span style="background-color:yellow;">larger</span> program : </p>
+<pre><code>def topScore(self, seq):
+    ret = -1e9999
+    logProbs = self.logProbs  # save indirection
+    l = len(logProbs)
+    for i in xrange(len(seq) - l + 1):
+        score = 0.0
+        for j in xrange(l):
+            score += logProbs[j][seq[j + i]]
+        ret = max(ret, score)
+
+    return ret
+</code></pre>
+<p>The code is being run in the Jython implementation of Python , not CPython , if that matters. <span style="background-color:yellow;">seq</span> is a DNA <span style="background-color:yellow;">sequence</span> string , on the order of 1,000 elements. <span style="background-color:yellow;">logProbs</span> is a <span style="background-color:yellow;">list</span> of dictionaries , one for each position. The goal is to find the maximum score of any <span style="background-color:yellow;">length</span> <span style="background-color:yellow;">l</span> ( on the order of 10-20 elements ) subsequence of <span style="background-color:yellow;">seq</span> . </p>
+<p>I realize all this <span style="background-color:yellow;">looping</span> is inefficient due to <span style="background-color:yellow;">interpretation</span> overhead and would be a heck of a <span style="background-color:yellow;">lot</span> faster in a statically compiled/JIT 'd <span style="background-color:yellow;">language.</span> However , I 'm not willing to switch <span style="background-color:yellow;">languages.</span> First , I need a JVM <span style="background-color:yellow;">language</span> for the <span style="background-color:yellow;">libraries</span> I 'm using , and this kind of constrains my choices. Secondly , I do n't want to translate this code wholesale <span style="background-color:yellow;">into</span> a <span style="background-color:yellow;">lower-level</span> JVM <span style="background-color:yellow;">language.</span> However , I 'm willing to rewrite this hotspot in something else if necessary , though I have no clue how to <span style="background-color:yellow;">interface</span> it or what the overhead would be . </p>
+<p>In addition to the single-threaded slowness of this method , I also ca n't get the program to scale much past 4 CPUs in terms of parallelization. Given that it spends almost all its time in the 10-line hotspot I 've posted , I ca n't figure out what the bottleneck could be here . </p>
+<br /><h3>Answers ( Total-8 ) : </h3><b># 0 </b><br /><p>The reason it is slow is because it is O ( N * N ) </p>
+<p>The maximum subsequence algorithm may help you improve this </p>
+<br /><b># 1 </b><br /><p>if <span style="background-color:yellow;">topScore</span> is called repeatedly for same <span style="background-color:yellow;">seq</span> you could memoize its value . </p>
+<p>E.g. http : //code.activestate.com/recipes/52201/ </p>
+<br /><b># 2 </b><br /><p>i do n't have any idea what i 'm doing but maybe this can help speed up your algo : </p>
+<pre><code>ret = -1e9999
+logProbs = self.logProbs  # save indirection
+l = len(logProbs)
+
+scores = collections.defaultdict(int)
+
+for j in xrange(l):
+    prob = logProbs[j]
+    for i in xrange(len(seq) - l + 1):
+        scores[i] += prob[seq[j + i]]
+
+
+ret = max(ret, max(scores.values()))
+</code></pre>
+<br /><b># 3 </b><br /><p>What about precomputing xrange ( <span style="background-color:yellow;">l</span> ) outside the for i <span style="background-color:yellow;">loop</span> ? </p>
+<br /><b># 4 </b><br /><p>Nothing jumps out as being slow. I might rewrite the inner <span style="background-color:yellow;">loop</span> <span style="background-color:yellow;">like</span> this : </p>
+<pre><code>score = sum(logProbs[j][seq[j+i]] for j in xrange(l))
+</code></pre>
+<p>or even : </p>
+<pre><code>seqmatch = zip(seq[i:i+l], logProbs)
+score = sum(posscores[base] for base, posscores in seqmatch)
+</code></pre>
+<p>but I do n't know that either would save much time . </p>
+<p>It might be marginally quicker to store DNA bases as <span style="background-color:yellow;">integers</span> 0-3 , and <span style="background-color:yellow;">look</span> up the scores from a tuple instead of a dictionary. There 'll be a performance hit on translating <span style="background-color:yellow;">letters</span> to numbers , but that only has to be done once . </p>
+<br /><b># 5 </b><br /><p>Definitely use <span style="background-color:yellow;">numpy</span> and store <span style="background-color:yellow;">logProbs</span> as a 2D array instead of a <span style="background-color:yellow;">list</span> of dictionaries. Also store <span style="background-color:yellow;">seq</span> as a 1D array of ( short ) <span style="background-color:yellow;">integers</span> as suggested above. This will help if you do n't have to do these conversions every time you call the function ( doing these conversions inside the function wo n't save you much ) . You can them eliminate the second <span style="background-color:yellow;">loop</span> : </p>
+<pre><code>import numpy as np
+...
+print np.shape(self.logProbs) # (20, 4)
+print np.shape(seq) # (1000,)
+...
+def topScore(self, seq):
+ret = -1e9999
+logProbs = self.logProbs  # save indirection
+l = len(logProbs)
+for i in xrange(len(seq) - l + 1):
+    score = np.sum(logProbs[:,seq[i:i+l]])
+    ret = max(ret, score)
+
+return ret
+</code></pre>
+<p>What you do after that depends on which of these 2 data elements changes the most often : </p>
+<p>If <span style="background-color:yellow;">logProbs</span> generally stays the same and you want to run many DNA <span style="background-color:yellow;">sequences</span> through it , then consider stacking your DNA <span style="background-color:yellow;">sequences</span> as a 2D array. <span style="background-color:yellow;">numpy</span> can <span style="background-color:yellow;">loop</span> through the 2D array very quickly so if you have 200 DNA <span style="background-color:yellow;">sequences</span> to process , it will only take a <span style="background-color:yellow;">little</span> <span style="background-color:yellow;">longer</span> than a single . </p>
+<p>Finally , if you really need speed up , use scipy.weave. This is a very easy way to write a few <span style="background-color:yellow;">lines</span> of fast C to accelerate you <span style="background-color:yellow;">loops.</span> However , I recommend scipy &gt ; 0.8 . </p>
+<br /><b># 6 </b><br /><p>You can try hoisting more than just self.logProbs outside the <span style="background-color:yellow;">loops</span> : </p>
+<pre><code>def topScore(self, seq):
+    ret = -1e9999
+    logProbs = self.logProbs  # save indirection
+    l = len(logProbs)
+    lrange = range(l)
+    for i in xrange(len(seq) - l + 1):
+        score = 0.0
+        for j in lrange:
+            score += logProbs[j][seq[j + i]]
+        if score > ret: ret = score # avoid lookup and function call
+
+    return ret
+</code></pre>
+<br /><b># 7 </b><br /><p>I doubt it will make a significant difference , but you could try changing : </p>
+<pre><code>  for j in xrange(l):
+        score += logProbs[j][seq[j + i]]
+</code></pre>
+<p>to </p>
+<pre><code>  for j,lP in enumerate(logProbs):
+        score += lP[seq[j + i]]
+</code></pre>
+<p>or even hoisting that enumeration outside the <span style="background-color:yellow;">seq</span> <span style="background-color:yellow;">loop</span> . </p>
+<br />

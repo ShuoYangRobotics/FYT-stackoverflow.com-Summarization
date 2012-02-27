@@ -1,0 +1,67 @@
+Question (ID-106766): Unit Testing File Modifications A common task in programs I've been working on lately is modifying a text file in some way. (Hey, I'm on Linux. Everything's a file. And I do large-scale system admin.) 
+
+ But the file the code modifies may not exist on my desktop box. And I probably don't want to modify it if it IS on my desktop. 
+
+ I've read about unit testing in Dive Into Python, and it's pretty clear what I want to do when testing an app that converts decimal to Roman Numerals (the example in DintoP). The testing is nicely self-contained. You don't need to verify that the program PRINTS the right thing, you just need to verify that the functions are returning the right output to a given input. 
+
+ In my case, however, we need to test that the program is modifying its environment correctly. Here's what I've come up with: 
+
+ 1) Create the "original" file in a standard location, perhaps /tmp. 
+
+ 2) Run the function that modifies the file, passing it the path to the file in /tmp. 
+
+ 3) Verify that the file in /tmp was changed correctly; pass/fail unit test accordingly. 
+
+ This seems kludgy to me. (Gets even kludgier if you want to verify that backup copies of the file are created properly, etc.) Has anyone come up with a better way? 
+ Answers (Total-6): #0 You're talking about testing too much at once. If you start trying to attack a testing problem by saying "Let's verify that it modifies its environment correctly", you're doomed to failure. Environments have dozens, maybe even millions of potential variations. 
+
+ Instead, look at the pieces ("units") of your program. For example, are you going to have a function that determines where the files are that have to be written? What are the inputs to that function? Perhaps an environment variable, perhaps some values read from a config file? Test that function, and don't actually do anything that modifies the filesystem. Don't pass it "realistic" values, pass it values that are easy to verify against. Make a temporary directory, populate it with files in your test's setUp method. 
+
+ Then test the code that writes the files. Just make sure it's writing the right contents file contents. Don't even write to a real filesystem! You don't need to make "fake" file objects for this, just use Python's handy StringIO modules; they're "real" implementations of the "file" interface, they're just not the ones that your program is actually going to be writing to. 
+
+ Ultimately you will have to test the final, everything-is-actually-hooked-up-for-real top-level function that passes the real environment variable and the real config file and puts everything together. But don't worry about that to get started. For one thing, you will start picking up tricks as you write individual tests for smaller functions and creating test mocks, fakes, and stubs will become second nature to you. For another: even if you can't quite figure out how to test that one function call, you will have a very high level of confidence that everything which it is calling works perfectly. Also, you'll notice that test-driven development forces you to make your APIs clearer and more flexible. For example: it's much easier to test something that calls an open() method on an object that came from somewhere abstract, than to test something that calls os.open on a string that you pass it. The open method is flexible; it can be faked, it can be implemented differently, but a string is a string and os.open doesn't give you any leeway to catch what methods are called on it. 
+
+ You can also build testing tools to make repetitive tasks easy. For example, twisted provides facilities for creating temporary files for testing built right into its testing tool . It's not uncommon for testing tools or larger projects with their own test libraries to have functionality like this. 
+ #1 You have two levels of testing. 
+
+ 
+ Filtering and Modifying content. These are "low-level" operations that don't really require physical file I/O. These are the tests, decision-making, alternatives, etc. The "Logic" of the application. 
+ File system operations. Create, copy, rename, delete, backup. Sorry, but those are proper file system operations that -- well -- require a proper file system for testing. 
+ 
+
+ For this kind of testing, we often use a "Mock" object. You can design a "FileSystemOperations" class that embodies the various file system operations. You test this to be sure it does basic read, write, copy, rename, etc. There's no real logic in this. Just methods that invoke file system operations. 
+
+ You can then create a MockFileSystem which dummies out the various operations. You can use this Mock object to test your other classes. 
+
+ In some cases, all of your file system operations are in the os module. If that's the case, you can create a MockOS module with mock version of the operations you actually use. 
+
+ Put your MockOS module on the PYTHONPATH and you can conceal the real OS module. 
+
+ For production operations you use your well-tested "Logic" classes plus your FileSystemOperations class (or the real OS module.) 
+ #2 When I touch files in my code, I tend to prefer to mock the actual reading and writing of the file... so then I can give my classes exact contents I want in the test, and then assert that the test is writing back the contents I expect. 
+
+ I've done this in Java, and I imagine it is quite simple in Python... but it may require designing your classes/functions in such a way that it is EASY to mock the use of an actual file. 
+
+ For this, you can try passing in streams and then just pass in a simple string input/output stream which won't write to a file, or have a function that does the actual "write this string to a file" or "read this string from a file", and then replace that function in your tests. 
+ #3 You might want to setup the test so that it runs inside a chroot jail, so you have all the environment the test needs, even if paths and file locations are hardcoded in the code [not really a good practice, but sometimes one gets the file locations from other places...] and then check the results via the exit code. 
+ #4 I think you are on the right track. Depending on what you need to do chroot may help you set up an environment for your scrpits that 'looks' real, but isn't. 
+
+ If that doesn't work then you could write your scripts to take a 'root' path as an argument. 
+
+ In a production run the root path is just /. For testing you create a shadow environment under /tmp/test and then run your scripts with a root path of /tmp/test. 
+ #5 For later readers who just want a way to test that code writing to files is working correctly, here is a "fake_open" that patches the open builtin of a module to use StringIO. fake_open returns a dict of opened files which can be examined in a unit test or doctest, all without needing a real file-system. 
+
+ def fake_open(module):
+ """Patch module's `open` builtin so that it returns StringIOs instead of
+ creating real files, which is useful for testing. Returns a dict that maps
+ opened file names to StringIO objects."""
+ from contextlib import closing
+ from StringIO import StringIO
+ streams = {}
+ def fakeopen(filename,mode):
+  stream = StringIO()
+  stream.close = lambda: None
+  streams[filename] = stream
+  return closing(stream)
+ module.open = fakeopen
+ return streams

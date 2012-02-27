@@ -1,0 +1,96 @@
+Question (ID-2210581): Map List of Tuples into a Dictionary, python I've got a list of tuples extracted from a table in a DB which looks like ( key , foreignkey , value ). There is a many to one relationship between the key and foreignkeys and I'd like to convert it into a dict indexed by the foreignkey containing the sum of all values with that foreignkey, i.e. { foreignkey , sumof( value ) }. I wrote something that's rather verbose: 
+
+ myDict = {}
+for item in myTupleList:
+ if item[1] in myDict:
+  myDict [ item[1] ] += item[2]
+ else:
+  myDict [ item[1] ] = item[2]
+ 
+
+ but after seeing this question's answer or these two there's got to be a more concise way of expressing what I'd like to do. And if this is a repeat, I missed it and will remove the question if you can provide the link. 
+ Answers (Total-6): #0 Assuming all your values are int s, you could use a defaultdict to make this easier: 
+
+ from collections import defaultdict
+
+myDict = defaultdict(int)
+
+for item in myTupleList:
+ myDict[item[1]] += item[2]
+ 
+
+ defaultdict is like a dictionary, except if you try to get a key that isn't there it fills in the value returned by the callable - in this case, int , which returns 0 when called with no arguments. 
+
+ UPDATE: Thanks to @gnibbler for reminding me, but tuples can be unpacked in a for loop: 
+
+ from collections import defaultdict
+
+myDict = defaultdict(int)
+
+for _, key, val in myTupleList:
+ myDict[key] += val
+ 
+
+ Here, the 3-item tuple gets unpacked into the variables _ , key , and val . _ is a common placeholder name in Python, used to indicate that the value isn't really important. Using this, we can avoid the hairy item[1] and item[2] indexing. We can't rely on this if the tuples in myTupleList aren't all the same size, but I bet they are. 
+
+ (We also avoid the situation of someone looking at the code and thinking it's broken because the writer thought arrays were 1-indexed, which is what I thought when I first read the code. I wasn't alleviated of this until I read the question. In the above loop, however, it's obvious that myTupleList is a tuple of three elements, and we just don't need the first one.) 
+ #1 from collections import defaultdict
+
+myDict = defaultdict(int)
+
+for _, key, value in myTupleList:
+ myDict[key] += value
+ 
+ #2 Here's my (tongue in cheek) answer: 
+
+ myDict = reduce(lambda d, t: (d.__setitem__(t[1], d.get(t[1], 0) + t[2]), d)[1], myTupleList, {})
+ 
+
+ It is ugly and bad, but here is how it works. 
+
+ The first argument to reduce (because it isn't clear there) is lambda d, t: (d.__setitem__(t[1], d.get(t[1], 0) + t[2]), d)[1] . I will talk about this later, but for now, I'll just call it joe (no offense to any people named Joe intended). The reduce function basically works like this: 
+
+ joe(joe(joe({}, myTupleList[0]), myTupleList[1]), myTupleList[2])
+ 
+
+ And that's for a three element list. As you can see, it basically uses its first argument to sort of accumulate each result into the final answer. In this case, the final answer is the dictionary you wanted. 
+
+ Now for joe itself. Here is joe as a def : 
+
+ def joe(myDict, tupleItem):
+ myDict[tupleItem[1]] = myDict.get(tupleItem[1], 0) + tupleItem[2]
+ return myDict
+ 
+
+ Unfortunately, no form of = or return is allowed in a Python lambda so that has to be gotten around. I get around the lack of = by calling the dict s __setitem__ function directly. I get around the lack of return in by creating a tuple with the return value of __setitem__ and the dictionary and then return the tuple element containing the dictionary. I will slowly alter joe so you can see how I accomplished this. 
+
+ First, remove the = : 
+
+ def joe(myDict, tupleItem):
+ # Using __setitem__ to avoid using '='
+ myDict.__setitem__(tupleItem[1], myDict.get(tupleItem[1], 0) + tupleItem[2])
+ return myDict
+ 
+
+ Next, make the entire expression evaluate to the value we want to return: 
+
+ def joe(myDict, tupleItem):
+ return (myDict.__setitem__(tupleItem[1], myDict.get(tupleItem[1], 0) + tupleItem[2]),
+   myDict)[1]
+ 
+
+ I have run across this use-case for reduce and dict many times in my Python programming. In my opinion, dict could use a member function reduceto(keyfunc, reduce_func, iterable, default_val=None) . keyfunc would take the current value from the iterable and return the key. reduce_func would take the existing value in the dictionary and the value from the iterable and return the new value for the dictionary. default_val would be what was passed into reduce_func if the dictionary was missing a key. The return value should be the dictionary itself so you could do things like: 
+
+ myDict = dict().reduceto(lambda t: t[1], lambda o, t: o + t, myTupleList, 0)
+ 
+ #3 Maybe not exactly readable but it should work: 
+
+ fks = dict([ (v[1], True) for v in myTupleList ]).keys()
+myDict = dict([ (fk, sum([ v[2] for v in myTupleList if v[1] == fk ])) for fk in fks ])
+ 
+
+ The first line finds all unique foreign keys. The second line builds your dictionary by first constructing a list of (fk, sum(all values for this fk))-pairs and turning that into a dictionary. 
+ #4 Look at SQLAlchemy and see if that does all the mapping you need and perhaps more 
+ #5 If at all possible, it's usually more efficient to move this into the database, and run an SQL query such as: 
+
+ SELECT SUM(value) FROM table GROUP BY foreignkey

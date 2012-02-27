@@ -1,0 +1,159 @@
+<h3>Question (ID-1387644):</h3><h2>Verify CSV against given format</h2><p>I am expecting users to upload a CSV file of max size 1MB to a web form that should fit a given format similar to:</p>
+
+<pre><code>"&lt;String&gt;","&lt;String&gt;",&lt;Int&gt;,&lt;Float&gt;
+</code></pre>
+
+<p>That will be processed later. I would like to verify the file fits a specified format so that the program that shall later use the file doesnt receive unexpected input and that there are no security concerns (say some injection attack against the parsing script that does some calculations and db insert).</p>
+
+<p>(1) What would be the best way to go about doing this that would be fast and thorough? From what I've researched I could go the path of regex or something more like <a href="http://stackoverflow.com/questions/614469/regex-to-match-anything-except-certain-delimiters">this</a>. I've looked at the python csv module but that doesnt appear to have any built in verification.</p>
+
+<p>(2) Assuming I go for a regex, can anyone direct me to towards the best way to do this? Do I match for illegal characters and reject on that? (eg. no '/' '\' '&lt;' '>' '{' '}' etc.) or match on all legal eg. [a-zA-Z0-9]{1,10} for the string component? I'm not too familiar with regular expressions so pointers or examples would be appreciated. </p>
+
+<p>EDIT:
+Strings should contain no commas or quotes it would just contain a name (ie. first name, last name). And yes I forgot to add they would be double quoted.</p>
+
+<p>EDIT #2:
+Thanks for all the answers. Cutplace is quite interesting but is a standalone. Decided to go with pyparsing in the end because it gives more flexibility should I add more formats.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I'd vote for parsing the file, checking you've got 4 components per record, that the first two components are strings, the third is an int (checking for NaN conditions), and the fourth is a float (also checking for NaN conditions).</p>
+
+<p>Python would be an excellent tool for the job.</p>
+
+<p>I'm not aware of any libraries in Python to deal with validation of CSV files against a spec, but it really shouldn't be too hard to write.</p>
+
+<pre><code>import csv
+import math
+
+dataChecker = csv.reader(open('data.csv'))
+for row in dataChecker:
+    if len(row) != 4:
+        print 'Invalid row length.'
+        return
+
+    my_int = int(row[2])
+    my_float = float(row[3])
+
+    if math.isnan(my_int):
+        print 'Bad int found'
+        return
+
+    if math.isnan(my_float):
+        print 'Bad float found'
+        return
+
+print 'All good!'
+</code></pre>
+<br /><b>#1</b><br /><p>Here's a small snippet I made:</p>
+
+<pre><code>import csv 
+
+f = csv.reader(open("test.csv"))
+
+for value in f:
+    value[0] = str(value[0])
+    value[1] = str(value[1])
+    value[2] = int(value[2])
+    value[3] = float(value[3])
+</code></pre>
+
+<p>If you run that with a file that doesn't have the format your specified, you'll get an exception:</p>
+
+<pre><code>$ python valid.py 
+Traceback (most recent call last):
+  File "valid.py", line 8, in &lt;module&gt;
+    i[2] = int(i[2])
+ValueError: invalid literal for int() with base 10: 'a3'
+</code></pre>
+
+<p>You can then make a try-except ValueError to catch it and let the users know what they did wrong.</p>
+<br /><b>#2</b><br /><p>There can be a lot of corner-cases for parsing CSV, so you probably don't want to try doing it "by hand".  At least start with a package/library built-in to the language that you're using, even if it doesn't do all the "verification" you can think of.</p>
+
+<p>Once you get there, then examine the fields for your list of "illegal" chars, or examine the values in each field to determine they're valid (if you can do so). You also don't even need a regex for this task necessarily, but it may be more concise to do it that way.</p>
+
+<p>You might also disallow embedded \r or \n, \0 or \t. Just loop through the fields and check them after you've loaded the data with your csv lib.</p>
+<br /><b>#3</b><br /><p>Try <a href="http://cutplace.sourceforge.net/" rel="nofollow">Cutplace</a>. It verifies that tabluar data conforms to an <em>interface control document</em>.</p>
+<br /><b>#4</b><br /><p>Pyparsing will process this data, and will be tolerant of unexpected things like spaces before and after commas, commas within quotes, etc.  (csv module is too, but regex solutions force you to add "\s*" bits all over the place).</p>
+
+<pre><code>from pyparsing import *
+
+integer = Regex(r"-?\d+").setName("integer")
+integer.setParseAction(lambda tokens: int(tokens[0]))
+floatnum = Regex(r"-?\d+\.\d*").setName("float")
+floatnum.setParseAction(lambda tokens: float(tokens[0]))
+dblQuotedString.setParseAction(removeQuotes)
+COMMA = Suppress(',')
+validLine = dblQuotedString + COMMA + dblQuotedString + COMMA + \
+        integer + COMMA + floatnum + LineEnd()
+
+tests = """\
+"good data","good2",100,3.14
+"good data" , "good2", 100, 3.14
+bad, "good","good2",100,3.14
+"bad","good2",100,3
+"bad","good2",100.5,3
+""".splitlines()
+
+for t in tests:
+    print t
+    try:
+        print validLine.parseString(t).asList()
+    except ParseException, pe:
+        print pe.markInputline('?')
+        print pe.msg
+    print
+</code></pre>
+
+<p>Prints</p>
+
+<pre><code>"good data","good2",100,3.14
+['good data', 'good2', 100, 3.1400000000000001]
+
+"good data" , "good2", 100, 3.14
+['good data', 'good2', 100, 3.1400000000000001]
+
+bad, "good","good2",100,3.14
+?bad, "good","good2",100,3.14
+Expected string enclosed in double quotes
+
+"bad","good2",100,3
+"bad","good2",100,?3
+Expected float
+
+"bad","good2",100.5,3
+"bad","good2",100?.5,3
+Expected ","
+</code></pre>
+
+<p>You will probably be stripping those quotation marks off at some future time, pyparsing can do that at parse time by adding:</p>
+
+<pre><code>dblQuotedString.setParseAction(removeQuotes)
+</code></pre>
+
+<p>If you want to add comment support to your input file, say a '#' followed by the rest of the line, you can do this:</p>
+
+<pre><code>comment = '#' + restOfline
+validLine.ignore(comment)
+</code></pre>
+
+<p>You can also add names to these fields, so that you can access them by name instead of index position (which I find gives more robust code in light of changes down the road):</p>
+
+<pre><code>validLine = dblQuotedString("key") + COMMA + dblQuotedString("title") + COMMA + \
+        integer("qty") + COMMA + floatnum("price") + LineEnd()
+</code></pre>
+
+<p>And your post-processing code can then do this:</p>
+
+<pre><code>data = validLine.parseString(t)
+print "%(key)s: %(title)s, %(qty)d in stock at $%(price).2f" % data
+print data.qty*data.price
+</code></pre>
+<br /><b>#5</b><br /><p>Ideally, you want your filtering to be as restrictive as possible - the fewer things you allow, the fewer potential avenues of attack. For instance, a float or int field has a very small number of characters (and very few configurations of those characters) which should actually be allowed. String filtering should ideally be restricted to only what characters people would have a reason to input - without knowing the larger context it's hard to tell you exactly which you should allow, but at a bare minimum the string match regex should require quoting of strings and disallow anything that would terminate the string early.</p>
+
+<p>Keep in mind, however, that some names may contain things like single quotes ("O'Neil", for instance) or dashes, so you couldn't necessarily rule those out.</p>
+
+<p>Something like...</p>
+
+<pre><code>/"[a-zA-Z' -]+"/
+</code></pre>
+
+<p>...would probably be ideal for double-quoted strings which are supposed to contain names. You could replace the <code>+</code> with a <code>{x,y}</code> length min/max if you wanted to enforce certain lengths as well.</p>
+<br />

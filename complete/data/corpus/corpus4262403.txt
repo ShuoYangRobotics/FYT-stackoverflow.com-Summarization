@@ -1,0 +1,59 @@
+Question (ID-4262403): Keeping in-memory data in sync with a file for long running Python script I have a Python (2.7) script that acts as a server and it will therefore run for very long periods of time. This script has a bunch of values to keep track of which can change at any time based on client input. 
+
+ What I'm ideally after is something that can keep a Python data structure (with values of types dict , list , unicode , int and float – JSON, basically) in memory, letting me update it however I want (except referencing any of the reference type instances more than once) while also keeping this data up-to-date in a human-readable file, so that even if the power plug was pulled, the server could just start up and continue with the same data. 
+
+ I know I'm basically talking about a database, but the data I'm keeping will be very simple and probably less than 1 kB most of the time, so I'm looking for the simplest solution possible that can provide me with the described data integrity. Are there any good Python (2.7) libraries that let me do something like this? 
+ Answers (Total-6): #0 Well, since you know we're basically talking about a database, albeit a very simple one, you probably won't be surprised that I suggest you have a look at the sqlite3 module. 
+ #1 Any reason for the human readable requirement? 
+
+ I would suggest looking at sqlite for a simple database solution, or at pickle for a simple way to serialise objects and write them to disk. Neither is particularly human readable though. 
+
+ Other options are JSON, or XML as you hinted at - use the built in json module to serialize the objects then write that to disk. When you start up, check for the presence of that file and load the data if required. 
+
+ From the docs : 
+
+ &gt;&gt;&gt; import json
+&gt;&gt;&gt; print json.dumps({'4': 5, '6': 7}, sort_keys=True, indent=4)
+{
+ "4": 5,
+ "6": 7
+}
+ 
+ #2 I agree that you don't need a fully blown database, as it seems that all you want is atomic file writes . You need to solve this problem in two parts, serialisation/deserialisation, and the atomic writing. 
+
+ For the first section, json , or pickle are probably suitable formats for you. JSON has the advantage of being human readable. It doesn't seem as though this the primary problem you are facing though. 
+
+ Once you have serialised your object to a string, use the following procedure to write a file to disk atomically, assuming a single concurrent writer (at least on POSIX, see below): 
+
+ import os, platform
+backup_filename = "output.back.json"
+filename = "output.json"
+
+serialised_str = json.dumps(...)
+with open(backup_filename, 'wb') as f:
+  f.write(serialised_str)
+if platform.system() == 'Windows':
+  os.unlink(filename)
+os.rename(backup_filename, filename)
+ 
+
+ While os.rename is will overwrite an existing file and is atomic on POSIX, this is sadly not the case on Windows. On Windows, there is the possibility that os.unlink will succeed but os.rename will fail, meaning that you have only backup_filename and no filename . If you are targeting Windows, you will need to consider this possibility when you are checking for the existence of filename . 
+
+ If there is a possibility of more than one concurrent writer, you will have to consider a synchronisation construct. 
+ #3 Since you mentioned your data is small, I'd go with a simple solution and use the pickle module, which lets you dump a python object into a line very easily . 
+
+ Then you just set up a Thread that saves your object to a file in defined time intervals. 
+
+ Not a "libraried" solution, but - if I understand your requirements - simple enough for you not to really need one. 
+
+ EDIT: you mentioned you wanted to cover the case that a problem occurs during the write itself, effectively making it an atomic transaction. In this case, the traditional way to go is using "Log-based recovery". It is essentially writing a record to a log file saying that "write transaction started" and then writing "write transaction comitted" when you're done. If a "started" has no corresponding "commit", then you rollback. 
+
+ In this case, I agree that you might be better off with a simple database like SQLite. It might be a slight overkill, but on the other hand, implementing atomicity yourself might be reinventing the wheel a little (and I didn't find any obvious libraries that do it for you). 
+
+ If you do decide to go the crafty way, this topic is covered on the Process Synchronization chapter of Silberschatz's Operating Systems book, under the section "atomic transactions". 
+
+ A very simple (though maybe not "transactionally perfect") alternative would be just to record to a new file every time, so that if one corrupts you have a history. You can even add a checksum to each file to automatically determine if it's broken. 
+ #4 You are asking how to implement a database which provides ACID guarantees, but you haven't provided a good reason why you can't use one off-the-shelf. SQLite is perfect for this sort of thing and gives you those guarantees. 
+
+ However, there is KirbyBase . I've never used it and I don't think it makes ACID guarantees, but it does have some of the characteristics you're looking for. 
+ #5 How about Memcached or Redis?

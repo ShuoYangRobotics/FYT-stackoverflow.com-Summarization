@@ -1,0 +1,202 @@
+Question (ID-305359): Correct way to detect sequence parameter? I want to write a function that accepts a parameter which can be either a sequence or a single value. The type of value is str, int, etc., but I don't want it to be restricted to a hardcoded list. 
+In other words, I want to know if the parameter X is a sequence or something I have to convert to a sequence to avoid special-casing later. I could do 
+
+ type(X) in (list, tuple) 
+
+ but there may be other sequence types I'm not aware of, and no common base class. 
+
+ -N. 
+
+ Edit : See my "answer" below for why most of these answers don't help me. Maybe you have something better to suggest. 
+ Answers (Total-12): #0 As of 2.6, use abstract base classes . 
+
+ &gt;&gt;&gt; import collections
+&gt;&gt;&gt; isinstance([], collections.Sequence)
+True
+&gt;&gt;&gt; isinstance(0, collections.Sequence)
+False
+ 
+
+ Furthermore ABC's can be customized to account for exceptions, such as not considering strings to be sequences. Here an example: 
+
+ import abc
+import collections
+
+class Atomic(object):
+ __metaclass__ = abc.ABCMeta
+ @classmethod
+ def __subclasshook__(cls, other):
+  return not issubclass(other, collections.Sequence) or NotImplemented
+
+Atomic.register(basestring)
+ 
+
+ After registration the Atomic class can be used with isinstance and issubclass : 
+
+ assert isinstance("hello", Atomic) == True
+ 
+
+ This is still much better than a hard-coded list, because you only need to register the exceptions to the rule, and external users of the code can register their own. 
+
+ In older versions, there are type checkers in the operator module. 
+
+ &gt;&gt;&gt; import operator
+&gt;&gt;&gt; operator.isSequenceType([])
+True
+&gt;&gt;&gt; operator.isSequenceType(0)
+False
+ 
+ #1 Sequences are described here:
+ http://www.python.org/doc/2.5.2/lib/typesseq.html 
+
+ So sequences are not the same as iterable objects. I think sequence must implement
+ __getitem__ , whereas iterable objects must implement __iter__ .
+So for example string are sequences and don't implement __iter__ , xrange objects are sequences and don't implement __getslice__ . 
+
+ But from what you seen to want to do, I'm not sure you want sequences, but rather iterable objects.
+So go for hasattr("__getitem__", X) you want sequences, but go rather hasattr("__iter__", X) if you don't want strings for example. 
+ #2 IMHO, the python way is to pass the list as *list. As in: 
+
+ myfunc(item)
+myfunc(*items)
+ 
+ #3 
+ The problem with all of the above
+ mentioned ways is that str is
+ considered a sequence (it's iterable,
+ has getitem , etc.) yet it's
+ usually treated as a single item. 
+ 
+ For example, a function may accept an
+ argument that can either be a filename
+ or a list of filenames. What's the
+ most Pythonic way for the function to
+ detect the first from the latter? 
+ 
+
+ Based on the revised question, it sounds like what you want is something more like: 
+
+ def to_sequence(arg):
+ ''' 
+ determine whether an arg should be treated as a "unit" or a "sequence"
+ if it's a unit, return a 1-tuple with the arg
+ '''
+ def _multiple(x): 
+  return hasattr(x,"__iter__")
+ if _multiple(arg): 
+  return arg
+ else:
+  return (arg,)
+
+&gt;&gt;&gt; to_sequence("a string")
+('a string',)
+&gt;&gt;&gt; to_sequence( (1,2,3) )
+(1, 2, 3)
+&gt;&gt;&gt; to_sequence( xrange(5) )
+xrange(5)
+ 
+
+ This isn't guaranteed to handle all types, but it handles the cases you mention quite well, and should do the right thing for most of the built-in types. 
+
+ When using it, make sure whatever receives the output of this can handle iterables. 
+ #4 In cases like this, I prefer to just always take the sequence type or always take the scalar. Strings won't be the only types that would behave poorly in this setup; rather, any type that has an aggregate use and allows iteration over its parts might misbehave. 
+ #5 The simplest method would be to check if you can turn it into an iterator. ie 
+
+ try:
+ it = iter(X)
+ # Iterable
+except TypeError:
+ # Not iterable
+ 
+
+ If you need to ensure that it's a restartable or random access sequence (ie not a generator etc), this approach won't be sufficient however. 
+
+ As others have noted, strings are also iterable, so if you need so exclude them (particularly important if recursing through items, as list(iter('a')) gives ['a'] again, then you may need to specifically exclude them with: 
+
+ if not isinstance(X, basestring)
+ 
+ #6 Revised answer: 
+
+ I don't know if your idea of "sequence" matches what the Python manuals call a " Sequence Type ", but in case it does, you should look for the __Contains__ method. That is the method Python uses to implement the check "if something in object:" 
+
+ if hasattr(X, '__contains__'):
+ print "X is a sequence"
+ 
+
+ My original answer: 
+
+ I would check if the object that you received implements an iterator interface: 
+
+ if hasattr(X, '__iter__'):
+ print "X is a sequence"
+ 
+
+ For me, that's the closest match to your definition of sequence since that would allow you to do something like: 
+
+ for each in X:
+ print each
+ 
+ #7 I'm new here so I don't know what's the correct way to do it. I want to answer my answers: 
+
+ The problem with all of the above mentioned ways is that str is considered a sequence (it's iterable, has __getitem__ , etc.) yet it's usually treated as a single item. 
+
+ For example, a function may accept an argument that can either be a filename or a list of filenames. What's the most Pythonic way for the function to detect the first from the latter? 
+
+ Should I post this as a new question? Edit the original one? 
+ #8 If strings are the problem, detect a sequence and filter out the special case of strings: 
+
+ def is_iterable(x):
+ if type(x) == str:
+ return False
+ try:
+ iter(x)
+ return True
+ except TypeError:
+ return False
+ 
+ #9 I think what I would do is check whether the object has certain methods that indicate it is a sequence. I'm not sure if there is an official definition of what makes a sequence. The best I can think of is, it must support slicing. So you could say: 
+
+ is_sequence = '__getslice__' in dir(X)
+ 
+
+ You might also check for the particular functionality you're going to be using. 
+
+ As pi pointed out in the comment, one issue is that a string is a sequence, but you probably don't want to treat it as one. You could add an explicit test that the type is not str. 
+ #10 You're asking the wrong question. You don't try to detect types in Python; you detect behavior. 
+
+ 
+ Write another function that handles a single value. (let's call it _use_single_val). 
+ Write one function that handles a sequence parameter. (let's call it _use_sequence). 
+ Write a third parent function that calls the two above. (call it use_seq_or_val). Surround each call with an exception handler to catch an invalid parameter (i.e. not single value or sequence). 
+ Write unit tests to pass correct &amp; incorrect parameters to the parent function to make sure it catches the exceptions properly. 
+ 
+
+ 
+ def _use_single_val(v):
+  print v + 1 # this will fail if v is not a value type
+
+ def _use_sequence(s):
+  print s[0] # this will fail if s is not indexable
+
+ def use_seq_or_val(item): 
+  try:
+   _use_single_val(item)
+  except TypeError:
+   pass
+
+  try:
+   _use_sequence(item)
+  except TypeError:
+   pass
+
+  raise TypeError, "item not a single value or sequence"
+ 
+
+ EDIT: Revised to handle the "sequence or single value" asked about in the question. 
+ #11 You could pass your parameter in the built-in len() function and check whether this causes an error. As others said, the string type requires special handling. 
+
+ According to the documentation the len function can accept a sequence (string, list, tuple) or a dictionary. 
+
+ You could check that an object is a string with the following code: 
+
+ x.__class__ == "".__class__

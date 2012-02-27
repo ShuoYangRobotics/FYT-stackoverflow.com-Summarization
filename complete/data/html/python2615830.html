@@ -1,0 +1,61 @@
+<h3>Question (ID-2615830):</h3><h2>Storing URLs while Spidering</h2><p>I created a little web spider in python which I'm using to collect URLs. I'm not interested in the content. Right now I'm keeping all the visited URLs in a set in memory, because I don't want my spider to visit URLs twice. Of course that's a very limited way of accomplishing this.</p>
+
+<p>So what's the best way to keep track of my visited URLs? </p>
+
+<p>Should I use a database?
+* which one? MySQL, sqlite, postgre? 
+* how should I save the URLs? As a primary key trying to insert every URL before visiting it?</p>
+
+<p>Or should I write them to a file?
+* one file?
+* multiple files? how should I design the file-structure?</p>
+
+<p>I'm sure there are books and a lot of papers on this or similar topics. Can you give me some advice what I should read?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I've written a lot of spiders. To me, a bigger problem than running out of memory is the potential of losing all the URLs you've spidered already if the code or machine crashes or you decide you need to tweak the code. If you run out of RAM most machines and OSes these days will page so you'll slow down but still function. Having to rebuild a set of URLs gathered over hours and hours of run-time because its no longer available can be a real blow to productivity.</p>
+
+<p>Keeping information in RAM that you do NOT want to lose is bad. Obviously a database is the way to go at that point because you need fast random access to see if you've already found a URL. Of course in-memory lookups are faster but the trade-off of figuring out WHICH urls to keep in memory adds overhead. Rather than try writing code to determine which URLs I need/don't-need, I keep it in the database and concentrate on making my code clean and maintainable and my SQL queries and schemas sensible. Make your URL field a unique index and the DBM will be able to find them in no time while automatically avoiding redundant links.</p>
+
+<p>Your connection to the internet and sites you're accessing will probably be a lot slower than your connection to a database on a machine on your internal network. A SQLite database on the same machine might be the fastest, though the DBM itself isn't as sophisticated as Postgres, which is my favorite. I found that putting the database on another machine on the same switch as my spidering machine to be extremely fast; Making one machine handle the spidering, parsing, and then the database reads/writes is pretty intensive so if you have an old box throw Linux on it, install Postgres, and go to town. Throw some extra RAM in the box if you need more speed. Having that separate box for database use can be very nice.</p>
+<br /><b>#1</b><br /><p>These seem to be the important aspects to me:</p>
+
+<ol>
+<li>You can't keep the URLs in memory as RAM will get too high</li>
+<li>You need fast existence lookups at least O(logn)</li>
+<li>You need fast insertions </li>
+</ol>
+
+<p>There are many ways to do this and it depends on how big your database will get.  I think an SQL database can provide a good model for your problem.  </p>
+
+<p>Probably all you need is an sqlite database.  Typically string lookups for existence check is a slow operation.  To speed this up you can create a CRC hash of the URL and store both the CRC and URL in your database.  You would have an index on that CRC field. </p>
+
+<ul>
+<li>When you insert: You insert the URL and the hash</li>
+<li>When you want to do an existance lookup: You take the CRC of the potentially new URL and check if it is in your database already.   </li>
+</ul>
+
+<p>There is of course a chance of collision on the URL hashes, but if 100% spanning is not important to you then you can take the hit of not having a URL in your db when there is a collision.  </p>
+
+<p>You could also decrease collisions in many ways.  For example you can increase the size of your CRC (CRC8 instead of CRC4) and use a hashing algorithm with a bigger size.  Or use CRC as well as URL length.  </p>
+<br /><b>#2</b><br /><p>Are you just storing URL's?  You should take a look at mongoDB.  It's a NoSQL database that's pretty easy to implement.</p>
+
+<p><a href="http://try.mongodb.org/" rel="nofollow">http://try.mongodb.org/</a></p>
+
+<p>It's got python bindings, too:</p>
+
+<p><a href="http://api.mongodb.org/python/1.5.2%2B/index.html" rel="nofollow">http://api.mongodb.org/python/1.5.2%2B/index.html</a></p>
+<br /><b>#3</b><br /><p>It depends on the scale of the spidering you're going to be doing, and the kind of machine you're doing it on.  Suppose a typical URL is a string of 60 bytes or so, an in-memory set will take a bit more than 100 bytes per URL (sets and dicts in Python are never allowed to grow beyond 60% full, for speed reasons).  If you have a 64-bit machine (and Python distro) with about 16 GB of RAM available, you could surely devote over 10 GB to the crucial set in question, letting you easily spider about 100 million URLs or so; but at the other extreme, if you have a 32-bit machine with 3GB of RAM, you clearly can't devote much more than a GB to the crucial set, limiting you to about 10 million URLs.  Sqlite would help around the same range of sized where a 32-bit machine couldn't make it but a generously-endowed 64-bit one could -- say 100 or 200 million URLs.</p>
+
+<p>Beyond those, I'd recommend PostgreSQL, which also has the advantage of being able to run on a different machine (on a fast LAN) with basically no problems, letting you devote your main machine to spidering.  I guess MySQL &amp;c would be OK for that too, but I love PostgreSQL standard compliance and robustness;-).  This would allow, say, a few billion URLs with no problems (just a fast disk, or better a RAID arrangement, and as much RAM as you can afford to speed things up, of course).</p>
+
+<p>Trying to save memory/storage by using a fixed-length hash in lieu of URLs that might be quite long is fine <strong>if</strong> you're OK with an occasional false positive that will stop you from crawling what's actually a new URL.  Such "collisions" need not be at all likely: even if you only use 8 bytes for the hash, you should only have a substantial risk of some collision when you're looking at billions of URLs (the "square root heuristic" for this well-known problem).</p>
+
+<p>With 8-bytes strings to represent the URLs, the in-memory set architecture should easily support a billion URLs or more on a well-endowed machine as above outlined.</p>
+
+<p>So, roughly how many URLs do you want to spider, and how much RAM can you spare?-)</p>
+<br /><b>#4</b><br /><p>Since it's likely that you'll see similar URLs at similar times (e.g., while spidering a website, you'll see lots of links to the main page of the website) I would advise that you keep the URLs in a dictionary until your memory becomes limited (just hardcode a reasonable number like 10M URLs or similar) and then flush the dictionary to a <a href="http://pypi.python.org/pypi/python-cdb/0.32" rel="nofollow">CDB database file</a> when it becomes too large.</p>
+
+<p>That way, the majority of your URL checks will be in memory (which is fast) while the ones that aren't in memory will still require only 1-2 reads from disk to verify that you've visited them.</p>
+<br /><b>#5</b><br /><p>Consider <a href="http://docs.python.org/library/pickle.html" rel="nofollow">Pickling</a> for now: Simple structured storage. </p>
+
+<p>Mileage will vary of course because, as the other responders have said, you'll quickly exhaust your RAM.</p>
+<br />

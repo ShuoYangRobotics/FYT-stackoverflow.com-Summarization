@@ -1,0 +1,139 @@
+<h3>Question (ID-431910):</h3><h2>Is possible send a array in Obj-c for a variable arguments function?</h2><p>in python is easy build a dictionary or array and pass it unpacked to a function with variable parameters</p>
+
+<p>I have this:</p>
+
+<pre><code>- (BOOL) executeUpdate:(NSString*)sql, ... {
+</code></pre>
+
+<p>And the manual way is do this:</p>
+
+<pre><code>[db executeUpdate:@"insert into test (a, b, c, d, e) values (?, ?, ?, ?, ?)" ,
+  @"hi'", // look!  I put in a ', and I'm not escaping it!
+  [NSString stringWithFormat:@"number %d", i],
+  [NSNumber numberWithInt:i],
+  [NSDate date],
+  [NSNumber numberWithFloat:2.2f]];
+</code></pre>
+
+<p>But I can't hardcode the parameters where I calling, I want:</p>
+
+<pre><code>NSMutableArray *values = [NSMutableArray array];
+
+for (NSString *fieldName in props) {
+  ..
+  ..
+  [values addObject : value]
+}
+[db executeUpdate:@"insert into test (a, b, c, d, e) values (?, ?, ?, ?, ?)" ,??values];
+</code></pre>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Unfortunately, no. Objective-C doesn't have argument unpacking like you get in a lot of modern languages. There isn't even a good way to work around it that I've ever found.</p>
+
+<p>Part of the problem is that Objective-C is essentially just C. It does multiple argument passing with C varargs, and there's no simple way to do this with varargs. <a href="http://stackoverflow.com/questions/280940/calling-a-c-function-with-a-varargs-argument-dynamically">A relevant SO discussion</a>.</p>
+<br /><b>#1</b><br /><p>I wanted to do the same thing.  I came up with the following, which works fine, given some constraints on the input variables.</p>
+
+<pre><code>NSArray* VarArgs(va_list ap)
+{
+  id obj;
+  NSMutableArray* array = [NSMutableArray array];
+
+  while ((obj = va_arg(ap, id))) {
+    [array addObject:obj];
+  }
+  return array;
+}
+
+#define VarArgs2(_last_) ({ \
+  va_list ap; \
+  va_start(ap, _last_); \
+  NSArray* __args = VarArgs(ap); \
+  va_end(ap); \
+  if (([__args count] == 1) &amp;&amp; ([[__args objectAtIndex:0] isKindOfClass:[NSArray class]])) { \
+    __args = [__args objectAtIndex:0]; \
+  } \
+__args; })
+</code></pre>
+
+<p>Using the above, I can call the following with either an NSArray or with varargs.</p>
+
+<pre><code>// '...' must be objc objects with nil sentinel OR an NSArray with nil sentinel
+- (void)someMethod:(NSString *)sql, ...
+{
+   NSArray *args = VarArgs2(sql);
+
+   // Do stuff with args
+}
+</code></pre>
+
+<p>One more tip is to use the following in the prototype to have the compiler check for the nil sentinel to avoid potential bad things.  I got this out of the apple headers...</p>
+
+<pre><code>- (void)someMethod:(NSString *)sql, ... NS_REQUIRES_NIL_TERMINATION;
+</code></pre>
+<br /><b>#2</b><br /><p>To accomplish what you want, you have to use "varargs", as your method uses, or you can pass in an array of values, something like <code>[db executeUpdate:sql withValues:vals];</code>, and then pull out the values in the method. But there's no way to do something more "Pythonic", such as automatically unpacking a tuple of values, á la <code>def executeUpdate(sql, *args)</code>.</p>
+<br /><b>#3</b><br /><p>Unfortunately (Objective-)C doesn't provide a way to do that. The executeUpdate method would need to accept an NSArray instead of variable argument list in this case.</p>
+
+<p>However, if you do know the amount of entries in the array (you have the amount in the string in the example anyway), you can of course do something like</p>
+
+<pre><code>[db executeUpdate:@"insert into test (a, b) values (?, ?)", [values objectAtIndex:0], [values objectAtIndex:1]]
+</code></pre>
+
+<p>If executeUpdate is an external library method and that library does not offer a version of the method accepting an NSArray, you could come up with your own wrapper function. The function would take the query string and an array as argument. This function would then call the executeUpdate method with correct amount of arguments based on the length of the array, something along the lines of</p>
+
+<pre><code>if ([values count] == 1) {
+  [db executeUpdate:query, [values objectAtIndex:0]];
+}
+else if ([values count] == 2) {
+  [db executeUpdate:query, [values objectAtIndex:0], [values objectAtIndex:1]];
+}
+</code></pre>
+
+<p>you could then call this new function as</p>
+
+<pre><code>executeUpdateWrapper(@"insert into test (a, b) values (?, ?)", values);
+</code></pre>
+
+<p>The obvious drawback in this solution is that you need to handle all possible lengths of the array separately in the function and it has a lot of copy-paste code.</p>
+<br /><b>#4</b><br /><p>There is a nice example how you can go from NSArray to va_list here (see "va_list in Cocoa" and "Creating a fake va_list" sections towards the bottom): </p>
+
+<p><a href="http://cocoawithlove.com/2009/05/variable-argument-lists-in-cocoa.html" rel="nofollow">http://cocoawithlove.com/2009/05/variable-argument-lists-in-cocoa.html</a></p>
+
+<p>Here is a teaser ("arguments" is NSArray):</p>
+
+<pre><code>char *argList = (char *)malloc(sizeof(NSString *) * [arguments count]);
+[arguments getObjects:(id *)argList];
+contents = [[NSString alloc] initWithFormat:formatString arguments:argList];
+free(argList);
+</code></pre>
+
+<p>Not quite python or ruby, but hey...</p>
+<br /><b>#5</b><br /><p>You should use new FMDB version <a href="http://github.com/ccgus/fmdb" rel="nofollow">http://github.com/ccgus/fmdb</a>. It has the method you need:</p>
+
+<pre><code>- (BOOL) executeUpdate:(NSString*)sql withArgumentsInArray:(NSArray *)arguments;
+</code></pre>
+<br /><b>#6</b><br /><p>additionally to robottobor's solution:
+if you add the following macro:</p>
+
+<pre><code>#define splitAlternatingArray(args,arg1,arg2) \
+NSMutableArray *arg1 = [NSMutableArray array];\
+NSMutableArray *arg2 = [NSMutableArray array];\
+{\
+  BOOL isFirst = YES;\
+  for (id arg in args) {\
+    if (isFirst) {\
+        [arg1 addObject:arg];\
+    } else {\
+        [arg2 addObject:arg];\
+    }\
+    isFirst = !isFirst;\
+  }\
+}
+</code></pre>
+
+<p>you can then do tricky things like:</p>
+
+<pre><code>- (id)initWithObjectsAndKeys:(id)firstObject, ...{
+    NSArray *objKeyArray = VarArgs2(firstObject);
+    splitAlternatingArray(objKeyArray,objs,keys);
+    return [self initWithObjects:objs forKeys:keys];
+}
+</code></pre>
+<br />

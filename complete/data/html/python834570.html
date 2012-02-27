@@ -1,0 +1,87 @@
+<h3>Question (ID-834570):</h3><h2>How to do fuzzy string search without a heavy database?</h2><p>I have a mapping of catalog numbers to product names:</p>
+
+<pre><code>35  cozy comforter
+35  warm blanket
+67  pillow
+</code></pre>
+
+<p>and <strong>need a search that would find misspelled, mixed names like "warm cmfrter"</strong>.</p>
+
+<p>We have code using edit-distance (difflib), but it probably won't scale to the 18000 names.</p>
+
+<p>I achieved something similar with Lucene, but as <a href="http://lucene.apache.org/pylucene/" rel="nofollow">PyLucene</a> only wraps Java that would complicate deployment to end-users.</p>
+
+<p>SQLite doesn't usually have full-text or scoring compiled in.</p>
+
+<p>The <a href="http://www.xapian.org/docs/bindings/python/" rel="nofollow">Xapian bindings</a> are like C++ and have some learning curve.</p>
+
+<p><a href="http://whoosh.ca/" rel="nofollow">Whoosh</a> is not yet well-documented but includes an abusable spell-checker.</p>
+
+<p>What else is there?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p><a href="http://nucular.sourceforge.net" rel="nofollow">Nucular</a>
+has full text search, but it doesn't support misspelled matches
+out-of-the box.  You could try adding an additional field to each entry
+which indexes the
+<a href="http://code.activestate.com/recipes/52213/" rel="nofollow">SOUNDEX</a> translation of the terms and then search using the soundex translation
+of the user input.  I really don't know how well this would work...</p>
+
+<p>Take a look at advas <a href="http://advas.sourceforge.net/news.php" rel="nofollow">http://advas.sourceforge.net/news.php</a> which has a nice demo comparing various soundex-alike methods:</p>
+
+<pre><code>advas/examples Aaron$ python phonetic_algorithms.py 
+                    soundex       metaphone           nyiis      caverphone 
+====================================================================================================
+ schmidt :             S253           sxmtt          sssnad      SKMT111111
+  schmid :             S253            sxmt          sssnad      SKMT111111
+ schmitt :             S253            sxmt         sssnatt      SKMT111111
+   smith :             S530            sm0h           snatt      SMT1111111
+  smythe :             S530           smy0h           snatt      SMT1111111
+ schmied :             S253            sxmt         sssnaad      SKMT111111
+   mayer :             M600             myr           naaar      MA11111111
+   meier :             M600              mr           naaar      MA11111111
+....
+</code></pre>
+
+<p>I don't know if any of them is good for your unnamed language...</p>
+<br /><b>#1</b><br /><p>You will get too many false positives with the SOUNDEX implementation. There are only 26,000 (at most) possible SOUNDEX codes.</p>
+
+<p>Though the Metaphone algorithim was designed for English surnames, it works pretty well for misspellings; I used it once in a branch locator and it was quite successful. </p>
+
+<p>Add a field with the Metaphone translation and match against it if no exact match is found. You will still get false positives, but fewer that with other algorithims.</p>
+<br /><b>#2</b><br /><p>The usual way of computing the edit-distance between two strings is a rather expensive algorithm (if I remember correctly, its time complexity is quadratic). Maybe if you used a different string similarity metric then your problem would go away.</p>
+
+<p>One of my favorite methods for fuzzy string matching is [trigrams matching]. Comparing two strings using this method has a linear time complexity, which is much better than the mentioned edit-distance. You can find my Python implementation on [Github]. There's also a PostgreSQL [contrib module] exactly for that. It shouldn't be too difficult to adapt it to work with SQLite3.</p>
+<br /><b>#3</b><br /><p>Apparently the only way to make fuzzy comparisons fast is to do less of them ;)</p>
+
+<p>Instead of writing another n-gram search or improving the one in Whoosh we now keep a word index, retrieve all entries that have at least one (correctly spelled) word in common with the query, and use difflib to rank those. Works well enough in this case.</p>
+<br /><b>#4</b><br /><p>Go to www.matchlogics.com. </p>
+<br /><b>#5</b><br /><p><a href="http://www.sybase.com/products/databasemanagement/sqlanywhere" rel="nofollow">Sybase SQL Anywhere</a> has a free Web edition/Developer Edition and comes with full text indexing/search and a FUZZY operator (and some implementation constraints). </p>
+
+<p>To quote from the documentation:</p>
+
+<pre><code>Specifying 'FUZZY "500 main street"' is equivalent to 
+'500 OR mai OR ain OR str OR tre OR ree OR eet'.
+</code></pre>
+
+<p>An other approach would be to use scoring on full-text searches.</p>
+<br /><b>#6</b><br /><p>sqlite3 supports python callback functions.  Matthew Barnett's regex (http://code.google.com/p/mrab-regex-hg/) now supports approximate matching.</p>
+
+<p>So, like this:</p>
+
+<pre><code>try:
+    import regex
+except ImportError:
+    sys.stderr.write("Can't import mrab-regex; see http://pypi.python.org/pypi/regex\n")
+    sys.exit(1)
+
+def _sqlite3_regex(expr, item):
+    return (not (not regex.search(expr, item)))
+
+def main():
+    ...
+    database = sqlite3.connect(dbfile)
+    database.create_function("regexp", 2, _sqlite3_regex)
+    pattern = '(?:%s){e&lt;=%d}' % (queriedname, distance)
+    print [x for x in database.cursor().execute(
+         "SELECT * FROM products WHERE (productname regexp '%s')" % pattern)]
+</code></pre>
+<br />

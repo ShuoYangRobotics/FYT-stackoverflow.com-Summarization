@@ -1,0 +1,202 @@
+<h3>Question (ID-2770038):</h3><h2>Python: create a function to modify a list by reference not value</h2><p>I'm doing some performance-critical Python work and want to create a function that removes a few elements from a list if they meet certain criteria.  I'd rather not create any copies of the list because it's filled with a lot of really large objects. </p>
+
+<p>Functionality I want to implement:</p>
+
+<pre><code>def listCleanup(listOfElements):
+    i = 0
+    for element in listOfElements:
+        if(element.meetsCriteria()):
+            del(listOfElements[i])
+        i += 1
+    return listOfElements
+
+myList = range(10000)
+myList = listCleanup(listOfElements)
+</code></pre>
+
+<p>I'm not familiar with the low-level workings of Python.  Is myList being passed by value or by reference?   </p>
+
+<p>How can I make this faster?</p>
+
+<p>Is it possible to somehow extend the list class and implement listCleanup() within that?</p>
+
+<pre><code>myList = range(10000)
+myList.listCleanup()
+</code></pre>
+
+<p>Thanks-</p>
+
+<p>Jonathan</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Python passes everything the same way, but calling it "by value" or "by reference" will not clear everything up, since Python's semantics are different than the languages for which those terms usually apply. If I was to describe it, I would say that all passing was by value, and that the value was an object reference. (This is why I didn't want to say it!)</p>
+
+<p>If you want to filter out some stuff from a list, you build a new list</p>
+
+<pre><code>foo = range(100000)
+new_foo = []
+for item in foo:
+    if item % 3 != 0: # Things divisble by 3 don't get through
+        new_foo.append(item)
+</code></pre>
+
+<p>or, using the list comprehension syntax</p>
+
+<pre><code> new_foo = [item for item in foo if item % 3 != 0]
+</code></pre>
+
+<p>Python will not copy the objects in the list, but rather both <code>foo</code> and <code>new_foo</code> will reference the same objects. (Python never implicitly copies any objects.)</p>
+
+<hr>
+
+<p>You have suggested you have performance concerns about this operation. Using repeated  <code>del</code> statements from the old list will result in not code that is less idiomatic and more confusing to deal with, but it will introduce quadratic performance because the whole list must be reshuffled each time. </p>
+
+<p>To address performance:</p>
+
+<ul>
+<li><p><strong>Get it up and running.</strong> You can't figure out what your performance is like unless you have code working. This will also tell you whether it is speed or space that you must optimize for; you mention concerns about both in your code, but oftentimes optimization  involves getting one at the cost of the other.</p></li>
+<li><p><strong>Profile.</strong> You can use <a href="http://docs.python.org/library/profile.html" rel="nofollow">the stdlib tools</a> for performance in time. There are various third-party memory profilers that can be somewhat useful but aren't quite as nice to work with.</p></li>
+<li><p><strong>Measure.</strong> <a href="http://docs.python.org/library/timeit.html" rel="nofollow">Time</a> or reprofile memory when you make a change to see if a change makes an improvement and if so what that improvement is.</p></li>
+<li><p>To make your code more memory-sensitive, you will often want a paradigm shift in how you store your data, not microoptimizastions like not building a second list to do filtering. (The same is true for time, really: changing to a better algorithm will almost always give the best speedup. However, it's harder to generalize about speed optimizations).</p>
+
+<p>Some common paradigm shifts to optimize memory consumption in Python include</p>
+
+<ol>
+<li><p>Using Generators. Generators are lazy iterables: they don't load a whole list into memory at once, they figure out what their next items are on the fly. To use generators, the snippets above would look like </p>
+
+<pre><code>foo = xrange(100000) # Like generators, xrange is lazy
+def filter_divisible_by_three(iterable):
+    for item in foo:
+        if item % 3 != 0:
+            yield item
+
+
+new_foo = filter_divisible_by_three(foo)
+</code></pre>
+
+<p>or, using the generator expression syntax, </p>
+
+<pre><code>new_foo = (item for item in foo if item % 3 != 0)
+</code></pre></li>
+<li><p>Using <code>numpy</code> for homogenous sequences, especially ones that are numerical-mathy. This can also speed up code that does lots of vector operations.</p></li>
+<li><p>Storing data to disk, such as in a database.</p></li>
+</ol></li>
+</ul>
+<br /><b>#1</b><br /><p>In Python, lists are always passed by reference.</p>
+
+<p>The size of the objects in the list doesn't affect the lists performance, because the lists only stores references to the objects.  However, the number of items in the list does affect the performance of some operations - such as removing an element, which is O(n).</p>
+
+<p>As written, listCleanup is worst-case O(n**2), since you have the O(n) del operation within a loop that is potentially O(n) itself.</p>
+
+<p>If the order of the elements doesn't matter, you may be able to use the built-in <code>set</code> type instead of a list.  The <code>set</code> has O(1) deletions and insertions.  However, you will have to ensure that your objects are immutable and hashable.</p>
+
+<p>Otherwise, you're better off recreating the list.  That's O(n), and your algorithm needs to be at least O(n) since you need to examine every element.  You can filter the list in one line like this:</p>
+
+<pre><code>listOfElements[:] = [el for el in listOfElements if el.MeetsCriteria()]
+</code></pre>
+<br /><b>#2</b><br /><p>Looks like premature optimization. You should try to get a better understanding of how python works before trying to optimize.</p>
+
+<p>In this particular case you don't need to worry about object size. Copying a list is using list comprehension or slice will only perform surface copy (copy references to objects even if the term does not really apply well to python). But the number of items in the list may matter because del is O(n). There may be other solutions, like replacing an item with None or a conventional Null object, or using another data structure like a set or a dictionary where cost of deleting item is much lower.</p>
+<br /><b>#3</b><br /><p>Deleting list elements in-situ is possible, but not by going forwards through the list. Your code just plain doesn't work -- as the list shrinks, you can miss out examining elements. You need to go backwards, so that the shrinking part is behind you, with rather horrid code. Before I show you that, there are some preliminary considerations:</p>
+
+<p>First, how did that rubbish get into the list? Prevention is better than cure.</p>
+
+<p>Second, how many elements in the list, and what percentage are likely to need deletion? The higher the percentage, the greater the likelihood that it's better to create a new list.</p>
+
+<p>OK, if you still want to do it in-situ, contemplate this:</p>
+
+<pre><code>def list_cleanup_fail(alist, is_bad):
+    i = 0
+    for element in alist:
+        print "i=%d alist=%r alist[i]=%d element=%d" % (i, alist, alist[i], element)
+        if is_bad(element):
+            del alist[i]
+        i += 1
+
+def list_cleanup_ok(alist, is_bad):
+    for i in xrange(len(alist) - 1, -1, -1):
+        print "i=%d alist=%r alist[i]=%d" % (i, alist, alist[i])
+        if is_bad(alist[i]):
+            del alist[i]
+
+def is_not_mult_of_3(x):
+    return x % 3 != 0
+
+for func in (list_cleanup_fail, list_cleanup_ok):
+    print
+    print func.__name__
+    mylist = range(11)
+    func(mylist, is_not_mult_of_3)
+    print "result", mylist
+</code></pre>
+
+<p>and here is the output:</p>
+
+<pre><code>list_cleanup_fail
+i=0 alist=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] alist[i]=0 element=0
+i=1 alist=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] alist[i]=1 element=1
+i=2 alist=[0, 2, 3, 4, 5, 6, 7, 8, 9, 10] alist[i]=3 element=3
+i=3 alist=[0, 2, 3, 4, 5, 6, 7, 8, 9, 10] alist[i]=4 element=4
+i=4 alist=[0, 2, 3, 5, 6, 7, 8, 9, 10] alist[i]=6 element=6
+i=5 alist=[0, 2, 3, 5, 6, 7, 8, 9, 10] alist[i]=7 element=7
+i=6 alist=[0, 2, 3, 5, 6, 8, 9, 10] alist[i]=9 element=9
+i=7 alist=[0, 2, 3, 5, 6, 8, 9, 10] alist[i]=10 element=10
+result [0, 2, 3, 5, 6, 8, 9]
+
+list_cleanup_ok
+i=10 alist=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] alist[i]=10
+i=9 alist=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9] alist[i]=9
+i=8 alist=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9] alist[i]=8
+i=7 alist=[0, 1, 2, 3, 4, 5, 6, 7, 9] alist[i]=7
+i=6 alist=[0, 1, 2, 3, 4, 5, 6, 9] alist[i]=6
+i=5 alist=[0, 1, 2, 3, 4, 5, 6, 9] alist[i]=5
+i=4 alist=[0, 1, 2, 3, 4, 6, 9] alist[i]=4
+i=3 alist=[0, 1, 2, 3, 6, 9] alist[i]=3
+i=2 alist=[0, 1, 2, 3, 6, 9] alist[i]=2
+i=1 alist=[0, 1, 3, 6, 9] alist[i]=1
+i=0 alist=[0, 3, 6, 9] alist[i]=0
+result [0, 3, 6, 9]
+</code></pre>
+<br /><b>#4</b><br /><p>Just to be clear: </p>
+
+<pre><code>def listCleanup(listOfElements):
+    i = 0
+    for element in listOfElements:
+        if(element.meetsCriteria()):
+            del(listOfElements[i])
+        i += 1
+    return listOfElements
+
+myList = range(10000)
+myList = listCleanup(listOfElements)
+</code></pre>
+
+<p>is the same as</p>
+
+<pre><code>def listCleanup(listOfElements):
+    i = 0
+    for element in listOfElements:
+        if(element.meetsCriteria()):
+            del(listOfElements[i])
+        i += 1
+
+myList = range(10000)
+listCleanup(listOfElements)
+</code></pre>
+
+<p>?</p>
+<br /><b>#5</b><br /><p>modifying your data structure as you're iterating over it is like shooting yourself in the foot... iteration fails. you might as well take others' advice and just make a new list:</p>
+
+<pre><code>myList = [element for element in listOfElements if not element.meetsCriteria()]
+</code></pre>
+
+<p>the old list -- if there are no other references to it -- will be deallocated and the memory reclaimed. better yet, don't even make a copy of the list. change the above to a <em>generator expression</em> for a more memory-friendly version:</p>
+
+<pre><code>myList = (element for element in listOfElements if not element.meetsCriteria())
+</code></pre>
+
+<p>all Python object access is by reference. objects are created and variables are just references to those objects. however, if someone wanted to ask the purist question, "what type of call semantics does Python use, call-by-reference or call-by-value?" the answer will have to be, "Neither... and both." the reason is because calling conventions are less important to Python than object type.</p>
+
+<p>if an object is mutable, it can be modified regardless of what scope you're in... as long as you have a valid object reference, the object can be changed. if the object is <em>immutable</em>, then that object cannot be changed no matter where you are or what reference you have.</p>
+<br /><b>#6</b><br /><p>I don't think anyone mentioned actually using filter. Since a lot of the answers came from well respected people, I'm sure that I'm the one that's missing something. Could someone explain what would be wrong with this:</p>
+
+<p><code>new_list = filter(lambda o: o.meetsCriteria(), myList)</code></p>
+<br />

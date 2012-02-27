@@ -1,0 +1,177 @@
+<h3>Question (ID-1583364):</h3><h2>Idiomatic Python has_one</h2><p>I just invented a stupid little helper function:</p>
+
+<pre><code>def has_one(seq, predicate=bool):
+    """Return whether there is exactly one item in `seq` that matches
+    `predicate`, with a minimum of evaluation (short-circuit).
+    """
+    iterator = (item for item in seq if predicate(item))
+    try:
+        iterator.next()
+    except StopIteration: # No items match predicate.
+        return False
+    try:
+        iterator.next()
+    except StopIteration: # Exactly one item matches predicate.
+        return True
+    return False # More than one item matches the predicate.
+</code></pre>
+
+<p>Because the most readable/idiomatic inline thing I could come up with was:</p>
+
+<pre><code>[predicate(item) for item in seq].count(True) == 1
+</code></pre>
+
+<p>... which is fine in my case because I know seq is small, but it just feels weird. <strong>Is there an idiom I’m forgetting here that prevents me from having to break out this helper?</strong></p>
+
+<h2>Clarification</h2>
+
+<p>Looking back on it, this was kind of a crappily posed question, though we got some excellent answers! I was looking for either:</p>
+
+<ul>
+<li>An obvious and readable inline idiom or stdlib function, eager evaluation being acceptable in this case.</li>
+<li>A more obvious and readable helper function -- since it's breaking out a whole other function, only the minimum amount of evaluation seems acceptable.</li>
+</ul>
+
+<p><a href="http://stackoverflow.com/questions/1583364/idiomatic-python-hasone/1583465#1583465">@Stephan202</a> came up with a really cool idiom for the helper function and <a href="http://stackoverflow.com/questions/1583364/idiomatic-python-hasone/1583445#1583445">@Martin v. Löwis</a> came up with a more simple inline idiom under the assumption that the predicate returns a bool. Thanks @ everybody for your help!</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>How about calling <a href="http://docs.python.org/3.1/library/functions.html#any" rel="nofollow"><code>any</code></a> twice, on an iterator (Python 2.x and 3.x compatible)?</p>
+
+<pre><code>&gt;&gt;&gt; def has_one(seq, predicate=bool):
+...     seq = (predicate(e) for e in seq)
+...     return any(seq) and not any(seq)
+... 
+&gt;&gt;&gt; has_one([])
+False
+&gt;&gt;&gt; has_one([1])
+True
+&gt;&gt;&gt; has_one([0])
+False
+&gt;&gt;&gt; has_one([1, 2])
+False
+</code></pre>
+
+<p><code>any</code> will take at most <em>one</em> element which evaluates to <code>True</code> from the iterator. If it succeeds the first time and fails the second time, then only one element matches the predicate.</p>
+
+<p><strong>Edit:</strong> I see <a href="http://stackoverflow.com/users/19403/robert-rossney">Robert Rossney</a> suggests a generalized version, which checks whether exactly <em>n</em> elements match the predicate. Let me join in on the fun, using <a href="http://docs.python.org/3.1/library/functions.html#all" rel="nofollow"><code>all</code></a>:</p>
+
+<pre><code>&gt;&gt;&gt; def has_n(seq, n, predicate=bool):
+...     seq = (predicate(e) for e in seq)
+...     return all(any(seq) for _ in range(n)) and not any(seq)
+... 
+&gt;&gt;&gt; has_n(range(0), 3)
+False
+&gt;&gt;&gt; has_n(range(3), 3)
+False
+&gt;&gt;&gt; has_n(range(4), 3)
+True
+&gt;&gt;&gt; has_n(range(5), 3)
+False
+</code></pre>
+<br /><b>#1</b><br /><p>I liked Stephan202's answer, but I like this one a little more, even though it's two lines instead of one.  I like it because it's just as crazy but a tiny bit more explicit about how its craziness works:</p>
+
+<pre><code>def has_one(seq):
+    g = (x for x in seq)
+    return any(g) and not any(g)
+</code></pre>
+
+<p><strong>Edit:</strong></p>
+
+<p>Here's a more generalized version that supports a predicate:</p>
+
+<pre><code>def has_exactly(seq, count, predicate = bool):
+    g = (predicate(x) for x in seq)
+    while(count &gt; 0):
+        if not any(g):
+            return False
+        count -= 1
+    if count == 0:
+        return not any(g)
+</code></pre>
+<br /><b>#2</b><br /><p>Not sure whether it is any better than the versions you proposed, however...</p>
+
+<p>If predicate is guaranteed to return True/False only, then</p>
+
+<pre><code>sum(map(predicate, seq)) == 1
+</code></pre>
+
+<p>will do (although it won't stop at the second element)</p>
+<br /><b>#3</b><br /><p>Perhaps something like this is more to your taste?</p>
+
+<pre><code>def has_one(seq,predicate=bool):
+    nwanted=1
+    n=0
+    for item in seq:
+        if predicate(item):
+            n+=1
+            if n&gt;nwanted:
+                return False
+
+    return n==nwanted
+</code></pre>
+
+<p>This is rather like the list comprehension example, but requires only one pass over one sequence. Compared to the second <code>has_one</code> function, and like the list comprehension code, it generalizes more easily to other counts. I've demonstrated this (hopefully without error...) by adding in a variable for the number of items wanted.</p>
+<br /><b>#4</b><br /><p>How about ...</p>
+
+<pre><code>import functools
+import operator
+
+def exactly_one(seq):
+    """
+    Handy for ensuring that exactly one of a bunch of options has been set.
+    &gt;&gt;&gt; exactly_one((3, None, 'frotz', None))
+    False
+    &gt;&gt;&gt; exactly_one((None, None, 'frotz', None))
+    True
+    """
+    return 1 == functools.reduce(operator.__add__, [1 for x in seq if x])
+</code></pre>
+<br /><b>#5</b><br /><p>Here's modified <a href="http://stackoverflow.com/questions/1583364/idiomatic-python-hasone/1583465#1583465">@Stephan202's answer</a>:</p>
+
+<pre><code>from itertools import imap, repeat
+
+def exactly_n_is_true(iterable, n, predicate=None):
+    it = iter(iterable) if predicate is None else imap(predicate, iterable)
+    return all(any(it) for _ in repeat(None, n)) and not any(it)
+</code></pre>
+
+<p>Differences:</p>
+
+<ol>
+<li><p><code>predicate()</code> is None by default. The meaning is the same as for built-in <code>filter()</code> and stdlib's <code>itertools.ifilter()</code> functions.</p></li>
+<li><p>More explicit function and parameters names (this is subjective).</p></li>
+<li><p><code>repeat()</code> allows large <code>n</code> to be used.</p></li>
+</ol>
+
+<p>Example:</p>
+
+<pre><code>if exactly_n_is_true(seq, 1, predicate):
+   # predicate() is true for exactly one item from the seq
+</code></pre>
+<br /><b>#6</b><br /><p>Look, Ma! No rtfm("itertools"), no dependency on predicate() returning a boolean, minimum evaluation, just works!</p>
+
+<pre><code>Python 1.5.2 (#0, Apr 13 1999, 10:51:12) [MSC 32 bit (Intel)] on win32
+Copyright 1991-1995 Stichting Mathematisch Centrum, Amsterdam
+&gt;&gt;&gt; def count_in_bounds(seq, predicate=lambda x: x, low=1, high=1):
+...     count = 0
+...     for item in seq:
+...         if predicate(item):
+...             count = count + 1
+...             if count &gt; high:
+...                 return 0
+...     return count &gt;= low
+...
+&gt;&gt;&gt; seq1 = [0, 0, 1, 0, 1, 0, 1, 0, 0, 0]
+&gt;&gt;&gt; count_in_bounds(seq1)
+0
+&gt;&gt;&gt; count_in_bounds(seq1, low=3, high=3)
+1
+&gt;&gt;&gt; count_in_bounds(seq1, low=3, high=4)
+1
+&gt;&gt;&gt; count_in_bounds(seq1, low=4, high=4)
+0
+&gt;&gt;&gt; count_in_bounds(seq1, low=0, high=3)
+1
+&gt;&gt;&gt; count_in_bounds(seq1, low=3, high=3)
+1
+&gt;&gt;&gt;
+</code></pre>
+<br />

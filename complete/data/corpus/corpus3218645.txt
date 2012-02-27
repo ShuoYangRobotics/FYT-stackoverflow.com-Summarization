@@ -1,0 +1,94 @@
+Question (ID-3218645): Handling large dense matrices in python Basically, what is the best way to go about storing and using dense matrices in python? 
+
+ I have a project that generates similarity metrics between every item in an array. 
+
+ Each item is a custom class, and stores a pointer to the other class and a number representing it's "closeness" to that class. 
+
+ Right now, it works brilliantly up to about ~8000 items, after which it fails with a out-of-memory error. 
+Basically, if you assume that each comparison uses ~30 (seems accurate based on testing) bytes to store the similarity, that means the total required memory is: 
+ numItems^2 * itemSize = Memory 
+So the memory usage is exponential based on the number of items. 
+In my case, the memory size is ~30 bytes per link, so: 
+ 8000 * 8000 * 30 = 1,920,000,000 bytes, or 1.9 GB 
+which is right at the memory limit for a single thread. 
+
+ It seems to me that there has to be a more effective way of doing this. I've looked at memmapping, but it's already computationally intensive just to generate the similarity values, and bottlenecking it all through a harddrive seems a little ridiculous. 
+
+ Edit 
+I've looked at numpy and scipy. Unfortunatly, they don't support very large arrays either. 
+
+ &gt;&gt;&gt; np.zeros((20000,20000), dtype=np.uint16)
+Traceback (most recent call last):
+ File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+MemoryError
+&gt;&gt;&gt;
+ 
+
+ Further Edit 
+Numpy seems to be popular. However, numpy won't really do what I want, at least without another abstraction layer. 
+
+ I don't want to store numbers, I want to store reference to classes. Numpy supports objects, but that doesn't really address the array size issues. I brought up numpy just as an example of what isn't working. 
+
+ Any advice? 
+
+ Edit Well, I wound up just rewriting all the logic so it no longer stores any redundant values, reducing the memory useage from O*n^2 to O*((n*(n-1))/2) . 
+
+ Basically, this whole affair is a version of the handshake problem , so I've switched from storing all links to only a single version of each link. 
+
+ It's not a complete solution, but I generally don't have any datasets large enough to overflow it, so I think it will work out. PyTables is really interesting, but I don't know any SQL, and there doesn't appear to be any nice traditional slicing or index based way to access the table data. I may revisit the issue in the future. 
+ Answers (Total-6): #0 Well, I've found my solution: 
+ h5py 
+
+ It's a library that basically presents a numpy-like interface, but uses compressed memmapped files to store arrays of arbitrary size (It's basically a wrapper for HDF5). 
+
+ PyTables is built on it, and PyTables actually led me to it. However, I do not need any of the SQL functionality that is the main offering of PyTables, and PyTables does not provide the clean array-like interface I was really looking for. 
+
+ h5py basically acts like a numpy array, and simply stores the data in a different format. 
+
+ It also seems to have no limit to array size, except perhaps disk space. I'm currently doing testing on a 100,000 * 100,000 array of uint16. 
+ #1 For the 20,000 x 20,000 you are looking at 12GB of RAM? 
+
+ Aren't you going to end up in swap hell trying to work with a 12GB in win32 which artificially limits the memory that the OS can address? 
+
+ I'd be looking for an OS that can support the 12GB (32 bin win 2003 server can if you need to stick with 32bit windows), but a 64 bit machine with 64bit OS and 16GB of RAM would seem a better fit. 
+
+ Good excuse for an upgrade :) 
+
+ 64 bit numpy can support your matrix 
+
+ Python 2.5.2 (r252:60911, Jan 20 2010, 23:14:04) 
+[GCC 4.2.4 (Ubuntu 4.2.4-1ubuntu3)] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import numpy as np
+&gt;&gt;&gt; np.zeros((20000,20000),dtype=np.uint16)
+array([[0, 0, 0, ..., 0, 0, 0],
+  [0, 0, 0, ..., 0, 0, 0],
+  [0, 0, 0, ..., 0, 0, 0],
+  ..., 
+  [0, 0, 0, ..., 0, 0, 0],
+  [0, 0, 0, ..., 0, 0, 0],
+  [0, 0, 0, ..., 0, 0, 0]], dtype=uint16)
+ 
+ #2 PyTables can handle tables of arbitrary size (Millions of columns!), through using memmap and some clever compression. 
+
+ Ostensibly, it provides SQL like performance, to python. It will, however, require significant code modifications. 
+
+ I'm not going to accept this answer until I've done a more thorough vetting, to ensure it can actually do what I want. Or someone provides a better solution. 
+ #3 You might find some advice in the NumPy (see SciPy) documentation (arrays/matrices): 
+
+ 
+ http://www.scipy.org/NumPy_for_Matlab_Users 
+ http://www.scipy.org/Tentative_NumPy_Tutorial 
+ 
+ #4 You can reduce the memory use by using uint8, but be careful to avoid overflow errors. A uint16 requires two bytes, so the minimal memory requirement in your example is 8000*8000*30*2 bytes = 3.84 Gb. 
+
+ If the second example fails then you need a new machine. The memory requirement is 20000*20000*2*bytes =800 Mb. 
+
+ My advice is that you try to create smaller matrices and use "top", "ps v" or the gnome system monitor to check the memory used by your python proces. Start out examining a single thread with a small matrix and do the math. Note that you can release the memory of a variable x by writing del(x). This is useful for testing. 
+
+ What is the memory on your machine? How much memory does pytables use to create a 20000*20000 table? How much memory does numpy use to create a 20000*20000 table using uint8? 
+ #5 If you have N objects, kept in a list L, and you wish to store the similarity betwen each object and each other object, that's O(N**2) similarities. Under the common conditions that similarity(A, B) == similarity(B, A) and similarity(A, A) == 0 , all that you need is a triangular array S of similarities. The number of elements in that array will be N*(N-1)//2 . You should be able to use an array.array for this purpose. Keeping your similarity as a float will take only 8 bytes. If you can represent your similarity as an integer in range(256) , you use an unsigned byte as the array.array element. 
+
+ So that's about 8000 * 8000 / 2 * 8 i.e. about 256 MB. Using only a byte for the similarity means only 32 MB. You could avoid the slow S[i*N-i*(i+1)//2+j] index calculation of the triangle thingie by simulating a square array instead using S[i*N+j]`; memory would double to (512 MB for float, 64 MB for byte). 
+
+ If the above doesn't suit you, then perhaps you could explain """Each item [in which container?] is a custom class, and stores a pointer to the other class and a number representing it's "closeness" to that class."" and """I don't want to store numbers, I want to store reference to classes""". Even after replacing "class(es)" by "object(s)", I'm struggling to understand what you mean.

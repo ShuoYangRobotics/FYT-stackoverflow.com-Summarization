@@ -1,0 +1,247 @@
+<h3>Question (ID-5237693):</h3><h2>Mocking open(file_name) in unit tests</h2><p>I have a source code that opens a csv file and sets up a header to 
+value association. The source code is given below: </p>
+
+<pre><code>def ParseCsvFile(source): 
+  """Parse the csv file. 
+  Args: 
+    source: file to be parsed
+
+  Returns: the list of dictionary entities; each dictionary contains
+             attribute to value mapping or its equivalent. 
+  """ 
+  global rack_file 
+  rack_type_file = None 
+  try: 
+    rack_file = source 
+    rack_type_file = open(rack_file)  # Need to mock this line.
+    headers = rack_type_file.readline().split(',') 
+    length = len(headers) 
+    reader = csv.reader(rack_type_file, delimiter=',') 
+    attributes_list=[] # list of dictionaries. 
+    for line in reader: 
+      # More process to happeng. Converting the rack name to sequence. 
+      attributes_list.append(dict((headers[i],
+                                   line[i]) for i in range(length))) 
+    return attributes_list 
+  except IOError, (errno, strerror): 
+    logging.error("I/O error(%s): %s" % (errno, strerror)) 
+  except IndexError, (errno, strerror): 
+    logging.error('Index Error(%s), %s' %(errno, strerror)) 
+  finally: 
+    rack_type_file.close() 
+</code></pre>
+
+<p>I am trying to mock the following statement 
+rack_type_file = open(rack_file) 
+How do I mock open(...) function? Any assistance would be appreciated</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>There are two ways that I like to do this, depending on the situation.</p>
+
+<p>If your unit test is going to call ParseCsvFile directly I would add a new kwarg to ParseCsvFile:</p>
+
+<pre><code>def ParseCsvFile(source, open=open): 
+    # ...
+    rack_type_file = open(rack_file)  # Need to mock this line.
+</code></pre>
+
+<p>Then your unit test can pass a different open_func in order to accomplish the mocking.</p>
+
+<p>If your unit test calls some other function that in turn calls ParseCsvFile then passing around open_func just for tests is ugly. In that case I would use the <a href="http://www.voidspace.org.uk/python/mock/" rel="nofollow">mock module</a>. This lets you alter a function by name and replace it with a Mock object.</p>
+
+<pre><code># code.py
+def open_func(name):
+    return open(name)
+
+def ParseCsvFile(source):
+    # ...
+    rack_type_file = open_func(rack_file)  # Need to mock this line.
+
+# test.py
+import unittest
+import mock
+from StringIO import StringIO
+
+@mock.patch('code.open_func')
+class ParseCsvTest(unittest.TestCase):
+    def test_parse(self, open_mock):
+        open_mock.return_value = StringIO("my,example,input")
+        # ...
+</code></pre>
+<br /><b>#1</b><br /><p>To mock built-in function open with mox use <code>__builtin__</code> module: </p>
+
+<pre><code>import __builtin__ # unlike __builtins__ this must be imported
+m = mox.Mox()
+m.StubOutWithMock(__builtin__, 'open')
+open('ftphelp.yml', 'rb').AndReturn(StringIO("fake file content"))     
+m.ReplayAll()
+# call the code you want to test that calls `open`
+m.VerifyAll()
+m.UnsetStubs()
+</code></pre>
+
+<p>Note that <code>__builtins__</code> is not always a module, it can be of type dict, please use <code>__builtin__</code> (with no "s") module to refer to system built-in methods.</p>
+
+<p>More about <code>__builtin__</code> module: <a href="http://docs.python.org/library/__builtin__.html" rel="nofollow">http://docs.python.org/library/<strong>builtin</strong>.html</a></p>
+<br /><b>#2</b><br /><p>I took the liberty of re-writing your sample function:</p>
+
+<p>Assume your function is located in a file named <code>code.py</code></p>
+
+<pre><code># code.py
+import csv
+
+import logging
+
+
+def ParseCsvFile(source):
+    """Parse the csv file.
+    Args:
+      source: file to be parsed
+
+    Returns: the list of dictionary entities; each dictionary contains
+               attribute to value mapping or its equivalent.
+    """
+    global rack_file
+    rack_file = source
+    attributes_list = []
+
+    try:
+        rack_type_file = open(rack_file)
+    except IOError, (errno, strerror):
+        logging.error("I/O error(%s): %s", errno, strerror)
+    else:
+        reader = csv.DictReader(rack_type_file, delimiter=',')
+        attributes_list = [line for line in reader]   # list of dictionaries
+        rack_type_file.close()
+
+    return attributes_list
+</code></pre>
+
+<p>A simple test case would be:</p>
+
+<pre><code># your test file
+import __builtin__
+import unittest
+import contextlib
+from StringIO import StringIO
+
+import mox
+
+import code
+
+
+@contextlib.contextmanager
+def mox_replayer(mox_instance):
+    mox_instance.ReplayAll()
+    yield
+    mox_instance.VerifyAll()
+
+
+class TestParseCSVFile(unittest.TestCase):
+
+    def setUp(self):
+        self.mox = mox.Mox()
+
+    def tearDown(self):
+        self.mox.UnsetStubs()
+
+    def test_parse_csv_file_returns_list_of_dicts(self):
+        TEST_FILE_NAME = 'foo.csv'
+
+        self.mox.StubOutWithMock(__builtin__, 'open')
+        open(TEST_FILE_NAME).AndReturn(StringIO("name,age\nfoo,13"))
+
+        with mox_replayer(self.mox):
+            result = code.ParseCsvFile(TEST_FILE_NAME)
+
+        self.assertEqual(result, [{'age': '13', 'name': 'foo'}])  # works!
+
+
+if __name__ == '__main__':
+    unittest.main()
+</code></pre>
+
+<p>EDIT:</p>
+
+<pre><code>% /usr/bin/python2.6
+Python 2.6.1 (r261:67515, Jun 24 2010, 21:47:49) 
+[GCC 4.2.1 (Apple Inc. build 5646)] on darwin
+Type "help", "copyright", "credits" or "license" for more information.
+&gt;&gt;&gt; import __builtin__
+&gt;&gt;&gt; import mox
+&gt;&gt;&gt; mock = mox.Mox()
+&gt;&gt;&gt; mock.StubOutWithMock(__builtin__, 'open')
+&gt;&gt;&gt; mock.UnsetStubs()
+</code></pre>
+
+<p>Works fine on 2.6 using mox 0.53</p>
+<br /><b>#3</b><br /><p>Maybe something like this:</p>
+
+<pre><code>from StringIO import StringIO
+
+def open(name):
+    return StringIO("one,two,three\n1,2,3")
+</code></pre>
+<br /><b>#4</b><br /><pre><code>&gt;&gt;&gt; class A(object):
+...     def __init__(self):
+...         self.x = open('test.py')
+... 
+&gt;&gt;&gt; old_open = open
+&gt;&gt;&gt; def open(s):
+...     return "test\n"
+... 
+&gt;&gt;&gt; a = A()
+&gt;&gt;&gt; a.x
+'test\n'
+&gt;&gt;&gt; open = old_open
+&gt;&gt;&gt; a = A()
+&gt;&gt;&gt; a.x
+&lt;open file 'test.py', mode 'r' at 0xb7736230&gt;
+</code></pre>
+<br /><b>#5</b><br /><p>Hi I was having a similar problem, and was tearing my hair out flipping between different mocking libraries. I finally found a solution that I am happy with, and maybe it might help you? In the end I went with the Mocker library <a href="http://labix.org/mocker" rel="nofollow">http://labix.org/mocker</a> and here is the code for mocking open:</p>
+
+<pre><code>from mocker import Mocker
+from StringIO import StringIO
+import __builtin__
+mocker = Mocker()
+sourceFile = 'myTestFile.txt'
+__builtin__.open = mocker.mock()
+__builtin__.open(sourceFile)
+mocker.result(StringIO('this,is,a,test,file'))
+
+&lt;the rest of your test setup goes here&gt;
+
+mocker.replay()
+
+ParseCsvFile(sourceFile)
+
+mocker.restore()
+mocker.verify()
+</code></pre>
+
+<p>Incidentaly the reason I went with Mocker is because I was testing a function which used open to read a file, and then used open again to overwrite the same file with new data. What I needed to be able to do was test the case where the initial file didn't exist, so set up a mock, that threw an IOError the first time, and then worked the second time. The setup for which looked like this:</p>
+
+<pre><code>from mocker import Mocker
+import __builtin__
+
+mocker = Mocker()
+
+mockFileObject = mocker.mock()
+__builtin__.open = mocker.mock()
+
+__builtin__.open('previousState.pkl', 'r') 
+mocker.throw(IOError('Boom'))
+
+__builtin__.open('previousState.pkl','w') 
+mocker.result(mockFileObject)
+
+&lt;rest of test setup &gt;
+
+mocker.replay()
+
+&lt;test&gt;
+
+mocker.restore() #required to restore the open method
+mocker.verify()
+</code></pre>
+
+<p>Hope this helps!</p>
+<br />

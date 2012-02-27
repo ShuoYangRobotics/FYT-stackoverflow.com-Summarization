@@ -1,0 +1,350 @@
+<h3>Question (ID-58711):</h3><h2>How would you design a very "Pythonic" UI framework?</h2><p>I have been playing with the Ruby library "shoes". Basically you can write a GUI application in the following way:</p>
+
+<pre><code>Shoes.app do
+  t = para "Not clicked!"
+  button "The Label" do
+    alert "You clicked the button!" # when clicked, make an alert
+    t.replace "Clicked!" # ..and replace the label's text
+  end
+end
+</code></pre>
+
+<p>This made me think - how would I design a similarly nice-to-use GUI framework in Python? One that doesn't have the usual tyings of basically being wrappers to a C* library (In the case of GTK, Tk, wx, QT etc etc)</p>
+
+<p>Shoes takes things from web devlopment (like <code>#f0c2f0</code> style colour notation, CSS layout techniques, like <code>:margin =&gt; 10</code>), and from ruby (extensively using blocks in sensible ways)</p>
+
+<p>Python's lack of "rubyish blocks" makes a (metaphorically)-direct port impossible:</p>
+
+<pre><code>def Shoeless(Shoes.app):
+    self.t = para("Not clicked!")
+
+    def on_click_func(self):
+        alert("You clicked the button!")
+        self.t.replace("clicked!")
+
+    b = button("The label", click=self.on_click_func)
+</code></pre>
+
+<p>No where near as clean, and wouldn't be <em>nearly</em> as flexible, and I'm not even sure if it would be implementable.</p>
+
+<p>Using decorators seems like an interesting way to map blocks of code to a specific action:</p>
+
+<pre><code>class BaseControl:
+    def __init__(self):
+        self.func = None
+
+    def clicked(self, func):
+        self.func = func
+
+    def __call__(self):
+        if self.func is not None:
+            self.func()
+
+class Button(BaseControl):
+    pass
+
+class Label(BaseControl):
+    pass
+
+# The actual applications code (that the end-user would write)
+class MyApp:
+    ok = Button()
+    la = Label()
+
+    @ok.clicked
+    def clickeryHappened():
+        print "OK Clicked!"
+
+if __name__ == '__main__':
+    a = MyApp()
+    a.ok() # trigger the clicked action
+</code></pre>
+
+<p>Basically the decorator function stores the function, then when the action occurred (say, a click) the appropriate function would be executed.</p>
+
+<p>The scope of various stuff (say, the <code>la</code> label in the above example) could be rather complicated, but it seems doable in a fairly neat manner..</p>
+<br /><h3>Answers (Total-15):</h3><b>#0</b><br /><p>You could actually pull this off, but it would require using metaclasses, which are <em>deep</em> magic (there be dragons). If you want an intro to metaclasses, there's a series of <a href="http://www.ibm.com/developerworks/linux/library/l-pymeta.html" rel="nofollow">articles from IBM</a> which manage to introduce the ideas without melting your brain.</p>
+
+<p>The source code from an ORM like SQLObject might help, too, since it uses this same kind of declarative syntax.</p>
+<br /><b>#1</b><br /><pre><code>## All you need is this class:
+
+class MainWindow(Window):
+    my_button = Button('Click Me')
+    my_paragraph = Text('This is the text you wish to place')
+    my_alert = AlertBox('What what what!!!')
+
+    @my_button.clicked
+    def my_button_clicked(self, button, event):
+        self.my_paragraph.text.append('And now you clicked on it, the button that is.')
+
+    @my_paragraph.text.changed
+    def my_paragraph_text_changed(self, text, event):
+        self.button.text = 'No more clicks!'
+
+    @my_button.text.changed
+    def my_button_text_changed(self, text, event):
+        self.my_alert.show()
+
+
+## The Style class is automatically gnerated by the framework
+## but you can override it by defining it in the class:
+##
+##      class MainWindow(Window):
+##          class Style:
+##              my_blah = {'style-info': 'value'}
+##
+## or like you see below:
+
+class Style:
+    my_button = {
+        'background-color': '#ccc',
+        'font-size': '14px'}
+    my_paragraph = {
+        'background-color': '#fff',
+        'color': '#000',
+        'font-size': '14px',
+        'border': '1px solid black',
+        'border-radius': '3px'}
+
+MainWindow.Style = Style
+
+## The layout class is automatically generated
+## by the framework but you can override it by defining it
+## in the class, same as the Style class above, or by
+## defining it like this:
+
+class MainLayout(Layout):
+    def __init__(self, style):
+        # It takes the custom or automatically generated style class upon instantiation
+        style.window.pack(HBox().pack(style.my_paragraph, style.my_button))
+
+MainWindow.Layout = MainLayout
+
+if __name__ == '__main__':
+    run(App(main=MainWindow))
+</code></pre>
+
+<p>It would be relatively easy to do in python with a bit of that metaclass python magic know how. Which I have. And a knowledge of PyGTK. Which I also have. Gets ideas?</p>
+<br /><b>#2</b><br /><p>I was never satisfied with David Mertz's articles at IBM on metaclsses so I recently wrote my own <a href="http://askawizard.blogspot.com/2008/09/metaclasses-python-saga-part-4_30.html" rel="nofollow">metaclass article</a>.  Enjoy.</p>
+<br /><b>#3</b><br /><p>This is extremely contrived and not pythonic at all, but here's my attempt at a semi-literal translation using the new "with" statement.</p>
+
+<pre><code>with Shoes():
+  t = Para("Not clicked!")
+  with Button("The Label"):
+    Alert("You clicked the button!")
+    t.replace("Clicked!")
+</code></pre>
+
+<p>The hardest part is dealing with the fact that python will not give us anonymous functions with more than one statement in them.  To get around that, we could create a list of commands and run through those...</p>
+
+<p>Anyway, here's the backend code I ran this with:</p>
+
+<pre><code>context = None
+
+class Nestable(object):
+  def __init__(self,caption=None):
+    self.caption = caption
+    self.things = []
+
+    global context
+    if context:
+      context.add(self)
+
+  def __enter__(self):
+    global context
+    self.parent = context
+    context = self
+
+  def __exit__(self, type, value, traceback):
+    global context
+    context = self.parent
+
+  def add(self,thing):
+    self.things.append(thing)
+    print "Adding a %s to %s" % (thing,self)
+
+  def __str__(self):
+    return "%s(%s)" % (self.__class__.__name__, self.caption)
+
+
+class Shoes(Nestable):
+  pass
+
+class Button(Nestable):
+  pass
+
+class Alert(Nestable):
+  pass
+
+class Para(Nestable):
+  def replace(self,caption):
+    Command(self,"replace",caption)
+
+class Command(Nestable):
+  def __init__(self, target, command, caption):
+    self.command = command
+    self.target  = target
+    Nestable.__init__(self,caption)
+
+  def __str__(self):
+    return "Command(%s text of %s with \"%s\")" % (self.command, self.target, self.caption)
+
+  def execute(self):
+    self.target.caption = self.caption
+</code></pre>
+<br /><b>#4</b><br /><p>With some Metaclass magic to keep the ordering I have the following working. I'm not sure how pythonic it is but it is good fun for creating simple things. </p>
+
+<pre><code>class w(Wndw):
+  title='Hello World'
+  class txt(Txt):  # either a new class
+    text='Insert name here'
+  lbl=Lbl(text='Hello') # or an instance
+  class greet(Bbt):
+    text='Greet'
+    def click(self): #on_click method
+      self.frame.lbl.text='Hello %s.'%self.frame.txt.text
+
+app=w()
+</code></pre>
+<br /><b>#5</b><br /><p>The closest you can get to rubyish blocks is the with statement from pep343: </p>
+
+<p><a href="http://www.python.org/dev/peps/pep-0343/" rel="nofollow">http://www.python.org/dev/peps/pep-0343/</a></p>
+<br /><b>#6</b><br /><p>If you use <a href="http://www.pygtk.org/" rel="nofollow">PyGTK</a> with <a href="http://glade.gnome.org/" rel="nofollow">glade</a> and <a href="http://www.pixelbeat.org/libs/libglade.py" rel="nofollow">this glade wrapper</a>, then PyGTK actually becomes somewhat pythonic. A little at least.</p>
+
+<p>Basically, you create the GUI layout in Glade. You also specify event callbacks in glade. Then you write a class for your window like this:</p>
+
+<pre><code>class MyWindow(GladeWrapper):
+    GladeWrapper.__init__(self, "my_glade_file.xml", "mainWindow")
+    self.GtkWindow.show()
+
+    def button_click_event (self, *args):
+        self.button1.set_label("CLICKED")
+</code></pre>
+
+<p>Here, I'm assuming that I have a GTK Button somewhere called <em>button1</em> and that I specified *button_click_event* as the <em>clicked</em> callback. The glade wrapper takes a lot of effort out of event mapping.</p>
+
+<p>If I were to design a Pythonic GUI library, I would support something similar, to aid rapid development. The only difference is that I would ensure that the widgets have a more pythonic interface too. The current PyGTK classes seem very C to me, except that I use foo.bar(...) instead of bar(foo, ...) though I'm not sure exactly what I'd do differently. Probably allow for a Django models style declarative means of specifying widgets and events in code and allowing you to access data though iterators (where it makes sense, eg widget lists perhaps), though I haven't really thought about it.</p>
+<br /><b>#7</b><br /><p>Maybe not as slick as the Ruby version, but how about something like this:</p>
+
+<pre><code>from Boots import App, Para, Button, alert
+
+def Shoeless(App):
+    t = Para(text = 'Not Clicked')
+    b = Button(label = 'The label')
+
+    def on_b_clicked(self):
+        alert('You clicked the button!')
+        self.t.text = 'Clicked!'
+</code></pre>
+
+<p><a href="http://stackoverflow.com/questions/58711/how-would-you-design-a-very-pythonic-ui-framework#58917" rel="nofollow">Like Justin said</a>, to implement this you would need to use a custom metaclass on class <code>App</code>, and a bunch of properties on <code>Para</code> and <code>Button</code>. This actually wouldn't be too hard.</p>
+
+<p>The problem you run into next is: how do you keep track of the <em>order</em> that things appear in the class definition? In Python 2.x, there is no way to know if <code>t</code> should be above <code>b</code> or the other way around, since you receive the contents of the class definition as a python <code>dict</code>.</p>
+
+<p>However, in Python 3.0 <a href="http://www.python.org/dev/peps/pep-3115/" rel="nofollow">metaclasses are being changed</a> in a couple of (minor) ways. One of them is the <code>__prepare__</code> method, which allows you to supply your own custom dictionary-like object to be used instead -- this means you'll be able to track the order in which items are defined, and position them accordingly in the window.</p>
+<br /><b>#8</b><br /><p>This could be an oversimplification, i don't think it would be a good idea to try to make a general purpose ui library this way. On the other hand you could use this approach (metaclasses and friends) to simplify the definition of certain classes of user interfaces for an existing ui library and depending of the application that could actually save you a significant amount of time and code lines.</p>
+<br /><b>#9</b><br /><p>The only attempt to do this that I know of is <a href="http://zephyrfalcon.org/labs/dope_on_wax.html" rel="nofollow">Hans Nowak's Wax</a> (which is unfortunately dead).</p>
+<br /><b>#10</b><br /><p>I have this same problem. I wan to to create a wrapper around any GUI toolkit for Python that is easy to use, and inspired by Shoes, but needs to be a OOP approach (against ruby blocks).</p>
+
+<p>More information in: <a href="http://wiki.alcidesfonseca.com/blog/python-universal-gui-revisited" rel="nofollow">http://wiki.alcidesfonseca.com/blog/python-universal-gui-revisited</a></p>
+
+<p>Anyone's welcome to join the project.</p>
+<br /><b>#11</b><br /><p>If you really want to code UI, you could try to get something similar to django's ORM; sth like this to get a simple help browser:</p>
+
+<pre><code>class MyWindow(Window):
+    class VBox:
+        entry = Entry()
+        bigtext = TextView()
+
+        def on_entry_accepted(text):
+            bigtext.value = eval(text).__doc__
+</code></pre>
+
+<p>The idea would be to interpret some containers (like windows) as simple classes, some containers (like tables, v/hboxes) recognized by object names, and simple widgets as objects.</p>
+
+<p>I dont think one would have to name all containers inside a window, so some shortcuts (like old-style classes being recognized as widgets by names) would be desirable.</p>
+
+<p>About the order of elements: in MyWindow above you don't have to track this (window is conceptually a one-slot container). In other containers you can try to keep track of the order assuming that each widget constructor have access to some global widget list. This is how it is done in django (AFAIK).</p>
+
+<p>Few hacks here, few tweaks there... There are still few things to think of, but I believe it is possible... and usable, as long as you don't build complicated UIs.</p>
+
+<p>However I am pretty happy with PyGTK+Glade. UI is just kind of data for me and it should be treated as data. There's just too much parameters to tweak (like spacing in different places) and it is better to manage that using a GUI tool. Therefore I build my UI in glade, save as xml and parse using gtk.glade.XML().</p>
+<br /><b>#12</b><br /><p>Declarative is not necessarily more (or less) pythonic than functional IMHO. I think a layered approach would be the best (from buttom up):</p>
+
+<ol>
+<li>A native layer that accepts and returns python data types.</li>
+<li>A functional dynamic layer.</li>
+<li>One or more declarative/object-oriented layers.</li>
+</ol>
+
+<p>Similar to <a href="http://elixir.ematia.de/trac/wiki" rel="nofollow">Elixir</a> + <a href="http://www.sqlalchemy.org/" rel="nofollow">SQLAlchemy</a>.</p>
+<br /><b>#13</b><br /><p>Personally, I would try to implement <a href="http://docs.jquery.com/Main_Page" rel="nofollow">JQuery</a> like API in a GUI framework.</p>
+
+<pre><code>class MyWindow(Window):
+    contents = (
+        para('Hello World!'),
+        button('Click Me', id='ok'),
+        para('Epilog'),
+    )
+
+    def __init__(self):
+        self['#ok'].click(self.message)
+        self['para'].hover(self.blend_in, self.blend_out)
+
+    def message(self):
+        print 'You clicked!'
+
+    def blend_in(self, object):
+        object.background = '#333333'
+
+    def blend_out(self, object):
+        object.background = 'WindowBackground'
+</code></pre>
+<br /><b>#14</b><br /><p>Here's an approach that goes about GUI definitions a bit differently using class-based meta-programming rather than inheritance.</p>
+
+<p>This is largley Django/SQLAlchemy inspired in that it is heavily based on meta-programming and separates your GUI code from your "code code".  I also think it should make heavy use of layout managers like Java does because when you're dropping code, no one wants to constantly tweak pixel alignment.  I also think it would be cool if we could have CSS-like properties.</p>
+
+<p>Here is a rough brainstormed example that will show a column with a label on top, then a text box, then a button to click on the bottom which shows a message.</p>
+
+<pre>
+from happygui.controls import *
+
+MAIN_WINDOW = Window(width="500px", height="350px",
+    my_layout=ColumnLayout(padding="10px",
+        my_label=Label(text="What's your name kiddo?", bold=True, align="center"),
+        my_edit=EditBox(placeholder=""),
+        my_btn=Button(text="CLICK ME!", on_click=Handler('module.file.btn_clicked')),
+    ),
+)
+MAIN_WINDOW.show()
+
+def btn_clicked(sender): # could easily be in a handlers.py file
+    name = MAIN_WINDOW.my_layout.my_edit.text
+    # same thing: name = sender.parent.my_edit.text
+    # best practice, immune to structure change: MAIN_WINDOW.find('my_edit').text
+    MessageBox("Your name is '%s'" % ()).show(modal=True)
+</pre>
+
+<p>One cool thing to notice is the way you can reference the input of my_edit by saying <code>MAIN_WINDOW.my_layout.my_edit.text</code>.  In the declaration for the window, I think it's important to be able to arbitrarily name controls in the function kwargs.</p>
+
+<p>Here is the same app only using absolute positioning (the controls will appear in different places because we're not using a fancy layout manager):</p>
+
+<pre>
+from happygui.controls import *
+
+MAIN_WINDOW = Window(width="500px", height="350px",
+    my_label=Label(text="What's your name kiddo?", bold=True, align="center", x="10px", y="10px", width="300px", height="100px"),
+    my_edit=EditBox(placeholder="", x="10px", y="110px", width="300px", height="100px"),
+    my_btn=Button(text="CLICK ME!", on_click=Handler('module.file.btn_clicked'), x="10px", y="210px", width="300px", height="100px"),
+)
+MAIN_WINDOW.show()
+
+def btn_clicked(sender): # could easily be in a handlers.py file
+    name = MAIN_WINDOW.my_edit.text
+    # same thing: name = sender.parent.my_edit.text
+    # best practice, immune to structure change: MAIN_WINDOW.find('my_edit').text
+    MessageBox("Your name is '%s'" % ()).show(modal=True)
+</pre>
+
+<p>I'm not entirely sure yet if this is a super great approach, but I definitely think it's on the right path.  I don't have time to explore this idea more, but if someone took this up as a project, I would love them.</p>
+<br />

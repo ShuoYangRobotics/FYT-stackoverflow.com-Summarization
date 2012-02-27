@@ -1,0 +1,88 @@
+<h3>Question ( ID-1942298 ) : </h3><h2>Wrapping a C library in Python : C , Cython or <span style="background-color:yellow;">ctypes</span> ? </h2><p>I want to call a C library from a Python application. I do n't want to wrap the whole API , only the functions and <span style="background-color:yellow;">datatypes</span> that are relevant to my case. As I see it , I have three choices : </p>
+<ol>Create an actual extension module in C. Probably overkill , and I 'd also like to avoid the overhead of learning extension writing . Use Cython to expose the relevant parts from the C library to Python . Do the whole thing in Python , using <span style="background-color:yellow;">ctypes</span> to communicate with the external library . </ol>
+<p>I 'm not sure whether 2 ) or 3 ) is the better choice. The advantage of 3 ) is that <span style="background-color:yellow;">ctypes</span> is part of the standard library , and the resulting code would be pure Python &ndash ; although I 'm not sure how big that advantage actually is . </p>
+<p>Are there more advantages / disadvantages with either choice ? Which approach do you recommend ? </p>
+<p></p>
+<p>Edit : Thanks for all your answers , they provide a good resource for anyone looking to do something similar. The decision , of course , is still to be made for the single case&mdash ; there 's no one " This is the right thing " sort of answer. For my own case , I 'll probably go with <span style="background-color:yellow;">ctypes</span> , but I 'm also looking forward to trying out Cython in some other project . </p>
+<p>With there being no single true answer , accepting one is somewhat arbitrary ; I chose FogleBird 's answer as it provides some good insight into <span style="background-color:yellow;">ctypes</span> and it currently also is the highest-voted answer. However , I suggest to <span style="background-color:yellow;">read</span> all the answers to get a good overview . </p>
+<p>Thanks again . </p>
+<br /><h3>Answers ( Total-8 ) : </h3><b># 0 </b><br /><p>Cython is a pretty cool tool in itself , well worth learning , and is surprisingly close to the Python syntax. If you do any scientific computing with Numpy , then Cython is the way to go because it integrates with Numpy for fast matrix operations . </p>
+<p>Cython is a superset of Python language. You can throw any valid Python file at it , and it will spit out a valid C program. In this case , Cython will just map the Python calls to the underlying CPython API. This results in perhaps a 50 % speedup because your code is no longer interpreted . </p>
+<p>To get some optimizations , you have to start telling Cython additional facts about your code , such as type declarations. If you tell it enough , it can boil the code down to pure C. That is , a for loop in Python becomes a for loop in C. Here you will see massive speed gains. You can also link to external C programs here . </p>
+<p>Using Cython code is also incredibly easy. I thought the manual makes it sound difficult. You literally just do : </p>
+<pre><code>$ cython mymodule.pyx
+$ gcc [some arguments here] mymodule.c -o mymodule.so
+</code></pre>
+<p>and then you can import mymodule in your Python code and forget entirely that it compiles down to C . </p>
+<p>In any case , because Cython is so easy to setup and start using , I suggest trying it to see if it suits your needs. It wo n't be a waste if it turns out not to be the tool you 're looking for . </p>
+<br /><b># 1 </b><br /><p><span style="background-color:yellow;">ctypes</span> is your best bet for getting it done quickly , and it 's a pleasure to work with as you 're still writing Python ! </p>
+<p>I recently wrapped an FTDI driver for communicating with a USB chip using <span style="background-color:yellow;">ctypes</span> and it was great. I had it all done and working in less than one work day. ( I only implemented the functions we needed , about 15 functions ) . </p>
+<p>We were previously using a third-party module , PyUSB , for the same purpose. PyUSB is an actual C/Python extension module. But PyUSB was n't releasing the GIL when doing blocking <span style="background-color:yellow;">reads/writes</span> , which was causing problems for us. So I wrote our own module using <span style="background-color:yellow;">ctypes</span> , which does release the GIL when calling the native functions . </p>
+<p>One thing to note is that <span style="background-color:yellow;">ctypes</span> wo n't know about # define constants and stuff in the library you 're using , only the functions , so you 'll have to redefine those constants in your own code . </p>
+<p>Here 's an example of how the code ended up looking ( lots snipped out , just trying to show you the gist of it ) : </p>
+<pre><code>from ctypes import *
+
+d2xx = WinDLL('ftd2xx')
+
+OK = 0
+INVALID_HANDLE = 1
+DEVICE_NOT_FOUND = 2
+DEVICE_NOT_OPENED = 3
+
+...
+
+def openEx(serial):
+    serial = create_string_buffer(serial)
+    handle = c_int()
+    if d2xx.FT_OpenEx(serial, OPEN_BY_SERIAL_NUMBER, byref(handle)) == OK:
+        return Handle(handle.value)
+    raise D2XXException
+
+class Handle(object):
+    def __init__(self, handle):
+        self.handle = handle
+    ...
+    def read(self, bytes):
+        buffer = create_string_buffer(bytes)
+        count = c_int()
+        if d2xx.FT_Read(self.handle, buffer, bytes, byref(count)) == OK:
+            return buffer.raw[:count.value]
+        raise D2XXException
+    def write(self, data):
+        buffer = create_string_buffer(data)
+        count = c_int()
+        bytes = len(data)
+        if d2xx.FT_Write(self.handle, buffer, bytes, byref(count)) == OK:
+            return count.value
+        raise D2XXException
+</code></pre>
+<p>Someone did some benchmarks on the various options . </p>
+<p>I might be more hesitant if I had to wrap a C + + library with lots of classes/templates/etc. But <span style="background-color:yellow;">ctypes</span> works well with structs and can even callback into Python . </p>
+<br /><b># 2 </b><br /><p>I 'll throw another one out there : SWIG </p>
+<p>It 's easy to learn , does a lot of things right , and supports many more languages so the time spent learning it can be pretty useful . </p>
+<p>If you use SWIG , you are creating a new python extension module , but with SWIG doing most of the heavy lifting for you . </p>
+<br /><b># 3 </b><br /><p>Personally , I 'd <span style="background-color:yellow;">write</span> an extension module in C. Do n't be intimidated by Python C extensions -- they 're not hard at all to <span style="background-color:yellow;">write.</span> The documentation is very clear and helpful. When I first wrote a C extension in Python , I think it took me about an hour to figure out how to <span style="background-color:yellow;">write</span> one -- not much time at all . </p>
+<br /><b># 4 </b><br /><p>If you have already a library with a defined API , I 'll think <span style="background-color:yellow;">ctypes</span> it 's the best option , as you only have to do a little initialization and then more or less call the library the way you 're used to . </p>
+<p>I think Cython or creating an extension module in C ( which it 's not very difficult ) are more useful when you 've need need new code , e.g. calling that library and do some complex , time-consuming tasks , and then passing the result to Python . </p>
+<p>Another approach , for simple programs , is directly do a different process ( compiled externally ) , outputting the result to standard output and call it with subprocess module. Sometimes it 's the easiest approach . </p>
+<p>For example , if you make a console C program that works more or less that way </p>
+<pre><code>$miCcode 10
+Result: 12345678
+</code></pre>
+<p>You could call it from Python </p>
+<pre><code>>>> import subprocess
+>>> p = subprocess.Popen(['miCcode', '10'], shell=True, stdout=subprocess.PIPE)
+>>> std_out, std_err = p.communicate()
+>>> print std_out
+Result: 12345678
+</code></pre>
+<p>With a little string formating , you can take the result in any way you want.You can also capture the standard error output , so it 's quite flexible . </p>
+<br /><b># 5 </b><br /><p>Warning : a Cython core developer 's opinion ahead . </p>
+<p>I almost always recommend Cython over <span style="background-color:yellow;">ctypes.</span> The reason is that it has a much smoother upgrade path. If you use <span style="background-color:yellow;">ctypes</span> , many things will be simple at first , and it 's certainly cool to <span style="background-color:yellow;">write</span> your FFI code in plain Python , without compilation , build dependencies and all that. However , at some point , you will almost certainly find that you have to call into your C library a lot , either in a loop or in a longer series of interdependent calls , and you would like to speed that up. That 's the point where you 'll notice that you ca n't do that with <span style="background-color:yellow;">ctypes.</span> Or , when you need callback functions and you find that your Python callback code becomes a bottleneck , you 'd like to speed it up and/or move it down into C as well. Again , you can not do that with <span style="background-color:yellow;">ctypes.</span> So you have to switch languages at that point and start rewriting parts of your code , potentially reverse engineering your Python/ctypes code into plain C , thus spoiling the whole benefit of writing your code in plain Python in the first place . </p>
+<p>With Cython , OTOH , you 're completely free to make the wrapping and calling code as thin or thick as you want. You can start with simple calls into your C code from regular Python code , and Cython will translate them into native C calls , without any additional calling overhead , and with an extremely low conversion overhead for Python parameters. When you notice that you need even more performance at some point where you are making too many expensive calls into your C library , you can start annotating your surrounding Python code with static types and let Cython optimise it straight down into C for you. Or , you can start rewriting parts of your C code in Cython in order to avoid calls and to specialise and tighten your loops algorithmically. And if you need a fast callback , just <span style="background-color:yellow;">write</span> a function with the appropriate signature and pass it into the C callback registry directly. Again , no overhead , and it gives you plain C calling performance. And in the much less likely case that you really can not get your code fast enough in Cython , you can still consider rewriting the truly critical parts of it in C ( or C + + or Fortran ) and call it from your Cython code naturally and natively. But then , this really becomes the last resort instead of the only option . </p>
+<p>So , <span style="background-color:yellow;">ctypes</span> is nice to do simple things and to quickly get something running. However , as soon as things start to grow , you 'll most likely come to the point where you notice that you 'd better used Cython right from the start . </p>
+<br /><b># 6 </b><br /><p><span style="background-color:yellow;">ctypes</span> is great when you 've already got a compiled library blob to deal with ( such as OS libraries ) . The calling overhead is severe , however , so if you 'll be making a lot of calls into the library , and you 're going to be writing the C code anyway ( or at least compiling it ) , I 'd say to go for cython . It 's not much more work , and it 'll be much faster and more pythonic to use the resulting pyd file . </p>
+<p>I personally tend to use cython for quick speedups of python code ( loops and integer comparisons are two areas where cython particularly shines ) , and when there is some more involved code/wrapping of other libraries involved , I 'll turn to Boost.Python . Boost.Python can be finicky to set up , but once you 've got it working , it makes wrapping C/C + + code straightforward . </p>
+<p>cython is also great at wrapping numpy ( which I learned from the SciPy 2009 proceedings ) , but I have n't used numpy , so I ca n't comment on that . </p>
+<br /><b># 7 </b><br /><p>There 's also one possibility to use GObject Introspection for libraries that are using GLib . </p>
+<br />

@@ -1,0 +1,1105 @@
+<h3>Question (ID-1467898):</h3><h2>What language could I use for fast execution of this database summarization task?</h2><p>So I wrote a Python program to handle a little data processing
+task.</p>
+
+<p>Here's a very brief specification in a made-up language of the computation I want:</p>
+
+<pre><code>parse "%s %lf %s" aa bb cc | group_by aa | quickselect --key=bb 0:5 | \
+    flatten | format "%s %lf %s" aa bb cc
+</code></pre>
+
+<p>That is, for each line, parse out a word, a floating-point number, and another word. Think of them as a player ID, a score, and a date. I want the top five scores and dates for each player. The data size is not trivial, but not huge; about 630 megabytes.</p>
+
+<p>I want to know what real, executable language I should have written it in to
+get it to be similarly short (as the Python below) but much faster.</p>
+
+<pre><code>#!/usr/bin/python
+# -*- coding: utf-8; -*-
+import sys
+
+top_5 = {}
+
+for line in sys.stdin:
+    aa, bb, cc = line.split()
+
+    # We want the top 5 for each distinct value of aa.  There are
+    # hundreds of thousands of values of aa.
+    bb = float(bb)
+    if aa not in top_5: top_5[aa] = []
+    current = top_5[aa]
+    current.append((bb, cc))
+
+    # Every once in a while, we drop the values that are not in
+    # the top 5, to keep our memory footprint down, because some
+    # values of aa have thousands of (bb, cc) pairs.
+    if len(current) &gt; 10:
+        current.sort()
+        current[:-5] = []
+
+for aa in top_5:
+    current = top_5[aa]
+    current.sort()
+    for bb, cc in current[-5:]:
+        print aa, bb, cc
+</code></pre>
+
+<p>Here’s some sample input data:</p>
+
+<pre><code>3 1.5 a
+3 1.6 b
+3 0.8 c
+3 0.9 d
+4 1.2 q
+3 1.5 e
+3 1.8 f
+3 1.9 g
+</code></pre>
+
+<p>Here’s the output I get from it:</p>
+
+<pre><code>3 1.5 a
+3 1.5 e
+3 1.6 b
+3 1.8 f
+3 1.9 g
+4 1.2 q
+</code></pre>
+
+<p>There are seven values for <code>3</code>, and so we drop the <code>c</code> and <code>d</code> values
+because their <code>bb</code> value puts them out of the top 5. Because <code>4</code> has
+only one value, its “top 5” consists of just that one value.</p>
+
+<p>This runs faster than doing the same queries in MySQL (at least, the
+way we’ve found to do the queries) but I’m pretty sure it's spending
+most of its time in the Python bytecode interpreter. I think that in
+another language, I could probably get it to process hundreds of
+thousands of rows per second instead of per minute. So I’d like to
+write it in a language that has a faster implementation.</p>
+
+<p>But I’m not sure what language to choose.</p>
+
+<p>I haven’t been able to figure out how to express this as a single query in SQL, and
+actually I’m really unimpressed with MySQL’s ability even to merely
+<code>select * from foo into outfile 'bar';</code> the input data.</p>
+
+<p>C is an obvious choice, but things like <code>line.split()</code>, sorting a list
+of 2-tuples, and making a hash table require writing some code that’s
+not in the standard library, so I would end up with 100 lines of code
+or more instead of 14.</p>
+
+<p>C++ seems like it might be a better choice (it has strings, maps,
+pairs, and vectors in the standard library) but it seems like the code
+would be a lot messier with STL. </p>
+
+<p>OCaml would be fine, but does it have an equivalent of <code>line.split()</code>,
+and will I be sad about the performance of its map?</p>
+
+<p>Common Lisp might work?</p>
+
+<p>Is there some equivalent of Matlab for database computation like this
+that lets me push the loops down into fast code? Has anybody tried <a href="http://hadoop.apache.org/pig/" rel="nofollow" title="Pig is a platform for analyzing large data sets that consists of a high-level language for expressing data analysis programs">Pig</a>?</p>
+
+<p>(Edit: responded to davethegr8's comment by providing some sample input and output data, and fixed a bug in the Python program!)</p>
+
+<p>(Additional edit: Wow, this comment thread is really excellent so far. Thanks, everybody!)</p>
+
+<p>Edit:</p>
+
+<p>There was an <a href="http://groups.google.com/group/sbcl-devel/browse%5Fthread/thread/f70c47e9f22d158a/9349b7b72943d314" rel="nofollow" title="Gary King: on an unsettling Lisp versus Python 'competition' or why isn't Lisp doing better here...?">eerily similar question asked on sbcl-devel in 2007</a> (thanks, Rainer!), and here's an <code>awk</code> script from Will Hartung for producing some test data (although it doesn't have the Zipfian distribution of the real data):</p>
+
+<pre><code>BEGIN {
+ for (i = 0; i &lt; 27000000; i++) {
+  v = rand();
+  k = int(rand() * 100);
+  print k " " v " " i;
+ }
+ exit;
+}
+</code></pre>
+<br /><h3>Answers (Total-18):</h3><b>#0</b><br /><p>I have a hard time believing that any script without any prior knowledge of the data (unlike MySql which has such info pre-loaded), would be faster than a SQL approach.</p>
+
+<p>Aside from the time spent parsing the input, the script needs to "keep" sorting the order by array etc...</p>
+
+<p>The following is a first guess at what should work decently fast in SQL, assuming a index (*) on the table's aa, bb, cc columns, in that order.  (A possible alternative would be an "aa, bb DESC, cc" index</p>
+
+<p>(*) This index could be clustered or not, not affecting the following query.  Choice of clustering or not, and of needing an "aa,bb,cc" separate index depends on use case, on the size of the rows in table etc. etc.</p>
+
+<pre><code>SELECT T1.aa, T1.bb, T1.cc , COUNT(*)
+FROM tblAbc T1
+LEFT OUTER JOIN tblAbc T2 ON T1.aa = T2.aa AND 
+         (T1.bb &lt; T2.bb OR(T1.bb = T2.bb AND T1.cc &lt; T2.cc))
+GROUP BY T1.aa, T1.bb, T1.cc
+HAVING COUNT(*) &lt; 5  -- trick, remember COUNT(*) goes 1,1,2,3,...
+ORDER BY T1.aa, T1.bb, T1.cc, COUNT(*) DESC
+</code></pre>
+
+<p>The idea is to get a count of how many records, within a given aa value are smaller than self.  There is a small trick however: we need to use LEFT OUTER join, lest we discard the record with the biggest bb value or the last one (which may happen to be one of the top 5).  As a result of left joining it, the COUNT(*) value counts 1, 1, 2, 3, 4 etc.  and the HAVING test therefore is "&lt;5" to effectively pick the top 5.</p>
+
+<p>To emulate the sample output of the OP, the ORDER BY uses DESC on the COUNT(), which could be removed to get a more traditional top 5 type of listing.  Also, the COUNT() in the select list can be removed if so desired, this doesn't impact the logic of the query and the ability to properly sort.</p>
+
+<p>Also note that this query is deterministic in terms of the dealing with ties, i,e, when a given set of records have a same value for bb (within an aa group); I think the Python program may provide slightly different outputs when the order of the input data is changed, that is because of its occasional truncating of the sorting dictionary.</p>
+
+<p><strong>Real solution: A SQL-based procedural approach</strong></p>
+
+<p>The self-join approach described above demonstrates how declarative statements can be used to express the OP's requirement.  However this approach is naive in a sense that its performance is roughly bound to the sum of the squares of record counts within each aa 'category'. (not O(n^2) but roughly O((n/a)^2) where a is the number of different values for the aa column)  In other words it performs well with data such that on average the number of records associated with a given aa value doesn't exceed a few dozens.  If the data is such that the aa column is not selective, the following  approach is much -much!- better suited.  It leverages SQL's efficient sorting framework, while implementing a simple algorithm that would be hard to express in declarative fashion.   This approach could further be improved for datasets with particularly huge number of records each/most aa 'categories' by introducing a simple binary search of the next aa value, by looking ahead (and sometimes back...) in the cursor.  For cases where the number of aa 'categories' relative to the overall row count in tblAbc is low, see yet another approach, after this next one.</p>
+
+<pre><code>DECLARE @aa AS VARCHAR(10), @bb AS INT, @cc AS VARCHAR(10)
+DECLARE @curAa AS VARCHAR(10)
+DECLARE @Ctr AS INT
+
+DROP TABLE  tblResults;
+CREATE TABLE tblResults
+(  aa VARCHAR(10),
+   bb INT,
+   cc VARCHAR(10)
+);
+
+DECLARE abcCursor CURSOR 
+  FOR SELECT aa, bb, cc
+  FROM tblABC
+  ORDER BY aa, bb DESC, cc
+  FOR READ ONLY;
+
+OPEN abcCursor;
+
+SET @curAa = ''
+
+FETCH NEXT FROM abcCursor INTO @aa, @bb, @cc;
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    IF @curAa &lt;&gt; @aa
+    BEGIN
+       SET @Ctr = 0
+       SET @curAa = @aa
+    END
+    IF @Ctr &lt; 5
+    BEGIN
+       SET @Ctr = @Ctr + 1;
+       INSERT tblResults VALUES(@aa, @bb, @cc);
+    END
+    FETCH NEXT FROM AbcCursor INTO @aa, @bb, @cc;
+END;
+
+CLOSE abcCursor;
+DEALLOCATE abcCursor;
+
+SELECT * from tblResults
+ORDER BY aa, bb, cc    -- OR .. bb DESC ... for a more traditional order.
+</code></pre>
+
+<p><strong>Alternative to the above</strong> for cases when aa is very unselective.  In other words, when we have relatively few aa 'categories'.  The idea is to go through the list of distinct categories and to run a "LIMIT" (MySql) "TOP" (MSSQL) query for each of these values.
+For reference purposes, the following ran in 63 seconds for tblAbc of 61 Million records divided in 45 aa values, on MSSQL 8.0, on a relatively old/weak host.</p>
+
+<pre><code>DECLARE @aa AS VARCHAR(10)
+DECLARE @aaCount INT
+
+DROP TABLE  tblResults;
+CREATE TABLE tblResults
+(  aa VARCHAR(10),
+   bb INT,
+   cc VARCHAR(10)
+);
+
+DECLARE aaCountCursor CURSOR 
+  FOR SELECT aa, COUNT(*)
+  FROM tblABC
+  GROUP BY aa
+  ORDER BY aa
+  FOR READ ONLY;
+OPEN aaCountCursor;
+
+
+FETCH NEXT FROM aaCountCursor INTO @aa, @aaCount
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    INSERT tblResults 
+       SELECT TOP 5 aa, bb, cc
+       FROM tblproh
+       WHERE aa = @aa
+       ORDER BY aa, bb DESC, cc
+
+    FETCH NEXT FROM aaCountCursor INTO @aa, @aaCount;
+END;
+
+CLOSE aaCountCursor
+DEALLOCATE aaCountCursor
+
+SELECT * from tblResults
+ORDER BY aa, bb, cc    -- OR .. bb DESC ... for a more traditional order.
+</code></pre>
+
+<p><strong>On the question of needing an index or not</strong>.  (cf OP's remark)
+When merely running a "SELECT * FROM myTable", a table scan is effectively the fastest appraoch, no need to bother with indexes.  However, the main reason why SQL is typically better suited for this kind of things (aside from being the repository where the data has been accumulating in the first place, whereas any external solution needs to account for the time to export the relevant data), is that it can rely on indexes to avoid scanning.  Many general purpose languages are far better suited to handle raw processing, but they are fighting an unfair battle with SQL because they need to rebuilt any prior knowledge of the data which SQL has gathered in the course of its data collection / import phase.  Since sorting is a typically a time and sometimes space consuming task, SQL and its relatively slower processing power often ends up ahead of alternative solutions.</p>
+
+<p>Also, even without pre-built indexes, modern query optimizers may decide on a plan that involves the creation of a temporary index.  And, because sorting is an intrinsic part of DDMS, the SQL servers are generally efficient in that area.</p>
+
+<p><strong>So... Is SQL better?</strong></p>
+
+<p>This said, if we are trying to compare SQL and other languages for pure ETL jobs, i.e. for dealing with <em>heaps</em> (unindexed tables) as its input to perform various transformations and filtering, it is likely that multi-thread-able utilities written in say C, and leveraging efficient sorting libaries, would likely be faster.  The determining question to decide on a SQL vs. Non-SQL approach is where the data is located and where should it eventually reside.  If we merely to convert a file to be supplied down "the chain" external programs are better suited.  If we have or need the data in a SQL server, there are only rare cases that make it worthwhile exporting and processing externally.</p>
+<br /><b>#1</b><br /><p>You could use smarter data structures and still use python.
+I've ran your reference implementation and my python implementation on my machine and even compared the output to be sure in results.</p>
+
+<p>This is yours:</p>
+
+<pre><code>$ time python ./ref.py  &lt; data-large.txt  &gt; ref-large.txt
+
+real 1m57.689s
+user 1m56.104s
+sys 0m0.573s
+</code></pre>
+
+<p>This is mine:</p>
+
+<pre><code>$ time python ./my.py  &lt; data-large.txt  &gt; my-large.txt
+
+real 1m35.132s
+user 1m34.649s
+sys 0m0.261s
+$ diff my-large.txt ref-large.txt 
+$ echo $?
+0
+</code></pre>
+
+<p>And this is the source:</p>
+
+<pre><code>#!/usr/bin/python
+# -*- coding: utf-8; -*-
+import sys
+import heapq
+
+top_5 = {}
+
+for line in sys.stdin:
+    aa, bb, cc = line.split()
+
+    # We want the top 5 for each distinct value of aa.  There are
+    # hundreds of thousands of values of aa.
+    bb = float(bb)
+    if aa not in top_5: top_5[aa] = []
+    current = top_5[aa]
+    if len(current) &lt; 5:
+        heapq.heappush(current, (bb, cc))
+    else:
+        if current[0] &lt; (bb, cc):
+            heapq.heapreplace(current, (bb, cc))
+
+for aa in top_5:
+    current = top_5[aa]
+    while len(current) &gt; 0:
+        bb, cc = heapq.heappop(current)
+        print aa, bb, cc
+</code></pre>
+
+<p><strong>Update:</strong> Know your limits.
+I've also timed a noop code, to know the fastest possible python solution with code similar to the original:</p>
+
+<pre><code>$ time python noop.py &lt; data-large.txt  &gt; noop-large.txt
+
+real    1m20.143s
+user    1m19.846s
+sys 0m0.267s
+</code></pre>
+
+<p>And the noop.py itself:</p>
+
+<pre><code>#!/usr/bin/python
+# -*- coding: utf-8; -*-
+import sys
+import heapq
+
+top_5 = {}
+
+for line in sys.stdin:
+    aa, bb, cc = line.split()
+
+    bb = float(bb)
+    if aa not in top_5: top_5[aa] = []
+    current = top_5[aa]
+    if len(current) &lt; 5:
+        current.append((bb, cc))
+
+for aa in top_5:
+    current = top_5[aa]
+    current.sort()
+    for bb, cc in current[-5:]:
+        print aa, bb, cc
+</code></pre>
+<br /><b>#2</b><br /><p>This is a sketch in Common Lisp</p>
+
+<p>Note that for long files there is a penalty for using READ-LINE, because it conses a fresh string for each line. Then use one of the derivatives of READ-LINE that are floating around that are using a line buffer. Also you might check if you want the hash table be case sensitive or not.</p>
+
+<p><strong>second version</strong></p>
+
+<p>Splitting the string is no longer needed, because we do it here. It is low level code, in the hope that some speed gains will be possible. It checks for one or more spaces as field delimiter and also tabs.</p>
+
+<pre><code>(defun read-a-line (stream)
+  (let ((line (read-line stream nil nil)))
+    (flet ((delimiter-p (c)
+             (or (char= c #\space) (char= c #\tab))))
+      (when line
+        (let* ((s0 (position-if     #'delimiter-p line))
+               (s1 (position-if-not #'delimiter-p line :start s0))
+               (s2 (position-if     #'delimiter-p line :start (1+ s1)))
+               (s3 (position-if     #'delimiter-p line :from-end t)))
+          (values (subseq line 0 s0)
+                  (list (read-from-string line nil nil :start s1 :end s2)
+                        (subseq line (1+ s3)))))))))
+</code></pre>
+
+<p>Above function returns two values: the key and a list of the rest.</p>
+
+<pre><code>(defun dbscan (top-5-table stream)
+   "get triples from each line and put them in the hash table"
+  (loop with aa = nil and bbcc = nil do
+    (multiple-value-setq (aa bbcc) (read-a-line stream))
+    while aa do
+    (setf (gethash aa top-5-table)
+          (let ((l (merge 'list (gethash aa top-5-table) (list bbcc)
+                          #'&gt; :key #'first)))
+             (or (and (nth 5 l) (subseq l 0 5)) l)))))
+
+
+(defun dbprint (table output)
+  "print the hashtable contents"
+  (maphash (lambda (aa value)
+              (loop for (bb cc) in value
+                    do (format output "~a ~a ~a~%" aa bb cc)))
+           table))
+
+(defun dbsum (input &amp;optional (output *standard-output*))
+  "scan and sum from a stream"
+  (let ((top-5-table (make-hash-table :test #'equal)))
+    (dbscan top-5-table input)
+    (dbprint top-5-table output)))
+
+
+(defun fsum (infile outfile)
+   "scan and sum a file"
+   (with-open-file (input infile :direction :input)
+     (with-open-file (output outfile
+                      :direction :output :if-exists :supersede)
+       (dbsum input output))))
+</code></pre>
+
+<p><strong>some test data</strong></p>
+
+<pre><code>(defun create-test-data (&amp;key (file "/tmp/test.data") (n-lines 100000))
+  (with-open-file (stream file :direction :output :if-exists :supersede)
+    (loop repeat n-lines
+          do (format stream "~a ~a ~a~%"
+                     (random 1000) (random 100.0) (random 10000)))))
+</code></pre>
+
+<p>; (create-test-data)</p>
+
+<pre><code>(defun test ()
+  (time (fsum "/tmp/test.data" "/tmp/result.data")))
+</code></pre>
+
+<p><strong>third version, LispWorks</strong></p>
+
+<p>Uses some SPLIT-STRING and PARSE-FLOAT functions, otherwise generic CL.</p>
+
+<pre><code>(defun fsum (infile outfile)
+  (let ((top-5-table (make-hash-table :size 50000000 :test #'equal)))
+    (with-open-file (input infile :direction :input)
+      (loop for line = (read-line input nil nil)
+            while line do
+            (destructuring-bind (aa bb cc) (split-string '(#\space #\tab) line)
+              (setf bb (parse-float bb))
+              (let ((v (gethash aa top-5-table)))
+                (unless v
+                  (setf (gethash aa top-5-table)
+                        (setf v (make-array 6 :fill-pointer 0))))
+                (vector-push (cons bb cc) v)
+                (when (&gt; (length v) 5)
+                  (setf (fill-pointer (sort v #'&gt; :key #'car)) 5))))))
+    (with-open-file (output outfile :direction :output :if-exists :supersede)
+      (maphash (lambda (aa value)
+                 (loop for (bb . cc) across value do
+                       (format output "~a ~f ~a~%" aa bb cc)))
+               top-5-table))))
+</code></pre>
+<br /><b>#3</b><br /><p>This took 45.7s on my machine with 27M rows of data that looked like this:</p>
+
+<pre><code>42 0.49357 0
+96 0.48075 1
+27 0.640761 2
+8 0.389128 3
+75 0.395476 4
+24 0.212069 5
+80 0.121367 6
+81 0.271959 7
+91 0.18581 8
+69 0.258922 9
+</code></pre>
+
+<p>Your script took 1m42 on this data, the c++ example too 1m46 (g++ t.cpp -o t to compile it, I don't know anything about c++).</p>
+
+<p>Java 6, not that it matters really. Output isn't perfect, but it's easy to fix.</p>
+
+<pre><code>package top5;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.TreeMap;
+
+public class Main {
+
+    public static void main(String[] args) throws Exception {
+        long start  = System.currentTimeMillis();
+        Map&lt;String, Pair[]&gt; top5map = new TreeMap&lt;String, Pair[]&gt;();
+        BufferedReader br = new BufferedReader(new FileReader("/tmp/file.dat"));
+
+        String line = br.readLine();
+        while(line != null) {
+            String parts[] = line.split(" ");
+
+            String key = parts[0];
+            double score = Double.valueOf(parts[1]);
+            String value = parts[2];
+            Pair[] pairs = top5map.get(key);
+
+            boolean insert = false;
+            Pair p = null;
+            if (pairs != null) {
+                insert = (score &gt; pairs[pairs.length - 1].score) || pairs.length &lt; 5;
+            } else {
+                insert = true;
+            }
+            if (insert) {
+                p = new Pair(score, value);
+                if (pairs == null) {
+                    pairs = new Pair[1];
+                    pairs[0] = new Pair(score, value);
+                } else {
+                    if (pairs.length &lt; 5) {
+                        Pair[] newpairs = new Pair[pairs.length + 1];
+                        System.arraycopy(pairs, 0, newpairs, 0, pairs.length);
+                        pairs = newpairs;
+                    }
+                    int k = 0;
+                    for(int i = pairs.length - 2; i &gt;= 0; i--) {
+                        if (pairs[i].score &lt;= p.score) {
+                            pairs[i + 1] = pairs[i];
+                        } else {
+                            k = i + 1;
+                            break;
+                        }
+                    }
+                    pairs[k] = p;
+                }
+                top5map.put(key, pairs);
+            }
+            line = br.readLine();
+        }
+        for(Map.Entry&lt;String, Pair[]&gt; e : top5map.entrySet()) {
+            System.out.print(e.getKey());
+            System.out.print(" ");
+            System.out.println(Arrays.toString(e.getValue()));
+        }
+        System.out.println(System.currentTimeMillis() - start);
+    }
+
+    static class Pair {
+        double score;
+        String value;
+
+        public Pair(double score, String value) {
+            this.score = score;
+            this.value = value;
+        }
+
+        public int compareTo(Object o) {
+            Pair p = (Pair) o;
+            return (int)Math.signum(score - p.score);
+        }
+
+        public String toString() {
+            return String.valueOf(score) + ", " + value;
+        }
+    }
+}
+</code></pre>
+
+<p>AWK script to fake the data:</p>
+
+<pre><code>BEGIN {
+ for (i = 0; i &lt; 27000000; i++) {
+  v = rand();
+  k = int(rand() * 100);
+  print k " " v " " i;
+ }
+ exit;
+}
+</code></pre>
+<br /><b>#4</b><br /><p>Pretty straightforward Caml (27 * 10^6 rows -- 27 sec, C++ by hrnt -- 29 sec)</p>
+
+<pre><code>open Printf
+open ExtLib
+
+let (&gt;&gt;) x f = f x
+let cmp x y = compare (fst x : float) (fst y)
+let wsp = Str.regexp "[ \t]+"
+
+let () =
+  let all = Hashtbl.create 1024 in
+  Std.input_lines stdin &gt;&gt; Enum.iter (fun line -&gt;
+    let [a;b;c] = Str.split wsp line in
+    let b = float_of_string b in
+    try
+      match Hashtbl.find all a with
+      | [] -&gt; assert false
+      | (bmin,_) as prev::tl -&gt; if b &gt; bmin then
+        begin
+          let m = List.sort ~cmp ((b,c)::tl) in
+          Hashtbl.replace all a (if List.length tl &lt; 4 then prev::m else m)
+        end
+    with Not_found -&gt; Hashtbl.add all a [b,c]
+  );
+  all &gt;&gt; Hashtbl.iter (fun a -&gt; List.iter (fun (b,c) -&gt; printf "%s %f %s\n" a b c))
+</code></pre>
+<br /><b>#5</b><br /><p>Here is a C++ solution. I didn't have a lot of data to test it with, however, so I don't know how fast it actually is.</p>
+
+<p>[edit] Thanks to the test data provided by the awk script in this thread, I
+managed to clean up and speed up the code a bit. I am not trying to find out the fastest possible version - the intent is to provide a reasonably fast version that isn't as ugly as people seem to think STL solutions can be. </p>
+
+<p>This version should be about twice as fast as the first version (goes through 27 million lines in about 35 seconds). Gcc users, remember to
+compile this with -O2.</p>
+
+<pre><code>#include &lt;map&gt;
+#include &lt;iostream&gt;
+#include &lt;functional&gt;
+#include &lt;utility&gt;
+#include &lt;string&gt;
+int main() {
+  using namespace std;
+  typedef std::map&lt;string, std::multimap&lt;double, string&gt; &gt; Map;
+  Map m;
+  string aa, cc;
+  double bb;
+  std::cin.sync_with_stdio(false); // Dunno if this has any effect, but anyways.
+
+  while (std::cin &gt;&gt; aa &gt;&gt; bb &gt;&gt; cc)
+    {
+      if (m[aa].size() == 5)
+        {
+          Map::mapped_type::iterator iter = m[aa].begin();
+          if (bb &lt; iter-&gt;first)
+            continue;
+          m[aa].erase(iter);
+        }
+      m[aa].insert(make_pair(bb, cc));
+    }
+  for (Map::const_iterator iter = m.begin(); iter != m.end(); ++iter)
+    for (Map::mapped_type::const_iterator iter2 = iter-&gt;second.begin();
+         iter2 != iter-&gt;second.end();
+         ++iter2)
+      std::cout &lt;&lt; iter-&gt;first &lt;&lt; " " &lt;&lt; iter2-&gt;first &lt;&lt; " " &lt;&lt; iter2-&gt;second &lt;&lt;
+ std::endl;
+
+}
+</code></pre>
+<br /><b>#6</b><br /><p>Interestingly, the original Python solution is by far the cleanest <em>looking</em> (although the C++  example comes close). </p>
+
+<p>How about using Pyrex or Psyco on your original code?</p>
+<br /><b>#7</b><br /><p>Of <em>all</em> the programs in this thread that I've tested so far, <strong>the OCaml version is the fastest</strong> and also among the <strong>shortest</strong>. (Line-of-code-based measurements are a little fuzzy, but it's not <em>clearly longer</em> than the Python version or the C or C++ versions, and it <em>is</em> clearly faster.)</p>
+
+<blockquote>
+  <p>Note: I figured out why my earlier runtimes were so nondeterministic! My CPU heatsink was clogged with dust and my CPU was overheating as a result. Now I am getting nice deterministic benchmark times. I think I've now redone all the timing measurements in this thread now that I have a reliable way to time things.</p>
+</blockquote>
+
+<p>Here are the timings for the different versions so far, running on a 27-million-row 630-megabyte input data file. I'm on Ubuntu Intrepid Ibex on a dual-core 1.6GHz Celeron, running a 32-bit version of the OS (the Ethernet driver was broken in the 64-bit version). I ran each program five times and report the range of times those five tries took. I'm using Python 2.5.2, OpenJDK 1.6.0.0, OCaml 3.10.2, GCC 4.3.2, SBCL 1.0.8.debian, and Octave 3.0.1.</p>
+
+<ul>
+<li>SquareCog's Pig version: not yet tested (because I can't just <code>apt-get install pig</code>), <em>7</em> lines of code.</li>
+<li>mjv's pure SQL version: not yet tested, but I predict a runtime of several days; <em>7</em> lines of code.</li>
+<li>ygrek's OCaml version: <strong>68.7 seconds</strong> ±0.9 in <em>15</em> lines of code.</li>
+<li>My Python version: <strong>169 seconds</strong> ±4 or <strong>86 seconds</strong> ±2 with Psyco, in <em>16</em> lines of code.</li>
+<li>abbot's heap-based Python version: <strong>177 seconds</strong> ±5 in <em>18</em> lines of code, or <strong>83 seconds</strong> ±5 with Psyco.</li>
+<li>My C version below, composed with GNU <code>sort -n</code>: <strong>90 + 5.5 seconds</strong> (±3, ±0.1), but gives the wrong answer because of a deficiency in GNU <code>sort</code>, in <em>22</em> lines of code (including one line of shell.)</li>
+<li>hrnt's C++ version: <strong>217 seconds</strong> ±3 in <em>25</em> lines of code.</li>
+<li>mjv's alternative SQL-based procedural approach: not yet tested, <em>26</em> lines of code.</li>
+<li>mjv's first SQL-based procedural approach: not yet tested, <em>29</em> lines of code.</li>
+<li>peufeu's <a href="http://gist.github.com/194877" rel="nofollow" title="My modified version as a gist">Python version with Psyco</a>: <strong>181 seconds</strong> ±4, somewhere around <em>30</em> lines of code.</li>
+<li>Rainer Joswig's Common Lisp version: <strong>478 seconds</strong> (only run once) in <em>42</em> lines of code.</li>
+<li>abbot's <code>noop.py</code>, which intentionally gives incorrect results to establish a lower bound: not yet tested, <em>15</em> lines of code.</li>
+<li>Will Hartung's Java version: <strong>96 seconds</strong> ±10 in, according to David A. Wheeler’s SLOCCount, <em>74</em> lines of code.</li>
+<li>Greg's Matlab version: doesn't work.</li>
+<li>Schuyler Erle's suggestion of using Pyrex on one of the Python versions: not yet tried.</li>
+</ul>
+
+<p>I supect abbot's version comes out relatively worse for me than for them because the real dataset has a highly nonuniform distribution: as I said, some <code>aa</code> values (“players”) have thousands of lines, while others only have one.</p>
+
+<p>About Psyco: I applied Psyco to my original code (and abbot's version) by putting it in a <code>main</code> function, which by itself cut the time down to about 140 seconds, and calling <code>psyco.full()</code> before calling <code>main()</code>. This added about four lines of code.</p>
+
+<p>I can <strong>almost</strong> solve the problem using GNU <code>sort</code>, as follows:</p>
+
+<pre><code>kragen@inexorable:~/devel$ time LANG=C sort -nr infile -o sorted
+
+real    1m27.476s
+user    0m59.472s
+sys 0m8.549s
+kragen@inexorable:~/devel$ time ./top5_sorted_c &lt; sorted &gt; outfile
+
+real    0m5.515s
+user    0m4.868s
+sys 0m0.452s
+</code></pre>
+
+<p>Here <code>top5_sorted_c</code> is this short C program:</p>
+
+<pre><code>#include &lt;ctype.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;stdlib.h&gt;
+
+enum { linesize = 1024 };
+
+char buf[linesize];
+char key[linesize];             /* last key seen */
+
+int main() {
+  int n = 0;
+  char *p;
+
+  while (fgets(buf, linesize, stdin)) {
+    for (p = buf; *p &amp;&amp; !isspace(*p); p++) /* find end of key on this line */
+      ;
+    if (p - buf != strlen(key) || 0 != memcmp(buf, key, p - buf)) 
+      n = 0;                    /* this is a new key */
+    n++;
+
+    if (n &lt;= 5)               /* copy up to five lines for each key */
+      if (fputs(buf, stdout) == EOF) abort();
+
+    if (n == 1) {               /* save new key in `key` */
+      memcpy(key, buf, p - buf);
+      key[p-buf] = '\0';
+    }
+  }
+  return 0;
+}
+</code></pre>
+
+<p>I first tried writing that program in C++ as follows, and I got runtimes which were substantially slower, at 33.6±2.3 seconds instead of 5.5±0.1 seconds:</p>
+
+<pre><code>#include &lt;map&gt;
+#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+int main() {
+  using namespace std;
+  int n = 0;
+  string prev, aa, bb, cc;
+
+  while (cin &gt;&gt; aa &gt;&gt; bb &gt;&gt; cc) {
+    if (aa != prev) n = 0;
+    ++n;
+    if (n &lt;= 5) cout &lt;&lt; aa &lt;&lt; " " &lt;&lt; bb &lt;&lt; " " &lt;&lt; cc &lt;&lt; endl;
+    prev = aa;
+  }
+  return 0;
+}
+</code></pre>
+
+<p>I did say <strong>almost</strong>.  The problem is that <code>sort -n</code> does okay for most of the data, but it fails when it's trying to compare <code>0.33</code> with <code>3.78168e-05</code>. So to get this kind of performance and actually solve the problem, I need a better sort.</p>
+
+<p>Anyway, I kind of feel like I'm whining, but the sort-and-filter approach is about 5× faster than the Python program, while the elegant STL program from hrnt is actually a little slower — there seems to be some kind of gross inefficiency in <code>&lt;iostream&gt;</code>. I don't know where the other 83% of the runtime is going in that little C++ version of the filter, but it isn't going anywhere useful, which makes me suspect I don't know where it's going in hrnt's <code>std::map</code> version either. Could that version be sped up 5× too? Because that would be pretty cool. Its working set <em>might</em> be bigger than my L2 cache, but as it happens it probably isn't.</p>
+
+<p>Some investigation with callgrind says my filter program in C++ is executing 97% of its instructions inside of <code>operator &gt;&gt;</code>. I can identify at least 10 function calls per input byte, and <code>cin.sync_with_stdio(false);</code> doesn’t help. This probably means I could get hrnt’s C program to run substantially faster by parsing input lines more efficiently.</p>
+
+<p>Edit: kcachegrind claims that hrnt’s program executes 62% of its instructions (on a small 157000 line input file) extracting <code>double</code>s from an <code>istream</code>. A substantial part of this is because the istreams library apparently executes about 13 function calls per input byte when trying to parse a <code>double</code>. Insane. Could I be misunderstanding kcachegrind's output?</p>
+
+<p>Anyway, any other suggestions?</p>
+<br /><b>#8</b><br /><p>Has anybody tried doing this problem with just awk. Specifically 'mawk'? It should be faster than even Java and C++, according to this blog post: <a href="http://anyall.org/blog/2009/09/dont-mawk-awk-the-fastest-and-most-elegant-big-data-munging-language/" rel="nofollow">http://anyall.org/blog/2009/09/dont-mawk-awk-the-fastest-and-most-elegant-big-data-munging-language/</a> </p>
+
+<p>EDIT: Just wanted to clarify that the only claim being made in that blog post is that for a certain class of problems that are specifically suited to awk-style processing, the mawk virtual machine can beat 'vanilla' implementations in Java and C++. </p>
+<br /><b>#9</b><br /><p>Since you asked about Matlab, here's how I did something like what you're asking for.  I tried to do it without any for loops, but I do have one because I didn't care to take a long time with it.  If you were worried about memory then you could pull data from the stream in chunks with fscanf rather than reading the entire buffer.</p>
+
+<pre><code>fid = fopen('fakedata.txt','r');
+tic
+A=fscanf(fid,'%d %d %d\n');
+A=reshape(A,3,length(A)/3)';  %Matlab reads the data into one long column'
+Names = unique(A(:,1));
+for i=1:length(Names)
+    indices = find(A(:,1)==Names(i));   %Grab all instances of key i
+    [Y,I] = sort(A(indices,2),1,'descend'); %sort in descending order of 2nd record
+    A(indices(I(1:min([5,length(indices(I))]))),:) %Print the top five
+end
+toc
+fclose(fid)
+</code></pre>
+<br /><b>#10</b><br /><p>Speaking of lower bounds on compute time :</p>
+
+<p>Let's analyze my algo above :</p>
+
+<pre><code>for each row (key,score,id) :
+    create or fetch a list of top scores for the row's key
+    if len( this list ) &lt; N
+        append current
+    else if current score &gt; minimum score in list
+        replace minimum of list with current row
+        update minimum of all lists if needed
+</code></pre>
+
+<p>Let N be the N in top-N
+Let R be the number of rows in your data set
+Let K be the number of distinct keys</p>
+
+<p>What assumptions can we make ?</p>
+
+<p>R * sizeof( row ) > RAM or at least it's big enough that we don't want to load it all, use a hash to group by key, and sort each bin. For the same reason we don't sort the whole stuff.</p>
+
+<p>Kragen likes hashtables, so K * sizeof(per-key state) &lt;&lt; RAM, most probably it fits in L2/3 cache</p>
+
+<p>Kragen is not sorting, so K*N &lt;&lt; R ie each key has much more than N entries</p>
+
+<p>(note : A &lt;&lt; B means A is small relative to B)</p>
+
+<p>If the data has a random distribution, then </p>
+
+<p>after a small number of rows, the majority of rows will be rejected by the per-key minimum condition, the cost is 1 comparison per row.</p>
+
+<p>So the cost per row is 1 hash lookup + 1 comparison + epsilon * (list insertion + (N+1) comparisons for the minimum)</p>
+
+<p>If the scores have a random distribution (say between 0 and 1) and the conditions above hold, both epsilons will be very small.</p>
+
+<p>Experimental proof :</p>
+
+<p>The 27 million rows dataset above produces 5933 insertions into the top-N lists. All other rows are rejected by a simple key lookup and comparison. epsilon = 0.0001</p>
+
+<p>So roughly, the cost is 1 lookup + coparison per row, which takes a few  nanoseconds.</p>
+
+<p>On current hardware, there is no way this is not going to be negligible versus IO cost and especially parsing costs.</p>
+<br /><b>#11</b><br /><p>Here is one more OCaml version - targeted for speed - with custom parser on Streams. Too long, but parts of the parser are reusable. Thanks <strong>peufeu</strong> for triggering competition :)</p>
+
+<p>Speed :</p>
+
+<ul>
+<li>simple ocaml - 27 sec</li>
+<li>ocaml with Stream parser - 15 sec</li>
+<li>c with manual parser - 5 sec</li>
+</ul>
+
+<p>Compile with :</p>
+
+<pre><code>ocamlopt -pp camlp4o code.ml -o caml
+</code></pre>
+
+<p>Code :</p>
+
+<pre><code>open Printf
+
+let cmp x y = compare (fst x : float) (fst y)
+let digit c = Char.code c - Char.code '0'
+
+let rec parse f = parser
+  | [&lt; a=int; _=spaces; b=float; _=spaces; 
+       c=rest (Buffer.create 100); t &gt;] -&gt; f a b c; parse f t
+  | [&lt; &gt;] -&gt; ()
+and int = parser
+  | [&lt; ''0'..'9' as c; t &gt;] -&gt; int_ (digit c) t
+  | [&lt; ''-'; ''0'..'9' as c; t &gt;] -&gt; - (int_ (digit c) t)
+and int_ n = parser
+  | [&lt; ''0'..'9' as c; t &gt;] -&gt; int_ (n * 10 + digit c) t
+  | [&lt; &gt;] -&gt; n
+and float = parser
+  | [&lt; n=int; t=frem; e=fexp &gt;] -&gt; (float_of_int n +. t) *. (10. ** e)
+and frem = parser
+  | [&lt; ''.'; r=frem_ 0.0 10. &gt;] -&gt; r
+  | [&lt; &gt;] -&gt; 0.0
+and frem_ f base = parser
+  | [&lt; ''0'..'9' as c; t &gt;] -&gt; 
+      frem_ (float_of_int (digit c) /. base +. f) (base *. 10.) t
+  | [&lt; &gt;] -&gt; f
+and fexp = parser
+  | [&lt; ''e'; e=int &gt;] -&gt; float_of_int e
+  | [&lt; &gt;] -&gt; 0.0
+and spaces = parser
+  | [&lt; '' '; t &gt;] -&gt; spaces t
+  | [&lt; ''\t'; t &gt;] -&gt; spaces t
+  | [&lt; &gt;] -&gt; ()
+and crlf = parser
+  | [&lt; ''\r'; t &gt;] -&gt; crlf t
+  | [&lt; ''\n'; t &gt;] -&gt; crlf t
+  | [&lt; &gt;] -&gt; ()
+and rest b = parser
+  | [&lt; ''\r'; _=crlf &gt;] -&gt; Buffer.contents b
+  | [&lt; ''\n'; _=crlf &gt;] -&gt; Buffer.contents b
+  | [&lt; 'c; t &gt;] -&gt; Buffer.add_char b c; rest b t
+  | [&lt; &gt;] -&gt; Buffer.contents b
+
+let () =
+  let all = Array.make 200 [] in
+  let each a b c =
+    assert (a &gt;= 0 &amp;&amp; a &lt; 200);
+    match all.(a) with
+    | [] -&gt; all.(a) &lt;- [b,c]
+    | (bmin,_) as prev::tl -&gt; if b &gt; bmin then
+      begin
+        let m = List.sort cmp ((b,c)::tl) in
+        all.(a) &lt;- if List.length tl &lt; 4 then prev::m else m
+      end
+  in
+  parse each (Stream.of_channel stdin);
+  Array.iteri 
+    (fun a -&gt; List.iter (fun (b,c) -&gt; printf "%i %f %s\n" a b c))
+    all
+</code></pre>
+<br /><b>#12</b><br /><p>Isn't this just as simple as </p>
+
+<pre><code> SELECT DISTINCT aa, bb, cc FROM tablename ORDER BY bb DESC LIMIT 5
+</code></pre>
+
+<p>?</p>
+
+<p>Of course, it's hard to tell what would be fastest without testing it against the data.  And if this is something you need to run very fast, it might make sense to optimize your database to make the query faster, rather than optimizing the query.</p>
+
+<p>And, of course, if you need the flat file anyway, you might as well use that.</p>
+<br /><b>#13</b><br /><p>The Pig version would go something like this (untested):</p>
+
+<pre><code> Data = LOAD '/my/data' using PigStorage() as (aa:int, bb:float, cc:chararray);
+ grp = GROUP Data by aa;
+ topK = FOREACH grp (
+     sorted = ORDER Data by bb DESC;
+     lim = LIMIT sorted 5;
+     GENERATE group as aa, lim;
+)
+STORE topK INTO '/my/output' using PigStorage();
+</code></pre>
+
+<p>Pig isn't optimized for performance; it's goal is to enable processing of multi-terabyte datasets using parallel execution frameworks. It does have a local mode, so you can try it, but I doubt it will beat your script.</p>
+<br /><b>#14</b><br /><p>That was a nice lunch break challenge, he, he.</p>
+
+<p>Top-N is a well-known database killer. As shown by the post above, there is no way to efficiently express it in common SQL.</p>
+
+<p>As for the various implementations, you got to keep in mind that the slow part in this is not the sorting or the top-N, it's the parsing of text. Have you looked at the source code for glibc's strtod() lately ?</p>
+
+<p>For instance, I get, using Python :</p>
+
+<pre><code>Read data : 80.5  s
+My TopN   : 34.41 s
+HeapTopN  : 30.34 s
+</code></pre>
+
+<p>It is quite likely that you'll never get very fast timings, no matter what language you use, unless your data is in some format that is a lot faster to parse than text. For instance, loading the test data into postgres takes 70 s, and the majority of that is text parsing, too.</p>
+
+<p>If the N in your topN is small, like 5, a C implementation of my algorithm below would probably be the fastest. If N can be larger, heaps are a much better option.</p>
+
+<p>So, since your data is probably in a database, and your problem is getting at the data, not the actual processing, if you're really in need of a super fast TopN engine, what you should do is write a C module for your database of choice. Since postgres is faster for about anything, I suggest using postgres, plus it isn't difficult to write a C module for it.</p>
+
+<p>Here's my Python code :</p>
+
+<pre><code>import random, sys, time, heapq
+
+ROWS = 27000000
+
+def make_data( fname ):
+    f = open( fname, "w" )
+    r = random.Random()
+    for i in xrange( 0, ROWS, 10000 ):
+        for j in xrange( i,i+10000 ):
+            f.write( "%d    %f    %d\n" % (r.randint(0,100), r.uniform(0,1000), j))
+        print ("write: %d\r" % i),
+        sys.stdout.flush()
+    print
+
+def read_data( fname ):
+    for n, line in enumerate( open( fname ) ):
+        r = line.strip().split()
+        yield int(r[0]),float(r[1]),r[2]
+        if not (n % 10000 ):
+            print ("read: %d\r" % n),
+            sys.stdout.flush()
+    print
+
+def topn( ntop, data ):
+    ntop -= 1
+    assert ntop &gt; 0
+    min_by_key = {}
+    top_by_key = {}
+    for key,value,label in data:
+        tup = (value,label)
+        if key not in top_by_key:
+            # initialize
+            top_by_key[key] = [ tup ]
+        else:
+            top = top_by_key[ key ]
+            l    = len( top )
+            if l &gt; ntop:
+                # replace minimum value in top if it is lower than current value
+                idx = min_by_key[ key ]
+                if top[idx] &lt; tup:
+                    top[idx] = tup
+                    min_by_key[ key ] = top.index( min( top ) )
+            elif l &lt; ntop:
+                # fill until we have ntop entries
+                top.append( tup )
+            else:
+                # we have ntop entries in list, we'll have ntop+1
+                top.append( tup )
+                # initialize minimum to keep
+                min_by_key[ key ] = top.index( min( top ) )
+
+    # finalize:
+    return dict( (key, sorted( values, reverse=True )) for key,values in top_by_key.iteritems() )
+
+def grouptopn( ntop, data ):
+    top_by_key = {}
+    for key,value,label in data:
+        if key in top_by_key:
+            top_by_key[ key ].append( (value,label) )
+        else:
+            top_by_key[ key ] = [ (value,label) ]
+
+    return dict( (key, sorted( values, reverse=True )[:ntop]) for key,values in top_by_key.iteritems() )
+
+def heaptopn( ntop, data ):
+    top_by_key = {}
+    for key,value,label in data:
+        tup = (value,label)
+        if key not in top_by_key:
+            top_by_key[ key ] = [ tup ]
+        else:
+            top = top_by_key[ key ]
+            if len(top) &lt; ntop:
+                heapq.heappush(top, tup)
+            else:
+                if top[0] &lt; tup:
+                    heapq.heapreplace(top, tup)
+
+    return dict( (key, sorted( values, reverse=True )) for key,values in top_by_key.iteritems() )
+
+def dummy( data ):
+    for row in data:
+        pass
+
+make_data( "data.txt" )
+
+t = time.clock()
+dummy( read_data( "data.txt" ) )
+t_read = time.clock() - t
+
+t = time.clock()
+top_result = topn( 5, read_data( "data.txt" ) )
+t_topn = time.clock() - t
+
+t = time.clock()
+htop_result = heaptopn( 5, read_data( "data.txt" ) )
+t_htopn = time.clock() - t
+
+# correctness checking :
+for key in top_result:
+    print key, " : ", "        ".join (("%f:%s"%(value,label)) for (value,label) in    top_result[key])
+    print key, " : ", "        ".join (("%f:%s"%(value,label)) for (value,label) in htop_result[key])
+
+print
+print "Read data :", t_read
+print "TopN :     ", t_topn - t_read
+print "HeapTopN : ", t_htopn - t_read
+
+for key in top_result:
+    assert top_result[key] == htop_result[key]
+</code></pre>
+<br /><b>#15</b><br /><p>Well, please grab a coffee and read the source code for strtod -- it's mindboggling, but needed, if you want to float -> text -> float to give back the same float you started with.... really...</p>
+
+<p>Parsing integers is a lot faster (not so much in python, though, but in C, yes).</p>
+
+<p>Anyway, putting the data in a Postgres table :</p>
+
+<pre><code>SELECT count( key ) FROM the dataset in the above program
+</code></pre>
+
+<p>=> 7 s (so it takes 7 s to read the 27M records)</p>
+
+<pre><code>CREATE INDEX topn_key_value ON topn( key, value );
+</code></pre>
+
+<p>191 s</p>
+
+<pre><code>CREATE TEMPORARY TABLE topkeys AS SELECT key FROM topn GROUP BY key;
+</code></pre>
+
+<p>12 s</p>
+
+<p>(You can use the index to get distinct values of 'key' faster too but it requires some light plpgsql hacking)</p>
+
+<pre><code>CREATE TEMPORARY TABLE top AS SELECT (r).* FROM (SELECT (SELECT b AS r FROM topn b WHERE b.key=a.key ORDER BY value DESC LIMIT 1) AS r FROM topkeys a) foo;
+</code></pre>
+
+<p>Temps : 15,310 ms</p>
+
+<pre><code>INSERT INTO top SELECT (r).* FROM (SELECT (SELECT b AS r FROM topn b WHERE b.key=a.key ORDER BY value DESC LIMIT 1 OFFSET 1) AS r FROM topkeys a) foo;
+</code></pre>
+
+<p>Temps : 17,853 ms</p>
+
+<pre><code>INSERT INTO top SELECT (r).* FROM (SELECT (SELECT b AS r FROM topn b WHERE b.key=a.key ORDER BY value DESC LIMIT 1 OFFSET 2) AS r FROM topkeys a) foo;
+</code></pre>
+
+<p>Temps : 13,983 ms</p>
+
+<pre><code>INSERT INTO top SELECT (r).* FROM (SELECT (SELECT b AS r FROM topn b WHERE b.key=a.key ORDER BY value DESC LIMIT 1 OFFSET 3) AS r FROM topkeys a) foo;
+</code></pre>
+
+<p>Temps : 16,860 ms</p>
+
+<pre><code>INSERT INTO top SELECT (r).* FROM (SELECT (SELECT b AS r FROM topn b WHERE b.key=a.key ORDER BY value DESC LIMIT 1 OFFSET 4) AS r FROM topkeys a) foo;
+</code></pre>
+
+<p>Temps : 17,651 ms</p>
+
+<pre><code>INSERT INTO top SELECT (r).* FROM (SELECT (SELECT b AS r FROM topn b WHERE b.key=a.key ORDER BY value DESC LIMIT 1 OFFSET 5) AS r FROM topkeys a) foo;
+</code></pre>
+
+<p>Temps : 19,216 ms</p>
+
+<pre><code>SELECT * FROM top ORDER BY key,value;
+</code></pre>
+
+<p>As you can see computing the top-n is extremely fast (provided n is small) but creating the (mandatory) index is extremely slow because it involves a full sort.</p>
+
+<p>Your best bet is to use a format that is fast to parse (either binary, or write a custom C aggregate for your database, which would be the best choice IMHO). The runtime in the C program shouldn't be more than 1s if python can do it in 1 s.</p>
+<br /><b>#16</b><br /><p>I love lunch break challenges. Here's a 1 hour implementation.</p>
+
+<p>OK, when you don't want do some extremely exotic crap like additions, nothing stops you from using a custom base-10 floating point format whose only implemented operator is comparison, right ? lol.</p>
+
+<p>I had some fast-atoi code lying around from a previous project, so I just imported that.</p>
+
+<p><a href="http://www.copypastecode.com/11541/" rel="nofollow">http://www.copypastecode.com/11541/</a></p>
+
+<p>This C source code takes about 6.6 seconds to parse the 580MB of input text (27 million lines), half of that time is fgets, lol. Then it takes approximately 0.05 seconds to compute the top-n, but I don't know for sure, since the time it takes for the top-n is less than the timer noise.</p>
+
+<p>You'll be the one to test it for correctness though XDDDDDDDDDDD</p>
+
+<p>Interesting huh ?</p>
+<br /><b>#17</b><br /><p>Pick "top 5" would look something like this.  Note that there's no sorting.  Nor does any list in the top_5 dictionary ever grow beyond 5 elements.</p>
+
+<pre><code>from collections import defaultdict
+import sys
+
+def keep_5( aList, aPair ):
+    minbb= min( bb for bb,cc in aList )
+    bb, cc = aPair
+    if bb &lt; minbb: return aList
+    aList.append( aPair )
+    min_i= 0
+    for i in xrange(1,6):
+        if aList[i][0] &lt; aList[min_i][0]
+            min_i= i
+    aList.pop(min_i)
+    return aList
+
+
+top_5= defaultdict(list)
+for row in sys.stdin:
+    aa, bb, cc = row.split()
+    bb = float(bb)
+    if len(top_5[aa]) &lt; 5:
+        top_5[aa].append( (bb,cc) )
+    else:
+        top_5[aa]= keep_5( top_5[aa], (bb,cc) )
+</code></pre>
+<br />

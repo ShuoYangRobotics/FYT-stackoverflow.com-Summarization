@@ -1,0 +1,137 @@
+Question (ID-910169): Resize fields in Django Admin Django tends to fill up horizontal space when adding or editing entries on the admin, but, in some cases, is a real waste of space, when, i.e., editing a date field, 8 characters wide, or a CharField, also 6 or 8 chars wide, and then the edit box goes up to 15 or 20 chars. 
+
+ How can I tell the admin how wide a textbox should be, or the heigth of a TextField edit box? 
+ Answers (Total-10): #0 You can set arbitrary HTML attributes on a widget using its "attrs" property . 
+
+ You can do this in the Django admin using formfield_for_dbfield: 
+
+ class MyModelAdmin(admin.ModelAdmin):
+ def formfield_for_dbfield(self, db_field, **kwargs):
+ field = super(ContentAdmin, self).formfield_for_dbfield(db_field, **kwargs)
+ if db_field.name == 'somefield':
+  field.widget.attrs['class'] = 'someclass ' + field.widget.attrs.get('class', '')
+ return field
+ 
+
+ or with a custom Widget subclass and the formfield_overrides dictionary : 
+
+ class DifferentlySizedTextarea(forms.Textarea):
+ def __init__(self, *args, **kwargs):
+ attrs = kwargs.setdefault('attrs', {})
+ attrs.setdefault('cols', 80)
+ attrs.setdefault('rows', 5)
+ super(DifferentlySizedTextarea, self).__init__(*args, **kwargs)
+
+class MyModelAdmin(admin.ModelAdmin):
+ formfield_overrides = { models.TextField: {'widget': DifferentlySizedTextarea}}
+ 
+ #1 You should use ModelAdmin.formfield_overrides 
+
+ It's quite easy - in admin.py define: 
+
+ class YourModelAdmin(admin.ModelAdmin):
+ formfield_overrides = {
+  models.CharField: {'widget': TextInput(attrs={'size':'20'})},
+  models.TextField: {'widget': Textarea(attrs={'rows':4, 'cols':40})},
+ }
+
+admin.site.register(YourModel, YourModelAdmin)
+ 
+
+ Don't forget that you should import appropriate widget classes from django.forms, in this case: 
+
+ from django.forms import TextInput, Textarea
+ 
+ #2 A quick and dirty option is to simply provide a custom template for the model in question. 
+
+ If you create a template named admin/&lt;app label&gt;/&lt;class name&gt;/change_form.html then the admin will use that template instead of the default. That is, if you've got a model named Person in an app named people , you'd create a template named admin/people/person/change_form.html . 
+
+ All the admin templates have an extrahead block you can override to place stuff in the &lt;head&gt; , and the final piece of the puzzle is the fact that every field has an HTML id of id_&lt;field-name&gt; . 
+
+ So, you could put something like the following in your template: 
+
+ {% extends "admin/change_form.html" %}
+
+{% block extrahead %}
+ {{ block.super }}
+ &lt;style type="text/css"&gt;
+ #id_my_field { width: 100px; }
+ &lt;/style&gt;
+{% endblock %}
+ 
+ #3 If you want to change the attributes on a per-field instance, you can add the "attrs" property directly in to your form entries. 
+
+ for example: 
+
+ class BlogPostForm(forms.ModelForm):
+ title = forms.CharField(label='Title:', max_length=128)
+ body = forms.CharField(label='Post:', max_length=2000, 
+  widget=forms.Textarea(attrs={'rows':'5', 'cols': '5'}))
+
+ class Meta:
+  model = BlogPost
+  fields = ('title', 'body')
+ 
+
+ The "attrs" property basically passes along the HTML markup that will adjust the form field. Each entry is a tuple of the attribute you would like to override and the value you would like to override it with. You can enter as many attributes as you like as long as you separate each tuple with a comma. 
+ #4 It's well described in Django FAQ : 
+
+ Q: How do I change the attributes for a widget on a field in my model? 
+
+ A: Override the formfield_for_dbfield in the ModelAdmin/StackedInline/TabularInline class 
+
+ class MyOtherModelInline(admin.StackedInline):
+ model = MyOtherModel
+ extra = 1
+
+ def formfield_for_dbfield(self, db_field, **kwargs):
+  # This method will turn all TextFields into giant TextFields
+  if isinstance(db_field, models.TextField):
+   return forms.CharField(widget=forms.Textarea(attrs={'cols': 130, 'rows':30, 'class': 'docx'}))
+  return super(MyOtherModelInline, self).formfield_for_dbfield(db_field, **kwargs)
+ 
+ #5 I had a similar problem with TextField. I'm using Django 1.0.2 and wanted to change the default value for 'rows' in the associated textarea. formfield_overrides doesn't exist in this version. Overriding formfield_for_dbfield worked but I had to do it for each of my ModelAdmin subclasses or it would result in a recursion error. Eventually, I found that adding the code below to models.py works: 
+
+ from django.forms import Textarea
+
+class MyTextField(models.TextField):
+#A more reasonably sized textarea                           
+ def formfield(self, **kwargs):
+   kwargs.update(
+   {"widget": Textarea(attrs={'rows':2, 'cols':80})}
+   )
+   return super(MyTextField, self).formfield(**kwargs)
+ 
+
+ Then use MyTextField instead of TextField when defining your models. I adapted it from this answer to a similar question. 
+ #6 You can always set your fields sizes in a custom stylesheet and tell Django to use that for your ModelAdmin class: 
+
+ class MyModelAdmin(ModelAdmin):
+ class Media:
+  css = {"all": ("my_stylesheet.css",)}
+ 
+ #7 The best way I found is something like this: 
+
+ class NotificationForm(forms.ModelForm):
+ def __init__(self, *args, **kwargs): 
+  super(NotificationForm, self).__init__(*args, **kwargs)
+  self.fields['content'].widget.attrs['cols'] = 80
+  self.fields['content'].widget.attrs['rows'] = 15
+  self.fields['title'].widget.attrs['size'] = 50
+ class Meta:
+  model = Notification
+ 
+
+ Its much better for ModelForm than overriding fields with different widgets, as it preserves name and help_text attributes and also default values of model fields, so you don't have to copy them to your form. 
+ #8 The Inline example is wrong... see:
+ http://yuji.wordpress.com/2009/09/14/django-admin-inline-styling-widget-attrs-overriding-widgets/ 
+ #9 Same answer as msdin but with TextInput instead of TextArea: 
+
+ from django.forms import TextInput
+
+class ShortTextField(models.TextField):
+ def formfield(self, **kwargs):
+   kwargs.update(
+   {"widget": TextInput(attrs={'size': 10})}
+   )
+   return super(ShortTextField, self).formfield(**kwargs)

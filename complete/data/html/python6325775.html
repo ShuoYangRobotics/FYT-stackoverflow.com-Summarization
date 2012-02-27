@@ -1,0 +1,199 @@
+<h3>Question (ID-6325775):</h3><h2>Managing Items in an Object Oriented game</h2><p>Every once in a while I like to take a break from my other projects to try to make a classic adventure text-based-game (in Python, this time) as a fun project, but I always have design issues implementing the item system. </p>
+
+<p>I'd like for the items in the game to descend from one base <code>Item</code> class, containing some attributes that every item has, such as damage and weight. My problems begin when I try to add some functionality to these items. When an item's damage gets past a threshold, it should be destroyed. And there lies my problem: I don't really know how to accomplish that.</p>
+
+<p>Since <code>del self</code> won't work for a million different reasons, <strong>(Edit: I am intentionally providing the use of 'del' as something that I know is wrong. I know what garbage collection is, and how it is not what I want.)</strong> how should I do this (And other similar tasks)? Should each item contain some kind of reference to it's container (The player, I guess) and 'ask' for itself to be deleted? </p>
+
+<p>The first thing that comes to mind is a big dictionary containing every item in the game, and each object would have a reference to this list, and both have and know it's own unique ID. I don't like this solution at all and I don't think that it's the right way to go at all. Does anybody have any suggestions?</p>
+
+<p><strong>EDIT:</strong> I'm seeing a lot of people thinking that I'm worried about garbage collection. What I'm talking about is not garbage collection, but actually removing the object from gameplay. I'm not sure about what objects should initiate the removal, etc. </p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I would have your object keep a reference to all of its parents. Then, when it should be destroyed, it would notify its parents. If you're already using an event system, this should integrate nicely with the rest of the game.</p>
+
+<p>A nice way to avoid forcing your parent to explicitly notify the object whenever the reference is dropped or added is to use some sort of proxy. Python supports <code>properties</code> that will allow for code like <code>self.weapon = Weapon()</code> to actually hand off the duty of setting the weapon attribute to the new weapon to a user defined function.</p>
+
+<p>Here's some example code using properties:</p>
+
+<pre><code>class Weapon(object):
+    def __init__(self, name):
+        self.name = name
+        self.parent = None
+    def destroy(self):
+        if self.parent:
+            self.parent.weaponDestroyed()
+
+def WeaponRef():
+    def getWeapon(self):
+        return self._weapon
+    def setWeapon(self, newWeapon):
+        if newWeapon == None: #ensure that this is a valid weapon
+            delWeapon(self)
+            return
+        if hasattr(self, "weapon"): #remove old weapon's reference to us
+            self._weapon.parent = None
+        self._weapon = newWeapon
+        newWeapon.parent = self
+    def delWeapon(self):
+        if hasattr(self, "weapon"):
+            self._weapon.parent = None
+            del self._weapon
+    return property(getWeapon, setWeapon, delWeapon)
+
+class Parent(object):
+    weapon = WeaponRef()
+    def __init__(self, name, weapon=None):
+        self.name = name
+        self.weapon = weapon
+    def weaponDestroyed(self):
+        print "%s deleting reference to %s" %(self.name, self.weapon.name)
+        del self.weapon
+
+
+w1 = Weapon("weapon 1")
+w2 = Weapon("weapon 2")
+w3 = Weapon("weapon 3")
+p1 = Parent("parent 1", w1)
+p2 = Parent("parent 2")
+
+w1.destroy()
+
+p2.weapon = w2
+w2.destroy()
+
+p2.weapon = w3
+w3.destroy()
+</code></pre>
+
+<p>Now if you're doing some sort of inventory system, where a player can have more than 1 weapon and any one of them can be destroyed at any time, then you're going to have to write your own collection class.<br>
+For something like that, just keep in mind that <code>x[2]</code> calls <code>x.__getitem__(2)</code>, <code>x[2] = 5</code> calls <code>x.__setitem__(2, 5)</code> and <code>del x[2]</code> calls <code>x.__delitem__(2)</code></p>
+<br /><b>#1</b><br /><p>You're conflating two meanings of the "destroying" idea.  The Item should get destroyed in a "gameplay" sense.  Let the garbage collector worry about when to destroy it as an object.</p>
+
+<p>Who has a reference to the Item?  Perhaps the player has it in his inventory, or it is in a room in the game.  In either case your Inventory or Room objects know about the Item. Tell them the Item has been destroyed (in a gameplay sense) and let them handle that.  Perhaps they'll now keep a reference to a "broken" Item.  Perhaps they'll keep track of it, but not display it to the user.  Perhaps they'll delete all references to it, in which case the object in memory will soon be deleted.</p>
+
+<p>The beauty of object-oriented programming is that you can abstract these processes away from the Item itself: pass the messages to whoever needs to know, and let them implement in their own way what it means for the Item to be destroyed.</p>
+<br /><b>#2</b><br /><p>Assuming you call a method when the item is used, you could always return a boolean value indicating whether it's broken.</p>
+<br /><b>#3</b><br /><p>How about:</p>
+
+<pre><code>from collections import defaultdict
+
+_items = defaultdict(set)
+_owner = {}
+
+class CanHaveItems(object):
+    @property
+    def items(self):
+        return iter(_items[self])
+    def take(self, item):
+        item.change_owner(self)
+    def lose(self, item):
+        """ local cleanup """
+
+class _nobody(CanHaveItems):
+    def __repr__(self):
+        return '_nobody'
+_nobody = _nobody()
+
+class Destroyed(object):
+    def __repr__(self):
+        return 'This is an ex-item!'
+
+class Item(object):
+    def __new__(cls, *a, **k):
+        self = object.__new__(cls)
+        _owner[self] = _nobody
+        _items[_nobody].add(self)
+        self._damage = .0
+        return self
+    def destroy(self):
+        self.change_owner(_nobody)
+        self.__class__ = Destroyed
+    @property
+    def damage(self):
+        return self._damage
+    @damage.setter
+    def damage(self, value):
+        self._damage = value
+        if self._damage &gt;= 1.:
+            self.destroy()
+    def change_owner(self, new_owner):
+        old_owner = _owner[self]
+        old_owner.lose(self)
+        _items[old_owner].discard(self)
+        _owner[self] = new_owner
+        _items[new_owner].add(self)
+
+
+class Ball(Item):
+    def __init__(self, color):
+        self.color = color
+    def __repr__(self):
+        return 'Ball(%s)' % self.color
+
+class Player(CanHaveItems):
+    def __init__(self, name):
+        self.name = name
+    def __repr__(self):
+        return 'Player(%s)' % self.name
+
+ball = Ball('red')
+ball = Ball('blue')
+
+joe = Player('joe')
+jim = Player('jim')
+
+print list(joe.items), ':', list(jim.items)
+joe.take(ball)
+print list(joe.items), ':', list(jim.items)
+jim.take(ball)
+print list(joe.items), ':', list(jim.items)
+
+print ball, ':', _owner[ball], ':', list(jim.items)
+ball.damage += 2
+print ball, ':', _owner[ball], ':', list(jim.items)
+
+print _items, ':', _owner
+</code></pre>
+<br /><b>#4</b><br /><p>One option would be to use a signal system</p>
+
+<p>Firstly, we have a reusable class that lets you define a signal</p>
+
+<pre><code>class Signal(object):
+    def __init__(self):
+         self._handlers = []
+
+    def connect(self, handler):
+         self._handlers.append(handler)
+
+    def fire(self, *args):
+         for handler in self._handlers:
+             handler(*args)
+</code></pre>
+
+<p>Your item class uses this signal to create a destroyed signal that other classes can listen for.</p>
+
+<pre><code> class Item(object):
+    def __init__(self):
+        self.destroyed = Signal()
+
+    def destroy(self):
+        self.destroyed.fire(self)
+</code></pre>
+
+<p>And inventory listens to the signals from the items and updates its internal state accordingly</p>
+
+<pre><code> class Inventory(object):
+     def __init__(self):
+         self._items = []
+
+     def add(self, item):
+         item.destroyed.connect(self.on_destroyed)
+         self._items.add(item)
+
+     def on_destroyed(self, item):
+         self._items.remove(item)
+</code></pre>
+<br /><b>#5</b><br /><p>at first: i don't have any python experience, so think about this in a more general way</p>
+
+<p>your item should neither know or care ... your Item should have an interface that says it is something destroyable. containers and other objects that care about things that can be destroyed, can make use of that interface</p>
+
+<p>that destroyable interface could have some option for consuming objects to register a callback or event, triggered when the item gets destroyed</p>
+<br />

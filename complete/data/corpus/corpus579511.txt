@@ -1,0 +1,156 @@
+Question (ID-579511): Using only the DB part of Django Does somebody know how "modular" is Django? Can I use just the ORM part, to get classes that map to DB tables and know how to read/write from these tables? 
+
+ If not, what would you recommend as "the Python equivalent of Hibernate"? 
+ Answers (Total-6): #0 If you like Django's ORM, it's perfectly simple to use it "standalone"; I've written up several techniques for using parts of Django outside of a web context , and you're free to use any of them (or roll your own). 
+
+ Shane above seems to be a bit misinformed on this and a few other points -- for example, Django can do multiple different databases, it just doesn't default to that (you need to do a custom manager on the models which use something other than the "main" DB, something that's not too hard and there are recipes floating around for it). It's true that Django itself doesn't do connection management/connection pooling, but personally I've always used external tools for that anyway (e.g., pgpool , which rocks harder than anything built in to an ORM ever could). 
+
+ I'd suggest spending some time reading up and possibly trying a few likely Google searches (e.g., the post I linked you to comes up as the top result for "standalone Django script") to get a feel for what will actually best suit your needs and tastes -- it may be Django's ORM isn't right for you, and you shouldn't use it if it isn't, but unfortunately there's a lot of misinformation out there which muddies the waters. 
+
+ Editing to respond to Shane: 
+
+ Again, you seem to be misinformed: SQLAlchemy needs to be configured (i.e., told what DB to use, how to connect, etc.) before you can run queries with it, so how is the fact that Django needs similar configuration (accomplished via your choice of methods -- you do not need to have a full Django settings file) any disadvantage? 
+
+ As for multiple DB support, you seem to be confused: the support is there at a low level. The query object -- not QuerySet , but the underlying Query object it will execute knows what DB it's connecting to, and accepts a DB connection as one of its initialization arguments. Telling one model to use one DB and another model to use another is as simple as setting up one method on a manager which passes the right connection info down into the Query . True, there's no higher-level API for this, but that's not the same as "no support" and not the same as "requires custom code" (unless you'd argue that configuring multiple DBs explicitly in SQLAlchemy, required if you want multiple DBs, is also "custom code"). 
+
+ As for whether you end up indirectly using things that aren't in django.db , well, so what? The fact that django.db imports bits of, say, django.utils because there are data structures and other bits of code which are useful for more than just an ORM is fine as far as I'm personally concerned; one might as well complain if something has external dependencies or makes use of standard Python libraries instead of being 100% self-contained. 
+ #1 The short answer is: no, you can't use the Django ORM separately from Django. 
+
+ The long answer is: yes, you can if you are willing to load large parts of Django along with it. For example, the database connection that is used by Django is opened when a request to Django occurs. This happens when a signal is sent so you could ostensibly send this signal to open the connection without using the specific request mechanism. Also, you'd need to setup the various applications and settings for the Django project. 
+
+ Ultimately, it probably isn't worth your time. SQL Alchemy is a relatively well known Python ORM, which is actually more powerful than Django's anyway since it supports multiple database connections and connection pooling and other good stuff. 
+
+ 
+
+ Edit: in response to James' criticism elsewhere, I will clarify what I described in my original post. While it is gratifying that a major Django contributor has called me out, I still think I'm right :) 
+
+ First off, consider what needs to be done to use Django's ORM separate from any other part. You use one of the methods described by James for doing a basic setup of Django. But a number of these methods don't allow for using the syncdb command, which is required to create the tables for your models. A settings.py file is needed for this, with variables not just for DATABASE_* , but also INSTALLED_APPLICATIONS with the correct paths to all models.py files. 
+
+ It is possible to roll your own solution to use syncdb without a settings.py, but it requires some advanced knowledge of Django. Of course, you don't need to use syncdb ; the tables can be created independently of the models. But it is an aspect of the ORM that is not available unless you put some effort into setup. 
+
+ Secondly, consider how you would create your queries to the DB with the standard Model.objects.filter() call. If this is done as part of a view, it's very simple: construct the QuerySet and view the instances. For example: 
+
+ tag_query = Tag.objects.filter( name='stackoverflow' )
+if( tag_query.count() &gt; 0 ):
+ tag = tag_query[0]
+ tag.name = 'stackoverflowed'
+ tag.save()
+ 
+
+ Nice, simple and clean. Now, without the crutch of Django's request/response chaining system, you need to initialise the database connection, make the query, then close the connection. So the above example becomes: 
+
+ from django.db import reset_queries, close_connection, _rollback_on_exception
+reset_queries()
+try:
+ tag_query = Tag.objects.filter( name='stackoverflow' )
+ if( tag_query.count() &gt; 0 ):
+  tag = tag_query[0]
+  tag.name = 'stackoverflowed'
+  tag.save()
+except:
+ _rollback_on_exception()
+finally:
+ close_connection()
+ 
+
+ The database connection management can also be done via Django signals. All of the above is defined in django/db/ init .py . Other ORMs also have this sort of connection management, but you don't need to dig into their source to find out how to do it. SQL Alchemy's connection management system is documented in the tutorials and elsewhere. 
+
+ Finally, you need to keep in mind that the database connection object is local to the current thread at all times, which may or may not limit you depending on your requirements. If your application is not stateless, like Django, but persistent, you may hit threading issues. 
+
+ In conclusion, it is a matter of opinion. In my opinion, both the limitations of, and the setup required for, Django's ORM separate from the framework is too much of a liability. There are perfectly viable dedicated ORM solutions available elsewhere that are designed for library usage. Django's is not. 
+
+ Don't think that all of the above shows I dislike Django and all it's workings, I really do like Django a lot! But I'm realistic about what it's capabilities are and being an ORM library is not one of them. 
+
+ P.S. Multiple database connection support is being worked on. But it's not there now. 
+ #2 You can certainly use various parts of Django in a stand-alone fashion. It is after-all just a collection of Python modules, which you can import to any other code you would like to use them. 
+
+ I'd also recommend looking at SQL Alchemy if you are only after the ORM side of things. 
+ #3 I recommend SQLAlchemy . It should do all the ORM stuff, as well as basic SQL stuff. 
+ #4 (I'm reporting my solution because my question said to be a duplicate) 
+
+ Ah ok I figured it out and will post the solutions for anyone attempting to do the same thing. 
+
+ This solution assumes that you want to create new models. 
+
+ First create a new folder to store your files. We'll call it "standAlone". Within "standAlone", create the following files: 
+
+ __init__.py
+myScript.py
+settings.py
+ 
+
+ Obviously "myScript.py" can be named whatever. 
+
+ Next, create a directory for your models. 
+
+ We'll name our model directory "myApp", but realize that this is a normal Django application within a project, as such, name it appropriately to the collection of models you are writing. 
+
+ Within this directory create 2 files: 
+
+ __init__.py
+models.py
+ 
+
+ Your going to need a copy of manage.py from an either an existing Django project or you can just grab a copy from your Django install path: 
+
+ django\conf\project_template\manage.py
+ 
+
+ Copy the manage.py to your /standAlone directory. Ok so you should now have the following structure: 
+
+ \standAlone
+ __init__.py
+ myScript.py
+ manage.py
+ settings.py
+\myApp
+ __init__.py
+ models.py
+ 
+
+ Add the following to your myScript.py file: 
+
+ # settings.py
+from django.conf import settings
+
+settings.configure(
+ DATABASE_ENGINE = "postgresql_psycopg2",
+ DATABASE_NAME  = "myDatabase",
+ DATABASE_USER  = "myUsername",
+ DATABASE_PASSWORD = "myPassword",
+ DATABASE_HOST  = "localhost",
+ DATABASE_PORT  = "5432",
+ INSTALLED_APPS  = ("myApp")
+)
+
+from django.db import models
+from myApp.models import *
+ 
+
+ and add this to your settings.py file: 
+
+  DATABASE_ENGINE = "postgresql_psycopg2"
+ DATABASE_NAME  = "myDatabase"
+ DATABASE_USER  = "myUsername"
+ DATABASE_PASSWORD = "myPassword"
+ DATABASE_HOST  = "localhost"
+ DATABASE_PORT  = "5432",
+ INSTALLED_APPS  = ("myApp")
+ 
+
+ and finally your myApp/models.py: 
+
+ # myApp/models.py
+from django.db import models
+
+class MyModel(models.Model):
+  field = models.CharField(max_length=255)
+ 
+
+ and that's it. Now to have Django manage your database, in command prompt navigate to our /standalone directory and run: 
+
+ manage.py sql MyApp
+ 
+ #5 Take a look at django-standalone which makes this setup pretty easy. 
+
+ I also found this blog entry quite useful.

@@ -1,0 +1,188 @@
+Question (ID-819355): How can I check if an ip is in a network in python Given an ip address (say 192.168.0.1), how do I check if it's in a network (say 192.168.0.0/24) in Python? 
+
+ Are there general tools in Python for ip address manipulation? Stuff like host lookups, ip adddress to int, network address with netmask to int and so on? Hopefully in the standard Python library for 2.5. 
+ Answers (Total-9): #0 I like to use netaddr for that: 
+
+ from netaddr import CIDR, IP
+
+if IP("192.168.0.1") in CIDR("192.168.0.0/24"):
+ print "Yay!"
+ 
+ #1 This article shows you can do it with socket and struct modules without too much extra effort. I added a little to the article as follows: 
+
+ import socket,struct
+
+def makeMask(n):
+ "return a mask of n bits as a long integer"
+ return (2L&lt;&lt;n-1) - 1
+
+def dottedQuadToNum(ip):
+ "convert decimal dotted quad string to long integer"
+ return struct.unpack('L',socket.inet_aton(ip))[0]
+
+def networkMask(ip,bits):
+ "Convert a network address to a long integer" 
+ return dottedQuadToNum(ip) &amp; makeMask(bits)
+
+def addressInNetwork(ip,net):
+ "Is an address in a network"
+ return ip &amp; net == net
+
+address = dottedQuadToNum("192.168.1.1")
+networka = networkMask("10.0.0.0",24)
+networkb = networkMask("192.168.0.0",24)
+print (address,networka,networkb)
+print addressInNetwork(address,networka)
+print addressInNetwork(address,networkb)
+ 
+
+ This outputs: 
+
+ False
+True
+ 
+
+ If you just want a single function that takes strings it would look like this: 
+
+ import socket,struct
+
+def addressInNetwork(ip,net):
+ "Is an address in a network"
+ ipaddr = struct.unpack('L',socket.inet_aton(ip))[0]
+ netaddr,bits = net.split('/')
+ netmask = struct.unpack('L',socket.inet_aton(netaddr))[0] &amp; ((2L&lt;&lt;int(bits)-1) - 1)
+ return ipaddr &amp; netmask == netmask
+ 
+ #2 Using ipaddr (in the Python stdlib since Python2.7/3.1): 
+
+ &gt;&gt;&gt; from ipaddr import IP
+&gt;&gt;&gt; IP('192.168.0.1') in IP('192.168.0.0/24')
+True
+ 
+ #3 I don't know of anything in the standard library, but PySubnetTree is a Python library that will do subnet matching. 
+ #4 ipaddr is a nice library as well. 
+ #5 This code is working for me on Linux x86. I haven't really given any thought to endianess issues, but I have tested it against the "ipaddr" module using over 200K IP addresses tested against 8 different network strings, and the results of ipaddr are the same as this code. 
+
+ def addressInNetwork(ip, net):
+ import socket,struct
+ ipaddr = int(''.join([ '%02x' % int(x) for x in ip.split('.') ]), 16)
+ netstr, bits = net.split('/')
+ netaddr = int(''.join([ '%02x' % int(x) for x in netstr.split('.') ]), 16)
+ mask = (0xffffffff &lt;&lt; (32 - int(bits))) &amp; 0xffffffff
+ return (ipaddr &amp; mask) == (netaddr &amp; mask)
+ 
+
+ Example: 
+
+ &gt;&gt;&gt; print addressInNetwork('10.9.8.7', '10.9.1.0/16')
+True
+&gt;&gt;&gt; print addressInNetwork('10.9.8.7', '10.9.1.0/24')
+False
+ 
+ #6 Thank you for your script! 
+I have work quite a long on it to make everything working... So I'm sharing it here 
+
+ 
+ Using netaddr Class is 10 times slower than using binary conversion, so if you'd like to use it on a big list of IP, you should consider not using netaddr class 
+ makeMask function is not working! Only working for /8,/16,/24 Ex: 
+
+ 
+ bits = "21" ; socket.inet_ntoa(struct.pack('=L',(2L &lt;&lt; int(bits)-1) - 1)) 
+ '255.255.31.0' whereas it should be 255.255.248.0 
+ 
+
+ So I have used another function calcDottedNetmask(mask) from http://code.activestate.com/recipes/576483-convert-subnetmask-from-cidr-notation-to-dotdecima/ 
+Ex: 
+ 
+
+ 
+#!/usr/bin/python
+>>> calcDottedNetmask(21)
+>>> '255.255.248.0'
+ 
+
+ 
+ Another problem is the process of matching if an IP belongs to a network! Basic Operation should be to compare (ipaddr &amp; netmask) and (network &amp; netmask). Ex: for the time being, the function is wrong 
+ 
+
+ 
+#!/usr/bin/python
+>>> addressInNetwork('188.104.8.64','172.16.0.0/12')
+>>>True which is completely WRONG!!
+ 
+
+ So my new addressInNetwork function looks-like: 
+
+ 
+#!/usr/bin/python
+import socket,struct
+def addressInNetwork(ip,net):
+ '''This function allows you to check if on IP belogs to a Network'''
+ ipaddr = struct.unpack('=L',socket.inet_aton(ip))[0]
+ netaddr,bits = net.split('/')
+ netmask = struct.unpack('=L',socket.inet_aton(calcDottedNetmask(bits)))[0]
+ network = struct.unpack('=L',socket.inet_aton(netaddr))[0] & netmask
+ return (ipaddr & netmask) == (network & netmask)
+
+def calcDottedNetmask(mask):
+ bits = 0
+ for i in xrange(32-int(mask),32):
+  bits |= (1 > 24, (bits & 0xff0000) >> 16, (bits & 0xff00) >> 8 , (bits & 0xff))
+
+
+ 
+
+ And now, answer is right!! 
+
+ 
+#!/usr/bin/python
+>>> addressInNetwork('188.104.8.64','172.16.0.0/12')
+False
+ 
+
+ I hope that it will help other people, saving time for them! 
+ #7 Marc's code is nearly correct... A complete version of the code is - 
+
+ def addressInNetwork3(ip,net):
+ '''This function allows you to check if on IP belogs to a Network'''
+ ipaddr = struct.unpack('=L',socket.inet_aton(ip))[0]
+ netaddr,bits = net.split('/')
+ netmask = struct.unpack('=L',socket.inet_aton(calcDottedNetmask(int(bits))))[0]
+ network = struct.unpack('=L',socket.inet_aton(netaddr))[0] &amp; netmask
+ return (ipaddr &amp; netmask) == (network &amp; netmask)
+
+def calcDottedNetmask(mask):
+ bits = 0
+ for i in xrange(32-mask,32):
+  bits |= (1 &lt;&lt; i)
+ return "%d.%d.%d.%d" % ((bits &amp; 0xff000000) &gt;&gt; 24, (bits &amp; 0xff0000) &gt;&gt; 16, (bits &amp; 0xff00) &gt;&gt; 8 , (bits &amp; 0xff))
+ 
+
+ Obviously from the same sources as above... 
+
+ A very Important note is that the first code has a small glitch - The IP address 255.255.255.255 also shows up as a Valid IP for any subnet... I had a heck of time getting this code to work and thanks to Marc for the correct answer... 
+ #8 from netaddr import all_matching_cidrs 
+
+ &gt;&gt;&gt; from netaddr import all_matching_cidrs
+&gt;&gt;&gt; all_matching_cidrs("212.11.70.34", ["192.168.0.0/24","212.11.64.0/19"] )
+[IPNetwork('212.11.64.0/19')]
+ 
+
+ Here is the usage for this method: 
+
+ &gt;&gt;&gt; help(all_matching_cidrs)
+
+Help on function all_matching_cidrs in module netaddr.ip:
+
+all_matching_cidrs(ip, cidrs)
+ Matches an IP address or subnet against a given sequence of IP addresses and subnets.
+
+ @param ip: a single IP address or subnet.
+
+ @param cidrs: a sequence of IP addresses and/or subnets.
+
+ @return: all matching IPAddress and/or IPNetwork objects from the provided
+ sequence, an empty list if there was no match.
+ 
+
+ Basically you provide an ip address as the first argument and a list of cidrs as the second argument. A list of hits are returned.

@@ -1,0 +1,171 @@
+Question (ID-492716): Reversing a regular expression in python I want to reverse a regular expression. i.e. given a regular expression, I want to produce any string that will match that regex. 
+
+ I know how to do this from a theoretical computer science background using finite state machine, I just want to know if someone has already written a library to do this. :) 
+
+ I'm using Python, so I'd like a python library. 
+
+ To reiterate, I only want one string that will match the regex. Things like "." or ".*" would make an infinite amount of strings match the regex, but I don't care about all options. 
+
+ I'm willing for this library to only work on a certain subset of regex. 
+ Answers (Total-8): #0 Although I don't see much sense in this, here goes: 
+
+ import re
+import string
+
+def traverse(tree):
+ retval = ''
+ for node in tree:
+  if node[0] == 'any':
+   retval += 'x'
+  elif node[0] == 'at':
+   pass
+  elif node[0] in ['min_repeat', 'max_repeat']:
+   retval += traverse(node[1][2]) * node[1][0]
+  elif node[0] == 'in':
+   if node[1][0][0] == 'negate':
+    letters = list(string.ascii_letters)
+    for part in node[1][1:]:
+     if part[0] == 'literal':
+      letters.remove(chr(part[1]))
+     else:
+      for letter in range(part[1][0], part[1][1]+1):
+       letters.remove(chr(letter))
+    retval += letters[0]
+   else:
+    if node[1][0][0] == 'range':
+     retval += chr(node[1][0][1][0])
+    else:
+     retval += chr(node[1][0][1])
+  elif node[0] == 'not_literal':
+   if node[1] == 120:
+    retval += 'y'
+   else:
+    retval += 'x'
+  elif node[0] == 'branch':
+   retval += traverse(node[1][1][0])
+  elif node[0] == 'subpattern':
+   retval += traverse(node[1][1])
+  elif node[0] == 'literal':
+   retval += chr(node[1])
+ return retval
+
+print traverse(re.sre_parse.parse(regex).data)
+ 
+
+ I took everything from the Regular Expression Syntax up to groups -- this seems like a reasonable subset -- and I ignored some details, like line endings. Error handling, etc. is left as an exercise to the reader. 
+
+ Of the 12 special characters in a regex, we can ignore 6 completely (2 even with the atom they apply to), 4.5 lead to a trivial replacement and 1.5 make us actually think. 
+
+ What comes out of this is not too terribly interesting, I think. 
+ #1 I don't know of any module to do this. If you don't find anything like this in the Cookbook or PyPI, you could try rolling your own, using the (undocumented) re.sre_parse module. This might help getting you started: 
+
+ In [1]: import re
+
+In [2]: a = re.sre_parse.parse("[abc]+[def]*\d?z")
+
+In [3]: a
+Out[3]: [('max_repeat', (1, 65535, [('in', [('literal', 97), ('literal', 98), ('literal', 99)])])), ('max_repeat', (0, 65535, [('in', [('literal', 100), ('literal', 101), ('literal', 102)])])), ('max_repeat', (0, 1, [('in', [('category', 'category_digit')])])), ('literal', 122)]
+
+In [4]: eval(str(a))
+Out[4]: 
+[('max_repeat',
+ (1, 65535, [('in', [('literal', 97), ('literal', 98), ('literal', 99)])])),
+ ('max_repeat',
+ (0,
+ 65535,
+ [('in', [('literal', 100), ('literal', 101), ('literal', 102)])])),
+ ('max_repeat', (0, 1, [('in', [('category', 'category_digit')])])),
+ ('literal', 122)]
+
+In [5]: a.dump()
+max_repeat 1 65535
+ in
+ literal 97
+ literal 98
+ literal 99
+max_repeat 0 65535
+ in
+ literal 100
+ literal 101
+ literal 102
+max_repeat 0 1
+ in
+ category category_digit
+literal 122
+ 
+ #2 Unless your regex is extremely simple (i.e. no stars or pluses), there will be infinitely many strings which match it. If your regex only involves concatenation and alternation, then you can expand each alternation into all of its possibilities, e.g. (foo|bar)(baz|quux) can be expanded into the list ['foobaz', 'fooquux', 'barbaz', 'barquux'] . 
+ #3 I haven't seen a Python module to do this, but I did see a (partial) implementation in Perl: Regexp::Genex . From the module description, it sounds like the implementation relies on internal details of Perl's regular expression engine, so it may not be useful even from a theoretical point of view (I haven't investigated the implementation, just going by the comments in the documentation). 
+
+ I think doing what you propose in general is a hard problem and may require the use of nondeterministic programming techniques. A start would be to parse the regular expression and build a parse tree, then traverse the tree and build sample string(s) as you go. Challenging bits will probably be things like backreferences and avoiding infinite loops in your implementation. 
+ #4 While the other answers use the re engine to parse out the elements I have whipped up my own that parses the re and returns a minimal pattern that would match. (Note it doesn't handle [^ads], fancy grouping constructs, start/end of line special characters). I can supply the unit tests if you really like :) 
+
+ import re
+class REParser(object):
+"""Parses an RE an gives the least greedy value that would match it"""
+
+ def parse(self, parseInput):
+ re.compile(parseInput) #try to parse to see if it is a valid RE
+ retval = ""
+ stack = list(parseInput)
+ lastelement = ""
+ while stack:
+  element = stack.pop(0) #Read from front
+  if element == "\\":
+   element = stack.pop(0)
+   element = element.replace("d", "0").replace("D", "a").replace("w", "a").replace("W", " ")
+  elif element in ["?", "*"]:
+   lastelement = ""
+   element = ""
+  elif element == ".":
+   element = "a"
+  elif element == "+":
+   element = ""
+  elif element == "{":
+   arg = self._consumeTo(stack, "}")
+   arg = arg[:-1] #dump the }  
+   arg = arg.split(",")[0] #dump the possible ,
+   lastelement = lastelement * int(arg)
+   element = ""
+  elif element == "[":
+   element = self._consumeTo(stack, "]")[0] # just use the first char in set
+   if element == "]": #this is the odd case of []&lt;something&gt;]
+    self._consumeTo(stack, "]") # throw rest away and use ] as first element
+  elif element == "|":
+   break # you get to an | an you have all you need to match
+  elif element == "(":
+   arg = self._consumeTo(stack, ")")
+   element = self.parse( arg[:-1] )
+
+  retval += lastelement
+  lastelement = element
+ retval += lastelement #Complete the string with the last char
+
+ return retval
+
+ def _consumeTo(self, stackToConsume, endElement ):
+ retval = ""
+ while not retval.endswith(endElement):
+  retval += stackToConsume.pop(0)
+ return retval
+ 
+ #5 Check out the regex inverter at UtilityMill . (Source code is viewable, based on this example from the pyparsing wiki.) 
+ #6 Somebody else had a similar (duplicate?) question here , and I'd like to offer a little helper library for generating random strings with Python that I've been working on. 
+
+ It includes a method, xeger() that allows you to create a string from a regex: 
+
+ &gt;&gt;&gt; import rstr
+&gt;&gt;&gt; rstr.xeger(r'[A-Z]\d[A-Z] \d[A-Z]\d')
+u'M5R 2W4'
+ 
+
+ Right now, it works with most basic regular expressions, but I'm sure it could be improved. 
+ #7 Perhaps you should consider changing your string with a [::-1]
+ie 
+
+ foo = "Lampole" 
+
+ foo = foo[::-1] 
+
+ print foo 
+
+ elopmaL

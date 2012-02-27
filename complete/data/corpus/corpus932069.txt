@@ -1,0 +1,131 @@
+Question (ID-932069): Building a minimal plugin architecture in Python I have an application, written in Python, which is used by a fairly technical audience (scientists). 
+
+ I'm looking for a good way to make the application extensible by the users, i.e. a scripting/plugin architecture. 
+
+ I am looking for something extremely lightweight . Most scripts, or plugins, are not going to be developed and distributed by a third-party and installed, but are going to be something whipped up by a user in a few minutes to automate a repeating task, add support for a file format, etc. So plugins should have the absolute minimum boilerplate code, and require no 'installation' other than copying to a folder (so something like setuptools entry points, or the Zope plugin architecture seems like too much.) 
+
+ Are there any systems like this already out there, or any projects that implement a similar scheme that I should look at for ideas / inspiration? 
+ Answers (Total-7): #0 Mine is, basically, a directory called "plugins" which the main app can poll and then use imp.load_module to pick up files, look for a well-known entry point possibly with module-level config params, and go from there. I use file-monitoring stuff for a certain amount of dynamism in which plugins are active, but that's a nice-to-have. 
+
+ Of course, any requirement that comes along saying "I don't need [big, complicated thing] X; I just want something lightweight" runs the risk of re-implementing X one discovered requirement at a time. But that's not to say you can't have some fun doing it anyway :) 
+ #1 Have a look at at this overview over existing plugin frameworks / libraries , it is a good starting point. I quite like yapsy , but it depends on your use-case. 
+ #2 module_example.py : 
+
+ def plugin_main(*args **kwargs):
+ print args, kwargs
+ 
+
+ loader.py : 
+
+ def load_plugin(name):
+ mod = __import__("module_%s" % name)
+ return mod
+
+def call_plugin(name, *args):
+ plugin = load_plugin(name)
+ plugin.plugin_main(*args)
+
+call_plugin("example", 1234)
+ 
+
+ It's certainly "minimal", it has absolutely no error checking, probably countless security problems, it's not very flexible - but it should how simple a plugin system in Python can be.. 
+
+ You probably want to look into the imp module too, although you can do a lot with just __import__ , os.listdir and some string manipulation. 
+ #3 While that question is really interesting, I think it's fairly hard to answer, without more details. What sort of application is this? Does it have a GUI? Is it a command-line tool? A set of scripts? A program with an unique entry point, etc... 
+
+ Given the little information I have, I will answer in a very generic manner. 
+
+ What means do you have to add plugins? 
+
+ 
+ You will probably have to add a configuration file, which will list the paths/directories to load. 
+ Another way would be to say "any files in that plugin/ directory will be loaded", but it has the inconvenient to require your users to move around files. 
+ A last, intermediate option would be to require all plugins to be in the same plugin/ folder, and then to active/deactivate them using relative paths in a config file. 
+ 
+
+ On a pure code/design practice, you'll have to determine clearly what behavior/specific actions you want your users to extend. Identify the common entry point/a set of functionalities that will always be overridden, and determine groups within these actions. Once this is done, it should be easy to extend your application, 
+
+ Example using hooks , inspired from MediaWiki (PHP, but does language really matters?): 
+
+ import hooks
+
+# In your core code, on key points, you allow user to run actions:
+def compute(...):
+ try:
+  hooks.runHook(hooks.registered.beforeCompute)
+ except hooks.hookException:
+  print('Error while executing plugin')
+
+ # [compute main code] ...
+
+ try:
+  hooks.runHook(hooks.registered.afterCompute)
+ except hooks.hookException:
+  print('Error while executing plugin')
+
+# The idea is to insert possibilities for users to extend the behavior 
+# where it matters.
+# If you need to, pass context parameters to runHook. Remember that
+# runHook can be defined as a runHook(*args, **kwargs) function, not
+# requiring you to define a common interface for *all* hooks. Quite flexible :)
+
+# --------------------
+
+# And in the plugin code:
+# [...] plugin magic
+def doStuff():
+ # ....
+# and register the functionalities in hooks
+
+# doStuff will be called at the end of each core.compute() call
+hooks.registered.afterCompute.append(doStuff)
+ 
+
+ Another example, inspired from mercurial. Here, extensions only add commands to the hg commandline executable, extending the behavior. 
+
+ def doStuff(ui, repo, *args, **kwargs):
+ # when called, a extension function always receives:
+ # * an ui object (user interface, prints, warnings, etc)
+ # * a repository object (main object from which most operations are doable)
+ # * command-line arguments that were not used by the core program
+
+ doMoreMagicStuff()
+ obj = maybeCreateSomeObjects()
+
+# each extension defines a commands dictionary in the main extension file
+commands = { 'newcommand': doStuff }
+ 
+
+ For both approaches, you might need common initialize and finalize for your extension.
+You can either use a common interface that all your extension will have to implement (fits better with second approach; mercurial uses a reposetup(ui, repo) that is called for all extension), or use a hook-kind of approach, with a hooks.setup hook. 
+
+ But again, if you want more useful answers, you'll have to narrow down your question ;) 
+ #4 Marty Allchin's simple plugin framework is the base I use for my own needs. I really recommand to take a look at it, I think it is really a good start if you want something simple and easily hackable. You can find it also as a Django Snippets . 
+ #5 I am a retired biologist who dealt with digital micrograqphs and found himself having to write an image processing and analysis package (not technically a library) to run on an SGi machine. I wrote the code in C and used Tcl for the scripting language. The GUI, such as it was, was done using Tk. The commands that appeared in Tcl were of the form "extensionName commandName arg0 arg1 ... param0 param1 ...", that is, simple space-separated words and numbers. When Tcl saw the "extensionName" substring, control was passed to the C package. That in turn ran the command through a lexer/parser (done in lex/yacc) and then called C routines as necessary. 
+
+ The commands to operate the package could be run one by one via a window in the GUI, but batch jobs were done by editing text files which were valid Tcl scripts; you'd pick the template that did the kind of file-level operation you wanted to do and then edit a copy to contain the actual directory and file names plus the package commands. It worked like a charm. Until ... 
+
+ 1) The world turned to PCs and 2) the scripts got longer than about 500 lines, when Tcl's iffy organizational capabilities started to become a real inconvenience. Time passed ... 
+
+ I retired, Python got invented, and it looked like the perfect successor to Tcl. Now, I have never done the port, because I have never faced up to the challenges of compiling (pretty big) C programs on a PC, extending Python with a C package, and doing GUIs in Python/Gt?/Tk?/??. However, the old idea of having editable template scripts seems still workable. Also, it should not be too great a burden to enter package commands in a native Python form, e.g.: 
+
+ packageName.command( arg0, arg1, ..., param0, param1, ...) 
+
+ A few extra dots, parens, and commas, but those aren't showstoppers. 
+
+ I remember seeing that someone has done versions of lex and yacc in Python (try: http://www.dabeaz.com/ply/ ), so if those are still needed, they're around. 
+
+ The point of this rambling is that it has seemed to me that Python itself IS the desired "lightweight" front end usable by scientists. I'm curious to know why you think that it is not, and I mean that seriously. 
+
+ 
+
+ added later: The application gedit anticipates plugins being added and their site has about the clearest explanation of a simple plugin procedure I've found in a few minutes of looking around. Try: 
+
+ http://live.gnome.org/Gedit/PythonPluginHowTo 
+
+ I'd still like to understand your question better. I am unclear whether you 1) want scientists to be able to use your (Python) application quite simply in various ways or 2) want to allow the scientists to add new capabilities to your application. Choice #1 is the situation we faced with the images and that led us to use generic scripts which we modified to suit the need of the moment. Is it Choice #2 which leads you to the idea of plugins, or is it some aspect of your application that makes issuing commands to it impracticable? 
+ #6 I enjoyed the nice discussion on different plugin architectures given by Dr Andre Roberge at Pycon 2009. He gives a good overview of different ways of implementing plugins, starting from something really simple. 
+
+ Its available as a podcast. You can google it with "pycon plugins monkeypatching podcast". 
+
+ I recommend giving it a quick listen before you make a decision.

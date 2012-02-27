@@ -1,0 +1,165 @@
+<h3>Question (ID-863935):</h3><h2>A data-structure for 1:1 mappings in python?</h2><p>I have a problem which requires a reversable 1:1 mapping of keys to values. </p>
+
+<p>That means sometimes I want to find the value given a key, but at other times I want to find the key given the value. Both keys and values are guaranteed unique. </p>
+
+<pre><code>x = D[y]
+y == D.inverse[x]
+</code></pre>
+
+<p>The obvious solution is to simply invert the dictionary every time I want a reverse-lookup: Inverting a dictionary is very easy, <a href="http://stackoverflow.com/questions/483666/python-reverse-inverse-a-mapping/483833">there's a recipe here but for a large dictionary it can be very slow</a>.</p>
+
+<p>The other alternative is to make a new class which unites two dictionaries, one for each kind of lookup. That would most likely be fast but would use up twice as much memory as a single dict. </p>
+
+<p>So is there a better structure I can use?</p>
+
+<ul>
+<li>My application requires that this should be very fast and use as little as possible memory.</li>
+<li>The structure must be mutable, and it's strongly desirable that mutating the object should not cause it to be slower (e.g. to force a complete re-index)</li>
+<li>We can guarantee that either the key or the value (or both) will be an integer</li>
+<li>It's likely that the structure will be needed to store thousands or possibly millions of items.</li>
+<li>Keys &amp; Valus are guaranteed to be unique, i.e. len(set(x)) == len(x) for for x in [D.keys(), D.valuies()]</li>
+</ul>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><blockquote>
+  <p><em>The other alternative is to make a new
+  class which unites two dictionaries,
+  one for each kind of lookup. That
+  would most likely be fast but would
+  use up twice as much memory as a
+  single dict.</em></p>
+</blockquote>
+
+<p>Not really. Have you measured that? Since both dictionaries would use references to the <strong>same objects</strong> as keys and values, then the memory spent would be just the dictionary structure. That's a lot less than <strong><em>twice</em></strong> and is a fixed ammount regardless of your data size.</p>
+
+<p>What I mean is that the actual data wouldn't be copied. So you'd spend little extra memory.</p>
+
+<p>Example:</p>
+
+<pre><code>a = "some really really big text spending a lot of memory"
+
+number_to_text = {1: a}
+text_to_number = {a: 1}
+</code></pre>
+
+<p>Only a single copy of the "really big" string exists, so you end up spending just a little more memory. That's generally affordable.</p>
+
+<p>I can't imagine a solution where you'd have the key lookup speed when looking by value, if you don't spend <em>at least</em> enough memory to store a reverse lookup hash table (which is exactly what's being done in your "unite two <code>dict</code>s" solution).</p>
+<br /><b>#1</b><br /><blockquote>
+  <p>The other alternative is to make a new class which unites two dictionaries, one for each > kind of lookup. That would most likely use up twice as much memory as a single dict.</p>
+</blockquote>
+
+<p>Not really, since they would just be holding two references to the same data. In my mind, this is not a bad solution. </p>
+
+<p>Have you considered an in-memory database lookup? I am not sure how it will compare in speed, but lookups in relational databases can be <em>very</em> fast.</p>
+<br /><b>#2</b><br /><p>How about using sqlite? Just create a :memory: database with a two-column table. You can even add indexes, then query by either one. Wrap it in a class if it's something you're going to use a lot. </p>
+<br /><b>#3</b><br /><p>Assuming that you have a key with which you look up a more complex mutable object, just make the key a property of that object. It does seem you might be better off thinking about the data model a bit.</p>
+<br /><b>#4</b><br /><p>"We can guarantee that either the key or the value (or both) will be an integer"</p>
+
+<p>That's weirdly written -- "key or the value (or both)" doesn't feel right.  Either they're all integers, or they're not all integers.    </p>
+
+<p>It sounds like they're all integers.</p>
+
+<p>Or, it sounds like you're thinking of replacing the target object with an integer value so you only have one copy referenced by an integer.  This is a false economy.  Just keep the target object.  All Python objects are -- in effect -- references.  Very little actual copying gets done.</p>
+
+<p>Let's pretend that you simply have two integers and can do a lookup on either one of the pair.  One way to do this is to use heap queues or the bisect module to maintain ordered lists of integer key-value tuples.</p>
+
+<p>See <a href="http://docs.python.org/library/heapq.html#module-heapq" rel="nofollow">http://docs.python.org/library/heapq.html#module-heapq</a></p>
+
+<p>See <a href="http://docs.python.org/library/bisect.html#module-bisect" rel="nofollow">http://docs.python.org/library/bisect.html#module-bisect</a></p>
+
+<p>You have one heapq <code>(key,value)</code> tuples.  Or, if your underlying object is more complex, the <code>(key,object</code>) tuples.</p>
+
+<p>You have another heapq <code>(value,key)</code> tuples.  Or, if your underlying object is more complex, <code>(otherkey,object)</code> tuples.</p>
+
+<p>An "insert" becomes two inserts, one to each heapq-structured list.</p>
+
+<p>A key lookup is in one queue; a value lookup is in the other queue.  Do the lookups using <code>bisect(list,item)</code>.  </p>
+<br /><b>#5</b><br /><pre><code>class TwoWay:
+    def __init__(self):
+       self.d = {}
+    def add(self, k, v):
+       self.d[k] = v
+       self.d[v] = k
+    def remove(self, k):
+       self.d.pop(self.d.pop(k))
+    def get(self, k):
+       return self.d[k]
+</code></pre>
+<br /><b>#6</b><br /><p>Here is my own solution to this problem: <a href="http://github.com/spenthil/pymathmap/blob/master/pymathmap.py" rel="nofollow">http://github.com/spenthil/pymathmap/blob/master/pymathmap.py</a></p>
+
+<p>The goal is to make it as transparent to the user as possible. The only introduced significant attribute is <code>partner</code>.</p>
+
+<p><code>OneToOneDict</code> subclasses from <code>dict</code> - I know that <a href="http://stackoverflow.com/questions/1392396/advantages-of-userdict-class-in-python/1394572#1394572">isn't generally recommended</a>, but I think I have the common use cases covered. The backend is pretty simple, it (<code>dict1</code>) keeps a weakref to a 'partner' <code>OneToOneDict</code> (<code>dict2</code>) which is its inverse. When <code>dict1</code> is modified <code>dict2</code> is updated accordingly as well and vice versa.</p>
+
+<p>From the docstring:</p>
+
+<pre><code>&gt;&gt;&gt; dict1 = OneToOneDict()
+&gt;&gt;&gt; dict2 = OneToOneDict()
+&gt;&gt;&gt; dict1.partner = dict2
+&gt;&gt;&gt; assert(dict1 is dict2.partner)
+&gt;&gt;&gt; assert(dict2 is dict1.partner)
+&gt;&gt;&gt; dict1['one'] = '1'
+&gt;&gt;&gt; dict2['2'] = '1'
+&gt;&gt;&gt; dict1['one'] = 'wow'
+&gt;&gt;&gt; assert(dict1 == dict((v,k) for k,v in dict2.items()))
+&gt;&gt;&gt; dict1['one'] = '1'
+&gt;&gt;&gt; assert(dict1 == dict((v,k) for k,v in dict2.items()))
+&gt;&gt;&gt; dict1.update({'three': '3', 'four': '4'})
+&gt;&gt;&gt; assert(dict1 == dict((v,k) for k,v in dict2.items()))
+&gt;&gt;&gt; dict3 = OneToOneDict({'4':'four'})
+&gt;&gt;&gt; assert(dict3.partner is None)
+&gt;&gt;&gt; assert(dict3 == {'4':'four'})
+&gt;&gt;&gt; dict1.partner = dict3
+&gt;&gt;&gt; assert(dict1.partner is not dict2)
+&gt;&gt;&gt; assert(dict2.partner is None)
+&gt;&gt;&gt; assert(dict1.partner is dict3)
+&gt;&gt;&gt; assert(dict3.partner is dict1)
+&gt;&gt;&gt; dict1.setdefault('five', '5')
+&gt;&gt;&gt; dict1['five']
+'5'
+&gt;&gt;&gt; dict1.setdefault('five', '0')
+&gt;&gt;&gt; dict1['five']
+'5'
+</code></pre>
+
+<p>When I get some free time, I intend to make a version that doesn't store things twice. No clue when that'll be though :)</p>
+<br /><b>#7</b><br /><p>It so happens that I find myself asking this question all the time (yesterday in particular).  I agree with the approach of making two dictionaries.  Do some benchmarking to see how much memory it's taking.  I've never needed to make it mutable, but here's how I abstract it, if it's of any use:</p>
+
+<pre><code>class BiDict(list):
+    def __init__(self,*pairs):
+    	super(list,self).__init__(pairs)
+    	self._first_access = {}
+    	self._second_access = {}
+    	for pair in pairs:
+    		self._first_access[pair[0]] = pair[1]
+    		self._second_access[pair[1]] = pair[0]
+    		self.append(pair)
+
+    def _get_by_first(self,key):
+    	return self._first_access[key]
+
+    def _get_by_second(self,key):
+    	return self._second_access[key]
+
+    # You'll have to do some overrides to make it mutable
+    # Methods such as append, __add__, __del__, __iadd__
+    # to name a few will have to maintain ._*_access
+
+class Constants(BiDict):
+    # An implementation expecting an integer and a string
+    get_by_name = BiDict._get_by_second
+    get_by_number = BiDict._get_by_first
+
+t = Constants(
+    	( 1, 'foo'),
+    	( 5, 'bar'),
+    	( 8, 'baz'),
+    )
+
+&gt;&gt;&gt; print t.get_by_number(5)
+bar
+&gt;&gt;&gt; print t.get_by_name('baz')
+8
+&gt;&gt;&gt; print t
+[(1, 'foo'), (5, 'bar'), (8, 'baz')]
+</code></pre>
+<br />

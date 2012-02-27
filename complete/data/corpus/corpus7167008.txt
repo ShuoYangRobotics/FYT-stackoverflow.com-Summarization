@@ -1,0 +1,108 @@
+Question (ID-7167008): Efficiently finding the last line in a text file I need to extract the last line from a number of very large (several hundred megabyte) text files to get certain data. Currently, I am using python to cycle through all the lines until the file is empty and then I process the last line returned, but I am certain there is a more efficient way to do this. 
+
+ What is the best way to retrieve just the last line of a text file using python? 
+ Answers (Total-10): #0 You could take a look at: Get last n lines of a file with Python, similar to tail 
+
+ It is really close to what you need. 
+ #1 Use the file's seek method with a negative offset and whence=os.SEEK_END to read a block from the end of the file. Search that block for the last line end character(s) and grab all the characters after it. If there is no line end, back up farther and repeat the process. 
+
+ def last_line(in_file, block_size=1024, ignore_ending_newline=False):
+ suffix = ""
+ in_file.seek(0, os.SEEK_END)
+ in_file_length = in_file.tell()
+ seek_offset = 0
+
+ while(-seek_offset &lt; in_file_length):
+  # Read from end.
+  seek_offset -= block_size
+  if -seek_offset &gt; in_file_length:
+   # Limit if we ran out of file (can't seek backward from start).
+   block_size -= -seek_offset - in_file_length
+   if block_size == 0:
+    break
+   seek_offset = -in_file_length
+  in_file.seek(seek_offset, os.SEEK_END)
+  buf = in_file.read(block_size)
+
+  # Search for line end.
+  if ignore_ending_newline and seek_offset == -block_size and buf[-1] == '\n':
+   buf = buf[:-1]
+  pos = buf.rfind('\n')
+  if pos != -1:
+   # Found line end.
+   return buf[pos+1:] + suffix
+
+  suffix = buf + suffix
+
+ # One-line file.
+ return suffix
+ 
+
+ Note that this will not work on things that don't support seek , like stdin or sockets. In those cases, you're stuck reading the whole thing (like the tail command does). 
+ #2 Not the straight forward way, but probably much faster than a simple Python implementation: 
+
+ line = subprocess.check_output(['tail', '-1', filename])
+ 
+ #3 If you do know the maximal length of a line, you can do 
+
+ def getLastLine(fname, maxLineLength=80):
+ fp=file(fname, "rb")
+ fp.seek(-maxLineLength-1, 2) # 2 means "from the end of the file"
+ return fp.readlines()[-1]
+ 
+
+ This works on my windows machine. But I do not know what happens on other platforms if you open a text file in binary mode. The binary mode is needed if you want to use seek(). 
+ #4 Seek to the end of the file minus 100 bytes or so. Do a read and search for a newline. If here is no newline, seek back another 100 bytes or so. Lather, rinse, repeat. Eventually you'll find a newline. The last line begins immediately after that newline. 
+
+ Best case scenario you only do one read of 100 bytes. 
+ #5 If you can pick a reasonable maximum line length, you can seek to nearly the end of the file before you start reading. 
+
+ myfile.seek(-max_line_length, os.SEEK_END)
+line = myfile.readlines()[-1]
+ 
+ #6 You shouldn't have to loop through all the lines. Can you just read the files into a list and index the last line? 
+
+ I found this example: 
+
+ http://www.daniweb.com/software-development/python/threads/121557 
+ #7 Could you load the file into a mmap , then use mmap.rfind(string[, start[, end]]) to find the second last EOL character in the file?  A seek to that point in the file should point you to the last line I would think. 
+ #8 The inefficiency here is not really due to Python, but to the nature of how files are read. The only way to find the last line is to read the file in and find the line endings. However, the seek operation may be used to skip to any byte offset in the file. You can, therefore begin very close to the end of the file, and grab larger and larger chunks as needed until the last line ending is found: 
+
+ from os import SEEK_END
+
+def get_last_line(file):
+ CHUNK_SIZE = 1024 # Would be good to make this the chunk size of the filesystem
+
+ last_line = ""
+
+ while True:
+ # We grab chunks from the end of the file towards the beginning until we 
+ # get a new line
+ file.seek(-len(last_line) - CHUNK_SIZE, SEEK_END)
+ chunk = file.read(CHUNK_SIZE)
+
+ if not chunk:
+  # The whole file is one big line
+  return last_line
+
+ if not last_line and chunk.endswith('\n'):
+  # Ignore the trailing newline at the end of the file (but include it 
+  # in the output).
+  last_line = '\n'
+  chunk = chunk[:-1]
+
+ nl_pos = chunk.rfind('\n')
+ # What's being searched for will have to be modified if you are searching
+ # files with non-unix line endings.
+
+ last_line = chunk[nl_pos + 1:] + last_line
+
+ if nl_pos == -1:
+  # The whole chunk is part of the last line.
+  continue
+
+ return last_line
+ 
+ #9 lines = file.readlines()
+fileHandle.close()
+last_line = lines[-1]

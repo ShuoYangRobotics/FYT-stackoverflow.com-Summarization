@@ -1,0 +1,167 @@
+<h3>Question (ID-3744382):</h3><h2>pythonic way to rewrite an assignment in an if statement</h2><p>Is there a pythonic preferred way to do this that I would do in C++:</p>
+
+<pre><code>
+for s in str:
+    if r = regex.match(s):
+        print r.groups()
+</code></pre>
+
+<p>I really like that syntax, imo it's a lot cleaner than having temporary variables everywhere. The only other way that's not overly complex is</p>
+
+<pre><code>
+for s in str:
+    r = regex.match(s)
+    if r:
+        print r.groups()
+</code></pre>
+
+<p>I guess I'm complaining about a pretty pedantic issue. I just miss the former syntax.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>How about</p>
+
+<pre><code>for r in [regex.match(s) for s in str]:
+    if r:
+        print r.groups()
+</code></pre>
+
+<p>or a bit more functional</p>
+
+<pre><code>for r in filter(None, map(regex.match, str)):
+    print r.groups()
+</code></pre>
+<br /><b>#1</b><br /><p>Perhaps it's a bit hacky, but using a function object's attributes to store the last result allows you to do something along these lines:</p>
+
+<pre><code>def fn(regex, s):
+    fn.match = regex.match(s) # save result
+    return fn.match
+
+for s in strings:
+    if fn(regex, s):
+        print fn.match.groups()
+</code></pre>
+
+<p>Or more generically:</p>
+
+<pre><code>def cache(value):
+    cache.value = value
+    return value
+
+for s in strings:
+    if cache(regex.match(s)):
+        print cache.value.groups()
+</code></pre>
+
+<p>Note that although the "value" saved can be a collection of a number of things, this approach is limited to holding only one such at a time, so more than one function may be required to handle situations where multiple values need to be saved simultaneously, such as in nested function calls, loops or other threads. So, in accordance with the <a href="http://encyclopedia.thefreedictionary.com/Don%27t+Repeat+Yourself" rel="nofollow">DRY</a> principle, rather than writing each one, a factory function can help:</p>
+
+<pre><code>def Cache():
+    def cache(value):
+        cache.value = value
+        return value
+    return cache
+
+cache1 = Cache()
+for s in strings:
+    if cache1(regex.match(s)):
+        # use another at same time
+        cache2 = Cache()
+        if cache2(somethingelse) != cache1.value:
+            process(cache2.value)
+        print cache1.value.groups()
+          ...
+</code></pre>
+<br /><b>#2</b><br /><p>There's a <a href="http://code.activestate.com/recipes/202234-assignment-in-expression/" rel="nofollow">recipe</a> to make an assignment expression but it's very hacky. Your first option doesn't compile so your second option is the way to go.</p>
+
+<pre><code>## {{{ http://code.activestate.com/recipes/202234/ (r2)
+import sys
+def set(**kw):
+    assert len(kw)==1
+
+    a = sys._getframe(1)
+    a.f_locals.update(kw)
+    return kw.values()[0]
+
+#
+# sample
+#
+
+A=range(10)
+
+while set(x=A.pop()):
+    print x
+## end of http://code.activestate.com/recipes/202234/ }}}
+</code></pre>
+
+<p>As you can see, production code shouldn't touch this hack with a ten foot, double bagged stick.</p>
+<br /><b>#3</b><br /><p>This might be an overly simplistic answer, but would you consider this:</p>
+
+<pre><code>for s in str:
+    if regex.match(s):
+        print regex.match(s).groups()
+</code></pre>
+<br /><b>#4</b><br /><p>There is no pythonic way to do something that is not pythonic.  It's that way for a reason, because 1, allowing statements in the conditional part of an if statement would make the grammar pretty ugly, for instance, if you allowed assignment statements in if conditions, why not also allow if statements?  how would you actually write that?  C like languages don't have this problem, because they don't have assignment statements.  They make do with just assignment expressions and expression statements.</p>
+
+<p>the second reason is because of the way </p>
+
+<pre><code>if foo = bar:
+    pass
+</code></pre>
+
+<p>looks very similar to </p>
+
+<pre><code>if foo == bar:
+    pass
+</code></pre>
+
+<p>even if you are clever enough to type the correct one, and even if most of the members on your team are sharp enough to notice it, are you sure that the one you are looking at now is exactly what is supposed to be there?  it's not unreasonable for a new dev to see this and just fix it (one way or the other) and now its definitely wrong.</p>
+<br /><b>#5</b><br /><p>Whenever I find that my loop logic is getting complex I do what I would with any other bit of logic: I extract it to a function. In Python it is a lot easier than some other languages to do this cleanly.</p>
+
+<p>So extract the code that just generates the items of interest:</p>
+
+<pre><code>def matching(strings, regex):
+    for s in strings:
+        r = regex.match(s)
+        if r: yield r
+</code></pre>
+
+<p>and then when you want to use it, the loop itself is as simple as they get:</p>
+
+<pre><code>for r in matching(strings, regex):
+    print r.groups()
+</code></pre>
+<br /><b>#6</b><br /><p>Yet another answer is to use the "Assign and test" recipe for allowing assigning and testing in a single statement published in O'Reilly Media's July 2002 1st edition of the <em>Python Cookbook</em> and also <a href="http://code.activestate.com/recipes/66061-assign-and-test" rel="nofollow">online</a> at Activestate. It's object-oriented, the crux of which is this:</p>
+
+<pre><code># from http://code.activestate.com/recipes/66061
+class DataHolder:
+    def __init__(self, value=None):
+        self.value = value
+    def set(self, value):
+        self.value = value
+        return value
+    def get(self):
+        return self.value
+</code></pre>
+
+<p>This can optionally be modified slightly by adding the custom <code>__call__()</code> method shown below to provide an alternative way to retrieve instances' values -- which, while less explicit, seems like a completely logical thing for a 'DataHolder' object to do when called, I think.</p>
+
+<pre><code>    def __call__(self):
+        return self.value
+</code></pre>
+
+<p>Allowing your example to be re-written:</p>
+
+<pre><code>r = DataHolder()
+for s in strings:
+    if r.set(regex.match(s))
+        print r.get().groups()
+# or
+        print r().groups()
+</code></pre>
+
+<p>As also noted in the original recipe, if you use it a lot, adding the class and/or an instance of it to the <code>__builtin__</code> module to make it globally available is very tempting despite the potential downsides:</p>
+
+<pre><code>import __builtin__
+__builtin__.DataHolder = DataHolder
+__builtin__.data = DataHolder()
+</code></pre>
+
+<p>As I mentioned in my other answer to this question, it must be noted that this approach is limited to holding only one result/value at a time, so more than one instance is required to handle situations where multiple values need to be saved simultaneously, such as in nested function calls, loops or other threads. That doesn't mean you should use it or the other answer, just that more effort will be required.</p>
+<br />

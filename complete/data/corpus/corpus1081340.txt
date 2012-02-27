@@ -1,0 +1,58 @@
+Question (ID-1081340): How do you do something after you render the view? (Django) I want to do something after I have rendered the view using 
+
+ return render_to_response()
+ 
+
+ Are signals the only way to do this? Do I need to write a custom signal or does request_finished give me enough information? Basically I need to know what page was rendered, and then do an action in response to that. 
+
+ Thanks. 
+
+ UPDATE FROM COMMENTS: I don't want to hold up the rendering of the page, so I want to render the page first and then do the action. 
+ Answers (Total-7): #0 A common way to do this is to use message queues. You place a message on the queue, and worker threads (or processes, etc.) consume the queue and do the work after your view has completed. 
+
+ Google App Engine has the task queue api http://code.google.com/appengine/docs/python/taskqueue/ , amazon has the Simple Queue Service http://aws.amazon.com/sqs/ . 
+
+ A quick search didn't turn up any django pluggables that look like accepted standards. 
+
+ A quick and dirty way to emulate the functionality is to place the 'message' in a database table, and have a cron job periodically check the table to perform the work. 
+ #1 If you have a long-running process, you have two simple choices. 
+
+ 
+ Spawn a subprocess prior to sending the response page. 
+ Create a "background service daemon" and pass work requests to it. 
+ 
+
+ This is all outside Django. You use subprocess or some other IPC method to communicate with the other process. 
+ #2 Django's HttpResponse object accepts an iterator in its constructor: 
+
+ http://docs.djangoproject.com/en/dev/ref/request-response/#passing-iterators 
+
+ So you could do something like: 
+
+ def myiter():
+ yield "my content"
+ enqueue_some_task()
+ return
+
+def myview(request):
+ return HttpResponse(myiter())
+ 
+
+ The normal use of an iterator is to send large data without reading it all into memory. For example, read chunks from a file and yield appropriately. I've never used it in this way, but it seems like it should work. 
+ #3 My favourite solution: A separate process that handles background tasks, typically things like indexing and sending notification mails etc. And then, during the view rendering, you send an event to the event handling system (I don't know if Django has one built in, but you always need one anyway so you should have one) and the even system then puts a message in a message queue (which is trivial to write unless you have multiple machines or multiple background processes) that does the task in question. 
+ #4 You spawn a separate thread and have it do the action. 
+
+ t = threading.Thread(target=do_my_action, args=[my_argument])
+# We want the program to wait on this thread before shutting down.
+t.setDaemon(False)
+t.start()
+ 
+
+ This will cause 'do_my_action(my_argument)' to be executed in a second thread which will keep working even after you send your Django response and terminate the initial thread. For example it could send an email without delaying the response. 
+ #5 In render to response, you pass the html page that you want displayed. That other page needs to send a post (via Javascript or something) that triggers the correct function in your views, then that view calls the correct next page to be shown. 
+ #6 Perhaps I do not understand your question. But why not something simple like: 
+
+ try:
+ return render_to_response()
+finally:
+ do_what_needs_to_be_done()

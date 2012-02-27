@@ -1,0 +1,99 @@
+<h3>Question ( ID-1958219 ) : </h3><h2>Convert <span style="background-color:yellow;">sqlalchemy</span> <span style="background-color:yellow;">row</span> <span style="background-color:yellow;">object</span> to python dict </h2><p>or a simple way to iterate over columnName , value pairs ? </p>
+<p>My version of <span style="background-color:yellow;">sqlalchemy</span> is 0.5.6 </p>
+<p>Here is the sample code where I tried <span style="background-color:yellow;">using</span> dict ( <span style="background-color:yellow;">row</span> ) , but it throws exception , TypeError : 'User ' <span style="background-color:yellow;">object</span> is not iterable </p>
+<pre><code>import sqlalchemy
+from sqlalchemy import *
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+print "sqlalchemy version:",sqlalchemy.__version__ 
+
+engine = create_engine('sqlite:///:memory:', echo=False)
+metadata = MetaData()
+users_table = Table('users', metadata,
+     Column('id', Integer, primary_key=True),
+     Column('name', String),
+)
+metadata.create_all(engine) 
+
+class User(declarative_base()):
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+
+    def __init__(self, name):
+        self.name = name
+
+Session = sessionmaker(bind=engine)
+session = Session()
+
+user1 = User("anurag")
+session.add(user1)
+session.commit()
+
+# uncommenting next line throws exception 'TypeError: 'User' object is not iterable'
+#print dict(user1)
+# this one also throws 'TypeError: 'User' object is not iterable'
+for u in session.query(User).all():
+    print dict(u)
+</code></pre>
+<p>Running this code on my system outputs : </p>
+<pre><code>sqlalchemy version: 0.5.6
+Traceback (most recent call last):
+  File "untitled-1.py", line 37, in <module>
+    print dict(u)
+TypeError: 'User' object is not iterable
+</code></pre>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>For now I am <span style="background-color:yellow;">using</span> </p>
+<pre><code>def row2dict(row):
+    d = {}
+    for columnName in row.__table__.columns.keys():
+        d[columnName] = getattr(row, columnName)
+
+    return d
+</code></pre>
+<br /><b># 1 </b><br /><pre><code>from sqlalchemy.orm import class_mapper
+
+def asdict(obj):
+    return dict((col.name, getattr(obj, col.name))
+                for col in class_mapper(obj.__class__).mapped_table.c)
+</code></pre>
+<br /><b># 2 </b><br /><pre><code>for row in resultproxy:
+    row_as_dict = dict(row)
+</code></pre>
+<br /><b># 3 </b><br /><p>I have a variation on Marco Mariani 's answer , expressed as a decorator. The main difference is that it 'll handle lists of entities , as well as safely ignoring some other types of return values ( which is very <span style="background-color:yellow;">useful</span> when writing tests <span style="background-color:yellow;">using</span> mocks ) : </p>
+<pre><code>@decorator
+def to_dict(f, *args, **kwargs):
+  result = f(*args, **kwargs)
+  if is_iterable(result) and not is_dict(result):
+    return map(asdict, result)
+
+  return asdict(result)
+
+def asdict(obj):
+  return dict((col.name, getattr(obj, col.name))
+              for col in class_mapper(obj.__class__).mapped_table.c)
+
+def is_dict(obj):
+  return isinstance(obj, dict)
+
+def is_iterable(obj):
+  return True if getattr(obj, '__iter__', False) else False
+</code></pre>
+<br /><b># 4 </b><br /><p>The expression you are iterating through evaluates to list of model <span style="background-color:yellow;">objects</span> , not <span style="background-color:yellow;">rows.</span> So the following is correct <span style="background-color:yellow;">usage</span> of them : </p>
+<pre><code>for u in session.query(User).all():
+    print u.id, u.name
+</code></pre>
+<p>Do you realy need to convert them to dicts ? Sure , there is a lot of ways , but then you do n't need ORM part of SQLAlchemy : </p>
+<pre><code>result = session.execute(User.__table__.select())
+for row in result:
+    print dict(row)
+</code></pre>
+<p>Update : Take a look at <span style="background-color:yellow;">sqlalchemy.orm.attributes</span> module. It has a set of functions to work with <span style="background-color:yellow;">object</span> state , that might be <span style="background-color:yellow;">useful</span> for you , especially instance_dict ( ) . </p>
+<br /><b># 5 </b><br /><pre><code>class User(object):
+    def to_dict(self):
+        return dict([(k, getattr(self, k)) for k in self.__dict__.keys() if not k.startswith("_")])
+</code></pre>
+<p>That should work . </p>
+<br />

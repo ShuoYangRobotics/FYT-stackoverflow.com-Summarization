@@ -1,0 +1,231 @@
+Question (ID-6769315): Python Algorithm Challenge? I have a python function (call it myFunction ) that gets as input a list of numbers , and, following a complex calculation, returns back the result of the calculation (which is a number ). 
+
+ The function looks like this: 
+
+ def myFunction( listNumbers ):
+ # initialize the result of the calculation
+ calcResult = 0
+
+ # looping through all indices, from 0 to the last one
+ for i in xrange(0, len(listNumbers), 1):
+  # some complex calculation goes here, changing the value of 'calcResult'
+
+ # let us now return the result of the calculation
+ return calcResult
+ 
+
+ I tested the function, and it works as expected. 
+
+ Normally, myFunction is provided a listNumbers argument that contains 5,000,000 elements in it. As you may expect, the calculation takes time. I need this function to run as fast as possible 
+
+ Here comes the challenge : assume that the time now is 5am, and that listNumbers contains just 4,999,999 values in it. Meaning, its LAST VALUE is not yet available . This value will only be available at 6am . 
+
+ Obviously, we can do the following ( 1st mode ): wait until 6am . Then, append the last value into listNumbers , and then, run myFunction . This solution works, BUT it will take a while before myFunction returns our calculated result (as we need to process the entire list of numbers , from the first element on). Remember, our goal is to get the results as soon as possible past 6am . 
+
+ I was thinking about a more efficient way to solve this ( 2nd mode ): since (at 5am) we have listNumbers with 4,999,999 values in it, let us immediately start running myFunction . Let us process whatever we can (remember, we don't have the last piece of data yet), and then -- exactly at 6am -- 'plug in' the new data piece -- and generate the computed result. This should be significantly faster, as most of the processing will be done BEFORE 6am, hence, we will only have to deal with the new data -- which means the computed result should be available immediately after 6am . 
+
+ Let's suppose that there's no way for us to inspect the code of myFunction or modify it. Is there ANY programming technique / design idea that will allow us to take myFunction AS IS , and do something with it (without changing its code) so that we can have it operate in the 2nd mode , rather than the 1st one ? 
+
+ Please do not suggest using c++ / numpy + cython / parallel computing etc to solve this problem. The goal here is to see if there's any programming technique or design pattern that can be easily used to solve such problems. 
+ Answers (Total-8): #0 You could use a generator as an input. The generator will only return when there is data available to process. 
+
+ Update: thanks for the brilliant comment, I wanted to remove this entry :) 
+
+ class lazylist(object):
+ def __init__(self):
+  self.cnt = 0
+  self.length = 5000000
+
+ def __iter__(self):
+  return self
+
+ def __len__(self):
+  return self.length
+
+ def next(self):
+  if self.cnt &lt; self.length:
+   self.cnt += 1
+   #return data here or wait for it
+   return self.cnt #just return a counter for this example
+  else:
+   raise StopIteration()
+
+ def __getitem__(self, i):
+  #again, block till you have data.
+  return i+1 #simple counter
+
+myFunction(lazylist())
+ 
+
+ Update: As you can see from the comments and other solutions your loop construct and len call causes a lot of headaches, if you can eliminate it you can use a lot more elegant solution. for e in li or enumerate is the pythonic way to go. 
+ #1 By "list of numbers", do you mean an actual built-in list type? 
+
+ 
+ If not, it's simple. Python uses duck-typing, so passing any sequence that supports iteration will do. Use the yield keyword to pass a generator . 
+
+ def delayed_list():
+ for val in numpy_array[:4999999]:
+  yield val
+ wait_until_6am()
+ yield numpy_array[4999999]
+ 
+ 
+
+ and then, 
+
+  myFunction(delayed_list())
+ 
+
+ 
+ If yes, then it's trickier :) 
+ 
+
+ Also, check out PEP8 for recommended Python code style: 
+
+ 
+ no spaces around brackets 
+ my_function instead of myFunction 
+ for i, val in enumerate(numbers): instead of for i in xrange(0, len(listNumbers), 1): etc. 
+ 
+ #2 subclass list so that when the function tries to read the last value it blocks until another thread provides the value. 
+
+ import threading
+import time
+
+class lastblocks(list):
+ def __init__(self,*args,**kwargs):
+  list.__init__(self,*args,**kwargs)
+  self.e = threading.Event()
+ def __getitem__(self, index):
+  v1 = list.__getitem__(self,index)
+  if index == len(self)-1:
+   self.e.wait()
+   v2 = list.__getitem__(self,index)
+   return v2
+  else:
+   return v1
+
+
+l = lastblocks(range(5000000-1)+[None])
+
+def reader(l):
+ s = 0
+ for i in xrange(len(l)):
+  s += l[i]
+ print s
+
+def writer(l):
+ time.sleep(10)
+ l[5000000-1]=5000000-1
+ l.e.set()
+ print "written"
+
+reader = threading.Thread(target=reader, args=(l,))
+writer = threading.Thread(target=writer, args=(l,))
+reader.start()
+writer.start()
+ 
+
+ prints: 
+
+ written
+12499997500000
+ 
+
+ for numpy: 
+
+ import threading
+import time
+
+import numpy as np
+
+class lastblocks(np.ndarray):
+ def __new__(cls, arry):
+  obj = np.asarray(arry).view(cls)
+  obj.e = threading.Event()
+  return obj
+ def __array_finalize__(self, obj):
+  if obj is None: return
+  self.e = getattr(obj, 'e', None)
+
+ def __getitem__(self, index):
+  v1 = np.ndarray.__getitem__(self,index)
+  if index == len(self)-1:
+   self.e.wait()
+   v2 = np.ndarray.__getitem__(self,index)
+   return v2
+  else:
+   return v1
+
+
+l = lastblocks(np.asarray(range(5000000-1)+[None]))
+
+def reader(l):
+ s = 0
+ for i in xrange(len(l)):
+  s += l[i]
+ print s
+
+def writer(l):
+ time.sleep(10)
+ l[5000000-1]=5000000-1
+ l.e.set()
+ print "written"
+
+reader = threading.Thread(target=reader, args=(l,))
+writer = threading.Thread(target=writer, args=(l,))
+reader.start()
+writer.start()
+ 
+ #3 Memory protection barriers are a general way to solve this type of problem when the techniques suggested in the other answers (generators and mock objects) are unavailable. 
+
+ A memory barrier is a hardware feature that causes an interrupt when a program tries to access a forbidden area of memory (usually controllable at the page level). The interrupt handler can then take appropriate action, for example suspending the program until the data is ready. 
+
+ So in this case you'd set up a barrier on the last page of the list, and the interrupt handler would wait until 06:00 before allowing the program to continue. 
+ #4 You could just create your own iterator to iterate over the 5,000,000 elements. This would do whatever you need to do to wait around for the final element (can't be specific since the example in the question is rather abstract). I'm assuming you don't care about the code hanging until 6:00, or know how to do it in a background thread. 
+
+ More information about writing your own iterator is at http://docs.python.org/library/stdtypes.html#iterator-types 
+ #5 I'm a little bit confused about not being able to investigate myFunction . At least you have to know if your list is being iterated or accessed by index. Your example might suggest an index is used. If you want to take advantage of iterators/generators, you have to iterate. I know you said myFunction is unchangeable, but just want to point out, that most pythonic version would be: 
+
+ def myFunction( listNumbers ):
+ calcResult = 0
+
+ # enumerate if you really need an index of element in array
+ for n,v in enumerate(listNumbers):
+  # some complex calculation goes here, changing the value of 'calcResult'
+
+ return calcResult
+ 
+
+ And now you can start introducing nice ideas. One is probably wrapping list with your own type and provide __iter__ method (as a generator); you could return value if accessible, wait for more data if you expect any or return after yielding last element. 
+
+ If you have to access list by index, you can use __getitem__ as in Dan D's example. It'll have a limitation though, and you'll have to know the size of array in advance. 
+ #6 There is a simpler generator solution: 
+
+ def fnc(lst):
+ result = 0
+ index = 0
+ while index &lt; len(lst):
+  while index &lt; len(lst):
+   ... do some manipulations here ...
+   index += 1
+  yield result
+
+lst = [1, 2, 3]
+gen = fnc(lst)
+print gen.next()
+
+lst.append(4)
+print gen.next()
+ 
+ #7 Couldn't you simply do something like this: 
+
+ processedBefore6 = myFunction([1,2,3]) # the first 4,999,999 vals.
+
+while lastVal.notavailable:
+ sleep(1)
+
+processedAfter6 = myFunction([processedBefore6, lastVal])
+ 
+
+ If the effects are linear (step 1 -> step 2 -> step 3, etc) this should allow you to do as much work as possible up front, then catch the final value when it's available and finish up.

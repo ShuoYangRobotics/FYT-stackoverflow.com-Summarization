@@ -1,0 +1,191 @@
+Question (ID-2584595): Building a python module and linking it against a MacOSX framework I'm trying to build a Python extension on MacOSX 10.6 and to link it against several frameworks (i386 only). I made a setup.py file, using distutils and the Extension object. 
+
+ I order to link against my frameworks, my LDFLAGS env var should look like : 
+
+ LDFLAGS = -lc -arch i386 -framework fwk1 -framework fwk2
+ 
+
+ As I did not find any 'framework' keyword in the Extension module documentation, I used the extra_link_args keyword instead. 
+
+ Extension('test',
+define_macros = [('MAJOR_VERSION', '1'), ,('MINOR_VERSION', '0')],
+include_dirs = ['/usr/local/include', 'include/', 'include/vitale'],
+extra_link_args = ['-arch i386',
+     '-framework fwk1',
+     '-framework fwk2'],
+sources = "testmodule.cpp",
+language = 'c++' )
+ 
+
+ Everything is compiling and linking fine. If I remove the -framework line from the extra_link_args, my linker fails, as expected. Here is the last two lines produced by a python setup.py build : 
+
+ /usr/bin/g++-4.2 -arch x86_64 -arch i386 -isysroot /
+-L/opt/local/lib -arch x86_64 -arch i386 -bundle
+-undefined dynamic_lookup build/temp.macosx-10.6-intel-2.6/testmodule.o
+-o build/lib.macosx-10.6-intel-2.6/test.so
+-arch i386 -framework fwk1 -framework fwk2
+ 
+
+ Unfortunately, the .so that I just produced is unable to find several symbols provided by this framework. I tried to check the linked framework with otool. None of them is appearing. 
+
+ $ otool -L test.so
+test.so:
+ /usr/lib/libstdc++.6.dylib (compatibility version 7.0.0, current version 7.9.0)
+ /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 125.0.1)
+ 
+
+ There is the output of otool run on a test binary, made with g++ and ldd using the LDFLAGS described at the top of my post. On this example, the -framework did work. 
+
+ $ otool -L vitaosx 
+vitaosx:
+ /Library/Frameworks/fwk1.framework/Versions/A/fwk1 (compatibility version 1.0.0, current version 1.0.0)
+ /Library/Frameworks/fwk2.framework/Versions/A/fwk2 (compatibility version 1.0.0, current version 1.0.0)
+ /usr/lib/libstdc++.6.dylib (compatibility version 7.0.0, current version 7.9.0)
+ /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 125.0.1)
+ 
+
+ May this issue be linked to the "-undefined dynamic_lookup" flag on the linking step ? I'm a little bit confused by the few lines of documentation that I'm finding on Google. 
+
+ Cheers, 
+ Answers (Total-6): #0 I am not sure I understand what you are trying to do and your desired outcome but perhaps this will help. Because C extension modules are normally run within the execution context of the Python interpreter, extension modules have to be built to be compatible with the interpreter. On OS X, Python and distutils go to some trouble to ensure that C extension modules are built with the same SDK ( -sysroot ), MACOSX_DEPLOYMENT_TARGET value, and -arch values as the Python interpreter itself was originally built. So, if you are using the Apple-supplied Python on 10.6, distutils will supply -arch i386 -arch ppc -arch x86_64 , the three archs that it was built with. If you use a current python.org OS X installer (on 10.6, 10.5, or 10.4), it will use: 
+
+ gcc-4.0 -arch ppc -arch i386 -isysroot /Developer/SDKs/MacOSX10.4u.sdk
+ 
+
+ From the snippets you supply, I'm guessing you are using a MacPorts-installed universal Python and, by default, it is built with and uses -arch x86_64 -arch i386 -isysroot / for building extension modules. 
+
+ Generally, to make everything work you need to ensure: 
+
+ 
+ there is at least one arch in
+common among the interpreter, all C
+extension modules, and all external
+frameworks and/or shared libraries
+that they link to 
+ the interpreter is executing in that (or one of those) common architecture(s). 
+ 
+
+ On OS X 10.6, that last step is not as easy as it should be depending on which Python you are using. For instance, the Apple-supplied Python 2.6 has a modification to force 32-bit execution (see Apple's man python for details): 
+
+ export VERSIONER_PYTHON_PREFER_32_BIT=yes
+ 
+
+ If you build your own 32-/64-bit universal Python, there are fixes in 2.6.5 to allow selection at run-time. Unfortunately, the way MacPorts builds Python bypasses those fixes so there does not appear to be any simple way to force a MacPorts python2.6 32-/64-bit universal build on 10.6 to run in 32-bit mode. For complicated reasons, it will always prefer 64-bit, if available, even if you use /usr/bin/arch -i386 . 
+
+ So, depending on what you are trying to do, you may be able to work around the issue (if I understand it correctly) by either: 
+
+ 
+ rebuild your frameworks to include -arch x86_64 
+ use the Apple-supplied Python ( /usr/bin/python ) in 32-bit mode or the python.org 2.6.5 
+ reinstall the MacPorts python in 32-bit-only mode (untested!): 
+
+ sudo port selfupdate
+sudo port clean python26
+sudo port install python26 +universal universal_archs=i386
+ 
+ 
+ #1 Although long after the dust has settled, having the same question myself I dug around a little bit and found this: 
+
+ /System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/distutils/sysconfig.py 
+
+  if 'ARCHFLAGS' in os.environ:
+    archflags = os.environ['ARCHFLAGS']
+   else:
+    archflags = '-arch i386 -arch ppc -arch x86_64'
+   _config_vars['ARCHFLAGS'] = archflags
+   if archflags.strip() != '':
+    _config_vars['CFLAGS'] = _config_vars['CFLAGS'] + ' ' + archflags
+    _config_vars['LDFLAGS'] = _config_vars['LDFLAGS'] + ' ' + archflags
+ 
+
+ I'm coming at the problem from a different angle - on 10.6 distutils is trying to build C extensions and as complains because there's no PPC portion in the 10.6 SDK. 
+
+ However, 
+
+ export ARCHFLAGS="-arch i386 -arch x86_64"
+ python setup.py build
+ 
+
+ Worked like a charm. 
+ #2 It seems that my framework is compiled for ppc and i386 but not x86_64 : 
+
+ $ file /Library/Frameworks/fwk1.framework/Versions/A/fwk1 
+/Library/Frameworks/fwk1.framework/Versions/A/fwk1: Mach-O universal binary with 2 architectures
+/Library/Frameworks/fwk1.framework/Versions/A/fwk1 (for architecture ppc): Mach-O dynamically linked shared library ppc
+/Library/Frameworks/fwk1.framework/Versions/A/fwk1 (for architecture i386): Mach-O dynamically linked shared library i386
+ 
+
+ I removed the -arch x86_64 flag from my linking line. My library is linked against my frameworks : 
+
+ $ otool -L test.so
+test.so:
+ /Library/Frameworks/fwk1.framework/Versions/A/fwk1 (compatibility version 1.0.0, current version 1.0.0)
+ /Library/Frameworks/fwk2.framework/Versions/A/fwk2 (compatibility version 1.0.0, current version 1.0.0)
+ /usr/lib/libstdc++.6.dylib (compatibility version 7.0.0, current version 7.9.0)
+ /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 125.0.1)
+ 
+
+ If someone know how to force the -arch to be used at compile and link time with Python's distutils... please share your advice. 
+ #3 One option that came to mind is to take the python2.6 fat binary, built by macports, and "thin" it out to extract out the i386 only binary. One example of how to "thin" a fat binary is here: 
+
+ http://code.google.com/p/modwsgi/wiki/InstallationOnMacOSX 
+
+ While logically this seems like it should work, if I follow steps similar to the above and extract an i386-only version of python from the macports build, when I actually try that, and run that version of python, it is somehow still running in 64-bit mode. It's baffling. 
+
+ $sudo lipo /opt/local/Library/Frameworks/Python.framework/Versions/2.6/bin/python2.6 -thin i386 -output /opt/local/Library/Frameworks/Python.framework/Versions/2.6/bin/python2.6-i386
+
+$file /opt/local/Library/Frameworks/Python.framework/Versions/2.6/bin/python
+2.6-i386 
+ /opt/local/Library/Frameworks/Python.framework/Versions/2.6/bin/python2.6-i386: Mach-O executable i386
+
+$/opt/local/Library/Frameworks/Python.framework/Versions/2.6/bin/python2.6-i386 -c "import sys; print sys.maxint"
+ 9223372036854775807
+ 
+
+ That number should be around 2 billion if it was running in 32-bit mode, I believe.
+(also, looking in activity monitor, the file is running in 64-bit mode). 
+
+ So it's a solution idea that doesn't seem to work. 
+ #4 I just ran into this myself. I had to bypass distutils, because they appear to hard-code the -undefined dynamic_lookup. Here is the Makefile I'm using to emulate distutils: 
+
+ CC = gcc
+CFLAGS = -pipe -std=c99 -fno-strict-aliasing -fno-common -dynamic -fwrapv -mno-fused-madd -DENABLE_DTRACE -DMACOSX -DNDEBUG -Werror -pedantic -Wall -Wstrict-prototypes -Wshorten-64-to-32 -g -Os -arch i386 -arch x86_64 -I/System/Library/Frameworks/Python.framework/Versions/2.7/include/python2.7
+LD = gcc
+LDFLAGS = -Wl,-F. -bundle -Wl,-F. -arch i386 -arch x86_64 -framework CoreFoundation -framework CoreMIDI -framework Python
+
+project = &lt;extension_name&gt;
+library = $(project).so
+modules = &lt;module_names&gt;
+sources = $(foreach module,$(modules),$(module).c)
+objects = $(sources:.c=.o)
+
+all: $(library)
+
+$(library): $(objects)
+ $(LD) $(LDFLAGS) $(objects) -o $@
+
+%.o: %.c Makefile
+ $(CC) $(CFLAGS) $&lt; -c -o $@
+
+install: $(library)
+ cp $(library) /Library/Python/2.7/site-packages
+
+clean:
+  rm -f $(library) $(objects) *~
+ 
+
+ I'm sure there is a way to get distutils to stop emitting that -undefined argument, but the above worked for me on 10.7 
+ #5 This has nothing to do with the undefined dynamic_lookup but all with distutils. It appends the extra_link_flags to the link flags it chooses for python building. Instead it should prepend it because the -framework listings must come before the objects that use them on the cmdline (AFAIK this is due how gcc gathers symbols for linking). A quick fix that I personally use is building with 
+
+  LDFLAGS="-framework Carbon" python setup.py build_ext --inplace
+ 
+
+ or whatever frameworks you need. LDFLAGS is prepended to distutils own flags. Note that your package will not be pip install able. A proper fix can only come from distutils - imho they should support frameworks like they support libraries . 
+
+ Alternatively, you can also add 
+
+ import os
+os.environ['LDFLAGS'] = '-framework Carbon'
+ 
+
+ in your setup.py. Your package should then be pip install able.

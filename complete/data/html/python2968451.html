@@ -1,0 +1,66 @@
+<h3>Question (ID-2968451):</h3><h2>Database query optimization</h2><p>Ok my Giant friends once again I seek a little space in your shoulders :P</p>
+
+<p>Here is the issue, I have a python script that is fixing some database issues but it is taking way too long, the main update statement is this: </p>
+
+<pre><code>cursor.execute("UPDATE jiveuser SET username = '%s' WHERE userid = %d" % (newName,userId))
+</code></pre>
+
+<p>That is getting called about 9500 times with different newName and userid pairs... </p>
+
+<p>Any suggestions on how to speed up the process? Maybe somehow a way where I can do all updates with just one query?</p>
+
+<p>Any help will be much appreciated!</p>
+
+<p>PS: Postgres is the db being used. </p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Insert all the data into another empty table (called userchanges, say) then UPDATE in a single batch:</p>
+
+<pre><code>UPDATE jiveuser
+SET username = userchanges.username
+FROM userchanges
+WHERE userchanges.userid = jiveuser.userid
+    AND userchanges.username &lt;&gt; jiveuser.username
+</code></pre>
+
+<p>See this documentation on <a href="http://www.postgresql.org/docs/8.1/interactive/sql-copy.html" rel="nofollow">the COPY command</a> for bulk loading your data.</p>
+
+<p>There are also <a href="http://www.postgresql.org/docs/8.1/interactive/populate.html" rel="nofollow">tips for improving performance when populating a database</a>.</p>
+<br /><b>#1</b><br /><p>First of all, do <b>not</b> use the % operator to construct your SQL.  Instead, pass your tuple of arguments as the second parameter to <code>cursor.execute</code>, which also negates the need to quote your argument and allows you to use %s for everything:</p>
+
+<pre><code>cursor.execute("UPDATE jiveuser SET username = %s WHERE userid = %s", (newName, userId))
+</code></pre>
+
+<p>This is important to prevent <a href="http://en.wikipedia.org/wiki/SQL_injection" rel="nofollow">SQL Injection attacks</a>.</p>
+
+<p>To answer your question, you can speed up these updates by creating an index on the <code>userid</code> column, which will allow the database to update in <code>O(1)</code> constant time rather than having to scan the entire database table, which is <code>O(n)</code>.  Since you're using PostgreSQL, here's the syntax to create your index:</p>
+
+<pre><code>CREATE INDEX username_lookup ON jiveuser (userid);
+</code></pre>
+
+<p>EDIT: Since your comment reveals that you already have an index on the <code>userid</code> column, there's not much you could possibly do to speed up that query.  So your main choices are either living with the slowness, since this sounds like a one-time fix-something-broken thing, or following <code>VeeArr</code>'s advice and testing whether <a href="http://www.java2s.com/Tutorial/Python/0300__Database/executemanyforbatchupdate.htm" rel="nofollow">cursor.executemany</a> will give you a sufficient boost.</p>
+<br /><b>#2</b><br /><p>The reason it's taking so long is probably that you've got autocommit enabled and each update gets done in its own transaction.</p>
+
+<p>This is slow because even if you have a battery-backed raid controller (which you should definitely have on all database servers, of course), it still needs to do a write into that device for every transaction commit to ensure durability.</p>
+
+<p>The solution is to do more than one row per transaction. But don't make transactions TOO big or you run into problems too. Try committing every 10,000 rows of changes as a rough guess.</p>
+<br /><b>#3</b><br /><p>You might want to look into <code>executemany()</code>: Information <a href="http://www.java2s.com/Tutorial/Python/0300__Database/executemanyforbatchupdate.htm" rel="nofollow">here</a></p>
+<br /><b>#4</b><br /><p>Perhaps you can create an index on userid to speed things up.</p>
+<br /><b>#5</b><br /><p>I'd do an explain on this. If it's doing an indexed lookup to find the record -- which it should if you have an index on userid -- then I don't see what you could do to improve performance. If it's not using the index, then the trick is figuring out why not and fixing it.</p>
+
+<p>Oh, you could try using a prepared statement. With 9500 inserts, that should help.</p>
+<br /><b>#6</b><br /><p>Move this to a stored procedure and execute it from the database self. </p>
+<br /><b>#7</b><br /><p>First ensure you have an index on 'userid', this will ensure the dbms doesn't have to do a table scan each time</p>
+
+<pre><code>CREATE INDEX jiveuser_userid ON jiveuser (userid);
+</code></pre>
+
+<p>Next try preparing the statement, and then calling execute on it.  This will stop the optimizer from having to examine the query each time</p>
+
+<pre><code>PREPARE update_username(string,integer) AS UPDATE jiveuser SET username = $1 WHERE userid = $2;
+EXECUTE update_username("New Name", 123);
+</code></pre>
+
+<p>Finally, a bit more performance could be squeezed out by turning off autocommit</p>
+
+<pre><code>\set autocommit off
+</code></pre>
+<br />

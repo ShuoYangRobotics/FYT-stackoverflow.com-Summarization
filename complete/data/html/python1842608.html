@@ -1,0 +1,171 @@
+<h3>Question (ID-1842608):</h3><h2>Regular expression to replace with XML node</h2><p>I'm using Python to write a regular expression for replacing parts of the string with a XML node.</p>
+
+<p>The source string looks like:</p>
+
+<pre>
+Hello
+REPLACE(str1) this is to replace
+REPLACE(str2) this is to replace
+</pre>
+
+<p>And the result string should be like:</p>
+
+<pre>
+Hello
+&lt;replace name="str1"> this is to replace &lt;/replace>
+&lt;replace name="str2"> this is to replace &lt;/replace>
+</pre>
+
+<p>Can anyone help me?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>Here is an <a href="http://www.amk.ca/python/howto/regex/" rel="nofollow">excellent tutorial</a> on how to write regular expressions in Python.</p>
+<br /><b>#1</b><br /><p>What makes your problem a little bit tricky is that you want to match inside of a multiline string.  You need to use the <code>re.MULTILINE</code> flag to make that work.</p>
+
+<p>Then, you need to match some groups inside your source string, and use those groups in the final output.  Here is code that works to solve your problem:</p>
+
+<pre><code>import re
+
+
+s_pat = "^\s*REPLACE\(([^)]+)\)(.*)$"
+pat = re.compile(s_pat, re.MULTILINE)
+
+s_input = """\
+Hello
+REPLACE(str1) this is to replace
+REPLACE(str2) this is to replace"""
+
+
+def mksub(m):
+    return '&lt;replace name="%s"&gt;%s&lt;/replace&gt;' % m.groups()
+
+
+s_output = re.sub(pat, mksub, s_input)
+</code></pre>
+
+<p>The only tricky part is the regular expression pattern.  Let's look at it in detail.</p>
+
+<p><code>^</code> matches the start of a string.  With <code>re.MULTILINE</code>, this matches the start of a line within a multiline string; in other words, it matches right after a newline in the string.</p>
+
+<p><code>\s*</code> matches optional whitespace.</p>
+
+<p><code>REPLACE</code> matches the literal string "REPLACE".</p>
+
+<p><code>\(</code> matches the literal string "(".</p>
+
+<p><code>(</code> begins a "match group".</p>
+
+<p><code>[^)]</code> means "match any character but a ")".</p>
+
+<p><code>+</code> means "match one or more of the preceding pattern.</p>
+
+<p><code>)</code> closes a "match group".</p>
+
+<p><code>\)</code> matches the literal string ")"</p>
+
+<p><code>(.*)</code> is another match group containing ".*".</p>
+
+<p><code>$</code> matches the end of a string.  With <code>re.MULTILINE</code>, this matches the end of a line within a multiline string; in other words, it matches a newline character in the string.</p>
+
+<p><code>.</code> matches any character, and <code>*</code> means to match zero or more of the preceding pattern.  Thus <code>.*</code> matches anything, up to the end of the line.</p>
+
+<p>So, our pattern has two "match groups".  When you run <code>re.sub()</code> it will make a "match object" which will be passed to <code>mksub()</code>.  The match object has a method, <code>.groups()</code>, that returns the matched substrings as a tuple, and that gets substituted in to make the replacement text.</p>
+
+<p>EDIT: You actually don't need to use a replacement function.  You can put the special string <code>\1</code> inside the replacement text, and it will be replaced by the contents of match group 1.  (Match groups count from 1; the special match group 0 corresponds the the entire string matched by the pattern.)  The only tricky part of the <code>\1</code> string is that <code>\</code> is special in strings.  In a normal string, to get a <code>\</code>, you need to put two backslashes in a row, like so: <code>"\\1"</code>  But you can use a Python "raw string" to conveniently write the replacement pattern.  Doing so you get this:</p>
+
+<p>import re</p>
+
+<pre><code>s_pat = "^\s*REPLACE\(([^)]+)\)(.*)$"
+pat = re.compile(s_pat, re.MULTILINE)
+
+s_repl = r'&lt;replace name="\1"&gt;\2&lt;/replace&gt;'
+
+s_input = """\
+Hello
+REPLACE(str1) this is to replace
+REPLACE(str2) this is to replace"""
+
+
+s_output = re.sub(pat, s_repl, s_input)
+</code></pre>
+<br /><b>#2</b><br /><p>Here is a solution using pyparsing.  I know you specifically asked about a regex solution, but if your requirements change, you might find it easier to expand a pyparsing parser.  Or a pyparsing prototype solution might give you a little more insight into the problem leading toward a regex or other final implementation.</p>
+
+<pre><code>src = """\
+Hello
+REPLACE(str1) this is to replace
+REPLACE(str2) this is to replace
+"""
+
+from pyparsing import Suppress, Word, alphas, alphanums, restOfLine
+
+LPAR,RPAR = map(Suppress,"()")
+ident = Word(alphas, alphanums)
+replExpr = "REPLACE" + LPAR + ident("name") + RPAR + restOfLine("body")
+replExpr.setParseAction(
+    lambda toks : '&lt;replace name="%(name)s"&gt;%(body)s &lt;/replace&gt;' % toks
+    )
+
+print replExpr.transformString(src)
+</code></pre>
+
+<p>In this case, you create the expression to be matched with pyparsing, define a parse action to do the text conversion, and then call transformString to scan through the input source to find all the matches, apply the parse action to each match, and return the resulting output.  The parse action serves a similar function to mksub in @steveha's solution.</p>
+
+<p>In addition to the parse action, pyparsing also supports naming individual elements of the expression - I used "name" and "body" to label the two parts of interest, which are represented in the re solution as groups 1 and 2.  You <em>can</em> name groups in an re, the corresponding re would look like:</p>
+
+<pre><code>s_pat = "^\s*REPLACE\((?P&lt;name&gt;[^)]+)\)(?P&lt;body&gt;.*)$"
+</code></pre>
+
+<p>Unfortunately, to access these groups by name, you have to invoke the <code>group()</code> method on the re match object, you can't directly do the named string interpolation as in my lambda parse action.  But this is Python, right? We can wrap that callable with a class that will give us dict-like access to the groups by name:</p>
+
+<pre><code>class CallableDict(object):
+    def __init__(self,fn):
+        self.fn = fn
+    def __getitem__(self,name):
+        return self.fn(name)
+
+def mksub(m):    
+    return '&lt;replace name="%(name)s"&gt;%(body)s&lt;/replace&gt;' %  CallableDict(m.group)
+
+s_output = re.sub(pat, mksub, s_input)
+</code></pre>
+
+<p>Using <code>CallableDict</code>, the string interpolation in mksub can now call m.group for each field, by making it look like we are retrieving the ['name'] and ['body'] elements of a dict.</p>
+<br /><b>#3</b><br /><p>Maybe like this ?</p>
+
+<pre><code>import re
+
+mystr = """Hello
+REPLACE(str1) this is to replace
+REPLACE(str2) this is to replace"""
+
+prog = re.compile(r'REPLACE\((.*?)\)\s(.*)')
+
+for line in mystr.split("\n"):
+    print prog.sub(r'&lt; replace name="\1" &gt; \2',line)
+</code></pre>
+<br /><b>#4</b><br /><p>Something like this should work:</p>
+
+<pre><code>import re,sys
+
+f = open( sys.argv[1], 'r' )
+for i in f:
+    g = re.match( r'REPLACE\((.*)\)(.*)', i )
+    if g is None:
+        print i
+    else:
+        print '&lt;replace name=\"%s\"&gt;%s&lt;/replace&gt;' % (g.group(1),g.group(2))
+f.close()
+</code></pre>
+<br /><b>#5</b><br /><pre><code>import re
+
+a="""Hello
+REPLACE(str1) this is to replace
+REPLACE(str2) this is to replace"""
+
+regex = re.compile(r"^REPLACE\(([^)]+)\)\s+(.*)$", re.MULTILINE)
+
+b=re.sub(regex, r'&lt; replace name="\1" &gt; \2 &lt; /replace &gt;', a)
+
+print b
+</code></pre>
+
+<p>will do the replace in one line.</p>
+<br />

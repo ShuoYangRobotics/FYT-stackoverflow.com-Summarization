@@ -1,0 +1,39 @@
+<h3>Question (ID-1998104):</h3><h2>Is it safe to use user input for Python's regular expressions?</h2><p>I would like to let my users use regular expressions for some features.  I'm curious what the implications are of passing user input to re.compile().  I assume there is no way for a user to give me a string that could let them execute arbitrary code.  The dangers I have thought of are:</p>
+
+<ol>
+<li>The user could pass input that raises an exception.</li>
+<li>The user could pass input that causes the regex engine to take a long time, or to use a lot of memory.   </li>
+</ol>
+
+<p>The solution to 1. is easy: catch exceptions. I'm not sure if there is a good solution to 2. Perhaps just limiting the length of the regex would work.</p>
+
+<p>Is there anything else I need to worry about?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I have worked on a program that allows users to enter their own regex and you are right - they can (and do) enter regex that can take a long time to finish - sometimes longer than than the lifetime of the universe.  What is worse, while processing a regex Python holds the GIL, so it will not only hang the thread that is running the regex, but the entire program.</p>
+
+<p>Limiting the length of the regex will not work, since the problem is backtracking.  For example,    matching the regex <code>r"(\S+)+x"</code> on a string of length N that does not contain an "x" will backtrack 2**N times.  On my system this takes about a second to match against <code>"a"*21</code> and the time doubles for each additional character, so a string of 100 characters would take approximately 19167393131891000 years to complete (this is an estimate, I have not timed it).</p>
+
+<p>For more information read the O'Reilly book "Mastering Regular Expressions" - this has a couple of chapters on performance.</p>
+
+<p><strong>edit</strong>
+To get round this we wrote a regex analysing function that tried to catch and reject some of the more obvious degenerate cases, but it is impossible to get all of them.  </p>
+
+<p>Another thing we looked at was patching the re module to raise an exception if it backtracks too many times.  This is possible, but requires changing the Python C source and recompiling, so is not portable.  We also submitted a patch to release the GIL when matching against python strings, but I don't think it was accepted into the core (python only holds the GIL because regex can be run against mutable buffers).</p>
+<br /><b>#1</b><br /><p>It's much simpler for casual users to give them a subset language.  The shell's globbing rules in <a href="http://docs.python.org/library/fnmatch.html" rel="nofollow">fnmatch</a>, for example.  The SQL LIKE condition rules are another example.</p>
+
+<p>Translate the user's language into a proper regex for execution at runtime.</p>
+<br /><b>#2</b><br /><p>Compiling the regular expression should be reasonably safe. Although what it compiles into is not strictly an NFA (backreferences mean it's not quite as clean) it should still be sort of straightforward to compile into.</p>
+
+<p>Now as to performance characteristics, this is another problem entirely. Even a small regular expression can have exponential time characteristics because of backtracking. It might be better to define a certain subset of features and only support very limited expressions that you translate yourself. </p>
+
+<p>If you really want to support general regular expressions you either have to trust your users (sometimes an option) or limit the amount of space and time used. I <em>believe</em> that space used is determined only by the length of the regular expression. </p>
+
+<p>edit: As Dave notes, apparently the global interpreter lock is held during regex matching, which would make setting that timeout harder. If that is the case, your only option to set a timeout is to run the match in a separate process. While not exactly ideal it is doable. I completely forgot about <a href="http://docs.python.org/dev/library/multiprocessing.htm" rel="nofollow"><code>multiprocessing</code></a>. Point of interest is <a href="http://docs.python.org/dev/library/multiprocessing.html#exchanging-objects-between-processes" rel="nofollow">this section</a> on sharing objects. If you really need the hard constraints, separate processes are the way to go here.</p>
+<br /><b>#3</b><br /><p>It's not necessary to use compile() except when you need to reuse a lot of different regular expressions. The module already caches the last expressions.</p>
+
+<p>The point 2 (at execution) could be a very difficult one if you allow the user to input any regular expression. You can make a complex regexp with few characters, like the famous <code>(x+x+)+y</code> one. I think it's a problem yet to be resolved in a general way. 
+A workaround could be launching a different thread and monitor it, if it exceeds the allowed time, kill the thread and return with an error.</p>
+<br /><b>#4</b><br /><p>I really don't think it is possible to execute code simply by passing it into an re.compile. The way I understand it, re.compile (or any regex system in any language) converts the regex string into a <a href="http://en.wikipedia.org/wiki/Regular_expression" rel="nofollow">finite automaton</a> (DFA or NFA), and despite the ominous name 'compile' it has nothing to do with the execution of any code. </p>
+<br /><b>#5</b><br /><p>You technically don't need to use <code>re.compile()</code> to perform a regular expression operation on a string.  In fact, the compile method can often be slower if you're only executing the operation once since there's overhead associated with the initial compiling.</p>
+
+<p>If you're worried about the word "compile" then avoid it all together and simply pass the raw expression to <code>match</code>, <code>search</code>, etc.  You may wind up improving the performance of your code slightly anyways.</p>
+<br />

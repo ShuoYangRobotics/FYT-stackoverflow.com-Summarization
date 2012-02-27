@@ -1,0 +1,369 @@
+<h3>Question (ID-2255177):</h3><h2>Finding the exponent of n = 2**x using bitwise operations [logarithm in base 2 of n]</h2><p>Is there a straightforward way to extracting the exponent from a power of 2 using bitwise operations only?</p>
+
+<p><strong>EDIT:</strong> Although the question was originally about bitwise operations, the thread is a good read also if you are wondering <strong>"What's the fastest way to find X given Y = 2**X <em>in Python</em>?"</strong></p>
+
+<p>I am currently trying to optimize a routine (<a href="http://en.wikipedia.org/wiki/Rabin-Miller_primality_test">Rabin-Miller primality test</a>) that reduces an <strong>even number</strong> N in the forms <strong><code>2**s * d</code></strong>. I can get the <strong><code>2**s</code></strong> part by:</p>
+
+<pre><code>two_power_s = N &amp; -N
+</code></pre>
+
+<p>but I can't find a way to extract just "<strong>s</strong>" with a bitwise operation. Workarounds I am currently testing without too much satisfaction (they are all pretty much slow) are:</p>
+
+<ul>
+<li>using the logarithm function</li>
+<li>manipulating the binary representation of 2**s (i.e. counting the trailing zeroes)</li>
+<li>looping on a division by 2 until the result is 1</li>
+</ul>
+
+<p>I am using python, but the answer to this question should be language agnostic, I suppose.</p>
+
+<p>Thank you in advance for your time.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>"language agnostic" and worrying about performance are pretty much incompatible concepts. </p>
+
+<p>Most modern processors have a CLZ instruction, "count leading zeros". In GCC you can get to it with __builtin_clz(x) (which also produces reasonable, if not the fastest, code for targets that lack clz). Note that this CLZ is undefined for zero, so you'll need an extra branch to catch that case if it matters in your application.</p>
+
+<p>In CELT ( <a href="http://celt-codec.org" rel="nofollow">http://celt-codec.org</a> ) the branchless CLZ we use for compliers lacking a CLZ was written by Timothy B. Terriberry:</p>
+
+<pre><code>
+int ilog(uint32 _v){
+  int ret;
+  int m;
+  ret=!!_v;
+  m=!!(_v&0xFFFF0000)&lt;&lt;4;
+  _v&gt;&gt;=m;
+  ret|=m;
+  m=!!(_v&0xFF00)&lt;&lt;3;
+  _v&gt;&gt;=m;
+  ret|=m;
+  m=!!(_v&0xF0)&lt;&lt;2;
+  _v&gt;&gt;=m;
+  ret|=m;
+  m=!!(_v&0xC)&lt;&lt;1;
+  _v&gt;&gt;=m;
+  ret|=m;
+  ret+=!!(_v&0x2);
+  return ret;
+}
+</code></pre>
+
+<p>(The comments indicate that this was found to be faster than a branching version and a lookup table based version)</p>
+
+<p>But if performance is that critical you probably shouldn't be implementing this part of your code in python.</p>
+<br /><b>#1</b><br /><p>There is a page with a lot of these types of tricks and hacks. It's written for C, but many of them should work in Python too (though the performance will obviously be different). The bit you want is <a href="http://graphics.stanford.edu/~seander/bithacks.html#IntegerLogObvious" rel="nofollow">here</a> and onwards.</p>
+
+<p>You could try <a href="http://graphics.stanford.edu/~seander/bithacks.html#IntegerLog" rel="nofollow">this</a> for example:</p>
+
+<pre><code>register unsigned int r = 0; // result of log2(v) will go here
+for (i = 4; i &gt;= 0; i--) // unroll for speed...
+{
+  if (v &amp; b[i])
+  {
+    v &gt;&gt;= S[i];
+    r |= S[i];
+  } 
+}
+</code></pre>
+
+<p>That looks like it could be converted to Python quite easily.</p>
+<br /><b>#2</b><br /><p>You can do it in O(lg s) time for arbitrary length integers using a binsearch. </p>
+
+<pre><code>import sys
+def floorlg(n):
+    if n &lt; 1:
+        return -1
+    low=0
+    high=sys.getsizeof(n)*8 # not the best upper-bound guesstimate, but...
+    while True:
+        mid = (low+high)//2
+        i = n &gt;&gt; mid
+        if i == 1:
+            return mid
+        if i == 0:
+            high = mid-1
+        else:
+            low = mid+1
+</code></pre>
+
+<p>For fixed size integers, a lookup table should be the fastest solution, and probably best overall.</p>
+<br /><b>#3</b><br /><h1>Short answer</h1>
+
+<p>As far as python is concerned:</p>
+
+<ul>
+<li>The <strong>fastest method of all</strong> to find the exponent of 2**x is by looking up in a dictionary whose hashes are the powers of 2 (see "<em>hashlookup</em>" in the code)</li>
+<li>The <strong>fastest bitwise method</strong> is the one called "*unrolled_bitwise*".</li>
+<li>Both previous methods have well-defined (but extensible) upper limits. The <strong>fastest method without hard-coded upper limits</strong> (which scales up as far as python can handle numbers) is "*log_e*".</li>
+</ul>
+
+<h1>Preliminary notes</h1>
+
+<ol>
+<li>All speed measurements below have been obtained via <strong><code>timeit.Timer.repeat(testn, cycles)</code></strong> where <code>testn</code> was set to 3 and <code>cycles</code> was automatically adjusted by the script to obtain times in the range of seconds (<strong>note:</strong> there was a bug in this auto-adjusting mechanism that has been fixed on 18/02/2010).</li>
+<li><strong>Not all methods can scale</strong>, this is why I did not test all functions for the various powers of 2</li>
+<li><strong>I did not manage to get some of the proposed methods to work</strong> (the function returns a wrong result). I did not yet have tiem to do a step-by-step debugging session: I included the code (commented) just in case somebody spots the mistake by inspection (or want to perform the debug themselves)</li>
+</ol>
+
+<h1>Results</h1>
+
+<p><strong>func(2**5)</strong></p>
+
+<pre><code>hashlookup:          0.13s     100%
+lookup:              0.15s     109%
+stringcount:         0.29s     220%
+unrolled_bitwise:    0.36s     272%
+log_e:               0.60s     450%
+bitcounter:          0.64s     479%
+log_2:               0.69s     515%
+ilog:                0.81s     609%
+bitwise:             1.10s     821%
+olgn:                1.42s    1065%
+</code></pre>
+
+<p><strong>func(2**31)</strong></p>
+
+<pre><code>hashlookup:          0.11s     100%
+unrolled_bitwise:    0.26s     229%
+log_e:               0.30s     268%
+stringcount:         0.30s     270%
+log_2:               0.34s     301%
+ilog:                0.41s     363%
+bitwise:             0.87s     778%
+olgn:                1.02s     912%
+bitcounter:          1.42s    1264%
+</code></pre>
+
+<p><strong>func(2**128)</strong></p>
+
+<pre><code>hashlookup:     0.01s     100%
+stringcount:    0.03s     264%
+log_e:          0.04s     315%
+log_2:          0.04s     383%
+olgn:           0.18s    1585%
+bitcounter:     1.41s   12393%
+</code></pre>
+
+<p><strong>func(2**1024)</strong></p>
+
+<pre><code>log_e:          0.00s     100%
+log_2:          0.01s     118%
+stringcount:    0.02s     354%
+olgn:           0.03s     707%
+bitcounter:     1.73s   37695%
+</code></pre>
+
+<h1>Code</h1>
+
+<pre><code>import math, sys
+
+def stringcount(v):
+    """mac"""    
+    return len(bin(v)) - 3
+
+def log_2(v):
+    """mac"""    
+    return int(round(math.log(v, 2), 0)) # 2**101 generates 100.999999999
+
+def log_e(v):
+    """bp on mac"""    
+    return int(round(math.log(v)/0.69314718055994529, 0))  # 0.69 == log(2)
+
+def bitcounter(v):
+    """John Y on mac"""
+    r = 0
+    while v &gt; 1 :
+        v &gt;&gt;= 1
+        r += 1
+    return r
+
+def olgn(n) :
+    """outis"""
+    if n &lt; 1:
+        return -1
+    low = 0
+    high = sys.getsizeof(n)*8 # not the best upper-bound guesstimate, but...
+    while True:
+        mid = (low+high)//2
+        i = n &gt;&gt; mid
+        if i == 1:
+            return mid
+        if i == 0:
+            high = mid-1
+        else:
+            low = mid+1
+
+def hashlookup(v):
+    """mac on brone -- limit: v &lt; 2**131"""
+#    def prepareTable(max_log2=130) :
+#        hash_table = {}
+#        for p in range(1, max_log2) :
+#            hash_table[2**p] = p
+#        return hash_table
+
+    global hash_table
+    return hash_table[v] 
+
+def lookup(v):
+    """brone -- limit: v &lt; 2**11"""
+#    def prepareTable(max_log2=10) :
+#        log2s_table=[0]*((1&lt;&lt;max_log2)+1)
+#        for i in range(max_log2+1):
+#            log2s_table[1&lt;&lt;i]=i
+#        return tuple(log2s_table)
+
+    global log2s_table
+    return log2s_table[v]
+
+def bitwise(v):
+    """Mark Byers -- limit: v &lt; 2**32"""
+    b = (0x2, 0xC, 0xF0, 0xFF00, 0xFFFF0000)
+    S = (1, 2, 4, 8, 16)
+    r = 0
+    for i in range(4, -1, -1) :
+        if (v &amp; b[i]) :
+            v &gt;&gt;= S[i];
+            r |= S[i];
+    return r
+
+def unrolled_bitwise(v):
+    """x4u on Mark Byers -- limit:   v &lt; 2**33"""
+    r = 0;
+    if v &gt; 0xffff : 
+        v &gt;&gt;= 16
+        r = 16;
+    if v &gt; 0x00ff :
+        v &gt;&gt;=  8
+        r += 8;
+    if v &gt; 0x000f :
+        v &gt;&gt;=  4
+        r += 4;
+    if v &gt; 0x0003 : 
+        v &gt;&gt;=  2
+        r += 2;
+    return r + (v &gt;&gt; 1)
+
+def ilog(v):
+    """Gregory Maxwell - (Original code: B. Terriberry) -- limit: v &lt; 2**32"""
+    ret = 1
+    m = (not not v &amp; 0xFFFF0000) &lt;&lt; 4;
+    v &gt;&gt;= m;
+    ret |= m;
+    m = (not not v &amp; 0xFF00) &lt;&lt; 3;
+    v &gt;&gt;= m;
+    ret |= m;
+    m = (not not v &amp; 0xF0) &lt;&lt; 2;
+    v &gt;&gt;= m;
+    ret |= m;
+    m = (not not v &amp; 0xC) &lt;&lt; 1;
+    v &gt;&gt;= m;
+    ret |= m;
+    ret += (not not v &amp; 0x2);
+    return ret - 1;
+
+
+# following table is equal to "return hashlookup.prepareTable()" 
+hash_table = {...} # numbers have been cut out to avoid cluttering the post
+
+# following table is equal to "return lookup.prepareTable()" - cached for speed
+log2s_table = (...) # numbers have been cut out to avoid cluttering the post
+</code></pre>
+<br /><b>#4</b><br /><p>Convert your power of 2 to hexadecimal (e.g., using '%x' formatting) and count the number of digits, then adjust for the first digit.</p>
+
+<p>Here's a function that computes the bitlength of a Python integer;  it'll return one more than the number you actually want (e.g., 2**100 has a bitlength of 101).</p>
+
+<pre><code>def nbits(n, correction = {
+        '0': 4, '1': 3, '2': 2, '3': 2,
+        '4': 1, '5': 1, '6': 1, '7': 1,
+        '8': 0, '9': 0, 'a': 0, 'b': 0,
+        'c': 0, 'd': 0, 'e': 0, 'f': 0}):
+    """Number of bits in binary representation of the positive integer n,
+    or 0 if n == 0.
+    """
+    if n &lt; 0:
+        raise ValueError("The argument to nbits should be nonnegative.")
+    hex_n = "%x" % n
+    return 4*len(hex_n) - correction[hex_n[0]]
+</code></pre>
+
+<p>In Python 3.1 (and 2.7, when it appears), there's a bit_length method on integers that does the same thing.</p>
+<br /><b>#5</b><br /><p>It seems like the range is known. Let's assume it goes up to 1&lt;&lt;20, just to make it more interesting:</p>
+
+<pre><code>max_log2=20
+</code></pre>
+
+<p>So make a list that (in effect) maps an integer to its base 2 logarithm. The following will do the trick:</p>
+
+<pre><code>log2s_table=[0]*((1&lt;&lt;max_log2)+1)
+for i in range(max_log2+1):
+    log2s_table[1&lt;&lt;i]=i
+</code></pre>
+
+<p>(This doesn't do anything useful for numbers that aren't powers of two; the problem statement suggests they don't need to be handled. Would be easy enough to fix that though.)</p>
+
+<p>The function to get the logarithm is very simple, and could easily be inlined:</p>
+
+<pre><code>def table(v):
+    return log2s_table[v]
+</code></pre>
+
+<p>I can't guarantee that the test code I wrote is exactly the same as the one being used to get the example timings, but this is rather quicker than the <code>stringcount</code> code:</p>
+
+<pre><code>stringcount: 0.43 s.
+table: 0.16 s.
+</code></pre>
+
+<p>Since all the values in the table are less than 256, I wondered whether using a string instead of a list would be quicker, or maybe an <code>array.array</code> of bytes, but no dice:</p>
+
+<pre><code>string: 0.25 s.
+arr: 0.21 s.
+</code></pre>
+
+<p>Using a <code>dict</code> to do the lookup is another possibility, taking advantage of the way only powers of two are being checked:</p>
+
+<pre><code>log2s_map=dict([(1&lt;&lt;x,x) for x in range(max_log2+1)])
+
+def map(v):
+    return log2s_map[v]
+</code></pre>
+
+<p>The results for this weren't as good, though:</p>
+
+<pre><code>map: 0.20 s.
+</code></pre>
+
+<p>And just for fun one could also use the <code>hex</code> method on float objects to get a string that includes (as its last part) the base 2 exponent of the number. This is a bit slow to extract in general, but if the exponent is only ever going to be one digit it could be done straightforwardly enough:</p>
+
+<pre><code>def floathex(v):
+    return ord(float(v).hex()[-1])-48
+</code></pre>
+
+<p>This is purely for entertainment value though as it was uncompetetive -- though, amazingly, still quicker than the bitwise approach.</p>
+
+<p>So it looks like using a list is the way to go.</p>
+
+<p>(This approach won't scale indefinitely, due to limited memory, but to make up for that the execution speed won't depend on <code>max_log2</code>, or the input values, in any way that you'll notice when running python code. Regarding the memory consumption, if I remember my python internals correctly, the table will take up about <code>(1&lt;&lt;max_log2)*4</code> bytes, because the contents are all small integers that the interpreter will intern automatically. SO, when <code>max_log2</code> is 20, that's about 4MB.)</p>
+<br /><b>#6</b><br /><p><em>This is actually a comment to the performance test posted by mac. I post this as an answer to have proper code formatting and indenting</em></p>
+
+<p>mac, could you try a unrolled implementation of the bitseach suggested by Mark Byers? Maybe it's just the array access that slows it down. In theory this approach should be faster than the others.</p>
+
+<p>It would look something like this, although I'm not sure whether the formatting is right for python but I guess you can see what it is supposed to do.</p>
+
+<pre><code>def bitwise(v):
+    r = 0;
+    if( v &gt; 0xffff ) : v &gt;&gt;= 16; r = 16;
+    if( v &gt; 0x00ff ) : v &gt;&gt;=  8; r += 8;
+    if( v &gt; 0x000f ) : v &gt;&gt;=  4; r += 4;
+    if( v &gt; 0x0003 ) : v &gt;&gt;=  2; r += 2;
+    return r + ( v &gt;&gt; 1 );
+</code></pre>
+
+<p>If python shares java's lack of unsingned integers it would need to be something like this:</p>
+
+<pre><code>def bitwise(v):
+    r = 0;
+    if( v &amp; 0xffff0000 ) : v &gt;&gt;&gt;= 16; r = 16;
+    if( v &gt; 0x00ff ) : v &gt;&gt;=  8; r += 8;
+    if( v &gt; 0x000f ) : v &gt;&gt;=  4; r += 4;
+    if( v &gt; 0x0003 ) : v &gt;&gt;=  2; r += 2;
+    return r + ( v &gt;&gt; 1 );
+</code></pre>
+<br />

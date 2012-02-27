@@ -1,0 +1,147 @@
+<h3>Question (ID-1416646):</h3><h2>pythonic way to convert variable to list</h2><p>I have a function whose input argument can either be an element or a list of elements. If this argument is a single element then I put it in a list so I can iterate over the input in a consistent manner. </p>
+
+<p>Currently I have this:</p>
+
+<pre><code>def my_func(input):
+    if not isinstance(input, list): input = [input]
+    for e in input:
+        ...
+</code></pre>
+
+<p>I am working with an existing API so I can't change the input parameters. Using isinstance() feels hacky, so is there a <em>proper</em> way to do this?</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Typically, strings (plain and unicode) are the only iterables that you want to nevertheless consider as "single elements" -- the <code>basestring</code> builtin exists SPECIFICALLY to let you test for either kind of strings with <code>isinstance</code>, so it's very UN-grotty for that special case;-).</p>
+
+<p>So my suggested approach for the most general case is:</p>
+
+<pre><code>  if isinstance(input, basestring): input = [input]
+  else:
+    try: iter(input)
+    except TypeError: input = [input]
+    else: input = list(input)
+</code></pre>
+
+<p>This is THE way to treat EVERY iterable EXCEPT strings as a list directly, strings and numbers and other non-iterables as scalars (to be normalized into single-item lists).</p>
+
+<p>I'm explicitly making a list out of every kind of iterable so you KNOW you can further on perform EVERY kind of list trick - sorting, iterating more than once, adding or removing items to facilitate iteration, etc, all without altering the ACTUAL input list (if list indeed it was;-). If all you need is a single plain <code>for</code> loop then that last step is unnecessary (and indeed unhelpful if e.g. input is a huge open file) and I'd suggest an auxiliary generator instead:</p>
+
+<pre><code>def justLoopOn(input):
+  if isinstance(input, basestring):
+    yield input
+  else:
+    try:
+      for item in input:
+        yield item
+    except TypeError:
+      yield input
+</code></pre>
+
+<p>now in every single one of your functions needing such argument normalization, you just use:</p>
+
+<pre><code> for item in justLoopOn(input):
+</code></pre>
+
+<p>You can use an auxiliary normalizing-function even in the other case (where you need a real list for further nefarious purposes); actually, in such (rarer) cases, you can just do:</p>
+
+<pre><code> thelistforme = list(justLoopOn(input))
+</code></pre>
+
+<p>so that the (inevitably) somewhat-hairy normalization logic is just in ONE place, just as it should be!-)</p>
+<br /><b>#1</b><br /><p>I like Andrei Vajna's suggestion of <code>hasattr(var,'__iter__')</code>.  Note these results from some typical Python types:</p>
+
+<pre><code>&gt;&gt;&gt; hasattr("abc","__iter__")
+False
+&gt;&gt;&gt; hasattr((0,),"__iter__")
+True
+&gt;&gt;&gt; hasattr({},"__iter__")
+True
+&gt;&gt;&gt; hasattr(set(),"__iter__")
+True
+</code></pre>
+
+<p>This has the added advantage of treating a string as a non-iterable - strings are a grey area, as sometimes you want to treat them as an element, other times as a sequence of characters.</p>
+<br /><b>#2</b><br /><p>You can put * before your argument, this way you'll always get a tuple:</p>
+
+<pre><code>def a(*p):
+  print type(p)
+  print p
+
+a(4)
+&gt;&gt;&gt; &lt;type 'tuple'&gt;
+&gt;&gt;&gt; (4,)
+
+a(4, 5)
+&gt;&gt;&gt; &lt;type 'tuple'&gt;
+&gt;&gt;&gt; (4,5,)
+</code></pre>
+
+<p>But that will force you to call your function with variable parameters, I don't know if that 's acceptable for you.</p>
+<br /><b>#3</b><br /><p>You can do direct type comparisons using <code>type()</code>.</p>
+
+<pre><code>def my_func(input):
+    if not type(input) is list:
+        input = [input]
+    for e in input:
+        # do something
+</code></pre>
+
+<p>However, the way you have it will allow <em>any</em> type derived from the <code>list</code> type to be passed through.  Thus preventing the any derived types from accidentally being wrapped.</p>
+<br /><b>#4</b><br /><p>Your aproach seems right to me.</p>
+
+<p>It's similar to how you use <code>atom?</code> in Lisp when you iterate over lists and check the current item to see if it is a list or not, because if it is a list you want to process its items, too.</p>
+
+<p>So, yeah, don't see anything wrong with that.</p>
+<br /><b>#5</b><br /><p>That is an ok way to do it (don't forget to include tuples).</p>
+
+<p>However, you may also want to consider if the argument has a __iter__ <a href="http://docs.python.org/reference/datamodel.html#object.%5F%5Fiter%5F%5F" rel="nofollow">method</a> or __getitem__ <a href="http://docs.python.org/reference/datamodel.html#object.%5F%5Fgetitem%5F%5F" rel="nofollow">method</a>. (note that strings have __getitem__ instead of __iter__.)</p>
+
+<pre><code>hasattr(arg, '__iter__') or hasattr(arg, '__getitem__')
+</code></pre>
+
+<p>This is probably the most general requirement for a list-like type than only checking the type.</p>
+<br /><b>#6</b><br /><p>First, there is no general method that could tell a "single element" from "list of elements" since by definition list can be an element of another list.</p>
+
+<p>I would say you need to define what kinds of data you might have, so that you might have:</p>
+
+<ul>
+<li>any descendant of <code>list</code> against anything else
+<ul>
+<li>Test with <code>isinstance(input, list)</code> (so your example is correct)</li>
+</ul></li>
+<li>any sequence type except strings (<code>basestring</code> in Python 2.x, <code>str</code> in Python 3.x)
+<ul>
+<li>Use sequence metaclass: <code>isinstance(myvar, collections.Sequence) and not isinstance(myvar, str)</code></li>
+</ul></li>
+<li>some sequence type against known cases, like <code>int</code>, <code>str</code>, <code>MyClass</code>
+<ul>
+<li>Test with <code>isinstance(input, (int, str, MyClass))</code></li>
+</ul></li>
+<li>any iterable except strings:
+<ul>
+<li>Test with </li>
+</ul></li>
+</ul>
+
+<p>.</p>
+
+<pre><code>    try: 
+        input = iter(input) if not isinstance(input, str) else [input]
+    except TypeError:
+        input = [input]
+</code></pre>
+<br /><b>#7</b><br /><p>This seems like a reasonable way to do it. You're wanting to test if the element is a list, and this accomplishes that directly. It gets more complicated if you want to support other 'list-like' data types, too, for example:</p>
+
+<pre><code>isinstance(input, (list, tuple))
+</code></pre>
+
+<p>or more generally, abstract away the question:</p>
+
+<pre><code>def iterable(obj):
+  try:
+    len(obj)
+    return True
+  except TypeError:
+    return False
+</code></pre>
+
+<p>but again, in summary, your method is simple and correct, which sounds good to me!</p>
+<br />

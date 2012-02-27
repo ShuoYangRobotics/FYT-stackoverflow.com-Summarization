@@ -1,0 +1,214 @@
+<h3>Question (ID-1042900):</h3><h2>Django unit testing with date/time-based objects</h2><p>Suppose I have the following <code>Event</code> model:</p>
+
+<pre><code>from django.db import models
+import datetime
+
+class Event(models.Model):
+    date_start = models.DateField()
+    date_end = models.DateField()
+
+    def is_over(self):
+        return datetime.date.today() &gt; self.date_end
+</code></pre>
+
+<p>I want to test <code>Event.is_over()</code> by creating an Event that ends in the future (today + 1 or something), and stubbing the date and time so the system thinks we've reached that future date.</p>
+
+<p>I'd like to be able to stub ALL system time objects as far as python is concerned. This includes <code>datetime.date.today()</code>, <code>datetime.datetime.now()</code>, and any other standard date/time objects.</p>
+
+<p>What's the standard way to do this?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Replacing internal stuff like this is always dangerous because it can have nasty side effects. So what you indeed want, is to have the monkey patching be as local as possible.</p>
+
+<p>We use Michael Foord's excellent mock library: <a href="http://www.voidspace.org.uk/python/mock/" rel="nofollow">http://www.voidspace.org.uk/python/mock/</a> that has a <code>@patch</code> decorator which patches certain functionality, but the monkey patch only lives in the scope of the testing function, and everything is automatically restored after the function runs out of its scope.</p>
+
+<p>The only problem is that the internal <code>datetime</code> module is implemented in C, so by default you won't be able to monkey patch it. We fixed this by making our own simple implementation which <em>can</em> be mocked.</p>
+
+<p>The total solution is something like this (the example is a validator function used within a Django project to validate that a date is in the future). Mind you I took this from a project but took out the non-important stuff, so things may not actually work when copy-pasting this, but you get the idea, I hope :)</p>
+
+<p>First we define our own very simple implementation of <code>datetime.date.today</code> in a file called <code>utils/date.py</code>:</p>
+
+<pre><code>import datetime
+
+def today():
+    return datetime.date.today()
+</code></pre>
+
+<p>Then we create the unittest for this validator in <code>tests.py</code>:</p>
+
+<pre><code>import datetime
+import mock
+from unittest2 import TestCase
+
+from django.core.exceptions import ValidationError
+
+from .. import validators
+
+class ValidationTests(TestCase):
+    @mock.patch('utils.date.today')
+    def test_validate_future_date(self, today_mock):
+        # Pin python's today to returning the same date
+        # always so we can actually keep on unit testing in the future :)
+        today_mock.return_value = datetime.date(2010, 1, 1)
+
+        # A future date should work
+        validators.validate_future_date(datetime.date(2010, 1, 2))
+
+        # The mocked today's date should fail
+        with self.assertRaises(ValidationError) as e:
+            validators.validate_future_date(datetime.date(2010, 1, 1))
+        self.assertEquals([u'Date should be in the future.'], e.exception.messages)
+
+        # Date in the past should also fail
+        with self.assertRaises(ValidationError) as e:
+            validators.validate_future_date(datetime.date(2009, 12, 31))
+        self.assertEquals([u'Date should be in the future.'], e.exception.messages)
+</code></pre>
+
+<p>The final implementation looks like this:</p>
+
+<pre><code>from django.utils.translation import ugettext_lazy as _
+from django.core.exceptions import ValidationError
+
+from utils import date
+
+def validate_future_date(value):
+    if value &lt;= date.today():
+        raise ValidationError(_('Date should be in the future.'))
+</code></pre>
+
+<p>Hope this helps</p>
+<br /><b>#1</b><br /><p>You could write your own datetime module replacement class, implementing the methods and classes from datetime that you want to replace. For example:</p>
+
+<pre><code>import datetime as datetime_orig
+
+class DatetimeStub(object):
+    """A datetimestub object to replace methods and classes from 
+    the datetime module. 
+
+    Usage:
+        import sys
+        sys.modules['datetime'] = DatetimeStub()
+    """
+    class datetime(datetime_orig.datetime):
+
+        @classmethod
+        def now(cls):
+            """Override the datetime.now() method to return a
+            datetime one year in the future
+            """
+            result = datetime_orig.datetime.now()
+            return result.replace(year=result.year + 1)
+
+    def __getattr__(self, attr):
+        """Get the default implementation for the classes and methods
+        from datetime that are not replaced
+        """
+        return getattr(datetime_orig, attr)
+</code></pre>
+
+<p>Let's put this in its own module we'll call  <code>datetimestub.py</code></p>
+
+<p>Then, at the start of your test, you can do this:</p>
+
+<pre><code>import sys
+import datetimestub
+
+sys.modules['datetime'] = datetimestub.DatetimeStub()
+</code></pre>
+
+<p>Any subsequent import of the <code>datetime</code> module will then use the <code>datetimestub.DatetimeStub</code> instance, because when a module's name is used as a key in the <code>sys.modules</code> dictionary, the module will not be imported: the object at <code>sys.modules[module_name]</code> will be used instead.</p>
+<br /><b>#2</b><br /><p>Slight variation to Steef's solution.  Rather than replacing datetime globally instead you could just replace the datetime module in just the module you are testing, e.g.:</p>
+
+<pre>
+<code>
+import models # your module with the Event model
+import datetimestub
+
+models.datetime = datetimestub.DatetimeStub()
+</code>
+</pre>
+
+<p>That way the change is much more localised during your test.</p>
+<br /><b>#3</b><br /><p>What if you mocked the self.end_date instead of the datetime? Then you could still test that the function is doing what you want without all the other crazy workarounds suggested.</p>
+
+<p>This wouldn't let you stub all date/times like your question initially asks, but that might not be completely necessary.</p>
+
+<pre>
+today = datetime.date.today()
+
+event1 = Event()
+event1.end_date = today - datetime.timedelta(days=1) # 1 day ago
+event2 = Event()
+event2.end_date = today + datetime.timedelta(days=1) # 1 day in future
+
+self.assertTrue(event1.is_over())
+self.assertFalse(event2.is_over())
+</pre>
+<br /><b>#4</b><br /><p>This doesn't perform system-wide datetime replacement, but if you get fed up with trying to get something to work you could always add an optional parameter to make it easier for testing.</p>
+
+<pre><code>def is_over(self, today=datetime.datetime.now()):
+    return today &gt; self.date_end
+</code></pre>
+<br /><b>#5</b><br /><p>I'd suggest taking a look at testfixtures test_datetime:</p>
+
+<p><a href="http://packages.python.org/testfixtures/datetime.html" rel="nofollow">http://packages.python.org/testfixtures/datetime.html</a></p>
+<br /><b>#6</b><br /><p>Two choices.</p>
+
+<ol>
+<li><p>Mock out datetime by providing your own.  Since the local directory is searched before the standard library directories, you can put your tests in a directory with your own mock version of datetime.  This is harder than it appears, because you don't know all the places datetime is secretly used.</p></li>
+<li><p>Use <strong>Strategy</strong>.  Replace explicit references to <code>datetime.date.today()</code> and <code>datetime.date.now()</code> in your code with a <strong>Factory</strong> that generates these.  The <strong>Factory</strong> must be configured with the module by the application (or the unittest).  This configuration (called "Dependency Injection" by some) allows you to replace the normal run-time <strong>Factory</strong> with a special test factory.  You gain a lot of flexibility with no special case handling of production.  No "if testing do this differently" business.</p></li>
+</ol>
+
+<p>Here's the <strong>Strategy</strong> version.</p>
+
+<pre><code>class DateTimeFactory( object ):
+    """Today and now, based on server's defined locale.
+
+    A subclass may apply different rules for determining "today".  
+    For example, the broswer's time-zone could be used instead of the
+    server's timezone.
+    """
+    def getToday( self ):
+        return datetime.date.today()
+    def getNow( self ):
+        return datetime.datetime.now()
+
+class Event( models.Model ):
+    dateFactory= DateTimeFactory() # Definitions of "now" and "today".
+    ... etc. ...
+
+    def is_over( self ):
+        return dateFactory.getToday() &gt; self.date_end 
+
+
+class DateTimeMock( object ):
+    def __init__( self, year, month, day, hour=0, minute=0, second=0, date=None ):
+        if date:
+            self.today= date
+            self.now= datetime.datetime.combine(date,datetime.time(hour,minute,second))
+        else:
+            self.today= datetime.date(year, month, day )
+            self.now= datetime.datetime( year, month, day, hour, minute, second )
+    def getToday( self ):
+        return self.today
+    def getNow( self ):
+        return self.now
+</code></pre>
+
+<p>Now you can do this</p>
+
+<pre><code>class SomeTest( unittest.TestCase ):
+    def setUp( self ):
+        tomorrow = datetime.date.today() + datetime.timedelta(1)
+        self.dateFactoryTomorrow= DateTimeMock( date=tomorrow )
+        yesterday = datetime.date.today() + datetime.timedelta(1)
+        self.dateFactoryYesterday=  DateTimeMock( date=yesterday )
+    def testThis( self ):
+        x= Event( ... )
+        x.dateFactory= self.dateFactoryTomorrow
+        self.assertFalse( x.is_over() )
+        x.dateFactory= self.dateFactoryYesterday
+        self.asserTrue( x.is_over() )
+</code></pre>
+
+<p>In the long run, you more-or-less <strong>must</strong> do this to account for browser locale separate from server locale.  Using default <code>datetime.datetime.now()</code> uses the server's locale, which may piss off users who are in a different time zone.</p>
+<br />

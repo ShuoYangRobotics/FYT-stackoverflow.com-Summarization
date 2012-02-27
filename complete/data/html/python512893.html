@@ -1,0 +1,100 @@
+<h3>Question (ID-512893):</h3><h2>memory use in large data-structures manipulation/processing</h2><p>I have a number of large (~100 Mb) files which I'm regularly processing. While I'm trying to delete unneeded data structures during processing, memory consumption is a bit too high. so, I was wondering is there a way to 'efficiently' manipulate large data, e.g.:</p>
+
+<pre><code>def read(self, filename):
+    fc = read_100_mb_file(filename)
+    self.process(fc)
+def process(self, content):
+    # do some processing of file content
+</code></pre>
+
+<p>is there a duplication of data structures? isn't it more memory efficient to use class-wide variable like self.fc?</p>
+
+<p>how to garbage-collect? I know about gc module, but do I call it after i <code>del fc</code> for example? does garbage collector called after a del statement at all? when should I use garbage collection?</p>
+
+<p><strong>update</strong><br />
+p.s. 100 Mb is not a problem in itself. but float conversion, further processing add significantly more to both working set and virtual size (i'm on windows).</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>I'd suggest looking at the <a href="http://www.dabeaz.com/generators/" rel="nofollow">presentation by David Beazley</a> on using generators in Python. This technique allows you to handle a lot of data, and do complex processing, quickly and without blowing up your memory use. IMO, the trick isn't holding a huge amount of data in memory as efficiently as possible; the trick is avoiding loading a huge amount of data into memory at the same time.</p>
+<br /><b>#1</b><br /><p>Before you start tearing your hair out over the garbage collector, you might be able to avoid that 100mb hit of loading the entire file into memory by using a memory-mapped file object. See the <a href="http://docs.python.org/library/mmap.html" rel="nofollow">mmap</a> module.</p>
+<br /><b>#2</b><br /><p>Don't read the entire 100 meg file in at a time.  Use streams to process a little bit at a time.  Check out this blog post that talks about handling large csv and xml files.  <a href="http://lethain.com/entry/2009/jan/22/handling-very-large-csv-and-xml-files-in-python/" rel="nofollow">http://lethain.com/entry/2009/jan/22/handling-very-large-csv-and-xml-files-in-python/</a></p>
+
+<p>Here is a sample of the code from the article.</p>
+
+<pre><code>from __future__ import with_statement # for python 2.5
+
+with open('data.in','r') as fin:
+    with open('data.out','w') as fout:
+        for line in fin:
+            fout.write(','.join(line.split(' ')))
+</code></pre>
+<br /><b>#3</b><br /><p>So, from your comments I assume that your file looks something like this:</p>
+
+<pre><code>item1,item2,item3,item4,item5,item6,item7,...,itemn
+</code></pre>
+
+<p>which you all reduce to a single value by repeated application of some combination function. As a solution, only read a single value at a time:</p>
+
+<pre><code>def read_values(f):
+    buf = []
+    while True:
+        c = f.read(1)
+        if c == ",":
+            yield parse("".join(buf))
+            buf = []
+        elif c == "":
+            yield parse("".join(buf))
+            return
+        else:
+            buf.append(c)
+
+with open("some_file", "r") as f:
+     agg = initial
+     for v in read_values(f):
+         agg = combine(agg, v)
+</code></pre>
+
+<p>This way, memory consumption stays constant, unless <code>agg</code> grows in time. </p>
+
+<ol>
+<li>Provide appropriate implementations of <code>initial</code>, <code>parse</code> and <code>combine</code></li>
+<li>Don't read the file byte-by-byte, but read in a fixed buffer, parse from the buffer and read more as you need it</li>
+<li><p>This is basically what the builtin <code>reduce</code> function does, but I've used an explicit for loop here for clarity. Here's the same thing using <code>reduce</code>:</p>
+
+<pre><code>with open("some_file", "r") as f:
+    agg = reduce(combine, read_values(f), initial)
+</code></pre></li>
+</ol>
+
+<p>I hope I interpreted your problem correctly.</p>
+<br /><b>#4</b><br /><p>First of all, don't touch the garbage collector. That's not the problem, nor the solution.</p>
+
+<p>It sounds like the real problem you're having is not with the file reading at all, but with the data structures that you're allocating as you process the files.
+Condering using <i>del</i> to remove structures that you no longer need during processing.  Also, you might consider using <i>marshal</i> to dump some of the processed data to disk while you work through the next 100mb of input files.</p>
+
+<p>For file reading, you have basically two options: unix-style files as streams, or memory mapped files.   For streams-based files, the default python file object is already buffered, so the simplest code is also probably the most efficient:</p>
+
+<pre>
+  with open("filename", "r") as f:
+    for line in f:
+       # do something with a line of the files
+</pre>
+
+<p>Alternately, you can use f.read([size]) to read blocks of the file.  However, usually you do this to gain CPU performance, by multithreading the processing part of your script, so that you can read and process at the same time.  But it doesn't help with memory usage; in fact, it uses more memory.</p>
+
+<p>The other option is mmap, which looks like this:</p>
+
+<pre>
+  with open("filename", "r+") as f:
+    map = mmap.mmap(f.fileno(), 0)
+    line = map.readline()
+    while line != '':
+       # process a line
+       line = map.readline()
+</pre>
+
+<p>This sometimes outperforms streams, but it also won't improve memory usage.</p>
+<br /><b>#5</b><br /><p>In your example code, data is being stored in the <code>fc</code> variable. If you don't keep a reference to <code>fc</code> around, your entire file contents will be removed from memory when the <code>read</code> method ends. </p>
+
+<p>If they are not, then <strong>you are keeping a reference somewhere</strong>. Maybe the reference is being created in <code>read_100_mb_file</code>, maybe in <code>process</code>. If there is no reference, CPython implementation will deallocate it almost immediatelly.</p>
+
+<p>There are some tools to help you find where this reference is, <a href="http://guppy-pe.sourceforge.net/" rel="nofollow">guppy</a>, <a href="http://www.aminus.net/wiki/Dowser" rel="nofollow">dowser</a>, <a href="http://pysizer.8325.org/" rel="nofollow">pysizer</a>...</p>
+<br />

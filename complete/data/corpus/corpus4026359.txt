@@ -1,0 +1,147 @@
+Question (ID-4026359): Memory-efficient string-to-string map in Python (or C) I need a memory-efficient data structure for for storing about a million key--value pairs, where keys are strings of about 80 bytes, and values are strings of about 200 bytes, the total key and value size being about 280MB. I also need efficient lookup of value by key, preferably a hash-map. The memory overhead should be as little as possible, e.g. for 280MB of useful data, the data structure shouldn't use more than 300MB of virtual memory (including malloc() overhead and everything else). The usage pattern is the following: we start with an empty data structure, and we populate it gradually, never changing keys, and never changing the length of values. As a plus, the data structure may support changing the length of values, at the expense of a 100% value overhead (meaning that for x value bytes, x bytes might be wasted in temporarily in unused buffer space). 
+
+ I need a pure Python module, or a built-in Python module, or a C implementation preferably with (C)Python bindings. I'd prefer if it was possible to serialize the whole data structure to disk, and to read it back very quickly. 
+
+ Just to prove that such a small overhead is possible, I've created a simple design with open addressing , the hash table of 1.25 million elements containing 4-byte pointers to 1MB data blocks, the data blocks containing the key and value lengths as base-128 varints . This design has an important limitation: it doesn't allow removing or changing pairs without wasting their memory area. According to my calculations with 1 million key--value pairs of 280 bytes each, the overhead is less than 3.6% (10 080 000 bytes). The limits above are more generous, they allow 20 000 000 bytes of overhead. 
+
+ I've just found http://www.pytables.org/ , which provides fast access and memory-efficient packing of data. I have to examine it more closely to check if it suits my needs. 
+ Answers (Total-9): #0 Martijn mentioned this in a comment (not sure why people comment with answers), but I agree: use SQLite. You should give it a try and see if it will meet your needs. 
+ #1 If you don't plan to have a large amounts of deletes, then this isn't that hard. Deletes lead to fragmentation. 
+
+ You also need to commit to a fixed length key. You mentioned 80 bytes. Are your keys allowed to duplicate? If not, it's even easier. 
+
+ So, here is what you do. 
+
+ You create an array of: 
+
+ struct {
+ char value[80];
+ char *data;
+} key;
+ 
+
+ And you keep this array sorted. 
+
+ If you keys can duplicate, then you need: 
+
+ struct link {
+ char *data;
+ link *next;
+}
+
+struct {
+ char value[80];
+ link *data;
+} key;
+ 
+
+ (My C is rusty, but this is the gist of it) The latter has each key pointing to a linked list of values. 
+
+ Then a lookup is a simple binary search. The "pain" is in maintaining this array and inserting/deleting keys. It's not as painful as it sounds, but it saves a LOT of memory, especially on 64bit systems. 
+
+ What you want to reduce is the number of pointers. Pointers are expensive when you have lots of structures filled with pointers. On a 64bit system, a pointer is 8 bytes. So for a single pointer, there goes 8MB of your memory budget. 
+
+ So, the expense is in building the array, copying and compacting memory (if you "know" you will have a million rows and can commit to that, then malloc(1000000 * sizeof(key)) right away, it'll save you some copying during expansion). 
+
+ But don't be afraid of, once it's up and running, performance is quite good. Modern cpus are actually pretty good at copying 100M blocks of memory around. 
+
+ Just as an aside, I just did something much like this in Java. On a 64bit JVM, a Map with 25M entries is 2G of RAM. My solution (using similar techniques to this) has at around 600M). Java uses more pointers than C, but the premise is the same. 
+ #2 Ok, the dirt-simple approach. 
+
+ Use a python dictionary for the data structure. I filled a python dictionary with 1 million random key-value pairs where the key was 80 characters and the value 200 characters. It took 360,844 Kb on my computer, which is outside of your specification of no more than 300 MB, but I offer it up as a solution anyway because it's still pretty memory efficient. 
+
+ This also fails your requirement of having a C API. I'm not sure why you need C, but as the question is tagged Python and lacks a C tag, I'll offer the pure Python to see if it just might fit the bill. 
+
+ Regarding persistence. Use the cPickle module. It's very fast and, again, dirt-simple. To save your dictionary: 
+
+ cPickle.dump(mydict, "myfile.pkl")
+ 
+
+ To reload your dictionary: 
+
+ mydict = cPickle.load("myfile.pkl")
+ 
+
+ A second dirt-simple idea is to use the shelve module, which is basically disk-based python dictionary. Memory overhead is very low (it's all on disk). But it's also much slower. 
+ #3 Have you tried using a straightforward dict? Most of your data is in strings, so the overhead might fit within your requirements. 
+ #4 You can use the sha1 of the key instead of the key itself. If the keys are unique, then the sha1 hash of the keys is likely, too. It provides a memory savings to try to squeak in under your limit. 
+
+ from random import choice
+from string import letters
+from hashlib import sha1
+
+def keygen(length):
+ return "".join(choice(letters) for _ in xrange(length))
+
+def gentestdata(n=1000*1000):
+ # return dict((sha1(keygen(80)).digest(), keygen(200)) for _ in xrange(n))
+ d = {}
+ for _ in xrange(n):
+  key = sha1(keygen(80)).digest()
+  assert key not in d
+  value = keygen(200)
+  d[key] = value
+ return d
+
+if __name__ == '__main__':
+ d = gentestdata()
+ 
+
+ On my ubuntu box, this tops out at 304 MB of memory: 
+
+ 2010-10-26 14:26:02 hbrown@hbrown-ubuntu-wks:~$ ps aux | grep python
+[...]
+hbrown 12082 78.2 7.5 307420 303128 pts/1 S+ 14:20 4:47 python
+ 
+
+ Close enough? It's python, not C. 
+
+ 
+
+ Later: also, if your data is somewhat redundant, you can gzip the values. It's a time versus space trade-off. 
+ #5 Using SQLite is a good idea. A quick implementation can tell if you are fast enough with little effort. 
+
+ 
+
+ If you determine you have to roll your own, I'd recommend the following: 
+
+ How well can you predict the number of pairs, or an upper limit for that? 
+How well can you predict the total data size, or an upper limit for that? 
+
+ Arena allocator for strings and nodes. (Usually, you'd work on a list of arenas, so you don't have to predict the total size). 
+
+ Alignment depends on your algorithms, in principle you could pack it byte-tight, and the only overhead is your overallocation, which only minimally affects your working set. 
+
+ However, if you have to run any cmp/copy etc. operations on these strings, remember that with the following guarantees, you can squeeze a little or a lot from these string operations: 
+
+ 
+ all elements are CPU word aligned 
+ all pad bytes are (e.g.) 0 
+ you can safely read "beyond" a string end as long as you don't cross a CPU border 
+ 
+
+ 
+
+ Hash table for the index. A dictionary would work, too, but that makes sense only if potential degradation / rehashing would be a serious issue. I don't know any "stock" hashtable implementation for C, but there should be one, right? right? Just replace allocations with calls to the arena allocator. 
+
+ 
+
+ Memory Locality 
+
+ If you can guarantee that lookup will never request a string that is not in the map, you should store the keys in a separate arena, as they are needed only on hash collisions. That can improve memory locality significantly. (In that case, if you ever have a "final" table, you could even copy the colliding keys to a new arena, and throw away all the others. The benefits of that are probably marginal, though.) 
+
+ Separation can help or hurt, depending on your access patterns. If you typically use the value once after each lookup, having them pair-wise in the same arena is great. If you e.g. look up a few keys, then use their values repeatedly, separate arenas make sense. 
+
+ 
+
+ If you have to support "funny characters" / Unicode, normalize your strings before storing them. 
+ #6 You could use struct module to pack binary data and unpack it when needed.
+You can implement a memory efficient storage using this approach. I guess access would be a pain. 
+
+ 
+ http://docs.python.org/library/struct.html 
+ 
+ #7 Apache Portable Runtime (aka APR) has a c-based hash table. You can see documentation at http://apr.apache.org/docs/apr/0.9/group_ apr _hash.html 
+
+ With apr_hash_t all you store is void*. So it gives you full control over values. SO if you want you can store pointer to a 100 byte block instead of actual length of the string. 
+ #8 Since I couldn't find any existing solutions which will pack the memory tightly, I've decided to implement it in C for myself. See my design with open addressing in the question.

@@ -1,0 +1,135 @@
+Question (ID-1363413): Efficient way to use python's lambda, map I need to store a big list of integers in Bigtable(db). For efficiency I am storing them as diff between 2 consecutive items. 
+
+ for eg: 
+
+ original_list = [1005, 1004, 1003, 1004, 1006] 
+
+ Storing the above list(which actually contains more than 1000k items) as 
+
+ 
+start = 1005
+diff = [-1, -1, 1, 2] 
+
+ The closest I could manage is, 
+
+ 
+ltp = [start]
+map(lambda x: ltp.append(ltp[-1] + x), tick) 
+
+ I am looking for an efficient way to convert it back into original list. 
+ Answers (Total-9): #0 For such large data structures numpy will work well. For this example, it's over 200x faster (see below), and a bit easier to code, basically just 
+
+ add.accumulate(diff)
+ 
+
+ Comparison between numpy and direct list manipulation: 
+
+ import numpy as nx
+import timeit
+
+N = 10000
+
+diff_nx = nx.zeros(N, dtype=nx.int)
+diff_py = list(diff_nx)
+
+start = 1005
+
+def f0():
+ orig = [start]
+ for x in diff_py: 
+  orig.append(orig[-1] + x)
+
+def f1():
+ diff_nx[0] = start
+ nx.add.accumulate(diff_nx)
+
+t = timeit.Timer("f0()", "from __main__ import f0, f1, diff_nx, diff_py, nx, start")
+print t.timeit(number=1000)
+t = timeit.Timer("f1()", "from __main__ import f0, f1, diff_nx, diff_py, nx, start")
+print t.timeit(number=1000)
+ 
+
+ gives 
+
+ 13.4044158459  # for list looping
+0.0474112033844 # for numpy accumulate
+ 
+
+ Really, though, it seems better to reuse an established compression algorithm, like can easily be done with PyTables , rather than rolling your own like it seems that you're doing here. 
+
+ Also, here, I'm suggesting that you read in the data with room for the prepended start term, rather than rebuild the list with the prepended term, of course, so you don't have to do the copy. 
+ #1 The following works for me: 
+
+ orig = [start]
+for x in diff:
+ orig.append(orig[-1] + x)
+ 
+
+ Using map will create an new array of the same size, filled with None . I also find a simple for loop more readable, and in this case as fast as you can get. 
+ #2 Perfect for generators: 
+
+ def diff2abs( diffs, start ):
+ yield start
+ for diff in diffs:
+  start += diff
+  yield start
+
+start = 1005
+diffs = [-1, -1, 1, 2]
+original_list = list( diff2abs( diffs, start ))
+ 
+ #3 Several of the other respondents have reasonable implementations of the algorithm you asked for, but I'm unclear on exactly what problem it is you're really trying to solve. 
+
+ Unless the numbers being stored are very large (i.e., overflow an integer and require bignums), your list of diffs won't gain you any efficiency -- an integer is an integer from the Python runtime POV, so your example "diff" list of [-1, -1, 1, 2] will consume just as much memory as the original list [1005, 1004, 1003, 1004, 1006] . 
+ #4 class runningtotal:
+ def __init__(self, start = 0):
+  self.total = start
+ def __call__(self, value):
+  self.total += value
+  return self.total
+ 
+
+ Now try: 
+
+ &gt;&gt;&gt; map(runningtotal(start), [0,]+diff)
+[1005, 1004, 1003, 1004, 1006]
+ 
+ #5 As mshsayem suggested, use list comprehensions - they are generally faster than for loops or map/lambdas (according do Mark Lutz's book Learning Python). 
+
+ If you really want to use an more FP-ish solution, the proper function would be "scan", wich [I believe] isn't implemented in Python so you would have to implement it yourself (which is not a hard task). 
+
+ "scan" is basically a reduce, but instead of reducing the list to a single value, it stores the result of each "iteration" in a new list. 
+
+ If you implemented it, you could do something like: 
+
+ scan(lambda x,y: x+y, [start]++diff)
+ 
+ #6 Although I don't get why this should be more efficient, I am pretty sure a for loop will give the best performance: 
+
+ l = [start]
+for i in diff:
+ l.append(l[-1] + i)
+ 
+ #7 I don't know about your reasoning for storing the integers as diffs -- rcoder gave a good answer about why this generally is not more efficient than storing the integers themselves -- but if you don't need to have access to the entire list at once, it's more efficient memory-wise for you to use a generator. Since you say this is a "big list," you can save a lot of memory this way, instead of allocating the entire list at once. Here's a generator comprehension to get your list back: 
+
+ start = 1005
+def mod_start(x):
+ global start
+ start += x
+ return start
+int_generator = (mod_start(i) for i in diffs)
+ 
+
+ You can then iterate over int_generator like you would any list, without having the entire list in memory at once. Note, however, that you cannot subscript or slice a generator, but you can use it in many useful situations. 
+
+ You can clean up the example so that the start variable does not need to be global. It just can't be local to the mod_start function. 
+
+ Edit: You don't have to use the generator comprehension to get a generator. You can also use a generator function with the yield expression, like THC4k did. That avoids the start variable scope issue and is probably a little cleaner. You can also get a list from a generator at any time by passing it to the list() built-in function. 
+ #8 No comment on the performance of this, but you can use reduce here. 
+
+ start = 1005
+diffs = [-1,-1,1,2]
+reduce(lambda undiffed_list, diff: undiffed_list + [undiffed_list[-1] + diff],diffs,[start])
+ 
+
+ gets you what you want.

@@ -1,0 +1,62 @@
+Question (ID-677028): How do I notify a process of an SQLite database change done in a different process? Let's say I have two or more processes dealing with an SQLite database - a "player" process and many "editor" processes. 
+
+ The "player" process reads the database and updates a view - in my case it would be a waveform being mixed to the soundcard depending on events stored in the database. 
+
+ An "editor" process is any editor for that database: it changes the database constantly. 
+
+ Now I want the player to reflect the editing changes quickly. 
+
+ I know that SQLite supplies hooks to trace database changes within the same process, but there seems to be little info on how to do this with multiple processes. 
+
+ I could poll the database constantly, compare records and trigger events, but that seems to be quite inefficient, especially when the database grows to a large size. 
+
+ I am thinking about using a log table and triggers, but I wonder if there is a simpler method. 
+ Answers (Total-6): #0 A relational database is not your best first choice for this. 
+
+ Why? 
+
+ You want all of your editors to pass changes to your player. 
+
+ Your player is -- effectively -- a server for all those editors. Your player needs multiple open connections. It must listen to all those connections for changes. It must display those changes. 
+
+ If the changes are really large, you can move to a hybrid solution where the editors persist the changes and notify the player. 
+
+ Either way, the editors must notify they player that they have a change. It's much, much simpler than the player trying to discover changes in a database. 
+
+ 
+
+ A better design is a server which accepts messages from the editors, persists them, and notifies the player. This server is neither editor nor player, but merely a broker that assures that all the messages are handled. It accepts connections from editors and players. It manages the database. 
+
+ There are two implementations. Server IS the player. Server is separate from the player. The design of server doesn't change -- only the protocol. When server is the player, then server calls the player objects directly. When server is separate from the player, then the server writes to the player's socket. 
+
+ When the player is part of the server, player objects are invoked directly when a message is received from an editor. When the player is separate, a small reader collects the messages from a socket and calls the player objects. 
+
+ The player connects to the server and then waits for a stream of information. This can either be input from the editors or references to data that the server persisted in the database. 
+
+ If your message traffic is small enough so that network latency is not a problem, editor sends all the data to the server/player. If message traffic is too large, then the editor writes to a database and sends a message with just a database FK to the server/player. 
+
+ 
+
+ Please clarify "If the editor crashes while notifying, the player is permanently messed up" in your question. 
+
+ This sounds like a poor design for the player service. It can't be "permanently messed up" unless it's not getting state from the various editors. If it's getting state from the editors (but attempting to mirror that state, for example) then you should consider a design where the player simply gets state from the editor and cannot get "permanently messed up". 
+ #1 Just open a socket between the two processes and have the editor tell all the players about the update. 
+ #2 I think in that case, I would make a process to manage the database read/writes. 
+
+ Each editor that want to make some modifications to the database makes a call to this proccess, be it through IPC or network, or whatever method. 
+
+ This process can then notify the player of a change in the database. The player, when he wants to retrieve some data should make a request of the data it wants to the process managing the database. (Or the db process tells it what it needs, when it notifies of a change, so no request from the player needed) 
+
+ Doing this will have the advantage of having only one process accessing the SQLite DB, so no locking or concurrency issues on the database. 
+ #3 Edit: I am asuming processes on the same machine. 
+
+ In my opinion there are two ways: 
+
+ 
+ Polling (as you mentioned), but keep it to a single value (like a table that just keeps the LastUpdateTime of other tables) 
+ Use whichever interprocess-communication there is available on the target platform. This could be events in Windows (e.g. in C# (I don't know in Python) the ManualResetEvent, AutoResetEvent, or a Mutex if you want to sacrifice a waiter-thread in each process), or Signals in Linux. 
+ 
+ #4 If it's on the same machine, the simplest way would be to have named pipe, "player" with blocking read() and "editors" putting a token in pipe whenever they modify DB. 
+ #5 How many editor processes (why processes?), and how often do you expect updates? This doesn't sound like a good design, especially not considering sqlite really isn't too happy about multiple concurrent accesses to the database. 
+
+ If multiple processes makes sense and you want persistence, it would probably be smarter to have the editors notify your player via sockets, pipes, shared memory or the like and then have the player (aka server process) do the persisting.

@@ -1,0 +1,253 @@
+Question (ID-8046142): Can I define a scope anywhere in Python? Sometimes I find that I have to use functions with long names such as os.path.abspath and os.path.dirname a lot in just a few lines of code. I don't think it's worth littering the global namespace with such functions, but it would be incredibly helpful to be able to define a scope around the lines where I need those functions. As an example, this would be perfect: 
+
+ import os, sys
+
+closure:
+ abspath = os.path.abspath
+ dirname = os.path.dirname
+
+ # 15 lines of heavy usage of those functions
+
+# Can't access abspath or dirname here
+ 
+
+ I'd love to know if this is doable somehow 
+ Answers (Total-7): #0 Python doesn't have a temporary namespace tool like let in Lisp or Scheme. 
+
+ The usual technique in Python is to put names in the current namespace and then take them out when you're done with them. This technique is used heavily in the standard library: 
+
+ abspath = os.path.abspath
+dirname = os.path.dirname
+# 15 lines of heavy usage of those functions
+a = abspath(somepath)
+d = dirname(somepath)
+...
+del abspath, dirname
+ 
+
+ An alternative technique to reduce typing effort is to shorten the recurring prefix: 
+
+ &gt;&gt;&gt; import math as m
+&gt;&gt;&gt; m.sin(x / 2.0) + m.sin(x * m.pi)
+
+&gt;&gt;&gt; p = os.path
+...
+&gt;&gt;&gt; a = p.abspath(somepath)
+&gt;&gt;&gt; d = p.dirname(somepath)
+ 
+
+ Another technique commonly used in the standard library is to just not worry about contaminating the module namespace and just rely on __all__ to list which names you intend to make public. The effect of __all__ is discussed in the docs for the import statement . 
+
+ Of course, you can also create your own namespace by storing the names in a dictionary (though this solution isn't common): 
+
+ d = dict(abspath = os.path.abspath,
+   dirname = os.path.dirname)
+...
+a = d['abspath'](somepath)
+d = d['dirname'](somepath)
+ 
+
+ Lastly, you can put all the code in a function (which has its own local namespace), but this has a number of disadvantages: 
+
+ 
+ the setup is awkward (an atypical and mysterious use of functions) 
+ you need to declare as global any assignments you want to do that aren't temporary. 
+ the code won't run until you call the function 
+ 
+
+ 
+ def temp():      # disadvantage 1: awkward setup
+ global a, d      # disadvantage 2: global declarations
+ abspath = os.path.abspath
+ dirname = os.path.dirname
+ # 15 lines of heavy usage of those functions
+ a = abspath(somepath)
+ d = dirname(somepath)
+ temp()        # disadvantage 3: invoking the code
+ 
+ 
+ #1 This sort of does what you want, but you do have to repeat the names 
+
+ try:
+ abspath = os.path.abspath
+ dirname = os.path.dirname
+ # fifteen lines of code
+finally:
+ del abspath
+ del dirname
+ 
+
+ This avoids pollution the namespace if there is an exception in a situation as below 
+
+ try:
+ ...
+ try:
+  abspath = os.path.abspath
+  dirname = os.path.dirname
+  # fifteen lines of code
+ finally:
+  del abspath
+  del dirname
+
+ ... # don't want abspath or dirname in scope here even if there was
+ ... # an exception in the above block
+
+except:
+ ...
+ 
+ #2 Just make a function? 
+
+ def do_things_with_those_functions():
+ abspath = os.path.abspath
+ dirname = os.path.dirname
+ # etc.
+ 
+
+ You can do this in any scope: 
+
+ def outer_function():
+ a = 5
+ def inner_function():
+  print(a)
+ inner_function()
+ 
+ #3 You can define functions anywhere, call them, then delete them. But there is no way to have an anonymous function that can make use of statements. 
+ #4 The short answer is "No.". 
+
+ Python has three scopes. It has function scope, global (aka module) scope, and the builtin scope. You can declare no other scopes. 
+
+ A class declaration looks sort of like a scope, but it isn't. It's basically shorthand for assigning a bunch of fields on an object. The functions in that class can't access those fields without going through the object they're defined on. 
+
+ This sounds a bit more limiting than it is. In Python you can also nest function definitions. A nested function definition gets read-only access to the outer scope. This is 'dynamic'. The name does not have to be mentioned before the function is defined. Here is an example: 
+
+ def joe(x):
+ def bar():
+  return y
+ def baz(z):
+  y = x + 20
+  return x
+ y = x+5
+ return bar, baz
+
+&gt;&gt;&gt; a, b = joe(5)
+&gt;&gt;&gt; b(20)
+5
+&gt;&gt;&gt; a()
+10
+ 
+
+ So, you can sort of get this effect without sacrificing too much locality by defining a nested function that creates the values you need, uses them, and returns a result. 
+
+ I remember, when learning Python, that getting used to the rather strange scoping rules was one of the more difficult parts. When nested functions were introduced, in my opinion, they made the scoping rules even stranger because of the read-only semantics for outer scopes and dynamic scoping of closures. 
+
+ Apparently, in Python3 there is a way of 'importing' a variable from the enclosing scope using the nonlocal keyword (analogous to the global keyword) so you can use it in a read/write context: 
+
+ def joe(x):
+ def bar():
+  return y
+ def baz(z):
+  nonlocal y
+  y = x + 20
+  return x
+ y = x+5
+ return bar, baz
+
+&gt;&gt;&gt; a, b = joe(5)
+&gt;&gt;&gt; b(20)
+5
+&gt;&gt;&gt; a()
+25
+ 
+
+ Otherwise, whenever Python sees a variable on the left-hand side of an = sign, it assumes you're creating a new local variable. The global and nonlocal keywords are a way of stating that you intend to modify a variable that's not in the scope of the function. 
+ #5 It is not clear if you're more embarassed by the length of identification expressions to write, or by the trail of remaining identifiers in a namespace after their use. 
+
+ 
+ For the first, the technique of defining an alias for a long prefix, as described by Raymond Hettinger, is THE ONE to employ. 
+ For the second, I'm surprised that nobody resorted to the importation of a module in which the instructions and lines you consider heavy and littering are consigned. 
+ 
+
+ By the way, if you access to functions by os.path.abspath and os.path.dirnames , it is incorrect to say that the functions (I suppose you mean their names) litter the namespace. Since they are belonging to the module os or os.path (it depends which one has been imported) , there are only the name of the module 'os' or 'os.path' in the namespace, and the module object in the memory, but not the functions's names directly in the namespace. 
+
+ So, one can create a script of name "heavy_code.py" : 
+
+ def doing(x):
+ from os.path import abspath as a,dirname as d
+ ## Execute all the desired processes and creations
+ def fufu(s,t):
+  return s+t
+ dedex = d[x]
+ #.........
+ #...........
+ #........
+ #............
+ #..........
+
+ ## Return to the calling scope all that is needed there
+ return (dedex,fufu)
+ 
+
+ And in the main module, taking acount of gnibbler's answer: 
+
+ one_path = 'I:/all/magala/zeru/kiol.py'
+try:
+ from pp.bududu import doing
+ w,ff = doing(one_path)
+finally:
+ del doing
+ 
+
+ . 
+
+ To see how it works: 
+
+ one_path = 'I:/all/magala/zeru/kiol.py'
+try:
+ from pp.bududu.heavy_code import doing
+ print "in try : "
+ print dir()
+ print "executing doing()"
+ w,ff = doing(one_path)
+ print dir()
+finally:
+ del doing
+
+print "\nafter finally : "
+print dir()
+print '\nw ==',w
+print 'ff(10,12) ==',ff(10,12)
+ 
+
+ produces as a result: 
+
+ in try :
+['__builtins__', '__doc__', '__name__', '__package__', 'doing', 'one_path']
+executing doing()
+['__builtins__', '__doc__', '__name__', '__package__', 'doing', 'ff', 'one_path', 'w']
+
+after finally :
+['__builtins__', '__doc__', '__name__', '__package__', 'ff', 'one_path', 'w']
+
+w == I:/all/magala/zeru
+ff(10,12) == 22
+ 
+
+ After the execution of the snippet, the function doing() doesn't exist anymore in the main module, but objects created by the execution of doing() now lay in it without a clutter of names in the main module's namespace. Also, all the identifiers needed inside the function doing() are local to it . 
+
+ The creation of all the desired and needed objects can be delegated to the module heavy_code , whatever how many they are, while importing and executing the function doing() takes only two lines in the main module, and function doing() in heavy_code plus its calling line can easily be modified. 
+
+ Isn't it what are the module designed for ? 
+ #6 In general, typing is not the hard part of writing software, but if you insist: 
+
+ class LocalNamespace(object):
+ def __enter__(self, *args, **kwargs):
+  pass
+ def __exit__(self, *args, **kwargs):
+  pass
+ with LocalNamespace() as foo:
+  abspath = os.path.abspath
+  dirname = os.path.dirname
+  # etc.
+ 
+
+ Hope this helps.

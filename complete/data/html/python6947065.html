@@ -1,0 +1,66 @@
+<h3>Question (ID-6947065):</h3><h2>right way to run some code with timeout in Python</h2><p>I looked online and found some SO discussing and ActiveState recipes for running some code with a timeout. It looks there are some common approaches:</p>
+
+<ul>
+<li>Use thread that run the code, and <code>join</code> it with timeout. If timeout elapsed - kill the thread. This is not directly supported in Python (used private <code>_Thread__stop</code> function) so it is <strong>bad practice</strong></li>
+<li>Use <code>signal.SIGALRM</code> - but this approach <strong>not working on Windows</strong>!</li>
+<li>Use subprocess with timeout - but this is <strong>too heavy</strong> - what if I want to start interruptible task often, I don't want fire process for each!</li>
+</ul>
+
+<p>So, what is <strong>the right way</strong>? I'm not asking about workarounds (eg use Twisted and async IO), but actual way to solve actual problem - I have some function and I want to run it only with some timeout. If timeout elapsed, I want control back. And I want it to work on Linux and Windows.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>What you might be looking for is the <a href="http://docs.python.org/library/multiprocessing.html#module-multiprocessing.pool" rel="nofollow">multiprocessing</a> module. If <code>subprocess</code> is too heavy, then this may not suit your needs either. </p>
+
+<pre><code>import time
+import multiprocessing
+
+def do_this_other_thing_that_may_take_too_long(duration):
+    time.sleep(duration)
+    return 'done after sleeping {0} seconds.'.format(duration)
+
+pool = multiprocessing.Pool(1)
+print 'starting....'
+res = pool.apply_async(do_this_other_thing_that_may_take_too_long, [8])
+for timeout in range(1, 10):
+    try:
+        print '{0}: {1}'.format(duration, res.get(timeout))
+    except multiprocessing.TimeoutError:
+        print '{0}: timed out'.format(duration) 
+
+print 'end'
+</code></pre>
+<br /><b>#1</b><br /><p>A completely general solution to this <em>really, honestly</em> does not exist. You have to use the right solution for a given domain.</p>
+
+<ul>
+<li><p>If you want timeouts for code you fully control, you have to write it to cooperate. Such code has to be able to break up into little chunks in some way, as in an event-driven system. You can also do this by threading if you can ensure nothing will hold a lock too long, but handling locks right is actually pretty hard.</p></li>
+<li><p>If you want timeouts because you're afraid code is out of control (for example, if you're afraid the user will ask your calculator to compute <code>9**(9**9)</code>), you need to run it in another process. This is the only easy way to sufficiently isolate it. Running it in your event system or even a different thread will not be enough. It is also possible to break things up into little chunks similar to the other solution, but requires very careful handling and usually isn't worth it; in any event, that doesn't allow you to do the same exact thing as just running the Python code.</p></li>
+</ul>
+<br /><b>#2</b><br /><p>For "normal" Python code, that doesn't linger prolongued times in C extensions or I/O waits, you can achieve your goal by setting a trace function with <code>sys.settrace()</code> that aborts the running code when the timeout is reached.</p>
+
+<p>Whether that is sufficient or not depends on how co-operating or malicious the code you run is. If it's well-behaved, a tracing function is sufficient.</p>
+<br /><b>#3</b><br /><p>An other way is to use <a href="http://pypi.python.org/pypi/faulthandler/" rel="nofollow">faulthandler</a>:</p>
+
+<pre><code>import time
+import faulthandler
+
+
+faulthandler.enable()
+
+
+try:
+    faulthandler.dump_tracebacks_later(3)
+    time.sleep(10)
+finally:
+    faulthandler.cancel_dump_tracebacks_later()
+</code></pre>
+
+<p>N.B: The <a href="http://docs.python.org/dev/library/faulthandler.html" rel="nofollow">faulthandler</a> module is part of stdlib in python3.3.</p>
+<br /><b>#4</b><br /><p>If it's network related you could try:</p>
+
+<pre><code>import socket
+socket.setdefaulttimeout(number)
+</code></pre>
+<br /><b>#5</b><br /><p>If you're running code that you expect to die after a set time, then you should write it properly so that there aren't any negative effects on shutdown, no matter if its a thread or a subprocess. A command pattern with undo would be useful here.</p>
+
+<p>So, it really depends on what the thread is doing when you kill it. If its just crunching numbers who cares if you kill it. If its interacting with the filesystem and you kill it , then maybe you should really rethink your strategy. </p>
+
+<p>What is supported in Python when it comes to threads? Daemon threads and joins. Why does python let the main thread exit if you've joined a daemon while its still active? Because its understood that someone using daemon threads will (hopefully) write the code in a way that it wont matter when that thread dies. Giving a timeout to a join and then letting main die, and thus taking any daemon threads with it, is perfectly acceptable in this context.</p>
+<br />

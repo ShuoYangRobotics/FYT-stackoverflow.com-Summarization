@@ -1,0 +1,174 @@
+<h3>Question ( ID-433162 ) : </h3><h2>Can I access constants in <span style="background-color:yellow;">settings.py</span> from <span style="background-color:yellow;">templates</span> in Django ? </h2><p>I have some stuff in <span style="background-color:yellow;">settings.py</span> that I 'd like to be able to access from a <span style="background-color:yellow;">template</span> , but I ca n't figure out how to do it. I already tried </p>
+<pre><code>{{CONSTANT_NAME}}
+</code></pre>
+<p>but that does n't seem to work. Is this possible ? </p>
+<br /><h3>Answers ( Total-9 ) : </h3><b># 0 </b><br /><p>If it 's a <span style="background-color:yellow;">value</span> you 'd like to have for every request &amp ; <span style="background-color:yellow;">template</span> , using a <span style="background-color:yellow;">context</span> processor is more appropriate . </p>
+<p>Here 's how : </p>
+<ol>Make a * <span style="background-color:yellow;">context_processors.py</span> * file in your app directory. Let 's say I want to have the ADMIN_PREFIX_VALUE <span style="background-color:yellow;">value</span> in every <span style="background-color:yellow;">context</span> : from <span style="background-color:yellow;">django.conf</span> import <span style="background-color:yellow;">settings</span> # import the <span style="background-color:yellow;">settings</span> file def admin_media ( <span style="background-color:yellow;">context</span> ) : # return the <span style="background-color:yellow;">value</span> you want as a dictionnary. you may add multiple <span style="background-color:yellow;">values</span> in there . return { 'ADMIN_MEDIA_URL ' : <span style="background-color:yellow;">settings.ADMIN_MEDIA_PREFIX</span> } add your <span style="background-color:yellow;">context</span> processor to your <span style="background-color:yellow;">settings.py</span> file : TEMPLATE_CONTEXT_PROCESSORS = ( " your_app.context_processors.admin_media " , ) Use RequestContext in your <span style="background-color:yellow;">view</span> to add your <span style="background-color:yellow;">context</span> processors in your <span style="background-color:yellow;">template</span> : from <span style="background-color:yellow;">django.template</span> import Template , <span style="background-color:yellow;">context</span> , RequestContext from <span style="background-color:yellow;">django.shortcuts</span> import <span style="background-color:yellow;">render_to_response</span> def my_view ( request ) : return <span style="background-color:yellow;">render_to_response</span> ( " index.html " , <span style="background-color:yellow;">context_instance</span> = RequestContext ( request ) ) and finally , in your <span style="background-color:yellow;">template</span> : .. . &lt ; a href = " { { ADMIN_MEDIA_URL } } " &gt ; path to admin media&lt ; /a&gt ; .. . </ol>
+<br /><b># 1 </b><br /><p>Django provides access to certain , frequently-used <span style="background-color:yellow;">settings</span> constants to the <span style="background-color:yellow;">template</span> such as <span style="background-color:yellow;">settings.MEDIA_URL</span> and some of the language <span style="background-color:yellow;">settings</span> if you use <span style="background-color:yellow;">django</span> 's built in generic <span style="background-color:yellow;">views</span> or pass in a <span style="background-color:yellow;">context</span> instance keyword argument in the <span style="background-color:yellow;">render_to_response</span> shortcut function. Here 's an example of each case : </p>
+<pre><code>from django.shortcuts import render_to_response
+from django.template import RequestContext
+from django.views.generic.simple import direct_to_template
+
+def my_generic_view(request, template='my_template.html'):
+    return direct_to_template(request, template)
+
+def more_custom_view(request, template='my_template.html'):
+    return render_to_response(template, {}, context_instance=RequestContext(request))
+</code></pre>
+<p>These <span style="background-color:yellow;">views</span> will both have several frequently used <span style="background-color:yellow;">settings</span> like <span style="background-color:yellow;">settings.MEDIA_URL</span> available to the <span style="background-color:yellow;">template</span> as { { MEDIA_URL } } , etc . </p>
+<p>If you 're looking for access to other constants in the <span style="background-color:yellow;">settings</span> , then simply unpack the constants you want and add them to the <span style="background-color:yellow;">context</span> dictionary you 're using in your <span style="background-color:yellow;">view</span> function , like so : </p>
+<pre><code>from django.conf import settings
+from django.shortcuts import render_to_response
+
+def my_view_function(request, template='my_template.html'):
+    context = {'favorite_color': settings.FAVORITE_COLOR}
+    return render_to_response(template, context)
+</code></pre>
+<p>Now you can access <span style="background-color:yellow;">settings.FAVORITE_COLOR</span> on your <span style="background-color:yellow;">template</span> as { { favorite_color } } . </p>
+<br /><b># 2 </b><br /><p>Another way to do this is to create a custom <span style="background-color:yellow;">template</span> tag which can let you fish <span style="background-color:yellow;">values</span> out of the <span style="background-color:yellow;">settings</span> . </p>
+<pre><code>@register.tag
+def value_from_settings(parser, token):
+    try:
+        # split_contents() knows not to split quoted strings.
+        tag_name, var = token.split_contents()
+    except ValueError:
+        raise template.TemplateSyntaxError, "%r tag requires a single argument" % token.contents.split()[0]
+    return ValueFromSettings(var)
+
+class ValueFromSettings(template.Node):
+    def __init__(self, var):
+        self.arg = template.Variable(var)
+    def render(self, context):        
+        return settings.__getattr__(str(self.arg))
+</code></pre>
+<p>You can then use : </p>
+<pre><code>{% value_from_settings "FQDN" %}
+</code></pre>
+<p>to print it on any page , without jumping through <span style="background-color:yellow;">context-processor</span> hoops . </p>
+<br /><b># 3 </b><br /><p>The example above from bchhun is nice except that you need to explicitly build your <span style="background-color:yellow;">context</span> dictionary from <span style="background-color:yellow;">settings.py.</span> Below is an UNTESTED example of how you could auto-build the <span style="background-color:yellow;">context</span> dictionary from all upper-case attributes of <span style="background-color:yellow;">settings.py</span> ( re : " ^ [ A-Z0-9_ ] + $ " ) . </p>
+<p>At the end of <span style="background-color:yellow;">settings.py</span> : </p>
+<pre><code>_context = {} 
+local_context = locals()
+for (k,v) in local_context.items():
+    if re.search('^[A-Z0-9_]+$',k):
+        _context[k] = str(v)
+
+def settings_context(context):
+    return _context
+
+TEMPLATE_CONTEXT_PROCESSORS = (
+...
+'myproject.settings.settings_context',
+...
+)
+</code></pre>
+<br /><b># 4 </b><br /><p>I improved chrisdew 's answer ( to create your own tag ) a little bit . </p>
+<p>First , create the file <span style="background-color:yellow;">yourapp/templatetags/value_from_settings.py</span> in which you define your own new tag <span style="background-color:yellow;">value_from_settings</span> : </p>
+<pre><code>from django.template import TemplateSyntaxError, Variable, Node, Variable, Library
+from yourapp import settings
+
+register = Library()
+# I found some tricks in URLNode and url from defaulttags.py:
+# https://code.djangoproject.com/browser/django/trunk/django/template/defaulttags.py
+@register.tag
+def value_from_settings(parser, token):
+  bits = token.split_contents()
+  if len(bits) < 2:
+    raise TemplateSyntaxError("'%s' takes at least one " \
+      "argument (settings constant to retrieve)" % bits[0])
+  settingsvar = bits[1]
+  settingsvar = settingsvar[1:-1] if settingsvar[0] == '"' else settingsvar
+  asvar = None
+  bits = bits[2:]
+  if len(bits) >= 2 and bits[-2] == 'as':
+    asvar = bits[-1]
+    bits = bits[:-2]
+  if len(bits):
+    raise TemplateSyntaxError("'value_from_settings' didn't recognise " \
+      "the arguments '%s'" % ", ".join(bits))
+  return ValueFromSettings(settingsvar, asvar)
+
+class ValueFromSettings(Node):
+  def __init__(self, settingsvar, asvar):
+    self.arg = Variable(settingsvar)
+    self.asvar = asvar
+  def render(self, context):
+    ret_val = getattr(settings,str(self.arg))
+    if self.asvar:
+      context[self.asvar] = ret_val
+      return ''
+    else:
+      return ret_val
+</code></pre>
+<p>You can use this tag in your Template <span style="background-color:yellow;">via</span> : </p>
+<pre><code>{% load value_from_settings %}
+[...]
+{% value_from_settings "FQDN" %}
+</code></pre>
+<p>or <span style="background-color:yellow;">via</span> </p>
+<pre><code>{% load value_from_settings %}
+[...]
+{% value_from_settings "FQDN" as my_fqdn %}
+</code></pre>
+<p>The advantage of the as ... notation is that this makes it easy to use in blocktrans blocks <span style="background-color:yellow;">via</span> a simple { { my_fqdn } } . </p>
+<br /><b># 5 </b><br /><p>I find the simplest approach being a single <span style="background-color:yellow;">template</span> tag : </p>
+<pre><code>from django import template
+from django.conf import settings
+
+register = template.Library()
+
+# settings value
+@register.simple_tag
+def settings_value(name):
+    try:
+        return settings.__getattr__(name)
+    except AttributeError:
+        return ""
+</code></pre>
+<p>Usage : </p>
+<pre><code>{% settings_value "LANGUAGE_CODE" %}
+</code></pre>
+<br /><b># 6 </b><br /><p>Both IanSR and bchhun suggested overriding TEMPLATE_CONTEXT_PROCESSORS in the <span style="background-color:yellow;">settings.</span> Be aware that this setting has a default that can cause some screwy things if you override it without re-setting the defaults. The defaults have also changed in recent <span style="background-color:yellow;">versions</span> of Django . </p>
+<p>https : //docs.djangoproject.com/en/1.3/ref/settings/ # <span style="background-color:yellow;">template-context-processors</span> </p>
+<p>The default TEMPLATE_CONTEXT_PROCESSORS : </p>
+<pre><code>TEMPLATE_CONTEXT_PROCESSORS = ("django.contrib.auth.context_processors.auth",
+"django.core.context_processors.debug",
+"django.core.context_processors.i18n",
+"django.core.context_processors.media",
+"django.core.context_processors.static",
+"django.contrib.messages.context_processors.messages")
+</code></pre>
+<br /><b># 7 </b><br /><p>If we were to compare <span style="background-color:yellow;">context</span> <span style="background-color:yellow;">vs.</span> <span style="background-color:yellow;">template</span> tags on a single <span style="background-color:yellow;">variable</span> , then knowing the more efficient option could be benificial. However , you might be better off to dip into the <span style="background-color:yellow;">settings</span> only from <span style="background-color:yellow;">templates</span> that need that <span style="background-color:yellow;">variable.</span> In that case it does n't make sense to pass the <span style="background-color:yellow;">variable</span> into all <span style="background-color:yellow;">templates.</span> But if you are sending the <span style="background-color:yellow;">variable</span> into a common <span style="background-color:yellow;">template</span> such as the base.html <span style="background-color:yellow;">template</span> , Then it would not matter as the base.html <span style="background-color:yellow;">template</span> is <span style="background-color:yellow;">rendered</span> on every request , so you can use either methods . </p>
+<p>If you decide to go with the <span style="background-color:yellow;">template</span> tags option , then use the following code as it allows you to pass a default <span style="background-color:yellow;">value</span> in , just in case the <span style="background-color:yellow;">variable</span> in-question was undefined . </p>
+<p>Example : <span style="background-color:yellow;">get_from_settings</span> my_variable as my_context_value </p>
+<p>Example : <span style="background-color:yellow;">get_from_settings</span> my_variable my_default as my_context_value </p>
+<pre><code>class SettingsAttrNode(Node):
+def __init__(self, variable, default, as_value):
+    self.variable = getattr(settings, variable, default)
+    self.cxtname = as_value
+
+def render(self, context):
+    context[self.cxtname] = self.variable
+    return ''
+
+def get_from_setting(parser, token):
+as_value = variable = default = ''
+bits = token.contents.split()
+if len(bits) == 4 and bits[2] == 'as':
+    variable = bits[1]
+    as_value = bits[3]
+elif len(bits) == 5 and bits[3] == 'as':
+    variable     = bits[1]
+    default  = bits[2]
+    as_value = bits[4]
+else:
+    raise TemplateSyntaxError, "usage: get_from_settings variable default as value " \
+                "OR: get_from_settings variable as value"
+
+return SettingsAttrNode(variable=variable, default=default, as_value=as_value)
+
+get_from_setting = register.tag(get_from_setting)
+</code></pre>
+<br /><b># 8 </b><br /><p>Depending on what the <span style="background-color:yellow;">settings</span> constant is for , you may really be looking for feature flipping / feature flags. Here are your options for Django ; I suggest <span style="background-color:yellow;">django-waffle</span> from Mozilla . </p>
+<br />

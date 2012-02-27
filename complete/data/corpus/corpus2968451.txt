@@ -1,0 +1,64 @@
+Question (ID-2968451): Database query optimization Ok my Giant friends once again I seek a little space in your shoulders :P 
+
+ Here is the issue, I have a python script that is fixing some database issues but it is taking way too long, the main update statement is this: 
+
+ cursor.execute("UPDATE jiveuser SET username = '%s' WHERE userid = %d" % (newName,userId))
+ 
+
+ That is getting called about 9500 times with different newName and userid pairs... 
+
+ Any suggestions on how to speed up the process? Maybe somehow a way where I can do all updates with just one query? 
+
+ Any help will be much appreciated! 
+
+ PS: Postgres is the db being used. 
+ Answers (Total-8): #0 Insert all the data into another empty table (called userchanges, say) then UPDATE in a single batch: 
+
+ UPDATE jiveuser
+SET username = userchanges.username
+FROM userchanges
+WHERE userchanges.userid = jiveuser.userid
+ AND userchanges.username &lt;&gt; jiveuser.username
+ 
+
+ See this documentation on the COPY command for bulk loading your data. 
+
+ There are also tips for improving performance when populating a database . 
+ #1 First of all, do not use the % operator to construct your SQL. Instead, pass your tuple of arguments as the second parameter to cursor.execute , which also negates the need to quote your argument and allows you to use %s for everything: 
+
+ cursor.execute("UPDATE jiveuser SET username = %s WHERE userid = %s", (newName, userId))
+ 
+
+ This is important to prevent SQL Injection attacks . 
+
+ To answer your question, you can speed up these updates by creating an index on the userid column, which will allow the database to update in O(1) constant time rather than having to scan the entire database table, which is O(n) . Since you're using PostgreSQL, here's the syntax to create your index: 
+
+ CREATE INDEX username_lookup ON jiveuser (userid);
+ 
+
+ EDIT: Since your comment reveals that you already have an index on the userid column, there's not much you could possibly do to speed up that query. So your main choices are either living with the slowness, since this sounds like a one-time fix-something-broken thing, or following VeeArr 's advice and testing whether cursor.executemany will give you a sufficient boost. 
+ #2 The reason it's taking so long is probably that you've got autocommit enabled and each update gets done in its own transaction. 
+
+ This is slow because even if you have a battery-backed raid controller (which you should definitely have on all database servers, of course), it still needs to do a write into that device for every transaction commit to ensure durability. 
+
+ The solution is to do more than one row per transaction. But don't make transactions TOO big or you run into problems too. Try committing every 10,000 rows of changes as a rough guess. 
+ #3 You might want to look into executemany() : Information here 
+ #4 Perhaps you can create an index on userid to speed things up. 
+ #5 I'd do an explain on this. If it's doing an indexed lookup to find the record -- which it should if you have an index on userid -- then I don't see what you could do to improve performance. If it's not using the index, then the trick is figuring out why not and fixing it. 
+
+ Oh, you could try using a prepared statement. With 9500 inserts, that should help. 
+ #6 Move this to a stored procedure and execute it from the database self. 
+ #7 First ensure you have an index on 'userid', this will ensure the dbms doesn't have to do a table scan each time 
+
+ CREATE INDEX jiveuser_userid ON jiveuser (userid);
+ 
+
+ Next try preparing the statement, and then calling execute on it. This will stop the optimizer from having to examine the query each time 
+
+ PREPARE update_username(string,integer) AS UPDATE jiveuser SET username = $1 WHERE userid = $2;
+EXECUTE update_username("New Name", 123);
+ 
+
+ Finally, a bit more performance could be squeezed out by turning off autocommit 
+
+ \set autocommit off

@@ -1,0 +1,200 @@
+Question (ID-2677713): Regex for finding valid sphinx fields I'm trying to validate that the fields given to sphinx are valid, but I'm having difficulty. 
+
+ Imagine that valid fields are cat, mouse, dog, puppy. 
+
+ Valid searches would then be: 
+
+ 
+ @cat search terms 
+ @(cat) search terms 
+ @(cat, dog) search term 
+ @cat searchterm1 @dog searchterm2 
+ @(cat, dog) searchterm1 @mouse searchterm2 
+ 
+
+ So, I want to use a regular expression to find terms such as cat, dog, mouse in the above examples, and check them against a list of valid terms. 
+
+ Thus, a query such as:
+@(goat) 
+
+ Would produce an error because goat is not a valid term. 
+
+ I've gotten so that I can find simple queries such as @cat with this regex: (?:@)([^( ]*) 
+
+ But I can't figure out how to find the rest. 
+
+ I'm using python &amp; django, for what that's worth. 
+ Answers (Total-6): #0 To match all allowed fields, the following rather fearful looking regex works: 
+
+ 
+@((?:cat|mouse|dog|puppy)\b|\((?:(?:cat|mouse|dog|puppy)(?:, *|(?=\))))+\))
+ 
+
+ It returns these matches, in order: @cat , @(cat) , @(cat, dog) , @cat , @dog , @(cat, dog) , @mouse . 
+
+ The regex breaks down as follows: 
+
+ 
+@        # the literal character "@"
+(        # match group 1
+ (?:cat|mouse|dog|puppy)  # one of your valid search terms (not captured)
+ \b       # a word boundary
+ |        # or...
+ \(       # a literal opening paren
+ (?:       # non-capturing group
+ (?:cat|mouse|dog|puppy)  # one of your valid search terms (not captured)
+ (?:       # non-capturing group
+  , *      # a comma "," plus any number of spaces
+  |       # or...
+  (?=\))     # a position followed by a closing paren
+ )       # end non-capture group
+ )+       # end non-capture group, repeat
+ \)       # a literal closing paren
+)        # end match group one.
+ 
+
+ Now to identify any invalid search, you would wrap all that in a negative look-ahead: 
+
+ 
+@(?!(?:cat|mouse|dog|puppy)\b|\((?:(?:cat|mouse|dog|puppy)(?:, *|(?=\))))+\))
+--^^
+ 
+
+ This would identify any @ character after which an invalid search term (or term combination) was attempted. Modifying it so that it also matches the invalid attempt instead of just pointing at it is not that hard anymore. 
+
+ You would have to prepare (?:cat|mouse|dog|puppy) from your field dynamically and plug it into the static rest of the regex. Should not be too hard to do either. 
+ #1 This should work: 
+
+ @\((cat|dog|mouse|puppy)\b(,\s*(cat|dog|mouse|puppy)\b)*\)|@(cat|dog|mouse|puppy)\b
+ 
+
+ It will either match a single @parameter or a parenthesized @(par1, par2) list containing only allowed words (one or more). 
+
+ It also makes sure that no partial matches are accepted ( @caterpillar ). 
+ #2 This pyparsing solution follows a similar logic path as your posted answer. All tags are matched, and then checked against the list of known valid tags, removing them from the reported results. Only those matches that have values left over after removing the valid ones are reported as matches. 
+
+ from pyparsing import *
+
+# define the pattern of a tag, setting internal results names for easy validation
+AT,LPAR,RPAR = map(Suppress,"@()")
+term = Word(alphas,alphanums).setResultsName("terms",listAllMatches=True)
+sphxTerm = AT + ~White() + ( term | LPAR + delimitedList(term) + RPAR )
+
+# define tags we consider to be valid
+valid = set("cat mouse dog".split())
+
+# define a parse action to filter out valid terms, and attach to the sphxTerm
+def filterValid(tokens):
+ tokens = [t for t in tokens.terms if t not in valid]
+ if not(tokens):
+  raise ParseException("",0,"")
+ return tokens
+sphxTerm.setParseAction(filterValid)
+
+
+##### Test out the parser #####
+
+test = """@cat search terms @ house
+ @(cat) search terms 
+ @(cat, dog) search term @(goat)
+ @cat searchterm1 @dog searchterm2 @(cat, doggerel)
+ @(cat, dog) searchterm1 @mouse searchterm2 
+ @caterpillar"""
+
+# scan for invalid terms, and print out the terms and their locations
+for t,s,e in sphxTerm.scanString(test):
+ print "Terms:%s Line: %d Col: %d" % (t, lineno(s, test), col(s, test))
+ print line(s, test)
+ print " "*(col(s,test)-1)+"^"
+ print
+ 
+
+ With these lovely results: 
+
+ Terms:['goat'] Line: 3 Col: 29
+ @(cat, dog) search term @(goat)
+       ^
+
+Terms:['doggerel'] Line: 4 Col: 39
+ @cat searchterm1 @dog searchterm2 @(cat, doggerel)
+          ^
+
+Terms:['caterpillar'] Line: 6 Col: 5
+ @caterpillar
+ ^
+ 
+
+ This last snippet will do all the scanning for you, and just give you the list of found invalid tags: 
+
+ # print out all of the found invalid terms
+print list(set(sum(sphxTerm.searchString(test), ParseResults([]))))
+ 
+
+ Prints: 
+
+ ['caterpillar', 'goat', 'doggerel']
+ 
+ #3 This will match all fields that are cat, dog, mouse, or puppy and combinations thereof. 
+
+ import re
+sphinx_term = "@goat some words to search"
+regex = re.compile("@\(?(cat|dog|mouse|puppy)(, ?(cat|dog|mouse|puppy))*\)? ")
+if regex.search(sphinx_term):
+ send the query to sphinx...
+ 
+ #4 Try this: 
+
+ field_re = re.compile(r"@(?:([^()\s]+)|\([^()]+\))")
+ 
+
+ A single field name (like cat in @cat ) will be captured in group #1, while the names in a parenthesized list like @(cat, dog) will be stored in group #2. In the latter case you'll need to break the list down with split() or something; there's no way to capture the names individually with a Python regex. 
+ #5 I ended up doing this a different way, since none of the above worked. First I found the fields like @cat, with this: 
+
+ attributes = re.findall('(?:@)([^\( ]*)', query)
+ 
+
+ Next, I found the more complicated ones, with this: 
+
+ regex0 = re.compile('''
+ @    # at sign
+ (?:    # start non-capturing group
+  \w+    # non-whitespace, one or more
+  \b    # a boundary character (i.e. no more \w)
+  |    # OR
+  (    # capturing group
+   \(    # left paren
+   [^@(),]+  # not an @(),
+   (?:     # another non-caputing group
+    , *    # a comma, then some spaces
+    [^@(),]+  # not @(),
+   )*    # some quantity of this non-capturing group
+   \)    # a right paren
+  )    # end of non-capuring group
+ )   # end of non-capturing group
+ ''', re.VERBOSE)
+
+# and this puts them into the attributes list.
+groupedAttributes = re.findall(regex0, query)
+for item in groupedAttributes:
+ attributes.extend(item.strip("(").strip(")").split(", "))
+ 
+
+ Next, I checked if the attributes I found were valid, and added them (uniquely to an array): 
+
+ # check if the values are valid.
+validRegex = re.compile(r'^mice$|^mouse$|^cat$|^dog$')
+
+# if they aren't add them to a new list.
+badAttrs = []
+for attribute in attributes:
+ if len(attribute) == 0:
+  # if it's a zero length attribute, we punt
+  continue
+ if validRegex.search(attribute.lower()) == None:
+  # if the attribute from the search isn't in the valid list
+  if attribute not in badAttrs:
+   # and the attribute isn't already in the list
+   badAttrs.append(attribute)
+ 
+
+ Thanks all for the help though. I'm very glad to have had it!

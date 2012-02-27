@@ -1,0 +1,152 @@
+Question (ID-804995): How to use subprocess when multiple arguments contain spaces? I'm working on a wrapper script that will exercise a vmware executable, allowing for the automation of virtual machine startup/shutdown/register/deregister actions. I'm trying to use subprocess to handle invoking the executable, but the spaces in the executables path and in parameters of the executable are not being handled correctly by subprocess. Below is a code fragment: 
+
+ vmrun_cmd = r"c:/Program Files/VMware/VMware Server/vmware-cmd.bat"
+def vm_start(target_vm):
+ list_arg = "start"
+ list_arg2 = "hard"
+ if vm_list(target_vm):
+   p = Popen([vmrun_cmd, target_vm, list_arg, list_arg2], stdout=PIPE).communicate()[0]
+   print p
+ else:
+   vm_register(target_vm)
+   vm_start(target_vm)
+def vm_list2(target_vm):
+ list_arg = "-l"
+ p = Popen([vmrun_cmd, list_arg], stdout=PIPE).communicate()[0]
+ for line in p.split('\n'):
+   print line
+ 
+
+ If I call the vm_list2 function, I get the following output: 
+
+ $ ./vmware_control.py --list            
+C:\Virtual Machines\QAW2K3Server\Windows Server 2003 Standard Edition.vmx
+C:\Virtual Machines\ubunturouter\Ubuntu.vmx
+C:\Virtual Machines\vacc\vacc.vmx
+C:\Virtual Machines\EdgeAS-4.4.x\Other Linux 2.4.x kernel.vmx
+C:\Virtual Machines\UbuntuServer1\Ubuntu.vmx
+C:\Virtual Machines\Other Linux 2.4.x kernel\Other Linux 2.4.x kernel.vmx
+C:\Virtual Machines\QAClient\Windows XP Professional.vmx
+ 
+
+ If I call the vm_start function, which requires a path-to-vm parameter, I get the following output: 
+
+ $ ./vmware_control.py --start "C:\Virtual Machines\ubunturouter\Ubuntu.vmx"
+'c:\Program' is not recognized as an internal or external command,
+operable program or batch file.
+ 
+
+ Apparently, the presence of a second parameter with embedded spaces is altering the way that subprocess is interpreting the first parameter. Any suggestions on how to resolve this? 
+
+ python2.5.2/cygwin/winxp 
+ Answers (Total-9): #0 'c:\Program' is not recognized as an internal or external command,
+operable program or batch file.
+ 
+
+ To get this message, you are either: 
+
+ 
+ Using shell=True : 
+
+ vmrun_cmd = r"c:\Program Files\VMware\VMware Server\vmware-cmd.bat"
+subprocess.Popen(vmrun_cmd, shell=True)
+ 
+ Changing vmrun_cmd on other part of your code 
+ Getting this error from something inside vmware-cmd.bat 
+ 
+
+ Things to try: 
+
+ 
+ Open a python prompt, run the following command: 
+
+ subprocess.Popen([r"c:\Program Files\VMware\VMware Server\vmware-cmd.bat"])
+ 
+ 
+
+ If that works, then quoting issues are out of the question. If not, you've isolated the problem. 
+ #1 If you have spaces in the path, the easiest way I've found to get them interpreted properly is this. 
+
+ subprocess.call('""' + path + '""')
+ 
+
+ I don't know why exactly it needs double double quotes, but that is what works. 
+ #2 2 things 
+
+ 1) 
+
+ You probably don't want to use Pipe 
+If the output of the subprogram is greater than 64KB it is likely your process will crash.
+ http://thraxil.org/users/anders/posts/2008/03/13/Subprocess-Hanging-PIPE-is-your-enemy/ 
+
+ 2) 
+Subprocess.Popen has a keyword argument shell, making it as if the shell has been parsing your arguments, setting shell=True should do what you want. 
+ #3 I believe that list2cmdline(), which is doing the processing of your list args, splits any string arg on whitespace unless the string contains double quotes. So I would expect 
+
+ vmrun_cmd = r'"c:/Program Files/VMware/VMware Server/vmware-cmd.bat"'
+ 
+
+ to be what you want. 
+
+ You'll also likely want to surround the other arguments (like target_vm ) in double quotes on the assumption that they, too, each represent a distinct arg to present to the command line. Something like 
+
+ r'"%s"' % target_vm
+ 
+
+ (for example) should suit. 
+
+ See the list2cmdline documentation 
+
+ D'A 
+ #4 In Python on MS Windows, the subprocess.Popen class uses the CreateProcess API to started the process. CreateProcess takes a string rather than something like an array of arguments. Python uses subprocess.list2cmdline to convert the list of args to a string for CreateProcess. 
+
+ If I were you, I'd see what subprocess.list2cmdline(args) returns (where args is the first argument of Popen). It would be interesting to see if it is putting quotes around the first argument. 
+
+ Of course, this explanation might not apply in a Cygwin environment. 
+
+ Having said all this, I don't have MS Windows. 
+ #5 Here's what I don't like 
+
+ vmrun_cmd = r"c:/Program Files/VMware/VMware Server/vmware-cmd.bat"
+ 
+
+ You've got spaces in the name of the command itself -- which is baffling your shell. Hence the "'c:\Program' is not recognized as an internal or external command,
+operable program or batch file." 
+
+ Option 1 -- put your .BAT file somewhere else. Indeed, put all your VMWare somewhere else. Here's the rule: Do Not Use "Program Files" Directory For Anything. It's just wrong. 
+
+ Option 2 -- quote the vmrun_cmd value 
+
+ vmrun_cmd = r'"c:/Program Files/VMware/VMware Server/vmware-cmd.bat"'
+ 
+ #6 One problem is that if the command is surrounded with quotes and doesn't have spaces, that could also confuse the shell. 
+
+ So I do this: 
+
+ if ' ' in raw_cmd:
+ fmt = '"%s"'
+else:
+ fmt = '%s'
+
+cmd = fmt % raw_cmd
+ 
+ #7 Why are you using r""? I believe that if you remove the "r" from the beginning, it will be treated as a standard string which may contain spaces. Python should then properly quote the string when sending it to the shell. 
+ #8 Possibly stupid suggestion, but perhaps try the following, to remove subprocess + spaces from the equation: 
+
+ import os
+from subprocess Popen, PIPE
+
+os.chdir(
+ os.path.join("C:", "Program Files", "VMware", "VMware Server")
+)
+
+p = Popen(
+ ["vmware-cmd.bat", target_vm, list_arg, list_arg2],
+ stdout=PIPE
+).communicate()[0]
+ 
+
+ It might also be worth trying.. 
+
+ p = Popen(
+ [os.path.join("C:", "Program Files", "VMware", "VMware Server", "vmware-cmd.bat"), ...

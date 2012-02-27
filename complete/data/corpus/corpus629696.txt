@@ -1,0 +1,85 @@
+Question (ID-629696): Deploying Google Analytics With Django We're about to deploy a new Django website, and we want to use Google Analytics to keep track of traffic on the site. However, we don't want all of the hits on development instances to contribute to the Google Analytics statistics. 
+
+ There are a few ways we could deal with this: 
+
+ 
+ have a configuration option in settings.py which the base template uses to decide whether or not to include the appropriate &lt;script&gt; elements, 
+ maintain a branch which we pull into before deploying to the production server, which we ensure includes the &lt;script&gt; elements, 
+ do something with Google Analytics to block hits to 127.0.0.1 or localhost, or 
+ something else. 
+ 
+
+ The first option seems the most sensible, but I'm not sure if it is. For example, would we have to start passing a google_analytics variable into all of our views? 
+
+ What are your thoughts? 
+ Answers (Total-6): #0 First, create a way to have your development and production servers pull settings from different files, say dev.py and prod.py. There are lots of ways to do this. 
+
+ Then, create a setting, GOOGLE_ANALYTICS_KEY . In dev.py set it to the empty string. In prod.py, set it to your key, something like "UA-124465-1". Create a context processor to add this setting to all your template contexts, either as GOOGLE_ANALYTICS_KEY , or just go ahead and add your settings module. Then, in your template, use it to conditionally include your analytics code: 
+
+ {% if settings.GOOGLE_ANALYTICS_KEY %}
+&lt;script&gt; blah blah {{settings.GOOGLE_ANALYTICS_KEY}} blah blah &lt;/script&gt;
+{% endif %}
+ 
+ #1 A little late to the party, but there's a reusable Django app called django-google-analytics . The easiest way to use it is: 
+
+ 
+ Add the google_analytics application to your INSTALLED_APPS section of your settings.py . 
+ In your base template, usually a base.html , insert this tag at the very top: {% load analytics %} 
+ In the same template, insert the following code right before the closing body tag: {% analytics "UA-xxxxxx-x" %} the UA-xxxxxx-x is a unique Google Analytics code for your domain. 
+ 
+ #2 My solution takes a similar approach to Ned's preferred answer, but separates the analytics code into its own template. I prefer this, so I can just copy the template from project to project. 
+
+ Here's a snippet from my context_processor file: 
+
+ from django.conf import settings
+from django.template.loader import render_to_string
+
+def analytics(request):
+ """
+ Returns analytics code.
+ """
+ if not settings.DEBUG:
+  return { 'analytics_code': render_to_string("analytics/analytics.html", { 'google_analytics_key: settings.GOOGLE_ANALYTICS_KEY }) }
+ else:
+  return { 'analytics_code': "" }
+ 
+
+ Of course you'll need to tell Django to include this in your context. In in your settings.py file, include: 
+
+ TEMPLATE_CONTEXT_PROCESSORS = (
+ ...
+ "context_processors.analytics",
+)
+ 
+
+ I have it set up to include the analytics code only when DEBUG is set to False, but you may prefer to key it off something else, perhaps a new setting altogether. I think DEBUG is a good default since it supposes you don't want to track any hits while debugging/developing. 
+
+ Create a setting with your Google Analytics Key: 
+
+ GOOGLE_ANALYTICS_KEY = "UA-1234567-8"
+ 
+
+ Create a template called: "analytics/analytics.html" that includes something like this: 
+
+ &lt;script type="text/javascript"&gt;
+var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+&lt;/script&gt;
+&lt;script type="text/javascript"&gt;
+try {
+var pageTracker = _gat._getTracker("{{ google_analytics_key }}");
+pageTracker._trackPageview();
+} catch(err) {}&lt;/script&gt;
+ 
+
+ Finally, just before the closing tag in your base.html template, add this: 
+
+ {{ analytics_code }}
+ 
+
+ Now your analytics code will be included only when DEBUG=False. Otherwise, nothing will be included. 
+ #3 I mostly agree with Ned, although I have a single setting called IS_LIVE_SITE which toggles analytics code, adverts and a few other things. This way I can keep all the keys in subversion (as it is a pain to look them up) and still toggle them on or off easily. 
+ #4 Instead of including the script tag directly in your html, just change the analytics javascript so it only runs if the href does not contain your prod site's name. This will work without any extra configuration. 
+ #5 You have template context processors that can be used to pass values to all templates without updating all your views. 
+
+ http://docs.djangoproject.com/en/dev/ref/settings/#template-context-processors

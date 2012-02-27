@@ -1,0 +1,223 @@
+<h3>Question (ID-1319763):</h3><h2>Key-ordered dict in python</h2><p>I am looking for a solid implementation of an ordered associative array (in terms of keys, not  of insertion order).</p>
+
+<p>More precisely, I am looking for a space-efficent implementation of a int-to-float (or string-to-float for another use case) mapping structure for which:</p>
+
+<ul>
+<li>Ordered iteration is O(n)</li>
+<li>Random access is O(1)</li>
+</ul>
+
+<p>The best I came up with was gluing a dict and a list of keys, keeping the last one ordered with bisect and insert.</p>
+
+<p>Any better idea ?</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>"Random access O(1)" is an extremely exacting requirement which basically imposes an underlying hash table -- and I hope you do mean random READS only, because I think it can be mathematically proven than it's impossible in the general case to have O(1) writes as well as O(N) ordered iteration.</p>
+
+<p>I don't think you will find a pre-packaged container suited to your needs because they are so extreme -- O(log N) access would of course make all the difference in the world. To get the big-O behavior you want for reads and iterations you'll need to glue two data structures, essentially a dict and a heap (or sorted list or tree), and keep them in sync. Although you don't specify, I think you'll only get <em>amortized</em> behavior of the kind you want - unless you're truly willing to pay any performance hits for inserts and deletes, which is the literal implication of the specs you express but does seem a pretty unlikely real-life requirement.</p>
+
+<p>For O(1) read and <em>amortized</em> O(N) ordered iteration, just keep a list of all keys on the side of a dict. E.g.:</p>
+
+<pre><code>class Crazy(object):
+  def __init__(self):
+    self.d = {}
+    self.L = []
+    self.sorted = True
+  def __getitem__(self, k):
+    return self.d[k]
+  def __setitem__(self, k, v):
+    if k not in self.d:
+      self.L.append(k)
+      self.sorted = False
+    self.d[k] = v
+  def __delitem__(self, k):
+    del self.d[k]
+    self.L.remove(k)
+  def __iter__(self):
+    if not self.sorted:
+      self.L.sort()
+      self.sorted = True
+    return iter(self.L)
+</code></pre>
+
+<p>If you don't like the "amortized O(N) order" you can remove self.sorted and just repeat <code>self.L.sort()</code> in <code>__setitem__</code> itself. That makes writes O(N log N), of course (while I still had writes at O(1)). Either approach is viable and it's hard to think of one as intrinsically superior to the other. If you tend to do a bunch of writes then a bunch of iterations then the approach in the code above is best; if it's typically one write, one iteration, another write, another iteration, then it's just about a wash.</p>
+
+<p>BTW, this takes shameless advantage of the unusual (and wonderful;-) performance characteristics of Python's sort (aka "timsort"): among them, sorting a list that's mostly sorted but with a few extra items tacked on at the end is basically O(N) (if the tacked on items are few enough compared to the sorted prefix part). I hear Java's gaining this sort soon, as Josh Block was so impressed by a tech talk on Python's sort that he started coding it for the JVM on his laptop then and there. Most sytems (including I believe Jython as of today and IronPython too) basically have sorting as an O(N log N) operation, not taking advantage of "mostly ordered" inputs; "natural mergesort", which Tim Peters fashioned into Python's timsort of today, is a wonder in this respect.</p>
+<br /><b>#1</b><br /><p>An ordered tree is usually better for this cases, but random access is going to be log(n). You should keep into account also insertion and removal costs...</p>
+<br /><b>#2</b><br /><p>Here is my own implementation:</p>
+
+<pre><code>import bisect
+class KeyOrderedDict(object):
+   __slots__ = ['d', 'l']
+   def __init__(self, *args, **kwargs):
+      self.l = sorted(kwargs)
+      self.d = kwargs
+
+   def __setitem__(self, k, v):
+      if not k in self.d:
+         idx = bisect.bisect(self.l, k)
+         self.l.insert(idx, k)
+       self.d[k] = v
+
+   def __getitem__(self, k):
+      return self.d[k]
+
+   def __delitem__(self, k):
+      idx = bisect.bisect_left(self.l, k)
+      del self.l[idx]
+      del self.d[k]
+
+   def __iter__(self):
+      return iter(self.l)
+
+   def __contains__(self, k):
+      return k in self.d
+</code></pre>
+
+<p>The use of bisect keeps self.l ordered, and insertion is O(n) (because of the insert, but not a killer in my case, because I append far more often than truly insert, so the usual case is amortized O(1)). Access is O(1), and iteration O(n). But maybe someone had invented (in C) something with a more clever structure ?</p>
+<br /><b>#3</b><br /><p>You could build a dict that allows traversal by storing a pair <code>(value, next_key)</code> in each position.  </p>
+
+<p>Random access:</p>
+
+<pre><code>my_dict[k][0]   # for a key k
+</code></pre>
+
+<p>Traversal:</p>
+
+<pre><code>k = start_key   # stored somewhere
+while k is not None:     # next_key is None at the end of the list
+    v, k = my_dict[k]
+    yield v
+</code></pre>
+
+<p>Keep a pointer to <code>start</code> and <code>end</code> and you'll have efficient update for those cases where you just need to add onto the end of the list.</p>
+
+<p>Inserting in the middle is obviously O(n).  Possibly you could build a <a href="http://en.wikipedia.org/wiki/Skiplist" rel="nofollow">skip list</a> on top of it if you need more speed.</p>
+<br /><b>#4</b><br /><p>I'm not sure which python version are you working in, but in case you like to experiment, Python 3.1 includes and official implementation of Ordered dictionaries:
+<a href="http://www.python.org/dev/peps/pep-0372/" rel="nofollow">http://www.python.org/dev/peps/pep-0372/</a>
+<a href="http://docs.python.org/3.1/whatsnew/3.1.html#pep-372-ordered-dictionaries" rel="nofollow">http://docs.python.org/3.1/whatsnew/3.1.html#pep-372-ordered-dictionaries</a></p>
+<br /><b>#5</b><br /><p>here's a pastie: I Had a need for something similar.  Note however that this specific implementation is immutable, there are no inserts, once the instance is created:  The exact performance doesn't quite match what you're asking for, however.  Lookup is O(log n) and full scan is O(n).  This works using the <code>bisect</code> module upon a tuple of key/value (tuple) pairs.  Even if you can't use this precisely, you might have some success adapting it to your needs.</p>
+
+<pre><code>import bisect
+
+class dictuple(object):
+    """
+        &gt;&gt;&gt; h0 = dictuple()
+        &gt;&gt;&gt; h1 = dictuple({"apples": 1, "bananas":2})
+        &gt;&gt;&gt; h2 = dictuple({"bananas": 3, "mangoes": 5})
+        &gt;&gt;&gt; h1+h2
+        ('apples':1, 'bananas':3, 'mangoes':5)
+        &gt;&gt;&gt; h1 &gt; h2
+        False
+        &gt;&gt;&gt; h1 &gt; 6
+        False
+        &gt;&gt;&gt; 'apples' in h1
+        True
+        &gt;&gt;&gt; 'apples' in h2
+        False
+        &gt;&gt;&gt; d1 = {}
+        &gt;&gt;&gt; d1[h1] = "salad"
+        &gt;&gt;&gt; d1[h1]
+        'salad'
+        &gt;&gt;&gt; d1[h2]
+        Traceback (most recent call last):
+        ...
+        KeyError: ('bananas':3, 'mangoes':5)
+   """
+
+
+    def __new__(cls, *args, **kwargs):
+        initial = {}
+        args = [] if args is None else args
+        for arg in args:
+            initial.update(arg)
+        initial.update(kwargs)
+
+        instance = object.__new__(cls)
+        instance.__items = tuple(sorted(initial.items(),key=lambda i:i[0]))
+        return instance
+
+    def __init__(self,*args, **kwargs):
+        pass
+
+    def __find(self,key):
+        return bisect.bisect(self.__items, (key,))
+
+
+    def __getitem__(self, key):
+        ind = self.__find(key)
+        if self.__items[ind][0] == key:
+            return self.__items[ind][1]
+        raise KeyError(key)
+    def __repr__(self):
+        return "({0})".format(", ".join(
+                        "{0}:{1}".format(repr(item[0]),repr(item[1]))
+                          for item in self.__items))
+    def __contains__(self,key):
+        ind = self.__find(key)
+        return self.__items[ind][0] == key
+    def __cmp__(self,other):
+
+        return cmp(self.__class__.__name__, other.__class__.__name__
+                  ) or cmp(self.__items, other.__items)
+    def __eq__(self,other):
+        return self.__items == other.__items
+    def __format__(self,key):
+        pass
+    #def __ge__(self,key):
+    #    pass
+    #def __getattribute__(self,key):
+    #    pass
+    #def __gt__(self,key):
+    #    pass
+    __seed = hash("dictuple")
+    def __hash__(self):
+        return dictuple.__seed^hash(self.__items)
+    def __iter__(self):
+        return self.iterkeys()
+    def __len__(self):
+        return len(self.__items)
+    #def __reduce__(self,key):
+    #    pass
+    #def __reduce_ex__(self,key):
+    #    pass
+    #def __sizeof__(self,key):
+    #    pass
+
+    @classmethod
+    def fromkeys(cls,key,v=None):
+        cls(dict.fromkeys(key,v))
+
+    def get(self,key, default):
+        ind = self.__find(key)
+        return self.__items[ind][1] if self.__items[ind][0] == key else default
+
+    def has_key(self,key):
+        ind = self.__find(key)
+        return self.__items[ind][0] == key
+
+    def items(self):
+        return list(self.iteritems())
+
+    def iteritems(self):
+        return iter(self.__items)
+
+    def iterkeys(self):
+        return (i[0] for i in self.__items)
+
+    def itervalues(self):
+        return (i[1] for i in self.__items)
+
+    def keys(self):
+        return list(self.iterkeys())
+
+    def values(self):
+        return list(self.itervalues())
+    def __add__(self, other):
+        _sum = dict(self.__items)
+        _sum.update(other.__items)
+        return self.__class__(_sum)
+
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()
+</code></pre>
+<br />

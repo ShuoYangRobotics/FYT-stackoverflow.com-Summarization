@@ -1,0 +1,592 @@
+<h3>Question (ID-1349311):</h3><h2>Python string 'join' is faster(?) than '+', but what's wrong here?</h2><p>I asked the most efficient method for mass dynamic string concatenation in an earlier post and I was suggested to use the <strong>join</strong> method, the best, simplest and fastest method to do so (as everyone said that). But while I was playing with string concatenations, I found some weird(?) results. I'm sure something is going on but I can't not get it quite. Here is what I did:</p>
+
+<p>I defined these functions:</p>
+
+<pre><code>import timeit
+def x():
+    s=[]
+    for i in range(100):
+        # Other codes here...
+        s.append("abcdefg"[i%7])
+    return ''.join(s)
+
+def y():
+    s=''
+    for i in range(100):
+        # Other codes here...
+        s+="abcdefg"[i%7]
+    return s
+
+def z():
+    s=''
+    for i in range(100):
+        # Other codes here...
+        s=s+"abcdefg"[i%7]
+    return s
+
+def p():
+    s=[]
+    for i in range(100):
+        # Other codes here...
+        s+="abcdefg"[i%7]
+    return ''.join(s)
+
+def q():
+    s=[]
+    for i in range(100):
+        # Other codes here...
+        s = s + ["abcdefg"[i%7]]
+    return ''.join(s)
+</code></pre>
+
+<p>I have tried to keep other things (except the concatenation) almost same throughout the functions. Then I tested with the following with results in comment (using Python 3.1.1 IDLE on Windows 32 bit machine):</p>
+
+<pre><code>timeit.timeit(x) # 31.54912480500002
+timeit.timeit(y) # 23.533029429999942 
+timeit.timeit(z) # 22.116181330000018
+timeit.timeit(p) # 37.718607439999914
+timeit.timeit(q) # 108.60377576499991
+</code></pre>
+
+<p>That means it shows that *strng = strng + dyn_strng* is the fastest. Though the difference in times are not that significant (except the last one), but I wanna know why this is happening. Is that because I am using Python 3.1.1 and that provides '+' as most efficient? Should I use '+' as an alternative to <em>join</em>? Or, have I done something extremely silly? Or what? Please explain clearly. Thank you.</p>
+
+<p><strong>EDIT:</strong> I have included my answer at the last (with no vote on it :)). Please comment on it.</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>Some of us Python committers, I believe mostly Rigo and Hettinger, went out of their way (on the way to 2.5 I believe) to optimize some special cases of the alas-far-too-common <code>s += something</code> <strong>blight</strong>, arguing that it was proven that beginners will never be covinced that <code>''.join</code> is the right way to go and the horrible slowness of the <code>+=</code> might be giving Python a bad name. Others of us weren't that hot, because they just couldn't possibly optimize every occurrence (or even just a majority of them) to decent performance; but we didn't feel hotly enough on the issue to try and actively block them.</p>
+
+<p>I believe this thread proves we should have opposed them more sternly. As it is now, they optimized <code>+=</code> in a certain hard-to-predict subset of cases to where it can be maybe 20% faster for particular stupid cases than the proper way (which IS still <code>''.join</code>) -- just a perfect way to trap beginners into pursuing those irrelevant 20% gains by using the wrong idiom... at the cost, once in a while and from their POV out of the blue, of being hit with a performance loss of 200% (or more, since non-linear behavior IS still lurking there just outside of the corners that Hettinger and Rigo prettied up and put flowers in;-) -- one that MATTERS, one that WILL make them miserable.  This goes against the grain of Python's "ideally only one obvious way to do it" and it feels to me like we, collectively, have lain a trap for beginners -- the best kind, too... those who don't just accept what they're told by their "betters", but inquisitively go and question and explore.</p>
+
+<p>Ah well -- I give up.  OP, @mshsayem, go ahead, use += everywhere, enjoy your irrelevant 20% speedups in trivial, tiny, irrelevant cases, and you'd better enjoy them to the hilt -- because one day, when you can't see it coming, on an IMPORTANT, LARGE operation, you'll be hit smack in the midriff by the oncoming trailer truck of a 200% slowdown (unless you get unlucky and it's a 2000% one;-).  Just remember: if you ever feel that "Python is horribly slow", REMEMBER, more likely than not it's one of your beloved loops of <code>+=</code> turning around and biting the hand that feeds it.</p>
+
+<p>For the rest of us -- those who understand what it means to say <a href="http://shreevatsa.wordpress.com/2008/05/16/premature-optimization-is-the-root-of-all-evil/" rel="nofollow">We should forget about small efficiencies, say about 97% of the time</a>, I'll keep heartily recommending <code>''.join</code>, so we all can sleep in all tranquility and KNOW we won't be hit with a superlinear slowdown when we least expect and least can afford you. But for you, Armin Rigo, and Raymond Hettinger (the last two, dear personal friends of mine, BTW, not just co-commiters;-) -- may your <code>+=</code> be smooth and your big-O's never worse than N!-)</p>
+
+<p>So, for the rest of us, here's a more meaningful and interesting set of measurements:</p>
+
+<pre><code>$ python -mtimeit -s'r=[str(x)*99 for x in xrange(100,1000)]' 's="".join(r)'
+1000 loops, best of 3: 319 usec per loop
+</code></pre>
+
+<p>900 strings of 300 chars each, joining the list directly is of course fastest, but the OP is terrified about having to do appends before then. But:</p>
+
+<pre><code>$ python -mtimeit -s'r=[str(x)*99 for x in xrange(100,1000)]' 's=""' 'for x in r: s+=x'
+1000 loops, best of 3: 779 usec per loop
+$ python -mtimeit -s'r=[str(x)*99 for x in xrange(100,1000)]' 'z=[]' 'for x in r: z.append(x)' '"".join(z)'
+1000 loops, best of 3: 538 usec per loop
+</code></pre>
+
+<p>...with a semi-important amount of data (a very few 100's of KB -- taking a measurable fraction of a millisecond every which way), even plain good old <code>.append</code> is alread superior. In addition, it's obviously and trivially easy to optimize:</p>
+
+<pre><code>$ python -mtimeit -s'r=[str(x)*99 for x in xrange(100,1000)]' 'z=[]; zap=z.append' 'for x in r: zap(x)' '"".join(z)'
+1000 loops, best of 3: 438 usec per loop
+</code></pre>
+
+<p>shaving another tenths of a millisecond over the average looping time.  Everybody (at least everybody who's totally obsessed abound performance) obviously knows that HOISTING (taking OUT of the inner loop a repetitive computation that would be otherwise performed over and over) is a crucial technique in optimization -- Python doesn't hoist on your behalf, so you have to do your own hoisting in those rare occasions where every microsecond matters.</p>
+<br /><b>#1</b><br /><p>I assume x() is slower because you're first building the array and then joining it. So you're not only measuring the time that join takes, but also the time that you take to build the array.</p>
+
+<p>In a scenario where you already have an array and you want to create a string out of its elements, join should be faster than iterating through the array and building the string step by step.</p>
+<br /><b>#2</b><br /><p>You are measuring two distinct operations: the creation of an array of strings, and the concatenation of strings.</p>
+
+<pre><code>    import timeit
+    def x():
+        s = []
+        for i in range(100):
+            s.append("abcdefg"[i%7])
+        return ''.join(s)
+    def y():
+        s = ''
+        for i in range(100):
+            s += "abcdefgh"[i%7]
+
+    # timeit.timeit(x) returns about 32s
+    # timeit.timeit(y) returns about 23s
+</code></pre>
+
+<p>From the above it would indeed seem that '+' is a faster operation than join. But consider:</p>
+
+<pre><code>    src = []
+    def c():
+        global src
+        s = []
+        for i in range(100):
+            s.append("abcdefg"[i%7])
+        src = s
+    def x2():
+        return ''.join(src)
+    def y2():
+        s = ''
+        for i in range(len(src)):
+            s += src[i]
+        return s
+
+    # timeit.timeit(c) returns about 30s
+    # timeit.timeit(x2) returns about 1.5s
+    # timeit.timeit(y2) returns about 14s
+</code></pre>
+
+<p>In other words, by timing x() vs y(), your result is polluted by the construction of your source array.  If you break that out, you find that join is faster.</p>
+
+<p>Furthermore, you're working with small arrays, and your timing numbers just happen to coincide.  If you increase the size of the array and the length of each string significantly, the differences are more clear:</p>
+
+<pre><code>   def c2():
+       global src
+       s = []
+       for i in range(10000):
+           s.append("abcdefghijklmnopqrstuvwxyz0123456789"
+       src = s
+
+   # timeit.timeit(x2, number=10000) returns about 1s
+   # timeit.timeit(y2, number=10000) returns about 80s
+</code></pre>
+<br /><b>#3</b><br /><p>This question is really about what things cost. We'll play a bit fast and loose here, subtracting results in similar cases. You can decide for yourself if this is a valid method. Here are some basic test cases:</p>
+
+<pre><code>import timeit
+def append_to_list_with_join():
+    s=[]
+    for i in xrange(100):
+        s.append("abcdefg"[i%7])
+    return ''.join(s)
+
+def append_to_list_with_join_opt():
+    s=[]
+    x = s.append
+    for i in xrange(100):
+        x("abcdefg"[i%7])
+    return ''.join(s)
+
+def plus_equals_string():
+    s=''
+    for i in xrange(100):
+        s+="abcdefg"[i%7]
+    return s
+
+def plus_assign_string():
+    s=''
+    for i in xrange(100):
+        s=s+"abcdefg"[i%7]
+    return s
+
+def list_comp_join():
+    return ''.join(["abcdefg"[i%7] for i in xrange(100)])
+
+def list_comp():
+    return ["abcdefg"[i%7] for i in xrange(100)]
+
+def empty_loop():
+    for i in xrange(100):
+    	pass
+
+def loop_mod():
+    for i in xrange(100):
+    	a = "abcdefg"[i%7]
+
+def fast_list_join():
+    return "".join(["0"] * 100)
+
+for f in [append_to_list_with_join, append_to_list_with_join_opt, plus_equals_string,plus_assign_string,list_comp_join, list_comp, empty_loop,loop_mod, fast_list_join]:
+    print f.func_name, timeit.timeit(f)
+</code></pre>
+
+<p>And here is what they cost:</p>
+
+<pre><code>append_to_list_with_join 25.4540209021
+append_to_list_with_join_opt 19.9999782794
+plus_equals_string 16.7842428996
+plus_assign_string 14.8312124167
+list_comp_join 16.329590353
+list_comp 14.6934344309
+empty_loop 2.3819276612
+loop_mod 10.1424356308
+fast_list_join 2.58149394686
+</code></pre>
+
+<p>First off, lots of things have unexpected costs in python. append_to_list_with_join versus append_to_list_with_join_opt shows that even looking up a method on an object has a non-negligible cost. In this case, looking up s.append is one-quarter of the time.</p>
+
+<p>Next, list_comp_join versus list_comp shows that join() is pretty fast: It takes about 1.7 or only 10% of list_comp_join's time.</p>
+
+<p>loop_mod shows that the greatest part of this test is actually in setting up the data, irrespective of which string construction method is used. By inference, the time taken for "string = string + ", "string += ", and list comprehension are:</p>
+
+<pre><code>plus_equals_string = 16.78 - 10.14 = 6.64
+plus_assign_string = 14.83 - 10.14 = 4.69
+list_comp = 14.69 - 10.14 = 4.55
+</code></pre>
+
+<p>So as to the OP's question, join() is fast but the time to create the underlying list, whether with list primitives or list comprehension, is comparable to creating the string with string primitives. If you already have a list, convert it to a string with join() -- it will be fast.</p>
+
+<p>The timings the OP presents indicate that constructing lists using concatenate operators is slow. In contrast, using list comprehensions is fast. If you have to build a list, use a list comprehension.</p>
+
+<p>Finally, let's take three of the OP's closest functions: what is the difference between x, p, and q? Let's simplify a bit:</p>
+
+<pre><code>import timeit
+def x():
+    s=[]
+    for i in range(100):
+        s.append("c")
+
+def p():
+    s=[]
+    for i in range(100):
+        s += "c"
+
+def q():
+    s=[]
+    for i in range(100):
+        s = s + ["c"]
+
+for f in [x,p,q]:
+    print f.func_name, timeit.timeit(f)
+</code></pre>
+
+<p>Here are the results:</p>
+
+<pre><code>x 16.0757342064
+p 87.1533697719
+q 85.0999698984
+</code></pre>
+
+<p>And here is the <a href="http://docs.python.org/dev/3.0/library/dis.html" rel="nofollow">disassembly</a>:</p>
+
+<pre><code>&gt;&gt;&gt; import dis
+&gt;&gt;&gt; dis.dis(x)
+  2           0 BUILD_LIST               0
+              3 STORE_FAST               0 (s)
+
+  3           6 SETUP_LOOP              33 (to 42)
+              9 LOAD_GLOBAL              0 (range)
+             12 LOAD_CONST               1 (100)
+             15 CALL_FUNCTION            1
+             18 GET_ITER
+        &gt;&gt;   19 FOR_ITER                19 (to 41)
+             22 STORE_FAST               1 (i)
+
+  4          25 LOAD_FAST                0 (s)
+             28 LOAD_ATTR                1 (append)
+             31 LOAD_CONST               2 ('c')
+             34 CALL_FUNCTION            1
+             37 POP_TOP
+             38 JUMP_ABSOLUTE           19
+        &gt;&gt;   41 POP_BLOCK
+        &gt;&gt;   42 LOAD_CONST               0 (None)
+             45 RETURN_VALUE
+&gt;&gt;&gt; dis.dis(p)
+  2           0 BUILD_LIST               0
+              3 STORE_FAST               0 (s)
+
+  3           6 SETUP_LOOP              30 (to 39)
+              9 LOAD_GLOBAL              0 (range)
+             12 LOAD_CONST               1 (100)
+             15 CALL_FUNCTION            1
+             18 GET_ITER
+        &gt;&gt;   19 FOR_ITER                16 (to 38)
+             22 STORE_FAST               1 (i)
+
+  4          25 LOAD_FAST                0 (s)
+             28 LOAD_CONST               2 ('c')
+             31 INPLACE_ADD
+             32 STORE_FAST               0 (s)
+             35 JUMP_ABSOLUTE           19
+        &gt;&gt;   38 POP_BLOCK
+        &gt;&gt;   39 LOAD_CONST               0 (None)
+             42 RETURN_VALUE
+&gt;&gt;&gt; dis.dis(q)
+  2           0 BUILD_LIST               0
+              3 STORE_FAST               0 (s)
+
+  3           6 SETUP_LOOP              33 (to 42)
+              9 LOAD_GLOBAL              0 (range)
+             12 LOAD_CONST               1 (100)
+             15 CALL_FUNCTION            1
+             18 GET_ITER
+        &gt;&gt;   19 FOR_ITER                19 (to 41)
+             22 STORE_FAST               1 (i)
+
+  4          25 LOAD_FAST                0 (s)
+             28 LOAD_CONST               2 ('c')
+             31 BUILD_LIST               1
+             34 BINARY_ADD
+             35 STORE_FAST               0 (s)
+             38 JUMP_ABSOLUTE           19
+        &gt;&gt;   41 POP_BLOCK
+        &gt;&gt;   42 LOAD_CONST               0 (None)
+             45 RETURN_VALUE
+</code></pre>
+
+<p>The loops are nearly identical. The comparison amounts to CALL_FUNCTION+POP_TOP vs. INPLACE_ADD+STORE_FAST vs. BUILD_LIST+BINARY_ADD+STORE_FAST. However, I can't give a more low-level explanation than that -- I just can't find costs of python bytecodes on the Net. However, you might get some inspiration from looking at Doug Hellmann's Python Module of the Week posting on <a href="http://www.doughellmann.com/PyMOTW/dis/index.html" rel="nofollow">dis</a>.</p>
+<br /><b>#4</b><br /><p>Interesting: I've done some tests where the size of the string changes, and this is what I found:</p>
+
+<pre><code>def x():
+    x = "a" * 100
+    s=[]
+    for i in range(100):
+        # Other codes here...
+        s.append(x)
+    return ''.join(s)
+
+def z():
+    x = "a" * 100
+    s=''
+    for i in xrange(100):
+        # Other codes here...
+        s=s+x
+    return s
+
+from timeit import timeit
+print "x:", timeit(x, number=1000000)
+print "z:", timeit(z, number=1000000)
+</code></pre>
+
+<p>For strings of length 1 (<code>x = "a" * 1</code>):</p>
+
+<pre><code>x: 27.2318270206
+z: 14.4046051502
+</code></pre>
+
+<p>For strings of length 100:</p>
+
+<pre><code>x: 30.0796670914
+z: 21.5891489983
+</code></pre>
+
+<p>And for strings of length 1000, running timeit 100,000 times instead of 1,000,000</p>
+
+<pre><code>x: 14.1769361496
+z: 31.4864079952
+</code></pre>
+
+<p>Which, if my reading of <code>Objects/stringobject.c</code> is correct, makes sense.</p>
+
+<p>It appears, on a first reading, that the String.join algorithm (edge-cases aside) is:</p>
+
+<pre><code>def join(sep, sequence):
+    size = 0
+    for string in sequence:
+        size += len(string) + len(sep)
+
+    result = malloc(size)
+
+    for string in sequence:
+        copy string into result
+        copy sep into result
+
+    return result
+</code></pre>
+
+<p>So this will require more or less <code>O(S)</code> steps (where <code>S</code> is the sum of the lengths of all the strings being joined).</p>
+<br /><b>#5</b><br /><p>There's a difference between += and + with strings -- if there's no other references to "x", x+=y can just append to x, rather than having to take a copy of the string to append to -- which is the same benefit you get from using "".join().</p>
+
+<p>The main benefit from "".join() over + or += is that join() should always give linear performance, while in many cases +/+= will give quadratic performance (ie, when you double the amount of text, you quadruple the amount of time taken). But this will only matter with a lot of text, not merely 100 bytes, and I <em>think</em> it won't get triggered if you only have one reference to the string you're appending to.</p>
+
+<p>In detail:</p>
+
+<p>Your best case performance for string concatenation is to look at every character in the final string once. "".join() does that naturally -- it has all the information it needs to right from the start. </p>
+
+<p>However a+=b can work in two ways, it can either just add "b" to an existing string, in which case it only needs to look at the characters in "b", or it can have to look at the characters in "a" too.</p>
+
+<p>In C, strcat() always looks at all the characters in both strings, so it's works badly always. In Python, however, the string length is stored, so the string can be extended as long as it's not referenced elsewhere -- and you get good performance by only copying the characters in "b". If it is referenced elsewhere, python will make a copy of "a" first, then add "b" to the end, giving you bad performance. If you're appending five strings in this manner, your time taken will be:</p>
+
+<pre><code>ab = a+b       # Time is a + b
+abc = ab+c     # Time is (a+b) + c
+abcd = abc+d   # Time is (a+b+c) + d
+abcde = abcd+e # Time is (a+b+c+d) + e
+</code></pre>
+
+<p>which if a,b,c,d,e are all roughly the same size, say, n, is n*(n-1)/2-1 operations, or essentially n-squared.</p>
+
+<p>To get the bad behaviour for x+=y, try:</p>
+
+<pre><code>def a(n=100):
+    res = ""
+    for k in xrange(n):
+        v=res
+        res += "foobar"
+    return res
+</code></pre>
+
+<p>Even though v isn't actually used, it's enough to trigger the slower path for += and get the bad behaviour that worries people.</p>
+
+<p>I believe += wasn't introduced until Python 2.0, so it wasn't possible to append efficiently without using something like "".join() in Python 1.6 and earlier.</p>
+<br /><b>#6</b><br /><p>In addition to what the others said, 100 1-char strings is <em>really small</em>.  (I'm kind of surprised you get separation of results at all.)  That's the sort of dataset that fits in your processor cache.  You're not going to see asymptotic performance on a microbenchmark.</p>
+<br /><b>#7</b><br /><p>As to why <code>q</code> is a lot slower:  when you say </p>
+
+<pre><code>l += "a"
+</code></pre>
+
+<p>you are appending the string <code>"a"</code> to the end of <code>l</code>, but when you say</p>
+
+<pre><code>l = l + ["a"]
+</code></pre>
+
+<p>you are creating a new list with the contents of <code>l</code> and <code>["a"]</code> and then reassigning the results back to <code>l</code>. Thus new lists are constantly being generated.</p>
+<br /><b>#8</b><br /><p>String concatenation was a lot slower before Python 2.5, when it still created a new copy for every string concatenation rather than appending to the original, leading to join() becoming a popular workaround.</p>
+
+<p>Here's an old benchmark demonstrating the old problem:
+<a href="http://www.skymind.com/~ocrow/python%5Fstring/" rel="nofollow">http://www.skymind.com/~ocrow/python%5Fstring/</a></p>
+<br /><b>#9</b><br /><p>I have figured out the answer from the answers posted here by experts. Python string concatenation (and timing measurements) depends on these (as far as I've seen):</p>
+
+<ul>
+<li>Number of concatenations</li>
+<li>Average length of strings</li>
+<li>Number of function callings</li>
+</ul>
+
+<p>I have built a new code that relates these. Thanks to Peter S Magnusson, sepp2k, hughdbrown, David Wolever and others for indicating important points I had missed earlier. Also, in this code I might have missed something. So, I highly appreciate any replies pointing our errors, suggestions, criticisms etc. After all, I am here for learning. Here is my new code:</p>
+
+<pre><code>from timeit import timeit
+
+noc = 100
+tocat = "a"
+def f_call():
+    pass
+
+def loop_only():
+    for i in range(noc):
+        pass
+
+def concat_method():
+    s = ''
+    for i in range(noc):
+        s = s + tocat
+
+def list_append():
+    s=[]
+    for i in range(noc):
+        s.append(tocat)
+    ''.join(s)
+
+def list_append_opt():
+    s = []
+    zap = s.append
+    for i in range(noc):
+        zap(tocat)
+    ''.join(s)
+
+def list_comp():
+    ''.join(tocat for i in range(noc))
+
+def concat_method_buildup():
+    s=''
+
+def list_append_buildup():
+    s=[]
+
+def list_append_opt_buildup():
+    s=[]
+    zap = s.append
+
+def function_time(f):
+    return timeit(f,number=1000)*1000
+
+f_callt = function_time(f_call)
+
+def measure(ftuple,n,tc):
+    global noc,tocat
+    noc = n
+    tocat = tc
+    loopt = function_time(loop_only) - f_callt
+    buildup_time = function_time(ftuple[1]) -f_callt if ftuple[1] else 0
+    total_time = function_time(ftuple[0])
+    return total_time, total_time - f_callt - buildup_time - loopt*ftuple[2]
+
+functions ={'Concat Method\t\t':(concat_method,concat_method_buildup,True),
+            'List append\t\t\t':(list_append,list_append_buildup,True),
+            'Optimized list append':(list_append_opt,list_append_opt_buildup,True),
+            'List comp\t\t\t':(list_comp,0,False)}
+
+for i in range(5):
+    print("\n\n%d concatenation\t\t\t\t10'a'\t\t\t\t 100'a'\t\t\t1000'a'"%10**i)
+    print('-'*80)
+    for (f,ft) in functions.items():
+        print(f,"\t|",end="\t")
+        for j in range(3):
+            t = measure(ft,10**i,'a'*10**j)
+            print("%.3f %.3f |" % t,end="\t")
+        print()
+</code></pre>
+
+<p>And here is what I have got. [In the time column two times (scaled) are shown: first one is the total function execution time, and the second time is the actual(?) concatenation time. I have deducted the function calling time, function buildup time(initialization time), and iteration time. Here I am considering a case where it can't be done without loop (say more statement inside).]</p>
+
+<pre><code>1 concatenation                 1'a'                  10'a'               100'a'
+-------------------     ----------------------  -------------------  ----------------
+List comp               |   2.310 2.168       |  2.298 2.156       |  2.304 2.162
+Optimized list append   |   1.069 0.439       |  1.098 0.456       |  1.071 0.413
+Concat Method           |   0.552 0.034       |  0.541 0.025       |  0.565 0.048
+List append             |   1.099 0.557       |  1.099 0.552       |  1.094 0.552
+
+
+10 concatenations                1'a'                  10'a'               100'a'
+-------------------     ----------------------  -------------------  ----------------
+List comp               |   3.366 3.224       |  3.473 3.331       |  4.058 3.916
+Optimized list append   |   2.778 2.003       |  2.956 2.186       |  3.417 2.639
+Concat Method           |   1.602 0.943       |  1.910 1.259       |  3.381 2.724
+List append             |   3.290 2.612       |  3.378 2.699       |  3.959 3.282
+
+
+100 concatenations               1'a'                  10'a'               100'a'
+-------------------     ----------------------  -------------------  ----------------
+List comp               |   15.900 15.758     |  17.086 16.944     |  20.260 20.118
+Optimized list append   |   15.178 12.585     |  16.203 13.527     |  19.336 16.703
+Concat Method           |   10.937 8.482      |  25.731 23.263     |  29.390 26.934
+List append             |   20.515 18.031     |  21.599 19.115     |  24.487 22.003
+
+
+1000 concatenations               1'a'                  10'a'               100'a'
+-------------------     ----------------------  -------------------  ----------------
+List comp               |   134.507 134.365   |  143.913 143.771   |  201.062 200.920
+Optimized list append   |   112.018 77.525    |  121.487 87.419    |  151.063 117.059
+Concat Method           |   214.329 180.093   |  290.380 256.515   |  324.572 290.720
+List append             |   167.625 133.619   |  176.241 142.267   |  205.259 171.313
+
+
+10000 concatenations              1'a'                  10'a'               100'a'
+-------------------     ----------------------  -------------------  ----------------
+List comp               |   1309.702 1309.560 |  1404.191 1404.049 |  2912.483 2912.341
+Optimized list append   |   1042.271 668.696  |  1134.404 761.036  |  2628.882 2255.804
+Concat Method           |   2310.204 1941.096 |  2923.805 2550.803 |  STUCK    STUCK
+List append             |   1624.795 1251.589 |  1717.501 1345.137 |  3182.347 2809.233
+</code></pre>
+
+<p>To sum up all these I have made this decisions for me:</p>
+
+<ol>
+<li>If you have a string list available,
+string 'join' method is best and
+fastest.</li>
+<li>If you can use list comprehension,
+that's the easiest and fast as well.    </li>
+<li>If you need 1 to 10 concatenation
+(average) with length 1 to 100, list
+append, '+' both takes same (almost, note that times are scaled) time.</li>
+<li>Optimized list append seems very
+good in most situation.</li>
+<li>When #concatenation or string length rises, '+' starts to take   significantly more
+    and more time. Note that, for 10000 concatenations with 100'a' my PC is stuck!</li>
+<li>If you use list append and 'join'
+always, you are safe all time
+(pointed by Alex
+    Martelli).    </li>
+<li>But in some situation say, where you
+need to take user input and print
+'Hello user's world!', it is simplest to use '+'. I think building a list
+and join for this case like x = input("Enter user name:") and then x.join(["Hello ","'s world!"])  is uglier than "Hello %s's world!"%x or "Hello " +x+ "'s world"</li>
+<li>Python 3.1 has improved
+concatenation performance. But, in
+some implementation 
+    like Jython, '+' is less efficient.</li>
+<li>Premature optimization is the root
+of all evil (experts' saying). Most
+of the time 
+    you do not need optimization. So, don't waste time in aspiration
+for optimization 
+    (unless you are writing a big or computational project where every
+micro/milli second 
+    counts.</li>
+<li>Use these information and write in
+ whatever way you like taking
+ circumstances under
+     consideration.</li>
+<li>If you really need optimization ,
+ use a profiler, find the
+ bottlenecks and try to 
+     optimize those.</li>
+</ol>
+
+<p>Finally, I say it again that I am a noob and trying to learn python more deeply. So, it is not unusual that there will be mistakes (error) in my observations. So, comment on this and suggest me if I am taking a wrong route. Thanks to all for participating. </p>
+<br />

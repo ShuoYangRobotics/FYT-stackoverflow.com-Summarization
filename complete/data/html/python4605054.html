@@ -1,0 +1,117 @@
+<h3>Question (ID-4605054):</h3><h2>Populating a table with a large amount of data from a temporary table - MySQL</h2><p>Ok I have a temporary MySQL table with 135,000 rows, from this temporary table I want to populate several other tables.</p>
+
+<p>First of all this is the structure of the temporary table</p>
+
+<p><code>
+CREATE TEMPORARY TABLE TVTEMPTABLE (
+PROGTITLE TEXT, SUBTITLE TEXT,
+EPISODE TEXT, YR YEAR, DIRECTOR TEXT,
+PERFORMERS TEXT, PREMIERE BOOL, FILM BOOL, RPEAT BOOL,
+SUBTITLES BOOL, WIDESCREEN BOOL, NEWSERIES BOOL, DEAFSIGNED BOOL,
+BNW BOOL, STARRATING TINYINT, CERTIFICATE VARCHAR(5), GENRE VARCHAR(50),
+DESCRIPTION TEXT, CHOICE BOOL, PROGDATE DATE, STARTIME TIME, ENDTIME TIME,
+DURATION INT, CHANNELID INT NOT NULL)
+</code></p>
+
+<p>And this is the structure of one of the tables I plan to populate from this.</p>
+
+<p><code>
+CREATE TABLE PROGRAMME (
+PROGRAMMEID INT NOT NULL AUTO_INCREMENT, GENREID INT NOT NULL, PROGTITLE VARCHAR(50), YR YEAR, DIRECTOR VARCHAR(50), PERFORMERS TEXT, FILM BOOL, WIDESCREEN BOOL, BNW BOOL, CERTIFICATE VARCHAR(5), DESCRIPTION TEXT, PRIMARY KEY(PROGRAMMEID), INDEX (GENREID), FOREIGN KEY (GENREID) REFERENCES GENRE(GENREID)
+) ENGINE=INNODB;
+</code></p>
+
+<p>And this is how I do my insert to the programme table</p>
+
+<p><code>
+INSERT INTO PROGRAMME (
+GENREID, PROGTITLE, YR, DIRECTOR, PERFORMERS, FILM, WIDESCREEN, BNW, CERTIFICATE, DESCRIPTION) SELECT G.GENREID, T.PROGTITLE, T.YR, T.DIRECTOR, T.PERFORMERS, T.FILM, T.WIDESCREEN, T.BNW, T.CERTIFICATE, T.DESCRIPTION FROM TVTEMPTABLE T,GENRE G WHERE G.GENRENAME = T.GENRE AND NOT EXISTS (
+SELECT * FROM PROGRAMME P WHERE P.PROGTITLE = T.PROGTITLE )
+</code></p>
+
+<p>This is however taking a very very long time to do, how should I approach this?</p>
+
+<p>Thanks,
+Paul</p>
+
+<p>Ok thanks guys still having a few issues with this I'm trying the left join example, I've found however that if the table I'm inserting into is empty to begin with though, then it inserts duplicates. Here's a simple example</p>
+
+<pre><code>CREATE TEMPORARY TABLE TEMP(
+    GENRENAME TEXT);
+
+CREATE TABLE GENRE(
+    GENREID INT NOT NULL AUTO_INCREMENT,
+    GENRENAME TEXT, PRIMARY KEY(GENREID)
+) ENGINE=INNODB;
+
+INSERT INTO TEMP(
+    GENRENAME)
+VALUES("news");
+
+INSERT INTO TEMP(
+    GENRENAME)
+VALUES("news");
+</code></pre>
+
+<p>This inserts the "news" genre into the temporary table twice. Now if I run this SQL command</p>
+
+<pre><code>INSERT INTO GENRE(
+    GENRENAME)
+SELECT
+    T.GENRENAME
+FROM
+    TEMP T
+LEFT JOIN
+    GENRE G ON G.GENRENAME=T.GENRENAME
+WHERE
+    G.GENRENAME IS NULL;
+</code></pre>
+
+<p>It inserts "news" twice into the genre table which is wrong. If I run the same command again, it correctly doesn't insert any new rows.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>How about this:</p>
+
+<pre><code>INSERT INTO PROGRAMME ( GENREID, PROGTITLE, YR, DIRECTOR, PERFORMERS, FILM, WIDESCREEN, BNW, CERTIFICATE, DESCRIPTION)
+SELECT G.GENREID, T.PROGTITLE, T.YR, T.DIRECTOR, T.PERFORMERS, T.FILM, T.WIDESCREEN, T.BNW, T.CERTIFICATE, T.DESCRIPTION
+FROM TVTEMPTABLE T,GENRE G
+WHERE G.GENRENAME = T.GENRE
+AND T.PROGTITLE NOT IN ( SELECT DISTINCT P.PROGTITLE FROM PROGRAMME P) 
+</code></pre>
+
+<p>I believe your <code>NOT EXISTS</code> has to execute for each selected row. Replace it with a single static subquery and check <code>NOT IN</code> on it.</p>
+<br /><b>#1</b><br /><p>You are doing a (possibly large) sub-select for each row.</p>
+
+<p>I would suggest doing a LEFT JOIN against PROGRAMME, and then only inserting rows where the join result is NULL, as follows:</p>
+
+<pre><code>INSERT INTO PROGRAMME (
+    GENREID, PROGTITLE, YR, DIRECTOR,
+    PERFORMERS, FILM, WIDESCREEN, BNW,
+    CERTIFICATE, DESCRIPTION)
+SELECT
+    G.GENREID, T.PROGTITLE, T.YR, T.DIRECTOR,
+    T.PERFORMERS, T.FILM, T.WIDESCREEN, T.BNW,
+    T.CERTIFICATE, T.DESCRIPTION
+FROM
+    TVTEMPTABLE T
+    INNER JOIN GENRE G ON G.GENRENAME=T.GENRE
+    LEFT JOIN PROGRAMME P ON P.PROGTITLE=T.PROGTITLE
+WHERE
+    P.PROGTITLE IS NULL
+</code></pre>
+
+<p>As an aside: have you considered (a) pretty-printing your code to be more readable and (b) not using all-caps field names?</p>
+<br /><b>#2</b><br /><p>i would first look at the performance of the embedded select statement in your insert, especially the NOT EXISTS clause.  Make sure you have good indexes there.</p>
+
+<p>another thought is to break it into smaller chunks so you do not have rollback space problems.  So see if you can insert only 1000 or 10,000 rows at a time, then commit, then run again. etc.</p>
+<br /><b>#3</b><br /><p>wrap your insert statement in a transaction.</p>
+
+<pre><code>start transaction;
+
+insert into programme (...) select ... from tvtemptable ...
+
+commit;
+</code></pre>
+
+<p>if it's still slow then post the explain plan of the select portion of your insert statement so we can see what's going on :P</p>
+<br /><b>#4</b><br /><p>index P.PROGTITLE and T.PROGTITLE</p>
+<br /><b>#5</b><br /><p>This was a combination of using left/inner join and the distinct keyword.</p>
+<br />

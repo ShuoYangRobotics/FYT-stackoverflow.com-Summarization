@@ -1,0 +1,190 @@
+<h3>Question (ID-900420):</h3><h2>Elegant way to compare sequences</h2><p>Does python provide an elegant way to check for "equality" of sequences of different types? The following work, but they seem rather ugly and verbose for python code:</p>
+
+<pre><code>def comp1(a, b):
+    if len(a) != len(b):
+        return False
+    for i, v in enumerate(a):
+        if v != b[i]:
+            return False
+    return True
+</code></pre>
+
+<p>The following is a bit shorter, but also less efficient since a third sequence is created:</p>
+
+<pre><code>def comp2(a, b):
+    for l, r in map(None, a, b):
+        if l != r:
+            return False
+    return True
+</code></pre>
+
+<p>Shoehorning one of those examples into a list comprehension isn't really what I'm looking for either.</p>
+
+<p>Edit: Ideally I am looking for a solution that doesn't create another sequence during the comparison.</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Convert both sequences to lists, and use builtin list comparison. It should be sufficient, unless your sequences are really large.</p>
+
+<pre><code>list(a) == list(b)
+</code></pre>
+
+<p>Edit:</p>
+
+<p>Testing done by schickb shows that using tuples is slightly faster:</p>
+
+<pre><code>tuple(a) == tuple(b)
+</code></pre>
+<br /><b>#1</b><br /><p>You can determine the equality of any two iterables (strings, tuples, lists, even custom sequences) without creating and storing duplicate lists by using the following:</p>
+
+<pre><code>all(x == y for x, y in itertools.izip_longest(a, b))
+</code></pre>
+
+<p>Note that if the two iterables are not the same length, the shorter one will be padded with <code>None</code>s. In other words, it will consider <code>[1, 2, None]</code> to be equal to <code>(1, 2)</code>.</p>
+
+<p><strong>Edit:</strong> As Kamil points out in the comments, <code>izip_longest</code> is only available in Python 2.6. However, <a href="http://docs.python.org/library/itertools.html#itertools.izip%5Flongest" rel="nofollow">the docs for the function</a> also provide an alternate implementation which should work all the way back to 2.3.</p>
+
+<p><strong>Edit 2:</strong> After testing on a few different machines, it looks like this is only faster than <code>list(a) == list(b)</code> in certain circumstances, which I can't isolate.  Most of the time, it takes about seven times as long.  However, I also found <code>tuple(a) == tuple(b)</code> to be consistently at least twice as fast as the <code>list</code> version.</p>
+<br /><b>#2</b><br /><p>It looks like tuple(a) == tuple(b) is the best overall choice. Or perhaps tuple comparison with a preceding len check if they'll often be different lengths. This does create extra lists, but hopefully not an issue except for really huge lists. Here is my comparison of the various alternatives suggested:</p>
+
+<pre><code>import timeit
+
+tests = (
+'''
+a=b=[5]*100
+''',
+
+'''
+a=[5]*100
+b=[5]*3
+''',
+
+'''
+a=b=(5,)*100
+''',
+
+'''
+a=b="This on is a string" * 5
+''',
+
+'''
+import array
+a=b=array.array('B', "This on is a string" * 5)
+'''
+)
+
+common = '''import itertools
+def comp1(a, b):
+    if len(a) != len(b):
+        return False
+    for i, v in enumerate(a):
+        if v != b[i]:
+            return False
+    return True'''
+
+for i, setup in enumerate(tests):
+    t1 = timeit.Timer("comp1(a, b)", setup + common)
+    t2 = timeit.Timer("all(x == y for x, y in itertools.izip_longest(a, b))", setup + common)
+    t3 = timeit.Timer("all([x == y for x, y in itertools.izip_longest(a, b)])", setup + common)
+    t4 = timeit.Timer("list(a) == list(b)", setup + common)
+    t5 = timeit.Timer("tuple(a) == tuple(b)", setup + common)
+
+    print '==test %d==' % i
+    print '   comp1: %g' % t1.timeit()
+    print ' all gen: %g' % t2.timeit()
+    print 'all list: %g' % t3.timeit()
+    print '    list: %g' % t4.timeit()
+    print '   tuple: %g\n' % t5.timeit()
+</code></pre>
+
+<p>Here are the results:</p>
+
+<pre><code>==test 0==
+   comp1: 27.8089
+ all gen: 31.1406
+all list: 29.4887
+    list: 3.58438
+   tuple: 3.25859
+
+==test 1==
+   comp1: 0.833313
+ all gen: 3.8026
+all list: 33.5288
+    list: 1.90453
+   tuple: 1.74985
+
+==test 2==
+   comp1: 30.606
+ all gen: 31.4755
+all list: 29.5637
+    list: 3.56635
+   tuple: 1.60032
+
+==test 3==
+   comp1: 33.3725
+ all gen: 35.3699
+all list: 34.2619
+    list: 10.2443
+   tuple: 10.1124
+
+==test 4==
+   comp1: 31.7014
+ all gen: 32.0051
+all list: 31.0664
+    list: 8.35031
+   tuple: 8.16301
+</code></pre>
+
+<p><strong>Edit:</strong> Added a few more tests. This was run on an AMD 939 3800+ with 2GB of ram. Linux 32bit, Python 2.6.2</p>
+<br /><b>#3</b><br /><p>Since you put the word "equality" in quotes, I assume that you would like to know how the lists are the same and how the are different.  Check out <strong>difflib</strong> which has a SequenceMatcher class:</p>
+
+<pre><code>    sm = difflib.SequenceMatcher(None, a, b)
+    for opcode in sm.get_opcodes():
+        print "    (%s %d:%d %d:%d)" % opcode
+</code></pre>
+
+<p>You will get back a sequences of descriptions of the differences.  It's fairly simple to turn that into <strong>diff</strong>-like output.</p>
+<br /><b>#4</b><br /><p>Apart from the extra memory used by creating temporary lists/tuples, those answers will lose out to short circuiting generator solutions for large sequences when the inequality occurs early in the sequences</p>
+
+<pre><code>from itertools import starmap, izip
+from operator import eq
+all(starmap(eq, izip(x,y)))
+</code></pre>
+
+<p>or more concisely</p>
+
+<pre><code>from itertools import imap
+from operator import eq
+all(imap(eq, x, y))
+</code></pre>
+
+<p>some benchmarks from ipython</p>
+
+<pre><code>x=range(1000)
+y=range(1000);y[10]=0
+
+timeit tuple(x)==tuple(y)
+100000 loops, best of 3: 16.9 us per loop
+
+timeit all(imap(eq,x,y))
+100000 loops, best of 3: 2.86 us per loop
+</code></pre>
+<br /><b>#5</b><br /><p>There's always:</p>
+
+<pre><code>list(a) == list(b)
+</code></pre>
+<br /><b>#6</b><br /><p>It's probably not as efficient, but it looks funky:</p>
+
+<pre><code>def cmpLists(a, b):
+    return len(a) == len(b) and (False not in [a[i] == b[i] for i in range(0,len(a)])
+</code></pre>
+
+<p>I don't know the "all" function that <a href="http://stackoverflow.com/questions/900420/elegant-way-to-compare-sequences/900444#900444">Ben mentioned</a>, but perhaps you could use that instead of "False not in"</p>
+<br /><b>#7</b><br /><p>This "functional" code should be fast and generic enough for all purposes.</p>
+
+<pre><code># python 2.6 ≤ x &lt; 3.0
+import operator, itertools as it
+
+def seq_cmp(seqa, seqb):
+    return all(it.starmap(operator.eq, it.izip_longest(seqa, seqb)))
+</code></pre>
+
+<p>If on Python 2.5, use the definition for izip_longest from <a href="http://docs.python.org/library/itertools.html#itertools.izip%5Flongest" rel="nofollow">there</a>.</p>
+<br />

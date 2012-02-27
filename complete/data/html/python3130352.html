@@ -1,0 +1,204 @@
+<h3>Question (ID-3130352):</h3><h2>Stopping a Reduce() operation mid way. Functional way of doing partial running sum</h2><p>I have been doing some functional programming and had a question. Perhaps I might be missing something but is there any way to stop a "reduce()" function midway? Lets say when I reach a certain condition? The idea somehow seems anti functional. I haven't seen any such option in python or F#, </p>
+
+<p>As an example, lets say I have a list such as [1,2,3,4,5]. I want to sum the elements in this list until the sum is not greater than some number (lets say 8), and return/mark/store/identify somehow, the number of elements I have actually added.</p>
+
+<p>If we looked at python for example for I might try something like</p>
+
+<pre><code>reduce(lambda a,b : a if a + b &gt; 8 else a + b, input)
+</code></pre>
+
+<p>This gives me the right answer 6, but how do I find that I had added 3 elements to get here. There is no counter as such. I can't do assignments inside lambdas. I think F# has the same situation.</p>
+
+<p>I know I can use a for loop or use a function that can store state etc. But what would be the functional way of doing/thinking about this. Reduce() wants to run until the end, but somewhere along this line of processing, we either want to stop it (because we don't care about processing the rest of the elements) or at least make a note of the place where we stopped caring.</p>
+<br /><h3>Answers (Total-10):</h3><b>#0</b><br /><p>Reduce is often used in combination with map. Google for example has developed a map-reduce framework for querying their databases and this map-reduce pattern is now used in several other projects (e.g. CouchDB, Hadoop, etc).</p>
+
+<p>First, you need to map the <code>input</code> variables <code>[2, 1, 3, 4, 5]</code> to something like:</p>
+
+<pre><code>[(1, 2), (1, 1), (1, 3), (1, 4), (1, 5)]
+</code></pre>
+
+<p>In that case, <code>x[0]</code> will represent the number of the elements to get the sum <code>x[1]</code>. Of course, the number of elements is <code>1</code> at the beginning for each single element.</p>
+
+<p>The next thing then, is to operate on those tuples:</p>
+
+<pre><code>reduce(
+    lambda a, b: a if a[1] + b[1] &gt; 8 else (a[0] + b[0], a[1] + b[1]),
+    map(lambda x: (1, x), input))
+</code></pre>
+
+<p>This will return <code>(3, 6)</code>, meaning the partial sum is <code>6</code> using <code>3</code> elements.</p>
+
+<p>I hope you got the idea behind map-reduce-algorithms.</p>
+
+<p>Regards,<br>
+Christoph</p>
+<br /><b>#1</b><br /><p>I agree with JaredPar that writing your own recursive function that behaves similarly to <code>fold</code>, but allows you to stop the computation earlier is the best approach. The way I would write it is a bit more general (so that you can use the function for any situation where you need <em>folding</em> that can <em>stop earlier</em>):</p>
+
+<pre><code>// Generalized 'fold' function that allws you to stop the execution earlier
+// The function 'f' has a type 'State -&gt; 'T -&gt; Option&lt;'State&gt;
+// By returning 'None' we can stop the execution (and return the 
+// current state), by returning Some(newState), we continue folding
+let rec foldStop f state input = 
+  match input with
+  | x::xs -&gt; 
+      match f state x with
+      | None -&gt; state
+      | Some(newState) -&gt; foldStop f newState xs
+  | [] -&gt; state
+
+// Example that stops folding after state is larger than 10
+foldStop (fun st n -&gt; if st &gt; 10 then None else Some(st + n)) 0 [ 1 .. 10 ]
+</code></pre>
+
+<p>This is a very general function and you can use it for all similar scenarios. The nice thing about writing it is that you will never need to write similar explicit recursion again (because you can just use <code>foldStop</code> once you have it).</p>
+
+<p>Note that you can use <code>foldStop</code> to implement <code>fold</code> by always wrapping the result of the accumulation function in 'Some' (so it is more general):</p>
+
+<pre><code>let fold f state input = 
+  foldStop (fun st n -&gt; Some(f st n)) state input
+</code></pre>
+<br /><b>#2</b><br /><p>I think that the 'most functional' way to do this is probably via lazy evaluation.  If you're in a lazy language like Haskell, or in an eager language but using a lazy list data structure (like <code>LazyList</code> in the F# PowerPack), you can create e.g. a 'scan' of the running sums, and then leave it in the hands of the consumer of the list to decide how much she wants/needs to evaluate.</p>
+
+<p>Or, you know, write a simple recursive function, like @JaredPar's answer.  For some reason I often get a mental block on that, preventing me from noticing that "not everything has to be a <code>fold</code>, you can in fact write your own recursive functions" :)</p>
+<br /><b>#3</b><br /><p>Let's imagine Python had two functions called <em>ireduce</em> (similar to <em>reduce</em> but it would yield intermediate values; it's called <em>scanl</em> in some languages) and <em>ilast</em> (return last item in iterable). Then we could write this pure functional code:</p>
+
+<pre><code>from itertools import takewhile
+from operator import add
+a = [1, 2, 3, 4, 5]
+print ilast(enumerate(takewhile(lambda x: x &lt; 8, ireduce(add, a, 0))))
+# (3, 6)
+</code></pre>
+
+<p>For a <em>ireduce</em> implementation see <a href="http://gnosis.cx/publish/programming/charming_python_b13.html" rel="nofollow">http://gnosis.cx/publish/programming/charming_python_b13.html</a></p>
+
+<p>For <em>ilast</em> see <a href="http://stackoverflow.com/questions/2138873/cleanest-way-to-get-last-item-from-python-iterator">http://stackoverflow.com/questions/2138873/cleanest-way-to-get-last-item-from-python-iterator</a></p>
+
+<p>And how would this look in Haskell? (probably the prettiest functional language out there)</p>
+
+<pre><code>&gt; last $ zip [0..] (takeWhile (&lt; 8) (scanl (+) 0 a))
+(3,6)
+</code></pre>
+<br /><b>#4</b><br /><p>Try the following</p>
+
+<pre><code>let sumUntil list stopAfter = 
+    let rec inner list sum = 
+        if sum &gt;= stopAfter then sum
+        else 
+            match list with
+            | [] -&gt; sum
+            | h::t-&gt; inner t (sum + h)
+    inner list 0    
+</code></pre>
+
+<p>F# interactive result</p>
+
+<pre><code>&gt; sumUntil [1;2;3;4;5] 8;;
+val it : int = 10
+</code></pre>
+<br /><b>#5</b><br /><p>This is a function that implements that functional program:</p>
+
+<pre><code>&gt;&gt;&gt; def limited_reduce(reducer, pred, lst):
+...  i = 0
+...  y = lst[0]
+...  while pred(y) and i &lt; len(lst):
+...    i += 1
+...    y = reducer(lst[i], y)
+...  return (i, y)
+</code></pre>
+
+<p>or recursively:</p>
+
+<pre><code>&gt;&gt;&gt; def limited_reduce(reducer, pred, lst):
+...   def helper(i, accum, rest):
+...     if not rest or not pred(accum): return (i, accum)
+...     return helper(i+1, reducer(rest[0], accum), rest[1:])
+...   return helper(0, lst[0], lst[1:])
+</code></pre>
+
+<p>There's probably a way to clean it up a bit, but you would use it like this:</p>
+
+<pre><code>&gt;&gt;&gt;&gt; limited_reduce(lambda x,y: x+y, lambda r: r &lt; 6, [1,2,1,3,2])
+(3, 7)
+</code></pre>
+<br /><b>#6</b><br /><p>Another functional approch could be using a "continution"-based version of reduce/fold:</p>
+
+<pre><code>let rec foldC fn acc cont = function
+    | []      -&gt; acc
+    | x :: xs -&gt; fn x acc (fun acc -&gt; foldC fn acc cont xs) 
+</code></pre>
+
+<p>Call with 'id' (fun x -> x) as 'initial continuation':</p>
+
+<pre><code>foldC (fun x sum c -&gt; 
+           if (sum + x) &gt; 8 
+           then sum 
+           else c (sum + x))
+      0
+      (fun x -&gt; x) 
+      [1; 2; 3; 4; 5]
+</code></pre>
+
+<p>And you will get your '6'. </p>
+
+<p>Note that this version of <code>foldC</code> is not tail recursive - or otherwise recommended - thought...  </p>
+<br /><b>#7</b><br /><p>I think this does what you are after, using functions built-in to the F# Seq module:</p>
+
+<pre><code>let answer =
+    [1; 2; 3; 4; 5]
+    |&gt; Seq.scan (fun (count,sum) x -&gt; (count+1, sum + x) ) (0,0)
+    |&gt; Seq.find (fun (_,x) -&gt; x &gt; 8)
+</code></pre>
+
+<p>The "scan" function is similar to "fold", but returns a sequence containing intermediate (and final) states, rather than just the final state.  In this case, the state is a tuple containing a count and sum of items thus far processed, starting with (0,0).  This gets computed and fed, one at a time, into the "find" function, which returns the first element which matches the supplied condition (v>8), in this case (4,10).</p>
+
+<p>The only issue you'd need to handle with the above is the case where the "find" condition is never satisfied, in which case a KeyNotFoundException is thrown.  You could use "tryFind" which returns an option value.  However, I can't see a graceful way to return the last element computed if no earlier state matches the condition, short of pre-computing the length of the sequence:</p>
+
+<pre><code>let xs = [1; 2; 3; 4; 5]
+let len = Seq.length xs
+let answer =
+    xs
+    |&gt; Seq.scan (fun (count,acc) v -&gt; (count+1, v + acc) ) (0,0)
+    |&gt; Seq.find (fun (count,v) -&gt; v &gt; 99 || count = len)
+</code></pre>
+<br /><b>#8</b><br /><p>Here is a slight variation of Stephen's code, using <code>foldl</code> instead of <code>foldr</code> (I hope) and not requiring a sequence:</p>
+
+<pre><code>#!/usr/bin/env python
+
+import operator
+import functools
+
+def limited_reduce(op, it, start, pred):
+    if not pred(start):
+        return 0, start
+    for i, x in enumerate(it):
+        y = op(start, x)
+        if pred(y):
+            start = y
+        else:
+            break
+    return i, start
+
+print limited_reduce(operator.add, xrange(1, 6), 0,
+                     functools.partial(operator.gt, 8))
+</code></pre>
+<br /><b>#9</b><br /><p>The only way to get out of the builtin <code>reduce</code> part way through is to throw an exception. Fortunately it's not hard to get the desired result this way:</p>
+
+<pre><code>def interruptible_reduce(fn, *args):
+    try:
+        return reduce(fn, *args)
+    except StopIteration, e:
+        return e.args[0]
+
+def reducefn(a, b):
+    total = a[1] + b[1]
+    if total &gt; 8:
+        raise StopIteration(a)
+    return (a[0]+b[0], total)
+
+input = [2, 1, 3, 4, 5]
+
+&gt;&gt;&gt; from itertools import imap
+&gt;&gt;&gt; interruptible_reduce(reducefn, imap(lambda x: (1,x), input))
+(3, 6)
+</code></pre>
+<br />

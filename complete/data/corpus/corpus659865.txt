@@ -1,0 +1,236 @@
+Question (ID-659865): Python multiprocessing: sharing a large read-only object between processes? Do child processes spawned via multiprocessing share objects created earlier in the program? 
+
+ I have the following setup: 
+
+ do_some_processing(filename):
+ for line in file(filename):
+  if line.split(',')[0] in big_lookup_object:
+   # something here
+
+if __name__ == '__main__':
+ big_lookup_object = marshal.load('file.bin')
+ pool = Pool(processes=4)
+ print pool.map(do_some_processing, glob.glob('*.data'))
+ 
+
+ I'm loading some big object into memory, then creating a pool of workers that need to make use of that big object. The big object is accessed read-only, I don't need to pass modifications of it between processes. 
+
+ My question is: is the big object loaded into shared memory, as it would be if I spawned a process in unix/c, or does each process load its own copy of the big object? 
+
+ Update: to clarify further - big_lookup_object is a shared lookup object. I don't need to split that up and process it separately. I need to keep a single copy of it. The work that I need to split it is reading lots of other large files and looking up the items in those large files against the lookup object. 
+
+ Further update: database is a fine solution, memcached might be a better solution, and file on disk (shelve or dbm) might be even better. In this question I was particularly interested in an in memory solution. For the final solution I'll be using hadoop, but I wanted to see if I can have a local in-memory version as well. 
+ Answers (Total-6): #0 "Do child processes spawned via multiprocessing share objects created earlier in the program?" 
+
+ No. 
+
+ Processes have independent memory space. 
+
+ Solution 1 
+
+ To make best use of a large structure with lots of workers, do this. 
+
+ 
+ Write each worker as a "filter" -- reads intermediate results from stdin, does work, writes intermediate results on stdout. 
+ Connect all the workers as a pipeline: 
+
+ process1 &lt;source | process2 | process3 | ... | processn &gt;result
+ 
+ 
+
+ Each process reads, does work and writes. 
+
+ This is remarkably efficient since all processes are running concurrently. The writes and reads pass directly through shared buffers between the processes. 
+
+ 
+
+ Solution 2 
+
+ In some cases, you have a more complex structure -- often a "fan-out" structure. In this case you have a parent with multiple children. 
+
+ 
+ Parent opens source data. Parent forks a number of children. 
+ Parent reads source, farms parts of the source out to each concurrently running child. 
+ When parent reaches the end, close the pipe. Child gets end of file and finishes normally. 
+ 
+
+ The child parts are pleasant to write because each child simply reads sys.sydin . 
+
+ The parent has a little bit of fancy footwork in spawning all the children and retaining the pipes properly, but it's not too bad. 
+
+ Fan-in is the opposite structure. A number of independently running processes need to interleave their inputs into a common process. The collector is not as easy to write, since it has to read from many sources. 
+
+ Reading from many named pipes is often done using the select module to see which pipes have pending input. 
+
+ 
+
+ Solution 3 
+
+ Shared lookup is the definition of a database. 
+
+ Solution 3A -- load a database. Let the workers process the data in the database. 
+
+ Solution 3B -- create a very simple server using werkzeug (or similar) to provide WSGI applications that respond to HTTP GET so the workers can query the server. 
+
+ 
+
+ Solution 4 
+
+ Shared filesystem object. Unix OS offers shared memory objects. These are just files that are mapped to memory so that swapping I/O is done instead of more convention buffered reads. 
+
+ You can do this from a Python context in several ways 
+
+ 
+ Write a startup program that (1) breaks your original gigantic object into smaller objects, and (2) starts workers, each with a smaller object. The smaller objects could be pickled Python objects to save a tiny bit of file reading time. 
+ Write a startup program that (1) reads your original gigantic object and writes a page-structured, byte-coded file using seek operations to assure that individual sections are easy to find with simple seeks. This is what a database engine does -- break the data into pages, make each page easy to locate via a seek . 
+
+ Spawn workers with access this this large page-structured file. Each worker can seek to the relevant parts and do their work there. 
+ 
+ #1 Do child processes spawned via multiprocessing share objects created earlier in the program? 
+
+ It depends. For global read-only variables it can be often considered so (apart from the memory consumed) else it should not. 
+
+ multiprocessing 's documentation says: 
+
+ Better to inherit than pickle/unpickle 
+
+ 
+ On Windows many types from
+ multiprocessing need to be picklable
+ so that child processes can use them.
+ However, one should generally avoid
+ sending shared objects to other
+ processes using pipes or queues.
+ Instead you should arrange the program
+ so that a process which need access to
+ a shared resource created elsewhere
+ can inherit it from an ancestor
+ process. 
+ 
+
+ Explicitly pass resources to child processes 
+
+ 
+ On Unix a child process can make use
+ of a shared resource created in a
+ parent process using a global
+ resource. However, it is better to
+ pass the object as an argument to the
+ constructor for the child process. 
+ 
+ Apart from making the code
+ (potentially) compatible with Windows
+ this also ensures that as long as the
+ child process is still alive the
+ object will not be garbage collected
+ in the parent process. This might be
+ important if some resource is freed
+ when the object is garbage collected
+ in the parent process. 
+ 
+
+ Global variables 
+
+ 
+ Bear in mind that if code run in a
+ child process tries to access a global
+ variable, then the value it sees (if
+ any) may not be the same as the value
+ in the parent process at the time that
+ Process.start() was called. 
+ 
+
+ Example 
+
+ On Windows (single CPU): 
+
+ #!/usr/bin/env python
+import os, sys, time
+from multiprocessing import Pool
+
+x = 23000 # replace `23` due to small integers share representation
+z = [] # integers are immutable, let's try mutable object
+
+def printx(y):
+ global x
+ if y == 3:
+  x = -x
+ z.append(y)
+ print os.getpid(), x, id(x), z, id(z) 
+ print y
+ if len(sys.argv) == 2 and sys.argv[1] == "sleep":
+  time.sleep(.1) # should make more apparant the effect
+
+if __name__ == '__main__':
+ pool = Pool(processes=4)
+ pool.map(printx, (1,2,3,4))
+ 
+
+ With sleep : 
+
+ $ python26 test_share.py sleep
+2504 23000 11639492 [1] 10774408
+1
+2564 23000 11639492 [2] 10774408
+2
+2504 -23000 11639384 [1, 3] 10774408
+3
+4084 23000 11639492 [4] 10774408
+4
+ 
+
+ Without sleep : 
+
+ $ python26 test_share.py
+1148 23000 11639492 [1] 10774408
+1
+1148 23000 11639492 [1, 2] 10774408
+2
+1148 -23000 11639324 [1, 2, 3] 10774408
+3
+1148 -23000 11639324 [1, 2, 3, 4] 10774408
+4
+ 
+ #2 If you're running under Unix, they may share the same object, due to how fork works (i.e., the child processes have separate memory but it's copy-on-write, so it may be shared as long as nobody modifies it). I tried the following: 
+
+ import multiprocessing
+
+x = 23
+
+def printx(y):
+ print x, id(x)
+ print y
+
+if __name__ == '__main__':
+ pool = multiprocessing.Pool(processes=4)
+ pool.map(printx, (1,2,3,4))
+ 
+
+ and got the following output: 
+
+ 
+$ ./mtest.py
+23 22995656
+1
+23 22995656
+2
+23 22995656
+3
+23 22995656
+4
+ 
+
+ Of course this doesn't prove that a copy hasn't been made, but you should be able to verify that in your situation by looking at the output of ps to see how much real memory each subprocess is using. 
+ #3 S.Lott is correct. Python's multiprocessing shortcuts effectively give you a separate, duplicated chunk of memory. 
+
+ On most *nix systems, using a lower-level call to os.fork() will, in fact, give you copy-on-write memory, which might be what you're thinking. AFAIK, in theory, in the most simplistic of programs possible, you could read from that data without having it duplicated. 
+
+ However, things aren't quite that simple in the Python interpreter. Object data and meta-data are stored in the same memory segment, so even if the object is never changes, something like a reference counter for that object being incremented will cause a memory write, and therefore a copy. Almost any Python program that is doing more than "print 'hello'" will cause reference count increments, so you will likely never realize the benefit of copy-on-write. 
+
+ Even if someone did manage to hack a shared-memory solution in Python, trying to coordinate garbage collection across processes would probably be pretty painful. 
+ #4 Not directly related to multiprocessing per se, but from your example, it would seem you could just use the shelve module or something like that. Does the "big_lookup_object" really have to be completely in memory? 
+ #5 Different processes have different address space. Like running different instances of the interpreter. That's what IPC (interprocess communication) is for. 
+
+ You can use either queues or pipes for this purpose. You can also use rpc over tcp if you want to distribute the processes over a network later. 
+
+ http://docs.python.org/dev/library/multiprocessing.html#exchanging-objects-between-processes

@@ -1,0 +1,173 @@
+<h3>Question (ID-653496):</h3><h2>How can I cluster a graph in Python?</h2><p>Let G be a graph. So G is a set of nodes and set of links. I need to find a fast way to partition the graph. The graph I am now working has only 120*160 nodes, but I might soon be working on an equivalent problem, in another context (not medicine, but website development), with millions of nodes. </p>
+
+<p>So, what I did was to store all the links into a graph matrix:</p>
+
+<pre><code>M=numpy.mat(numpy.zeros((len(data.keys()),len(data.keys()))))
+</code></pre>
+
+<p>Now M holds a 1 in position s,t, if node s is connected to node t. I make sure M is symmetrical M[s,t]=M[t,s] and each node links to itself M[s,s]=1.</p>
+
+<p>If I remember well if I multiply M with M, the results is a matrix that represents the graph that connects vertexes that are reached on through two steps.</p>
+
+<p>So I keep on multplying M with itself, until the number of zeros in the matrix do not decrease any longer. Now I have the list of the connected components. 
+And now I need to cluster this matrix.</p>
+
+<p>Up to now I am pretty satisfied with the algorithm. I think it is easy, elegant, and reasonably fast. I am having trouble with this part.</p>
+
+<p>Essentially I need to split this graph into its connected components.</p>
+
+<p>I can go through all the nodes, and see what are they connected to.</p>
+
+<p>But what about sorting the matrix reordering the lines. But I don't know if it is possible to do it.</p>
+
+<p>What follows is the code so far:</p>
+
+<pre><code>def findzeros(M):
+    nZeros=0
+    for t in M.flat:
+        if not t:
+            nZeros+=1
+    return nZeros
+
+M=numpy.mat(numpy.zeros((len(data.keys()),len(data.keys()))))    
+for s in data.keys():
+    MatrixCells[s,s]=1
+    for t in data.keys():
+        if t&lt;s:
+            if (scipy.corrcoef(data[t],data[s])[0,1])&gt;threashold:
+                M[s,t]=1
+                M[t,s]=1
+
+nZeros=findzeros(M)
+M2=M*M
+nZeros2=findzeros(M2)
+
+while (nZeros-nZeros2):
+    nZeros=nZeros2
+    M=M2
+    M2=M*M
+    nZeros2=findzeros(M2)
+</code></pre>
+
+<p><hr /></p>
+
+<h3>Edit:</h3>
+
+<p>It has been suggested that I use SVD decomposition. Here is a simple example of the problem on a 5x5 graph. We shall use this since with the 19200x19200 square matrix is not that easy to see the clusters.</p>
+
+<pre><code>import numpy
+import scipy
+
+M=numpy.mat(numpy.zeros((5,5)))
+
+M[1,3]=1
+M[3,1]=1
+M[1,1]=1
+M[2,2]=1
+M[3,3]=1
+M[4,4]=1
+M[0,0]=1
+
+print M
+
+u,s,vh = numpy.linalg.linalg.svd(M)
+print u
+print s
+print vh
+</code></pre>
+
+<p>Essentially there are 4 clusters here: (0),(1,3),(2),(4)
+But I still don't see how the svn can help in this context.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>In SciPy you can use <a href="http://docs.scipy.org/doc/scipy/reference/sparse.html" rel="nofollow">sparse matrices</a>. Also note, that there are more efficient ways of multiplying matrix by itself. Anyway, what you're trying to do can by done by SVD decomposition. </p>
+
+<p><a href="http://expertvoices.nsdl.org/cornell-cs322/2008/04/06/svd-and-graph-partitioning-can-life-get-more-exciting-than-this/" rel="nofollow">Introduction with useful links</a>. </p>
+<br /><b>#1</b><br /><p>Why not use a real graph library, like <a href="http://code.google.com/p/python-graph/" rel="nofollow">Python-Graph</a>? It has a <a href="http://www.linux.ime.usp.br/~matiello/python-graph/docs/graph.algorithms.accessibility-module.html#connected%5Fcomponents" rel="nofollow">function to determine connected components</a> (though no example is provided). I'd imagine a dedicated library is going to be faster than whatever ad-hoc graph code you've cooked up.</p>
+
+<p>EDIT: <a href="http://networkx.lanl.gov/index.html" rel="nofollow">NetworkX</a> seems like it might be a better choice than python-graph; its <a href="http://networkx.lanl.gov/reference/generated/networkx.connected%5Fcomponents.html#networkx.connected%5Fcomponents" rel="nofollow">documentation (here for the connected components function)</a> certainly is.</p>
+<br /><b>#2</b><br /><p>Looks like there is a library <a href="http://mathema.tician.de/software/pymetis" rel="nofollow">PyMetis</a>, which will partition your graph for you, given a list of links. It should be fairly easy to extract the list of links from your graph by passing it your original list of linked nodes (not the matrix-multiply-derived one).</p>
+
+<p>Repeatedly performing M' = MM will not be efficient for large orders of M. A full matrix-multiply for matrices of order N will cost N multiplications and N-1 additions per element, of which there are N<sup>2</sup>, that is O(N<sup>3</sup>) operations. If you are scaling that to "millions of nodes", that would be O(10<sup>18</sup>) operations per matrix-matrix multiplication, of which you want to do several. </p>
+
+<p>In short, you don't want to do it this way. The <a href="http://stackoverflow.com/questions/653496/clustering-a-graph-in-python/653539#653539">SVD suggestion</a> from Vartec would be the only appropriate choice there. Your best option is just to use PyMetis, and not try to reinvent graph-partitioning. </p>
+<br /><b>#3</b><br /><p>Here's some naive implementation, which finds the connected components using <a href="http://en.wikipedia.org/wiki/Depth%5Ffirst%5Fsearch" rel="nofollow">depth first search</a>, i wrote some time ago. Although it's very simple, it scales well to ten thousands of vertices and edges...</p>
+
+<pre><code>
+import sys
+from operator import gt, lt
+
+class Graph(object):
+    def __init__(self):
+        self.nodes = set()
+        self.edges = {}
+        self.cluster_lookup = {}
+        self.no_link = {}
+
+    def add_edge(self, n1, n2, w):
+        self.nodes.add(n1)
+        self.nodes.add(n2)
+        self.edges.setdefault(n1, {}).update({n2: w})
+        self.edges.setdefault(n2, {}).update({n1: w})
+
+    def connected_components(self, threshold=0.9, op=lt):
+        nodes = set(self.nodes)
+        components, visited = [], set()
+        while len(nodes) > 0:
+            connected, visited = self.dfs(nodes.pop(), visited, threshold, op)
+            connected = set(connected)
+            for node in connected:
+                if node in nodes:
+                    nodes.remove(node)
+
+            subgraph = Graph()
+            subgraph.nodes = connected
+            subgraph.no_link = self.no_link
+            for s in subgraph.nodes:
+                for k, v in self.edges.get(s, {}).iteritems():
+                    if k in subgraph.nodes:
+                        subgraph.edges.setdefault(s, {}).update({k: v})
+                if s in self.cluster_lookup:
+                    subgraph.cluster_lookup[s] = self.cluster_lookup[s]
+
+            components.append(subgraph)
+        return components
+
+    def dfs(self, v, visited, threshold, op=lt, first=None):
+        aux = [v]
+        visited.add(v)
+        if first is None:
+            first = v
+        for i in (n for n, w in self.edges.get(v, {}).iteritems()
+                  if op(w, threshold) and n not in visited):
+            x, y = self.dfs(i, visited, threshold, op, first)
+            aux.extend(x)
+            visited = visited.union(y)
+        return aux, visited
+
+def main(args):
+    graph = Graph()
+    # first component
+    graph.add_edge(0, 1, 1.0)
+    graph.add_edge(1, 2, 1.0)
+    graph.add_edge(2, 0, 1.0)
+
+    # second component
+    graph.add_edge(3, 4, 1.0)
+    graph.add_edge(4, 5, 1.0)
+    graph.add_edge(5, 3, 1.0)
+
+    first, second = graph.connected_components(op=gt)
+    print first.nodes
+    print second.nodes
+
+if __name__ == '__main__':
+    main(sys.argv)
+</code></pre>
+<br /><b>#4</b><br /><p>As others have pointed out, no need to reinvent the wheel. A lot of thought has been put into optimal clustering techniques. <a href="http://www.micans.org/mcl/" rel="nofollow">Here</a> is one well-known clustering program.</p>
+<br /><b>#5</b><br /><p>The SVD algorithm is not applicable here, but otherwise Phil H is correct. </p>
+<br /><b>#6</b><br /><p>Finding an optimal graph partition is an NP-hard problem, so whatever the algorithm, it is going to be a heuristic. Not surprisingly, different clustering algorithms produce (wildly) different results. </p>
+
+<p>Python implementation of Newman's modularity algorithm:
+<a href="http://perso.crans.org/aynaud/communities/index.html" rel="nofollow">modularity</a></p>
+
+<p>Also: <a href="http://www.micans.org/mcl/" rel="nofollow">MCL</a>, <a href="http://baderlab.org/Software/MCODE" rel="nofollow">MCODE</a>, <a href="http://www.cfinder.org/" rel="nofollow">CFinder</a>, <a href="http://chianti.ucsd.edu/cyto_web/plugins/displayplugininfo.php?name=NeMo" rel="nofollow">NeMo</a>, <a href="http://www.paccanarolab.org/software/cluster-one/index.html" rel="nofollow">clusterONE</a></p>
+<br />

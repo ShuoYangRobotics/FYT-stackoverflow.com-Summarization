@@ -1,0 +1,151 @@
+<h3>Question ( ID-3106480 ) : </h3><h2>Really <span style="background-color:yellow;">simple</span> way to deal with XML in Python ? </h2><p>Musing over a recently asked question , I <span style="background-color:yellow;">started</span> to wonder if there is a really <span style="background-color:yellow;">simple</span> way to deal with XML documents in Python. A pythonic way , if you will . </p>
+<p>Perhaps I can explain best if i give example : let 's <span style="background-color:yellow;">say</span> the following - which i think is a good example of how XML is ( mis ) used in web <span style="background-color:yellow;">services</span> - is the <span style="background-color:yellow;">response</span> i get from http request to http : //www.google.com/ig/api ? weather = 94043 </p>
+<pre><code><xml_api_reply version="1">
+  <weather module_id="0" tab_id="0" mobile_row="0" mobile_zipped="1" row="0" section="0" >
+    <forecast_information>
+      <city data="Mountain View, CA"/>
+      <postal_code data="94043"/>
+      <latitude_e6 data=""/>
+      <longitude_e6 data=""/>
+      <forecast_date data="2010-06-23"/>
+      <current_date_time data="2010-06-24 00:02:54 +0000"/>
+      <unit_system data="US"/>
+    </forecast_information>
+    <current_conditions>
+      <condition data="Sunny"/>
+      <temp_f data="68"/>
+      <temp_c data="20"/>
+      <humidity data="Humidity: 61%"/>
+      <icon data="/ig/images/weather/sunny.gif"/>
+      <wind_condition data="Wind: NW at 19 mph"/>
+    </current_conditions>
+    ...
+    <forecast_conditions>
+      <day_of_week data="Sat"/>
+      <low data="59"/>
+      <high data="75"/>
+      <icon data="/ig/images/weather/partly_cloudy.gif"/>
+      <condition data="Partly Cloudy"/>
+    </forecast_conditions>
+  </weather>
+</xml_api_reply>
+</code></pre>
+<p>After loading/parsing <span style="background-color:yellow;">such</span> document , i would like to be able to access the information as <span style="background-color:yellow;">simple</span> as <span style="background-color:yellow;">say</span> </p>
+<pre><code>>>> xml['xml_api_reply']['weather']['forecast_information']['city'].data
+'Mountain View, CA'
+</code></pre>
+<p>or </p>
+<pre><code>>>> xml.xml_api_reply.weather.current_conditions.temp_f['data']
+'68'
+</code></pre>
+<p>From what I <span style="background-color:yellow;">saw</span> <span style="background-color:yellow;">so</span> far , <span style="background-color:yellow;">seems</span> that ElementTree is the closest to what I dream of. But it 's not there , there is <span style="background-color:yellow;">still</span> <span style="background-color:yellow;">some</span> fumbling to do when consuming XML. OTOH , what I am thinking is not that complicated - probably just thin veneer on top of a parser - and yet it can decrease annoyance of dealing with XML. Is there <span style="background-color:yellow;">such</span> a magic ? ( And if not - why ? ) </p>
+<p>PS. Note I have tried BeautifulSoup already and while I like its approach , it has real issues with empty &lt ; element/&gt ; <span style="background-color:yellow;">s</span> - <span style="background-color:yellow;">see</span> below in comments for examples . </p>
+<br /><h3>Answers ( Total-9 ) : </h3><b># 0 </b><br /><p><span style="background-color:yellow;">lxml</span> has been mentioned. You might also check out <span style="background-color:yellow;">lxml.objectify</span> for <span style="background-color:yellow;">some</span> really <span style="background-color:yellow;">simple</span> manipulation . </p>
+<pre><code>>>> from lxml import objectify
+>>> tree = objectify.fromstring(your_xml)
+>>> tree.weather.attrib["module_id"]
+'0'
+>>> tree.weather.forecast_information.city.attrib["data"]
+'Mountain View, CA'
+>>> tree.weather.forecast_information.postal_code.attrib["data"]
+'94043'
+</code></pre>
+<br /><b># 1 </b><br /><p>You want a thin veneer ? That 's easy to cook up. Try the following trivial wrapper around ElementTree as a <span style="background-color:yellow;">start</span> : </p>
+<pre><code># geetree.py
+import xml.etree.ElementTree as ET
+
+class GeeElem(object):
+    """Wrapper around an ElementTree element. a['foo'] gets the
+       attribute foo, a.foo gets the first subelement foo."""
+    def __init__(self, elem):
+        self.etElem = elem
+
+    def __getitem__(self, name):
+        res = self._getattr(name)
+        if res is None:
+            raise AttributeError, "No attribute named '%s'" % name
+        return res
+
+    def __getattr__(self, name):
+        res = self._getelem(name)
+        if res is None:
+            raise IndexError, "No element named '%s'" % name
+        return res
+
+    def _getelem(self, name):
+        res = self.etElem.find(name)
+        if res is None:
+            return None
+        return GeeElem(res)
+
+    def _getattr(self, name):
+        return self.etElem.get(name)
+
+class GeeTree(object):
+    "Wrapper around an ElementTree."
+    def __init__(self, fname):
+        self.doc = ET.parse(fname)
+
+    def __getattr__(self, name):
+        if self.doc.getroot().tag != name:
+            raise IndexError, "No element named '%s'" % name
+        return GeeElem(self.doc.getroot())
+
+    def getroot(self):
+        return self.doc.getroot()
+</code></pre>
+<p>You invoke it <span style="background-color:yellow;">so</span> : </p>
+<pre><code>>>> import geetree
+>>> t = geetree.GeeTree('foo.xml')
+>>> t.xml_api_reply.weather.forecast_information.city['data']
+'Mountain View, CA'
+>>> t.xml_api_reply.weather.current_conditions.temp_f['data']
+'68'
+</code></pre>
+<br /><b># 2 </b><br /><p>Take a look at Amara 2 , particularly the Bindery part of this tutorial . </p>
+<p>It works in a way pretty <span style="background-color:yellow;">similar</span> to what you describe . </p>
+<p>On the other hand. ElementTree 's find * ( ) methods can give you 90 % of that and are packaged with Python . </p>
+<br /><b># 3 </b><br /><p>I highly recommend <span style="background-color:yellow;">lxml.etree</span> and xpath to parse and analyse your data. Here is a complete example. I have truncated the <span style="background-color:yellow;">xml</span> to make it easier to read . </p>
+<pre><code>import lxml.etree
+
+s = """<?xml version="1.0" encoding="utf-8"?>
+<xml_api_reply version="1">
+  <weather module_id="0" tab_id="0" mobile_row="0" mobile_zipped="1" row="0" section="0" >
+    <forecast_information>
+      <city data="Mountain View, CA"/> <forecast_date data="2010-06-23"/>
+    </forecast_information>
+    <forecast_conditions>
+      <day_of_week data="Sat"/>
+      <low data="59"/>
+      <high data="75"/>
+      <icon data="/ig/images/weather/partly_cloudy.gif"/>
+      <condition data="Partly Cloudy"/>
+    </forecast_conditions>
+  </weather>
+</xml_api_reply>"""
+
+tree = lxml.etree.fromstring(s)
+for weather in tree.xpath('/xml_api_reply/weather'):
+    print weather.find('forecast_information/city/@data')[0]
+    print weather.find('forecast_information/forecast_date/@data')[0]
+    print weather.find('forecast_conditions/low/@data')[0]
+    print weather.find('forecast_conditions/high/@data')[0]
+</code></pre>
+<br /><b># 4 </b><br /><p>If you do n't mind using a 3rd party library , then BeautifulSoup will do almost exactly what you ask for : </p>
+<pre><code>>>> from BeautifulSoup import BeautifulStoneSoup
+>>> soup = BeautifulStoneSoup('''<snip>''')
+>>> soup.xml_api_reply.weather.current_conditions.temp_f['data']
+u'68'
+</code></pre>
+<br /><b># 5 </b><br /><p>I believe that the built in python <span style="background-color:yellow;">xml</span> module will do the trick. Look at " <span style="background-color:yellow;">xml.parsers.expat</span> " </p>
+<p><span style="background-color:yellow;">xml.parsers.expat</span> </p>
+<br /><b># 6 </b><br /><p>The <span style="background-color:yellow;">suds</span> project provides a Web Services client library that works almost exactly as you describe -- provide it a wsdl and then use factory methods to create the defined types ( and process the <span style="background-color:yellow;">responses</span> too ! ) . </p>
+<br /><b># 7 </b><br /><p>I found the following python-simplexml module , which in the attempts of the author to get <span style="background-color:yellow;">something</span> close to SimpleXML from PHP is indeed a <span style="background-color:yellow;">small</span> wrapper around ElementTree . It 's under 100 lines but <span style="background-color:yellow;">seems</span> to do what was requested : </p>
+<pre><code>>>> import SimpleXml
+>>> x = SimpleXml.parse(urllib.urlopen('http://www.google.com/ig/api?weather=94043'))
+>>> print x.weather.current_conditions.temp_f['data']
+58
+</code></pre>
+<br /><b># 8 </b><br /><p>If you have n't already , I 'd <span style="background-color:yellow;">suggest</span> looking into the DOM API for Python . DOM is a pretty widely used XML interpretation <span style="background-color:yellow;">system</span> , <span style="background-color:yellow;">so</span> it <span style="background-color:yellow;">should</span> be pretty robust . </p>
+<p>It 's probably a little more complicated than what you describe , but that comes from its attempts to preserve all the information implicit in XML markup rather than from bad design . </p>
+<br />

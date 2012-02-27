@@ -1,0 +1,145 @@
+<h3>Question (ID-2741507):</h3><h2>A simple Python deployment problem - a whole world of pain</h2><p>We have several Python 2.6 applications running on Linux. Some of them are Pylons web applications, others are simply long-running processes that we run from the command line using <code>nohup</code>. We're also using <code>virtualenv</code>, both in development and in production. <strong>What is the best way to deploy these applications to a production server?</strong></p>
+
+<p>In development we simply get the source tree into any directory, set up a virtualenv and run - easy enough. We could do the same in production and perhaps that really is the most practical solution, but it just feels a bit wrong to run <code>svn update</code> in production. We've also tried <code>fab</code>, but it just never works first time. For every application something else goes wrong. It strikes me that the whole process is <strong>just too hard</strong>, given that what we're trying to achieve is fundamentally very simple. Here's what we want from a deployment process.</p>
+
+<ol>
+<li>We should be able to run <strong>one simple command</strong> to deploy an updated version of an application. (If the initial deployment involves a bit of extra complexity that's fine.)</li>
+<li>When we run this command it should copy certain files, either out of a Subversion repository or out of a local working copy, to a specified "environment" on the server, which probably means a different virtualenv. We have both staging and production version of the applications on the same server, so they need to somehow be kept separate. If it installs into site-packages, that's fine too, as long as it works.</li>
+<li>We have some configuration files on the server that should be preserved (ie. not overwritten or deleted by the deployment process).</li>
+<li>Some of these applications <strong>import modules from other applications</strong>, so they need to be able to reference each other as packages somehow. This is the part we've had the most trouble with! I don't care whether it works via relative imports, site-packages or whatever, as long as it works reliably in both development and production.</li>
+<li>Ideally the deployment process should automatically install external packages that our applications depend on (eg. psycopg2).</li>
+</ol>
+
+<p>That's really it! How hard can it be?</p>
+<br /><h3>Answers (Total-8):</h3><b>#0</b><br /><p>Development and deployment of Python code is made much easier by <a href="http://peak.telecommunity.com/DevCenter/setuptools" rel="nofollow">setuptools</a> in combination with <a href="http://pypi.python.org/pypi/virtualenv" rel="nofollow">virtualenv</a> and <a href="http://pypi.python.org/pypi/pip" rel="nofollow">pip</a>.</p>
+
+<h2>Core ideas</h2>
+
+<p>The trickiest part, I've found, is running a development environment that mirrors the deployed setup as closely as possible, while at the same time respecting Pythonic tools and idioms. But it turns out that this is very easy to achieve with pip and setuptools, which together allow you to "install" a development tree into a Python environment without moving the files around. (Actually setuptools does this all by itself, but pip acts as a front end handle dependencies better.)</p>
+
+<p>Another key issue is preparing a clean environment with a known package set across both environments. Python's virtualenv is a god-send in this respect, allowing you to configure a completely customised Python environment with your own choice of packages, without requiring root access, or OS packages (rpm or dpkg), and without being constrained by whatever packages and versions thereof that happen to be installed on your distro.</p>
+
+<p>Finally, one annoying bug-bear is the difficulty of creating command-line scripts that play nice with PYTHON_PATH. This is also dealt with quite elegantly by setuptools.</p>
+
+<h2>Setting up</h2>
+
+<p>(To keep things simple, this is fairly prescriptive. Feel free to diverge as appropriate.)</p>
+
+<ol>
+<li>Prepare a working directory that your Python stuff can call home.</li>
+<li>Grab the latest virtualenv from the bottom of <a href="http://pypi.python.org/pypi/virtualenv" rel="nofollow">this page</a> and untar it (doesn't matter where).</li>
+<li><p>From the working directory, setup a new Python virtual environment:</p>
+
+<pre><code>$ python &lt;untarred_directory&gt;/virtualenv.py venv
+</code></pre></li>
+<li><p>You'll want to do most of your work from inside this virtual environment. Use this command to do so (<code>.</code> is a shortcut for <code>source</code>):</p>
+
+<pre><code>$ . venv/bin/activate
+</code></pre></li>
+<li><p>Install pip:</p>
+
+<pre><code>$ easy_install pip
+</code></pre></li>
+<li><p>Create directories for each installable package you want to create.</p></li>
+<li>In each directory, you'll need a setup.py that defines the content and structure of the package. The setuptools <a href="http://peak.telecommunity.com/DevCenter/setuptools" rel="nofollow">documentation</a> is a very good resource for getting started on this. It's worth taking the time absorb large chunks of it.</li>
+</ol>
+
+<h2>Development</h2>
+
+<p>Once your tree structure is ready, you are almost ready to begin coding. But right now, packages that depend on each other can't see each other as they will in the deployed environment. This problem is resolved with a neat little trick that setuptools offers, and which pip makes use of. For each package you are developing, run the following command (make sure you are in the virtual environment for your project, as per step 3, above):</p>
+
+<pre><code>$ pip install -e pkg1
+</code></pre>
+
+<p>This command will install <code>pkg1</code> into your virtual environment, and it does so without copying any of your files. It simply adds a link to the <code>site-packages</code> directory pointing to the package's development root and creates an egg-info directory in that root. You can also do this without pip, as follows:</p>
+
+<pre><code>$ cd pkg1
+$ python setup.py develop
+</code></pre>
+
+<p>And it will usually work, but if you have third-party dependencies (which should be listed in setup.py, as explained <a href="http://peak.telecommunity.com/DevCenter/setuptools#declaring-dependencies" rel="nofollow">here</a> in the setuptools documentation), pip is smarter about finding them.</p>
+
+<p>One caveat to note is that neither setuptools nor pip have any smarts about finding dependencies amongst your own packages. If PkgB in directory B, depends on PkgA in directory A, then <code>pip install -e B</code> will fail, because pip has no way of knowing that PkgA can be found in directory A; it will instead try, and fail, to download PkgA from its online repository sources. The workaround is simply to install each package after its dependencies.</p>
+
+<p>At this point, you can start python, load up one of your modules and start toying with it. You can edit code, and it will be immediately available the next time you import it.</p>
+
+<p>Finally, if you want to create command-line tools with your packages. Don't write them by hand. You'll end up with a horrible mess of PYTHON_PATH hacks that never quite works properly. Just read up on <a href="http://peak.telecommunity.com/DevCenter/setuptools#automatic-script-creation" rel="nofollow">automatic script creation</a> in the setuptools documentation. This will spare you a lot of grief.</p>
+
+<h2>Deployment</h2>
+
+<p>When your packages are ready for action, you can use setup.py to create deployment packages. There are way too many options to go into here, but the following should get you started:</p>
+
+<pre><code>$ cd pkg1
+$ python setup.py --help
+$ python setup.py --help-commands
+</code></pre>
+
+<h2>Loose ends</h2>
+
+<p>Due to the broad nature of the question, this answer is necessarily incomplete. I haven't dealt with long-running servers, web frameworks or the actual deployment process itself (in particular, use of pip install's <code>--index-url</code> to manage a private repository of third-party and internal packages and <code>-e vcs+...</code>, which will pull packages out of svn, git, hg or bzr). But I hope I've given you enough rope to tie it all together (just don't hang yourself with it :-).</p>
+<br /><b>#1</b><br /><p>I've been working on implementing this for our work projects. It's a few different parts involved. </p>
+
+<p>First, we customize virtualenv.py using their bootstrap abilities to add in your own custom post-creation functions and flags. These allow us to define common types of projects and also gives us a single command to create a new virtualenv, checkout a project from the git repository, and install any requirements into the virtualenv using pip and requirements.txt 
+files. </p>
+
+<p>so our commands look like:
+python venv.py --no-site-packages -g $git_proj -t $tag_num $venv_dir</p>
+
+<p><a href="http://pypi.python.org/pypi/virtualenv" rel="nofollow">http://pypi.python.org/pypi/virtualenv</a>
+http://pip.openplans.org/</p>
+
+<p>Now that gets us through the initial checking out of an existing project. As we work and update the project we use fabric commands within each project to build releases and then to deploy them:</p>
+
+<p><a href="http://docs.fabfile.org/0.9.0/" rel="nofollow">http://docs.fabfile.org/0.9.0/</a></p>
+
+<p>I've got a fab command: make_tag which checks for unused commits, opens files that need version strings updated, builds and uploads sphinx docs, and then commits the final tag to the repository. </p>
+
+<p>The flip side is a fab deploy command which will, over ssh, do a git co of the tag specified, run a pip update on any new requirements, run any database migrations needed, and then resets the web server if this is a web application. </p>
+
+<p>Here's an example of the tagging function:
+<a href="http://www.google.com/codesearch/p?hl=en#9tLIXCbI4vU/fabfile.py&amp;q=fabfile.py%20git%20tag_new_version&amp;sa=N&amp;cd=1&amp;ct=rc&amp;l=143" rel="nofollow">http://www.google.com/codesearch/p?hl=en#9tLIXCbI4vU/fabfile.py&amp;q=fabfile.py%20git%20tag_new_version&amp;sa=N&amp;cd=1&amp;ct=rc&amp;l=143</a></p>
+
+<p>There are a ton of good fabric files you can browse through using the google code search. I know I cheat-sheeted a few for my own use. </p>
+
+<p>It's definitely complicated and has several parts in order to get things running smooth. Once you get it running though, the flexibility and speed for things is just awesome.</p>
+<br /><b>#2</b><br /><p>This is really not hard. You need to play mostly with <a href="http://pypi.python.org/pypi/zc.buildout" rel="nofollow">buildout</a> and <a href="http://supervisord.org/using.html#introduction" rel="nofollow">supervisord</a> IMO.</p>
+
+<p>While learning buildout may take a little time but it's woth it, given amount of pain it reduces in repeated setups.</p>
+
+<p><strong>About nohup:</strong> nohup approach does not suit serious deployments. I have very good experience of supervisord. It provides excellent solution for running production python applications. It is very easy to setup.</p>
+
+<p>Some specific answers below.</p>
+
+<ol>
+<li>single command to deploy: Buildout is the answer. We are using it since a couple of years with not much of problems</li>
+<li>Usually it's like you checkout the source. Then run buildout. Further it may not be a good idea to let the setup copy into site-packages. Better keep environments separate.</li>
+<li>Configs would not be overwritten.</li>
+<li>You may/should consider building egg(s) for the common packages. Like you may build the egg for a package (say commonlib) and upload it on your code repository. Then you can specify this as a dependency in your buildout.cfg</li>
+<li>Buildout is capable of building most essential packages completely separate from central/top level install. However in my experience the python packages with c extension if installed as OS packages, it's much easier.</li>
+</ol>
+<br /><b>#3</b><br /><p>Have a look at <A href="http://www.buildout.org" rel="nofollow">Buildout</a> for reproducible deployments.</p>
+<br /><b>#4</b><br /><p>Another vote for fabric (haven't tried Buildout yet). We've been using it successfully for a couple of months now.</p>
+
+<p>If you're having trouble with fabric, another option is <a href="http://www.capify.org/index.php/Capistrano" rel="nofollow">Capistrano</a>. Works great (even for non-rails apps). Only stopped using it because it feels weird to use Ruby to deploy Python apps ;)  </p>
+<br /><b>#5</b><br /><p>I would use rsync to synchronize outwards from your production "prime" server to the others, and from your "beta test" platform, to your production "prime" server.</p>
+
+<p>rsync has the benefit of copying only those files which changed, and copying only parts of files that changed partially, and verifying the integrity and identical content at the end on all machines.  An update that gets part way through and is interrupted can easily be continued later, making your deployment more robust.</p>
+
+<p>Subversion or Mercurial would not be a bad idea in this case either.   Mercurial has the 
+advantage of allowing you to "pull" or "push" instead of just updating from one central source.  You might find interesting cases where a decentralized model (mercurial) works better.</p>
+<br /><b>#6</b><br /><p>if you are a buildout person, then you should know about <a href="http://pypi.python.org/pypi/minitage.recipe.scripts/1.53#generating-an-envrionment-file" rel="nofollow">minitage.recipe.scripts</a> ability to generate a file to set your python environment.  Source to your web server and your buildout is completely portable.  </p>
+<br /><b>#7</b><br /><p>It sounds like what you want is a build script.  So write one, using shell, python, ant, or your favorite build tool.  If you don't like writing in XML, <a href="http://myarch.com/pant" rel="nofollow">pant</a> allows you to write ant scripts in python.  Several people have mentioned <a href="http://www.buildout.org/" rel="nofollow">buildout</a> but I don't have any experience with it.</p>
+
+<p>First define your steps.  It sounds like you want to:</p>
+
+<ol>
+<li>SVN export from your production tag (you don't want to have a working copy in prod)</li>
+<li>set virtualenv </li>
+<li>easy_install or pip install required packages (or probably use pre-downloaded &amp; tested versions)</li>
+<li>copy production configuration files to your target (it's not a good idea to keep this information in your source repo -- though you could have them versioned separately)</li>
+<li>restart your server  &amp; do any other setup task</li>
+<li>run smoke tests and rollback on failure</li>
+</ol>
+
+<p>If you're doing load balancing or depending on other services production you might want to figure out a way to roll out limited scope so all your customers aren't affected at once.  If you have a production-like staging environment that might also satisfy that need.</p>
+<br />

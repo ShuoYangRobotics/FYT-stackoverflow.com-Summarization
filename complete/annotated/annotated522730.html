@@ -1,0 +1,134 @@
+<h3>Question ( ID-522730 ) : </h3><h2>How can I strip Python <span style="background-color:yellow;">logging</span> calls without commenting them out ? </h2><p>Today I was thinking about a Python project I wrote about a year back where I used <span style="background-color:yellow;">logging</span> pretty extensively. I remember having to comment out a lot of <span style="background-color:yellow;">logging</span> calls in inner-loop-like scenarios ( the 90 % code ) because of the overhead ( hotshot indicated it was one of my biggest bottlenecks ) . </p>
+<p>I wonder now if there 's some canonical way to programmatically strip out <span style="background-color:yellow;">logging</span> calls in Python applications without commenting and uncommenting all the time. I 'd think you could use inspection/recompilation or bytecode manipulation to do something like this and target only the code <span style="background-color:yellow;">objects</span> that are causing bottlenecks . This way , you could add a manipulator as a post-compilation step and use a centralized configuration file , like so : </p>
+<pre><code>[Leave ERROR and above]
+my_module.SomeClass.method_with_lots_of_warn_calls
+
+[Leave WARN and above]
+my_module.SomeOtherClass.method_with_lots_of_info_calls
+
+[Leave INFO and above]
+my_module.SomeWeirdClass.method_with_lots_of_debug_calls
+</code></pre>
+<p>Of course , you 'd want to use it sparingly and probably with per-function granularity -- only for code <span style="background-color:yellow;">objects</span> that have shown <span style="background-color:yellow;">logging</span> to be a bottleneck. Anybody know of anything like this ? </p>
+<p>Note : There are a few things that make this more difficult to do in a performant manner because of dynamic typing and late binding. For example , any calls to a method named <span style="background-color:yellow;">debug</span> may have to be wrapped with an if not isinstance ( log , Logger ) . In any case , I 'm assuming all of the minor details can be overcome , either by a gentleman 's agreement or some run-time checking. : - ) </p>
+<br /><h3>Answers ( Total-9 ) : </h3><b># 0 </b><br /><p>What about using <span style="background-color:yellow;">logging.disable</span> ? </p>
+<p>I 've also found I had to use <span style="background-color:yellow;">logging.isEnabledFor</span> if the <span style="background-color:yellow;">logging</span> message is expensive to create . </p>
+<br /><b># 1 </b><br /><p>As an imperfect shortcut , how about mocking out <span style="background-color:yellow;">logging</span> in specific modules using something like MiniMock ? </p>
+<p>For example , if <span style="background-color:yellow;">my_module.py</span> was : </p>
+<pre><code>import logging
+class C(object):
+    def __init__(self, *args, **kw):
+        logging.info("Instantiating")
+</code></pre>
+<p>You would replace your use of <span style="background-color:yellow;">my_module</span> with : </p>
+<pre><code>from minimock import Mock
+import my_module
+my_module.logging = Mock('logging')
+c = my_module.C()
+</code></pre>
+<p>You 'd only have to do this once , before the initial import of the module . </p>
+<p>Getting the level specific behaviour would be simple enough by mocking specific methods , or having <span style="background-color:yellow;">logging.getLogger</span> return a mock <span style="background-color:yellow;">object</span> with some methods impotent and others delegating to the real <span style="background-color:yellow;">logging</span> module . </p>
+<p>In practice , you 'd probably want to replace MiniMock with something simpler and faster ; at the very least something which does n't print usage to stdout ! Of course , this does n't handle the problem of module A importing <span style="background-color:yellow;">logging</span> from module B ( and hence A also importing the log granularity of B ) .. . </p>
+<p>This will never be as fast as not running the log statements at all , but should be much faster than going all the way into the depths of the <span style="background-color:yellow;">logging</span> module only to discover this record should n't be logged after all . </p>
+<br /><b># 2 </b><br /><p>You could try something like this : </p>
+<pre><code># Create something that accepts anything
+class Fake(object):
+    def __getattr__(self, key):
+        return self
+    def __call__(self, *args, **kwargs):
+        return True
+
+# Replace the logging module
+import sys
+sys.modules["logging"] = Fake()
+</code></pre>
+<p>It essentially replaces ( or initially fills in ) the space for the <span style="background-color:yellow;">logging</span> module with an instance of <span style="background-color:yellow;">Fake</span> which simply takes in anything. You must run the above code ( just once ! ) before the <span style="background-color:yellow;">logging</span> module is attempted to be used anywhere. Here is a test : </p>
+<pre><code>import logging
+
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s %(levelname)-8s %(message)s',
+                    datefmt='%a, %d %b %Y %H:%M:%S',
+                    filename='/temp/myapp.log',
+                    filemode='w')
+logging.debug('A debug message')
+logging.info('Some information')
+logging.warning('A shot across the bows')
+</code></pre>
+<p>With the above , nothing at all was logged , as was to be expected . </p>
+<br /><b># 3 </b><br /><p>I 'd use some fancy <span style="background-color:yellow;">logging</span> decorator , or a bunch of them : </p>
+<pre><code>def doLogging(logTreshold):
+    def logFunction(aFunc):
+        def innerFunc(*args, **kwargs):
+            if LOGLEVEL >= logTreshold:
+                print ">>Called %s at %s"%(aFunc.__name__, time.strftime("%H:%M:%S"))
+                print ">>Parameters: ", args, kwargs if kwargs else "" 
+            try:
+                return aFunc(*args, **kwargs)
+            finally:
+                print ">>%s took %s"%(aFunc.__name__, time.strftime("%H:%M:%S"))
+        return innerFunc
+    return logFunction
+</code></pre>
+<p>All you need is to declare LOGLEVEL constant in each module ( or just globally and just import it in all modules ) and then you can use it like this : </p>
+<pre><code>@doLogging(2.5)
+def myPreciousFunction(one, two, three=4):
+    print "I'm doing some fancy computations :-)"
+    return
+</code></pre>
+<p>And if LOGLEVEL is no less than 2.5 you 'll get output like this : </p>
+<pre><code>>>Called myPreciousFunction at 18:49:13
+>>Parameters:  (1, 2) 
+I'm doing some fancy computations :-)
+>>myPreciousFunction took 18:49:13
+</code></pre>
+<p>As you can see , some work is needed for better handling of kwargs , so the default values will be printed if they are present , but that 's another question . </p>
+<p>You should probably use some logger module instead of raw print statements , but I wanted to focus on the decorator idea and avoid making code too long . </p>
+<p>Anyway - with such decorator you get function-level <span style="background-color:yellow;">logging</span> , arbitrarily many log levels , ease of application to new function , and to disable <span style="background-color:yellow;">logging</span> you only need to set LOGLEVEL. And you can define different output streams/files for each function if you wish. You can write <span style="background-color:yellow;">doLogging</span> as : </p>
+<pre><code> def doLogging(logThreshold, outStream=sys.stdout):
+      .....
+      print >>outStream, ">>Called %s at %s" etc.
+</code></pre>
+<p>And utilize log files defined on a per-function basis . </p>
+<br /><b># 4 </b><br /><p>This is an issue in my project as well--logging ends up on profiler reports pretty consistently . </p>
+<p>I 've used the _ast module before in a fork of PyFlakes ( http : //github.com/kevinw/pyflakes ) ... and it is definitely possible to do what you suggest in your question--to inspect and inject guards before calls to <span style="background-color:yellow;">logging</span> methods ( with your acknowledged caveat that you 'd have to do some runtime type checking ) . See http : //pyside.blogspot.com/2008/03/ast-compilation-from-python.html for a simple example . </p>
+<p>Edit : I just noticed MetaPython on my planetpython.org feed--the example use case is removing log statements at import time . </p>
+<p>Maybe the best solution would be for someone to reimplement <span style="background-color:yellow;">logging</span> as a <span style="background-color:yellow;">C</span> module , but I would n't be the first to jump at such an...opportunity : p </p>
+<br /><b># 5 </b><br /><p>I 've also seen assert used in this fashion . </p>
+<pre><code>assert logging.warn('disable me with the -O option') == None
+</code></pre>
+<p>( I 'm guessing that warn always returns none.. if not , you 'll get an AssertionError </p>
+<p>But really that 's just a funny way of doing this : </p>
+<pre><code>if __debug__: logging.warn('disable me with the -O option')
+</code></pre>
+<p>When you run a script with that line in it with the -O option , the line will be removed from the optimized .pyo code. If , instead , you had your own variable , like in the following , you will have a conditional that is always executed ( no matter what value the variable is ) , although a conditional should execute quicker than a function call : </p>
+<pre><code>my_debug = True
+...
+if my_debug: logging.warn('disable me by setting my_debug = False')
+</code></pre>
+<p>so if my understanding of <span style="background-color:yellow;">debug</span> is correct , it seems like a nice way to get rid of unnecessary <span style="background-color:yellow;">logging</span> calls. The flipside is that it also disables all of your asserts , so it is a problem if you need the asserts . </p>
+<br /><b># 6 </b><br /><p>Use <span style="background-color:yellow;">pypreprocessor</span> </p>
+<p>Which can also be found on PYPI ( Python Package Index ) and be fetched using pip . </p>
+<p>Here 's a basic usage example : </p>
+<pre><code>from pypreprocessor import pypreprocessor
+
+pypreprocessor.parse()
+
+#define nologging
+
+#ifdef nologging
+...logging code you'd usually comment out manually...
+#endif
+</code></pre>
+<p>Essentially , the preprocessor comments out code the way you were doing it manually before. It just does it on the fly conditionally depending on what you define . </p>
+<p>You can also remove all of the preprocessor directives and commented out code from the postprocessed code by adding 'pypreprocessor.removeMeta = True ' between the import and parse ( ) statements . </p>
+<p>The bytecode output ( .pyc ) file will contain the optimized output . </p>
+<p>SideNote : <span style="background-color:yellow;">pypreprocessor</span> is compatible with python2x and python3k . </p>
+<p>Disclaimer : I 'm the author of <span style="background-color:yellow;">pypreprocessor</span> . </p>
+<br /><b># 7 </b><br /><p>I like the 'if _ <span style="background-color:yellow;">debug</span> ' solution except that putting it in front of every call is a bit distracting and ugly. I had this same problem and overcame it by writing a script which automatically parses your source files and replaces <span style="background-color:yellow;">logging</span> statements with pass statements ( and commented out copies of the <span style="background-color:yellow;">logging</span> statements ) . It can also undo this conversion . </p>
+<p>I use it when I deploy new code to a production environment when there are lots of <span style="background-color:yellow;">logging</span> statements which I do n't need in a production setting and they are affecting performance . </p>
+<p>You can find the script here : http : //dound.com/2010/02/python-logging-performance/ </p>
+<br /><b># 8 </b><br /><p>: - ) We used to call that a preprocessor and although <span style="background-color:yellow;">C</span> 's preprocessor had some of those capablities , the " king of the hill " was the preprocessor for IBM mainframe PL/I. It provided extensive language support in the preprocessor ( full assignments , conditionals , looping , etc. ) and it was possible to write " programs that wrote programs " using just the PL/I PP . </p>
+<p>I wrote many applications with full-blown sophisticated program and data tracing ( we did n't have a decent <span style="background-color:yellow;">debugger</span> for a back-end process at that time ) for use in development and testing which then , when compiled with the appropriate " runtime flag " simply stripped all the tracing code out cleanly without any performance impact . </p>
+<p>I think the decorator idea is a good one. You can write a decorator to wrap the functions that need <span style="background-color:yellow;">logging.</span> Then , for runtime distribution , the decorator is turned into a " no-op " which eliminates the <span style="background-color:yellow;">debugging</span> statements . </p>
+<p>Jon R </p>
+<br />

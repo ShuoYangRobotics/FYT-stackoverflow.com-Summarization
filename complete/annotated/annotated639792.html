@@ -1,0 +1,61 @@
+<h3>Question ( ID-639792 ) : </h3><h2>Setting object owner with generic create_object view in <span style="background-color:yellow;">django</span> </h2><p>Is it possible to use create_object view to create a new object and automatically asign <span style="background-color:yellow;">request.user</span> as foreign key ? </p>
+<p>P.E : </p>
+<pre><code>class Post(models.Model):
+    text = models.TextField()
+    author = models.ForeignKey(User)
+</code></pre>
+<p>What I want is to use create_object and fill author with <span style="background-color:yellow;">request.user</span> . </p>
+<br /><h3>Answers ( Total-6 ) : </h3><b># 0 </b><br /><p>You may want to consider a closure . </p>
+<pre><code>from django.forms import ModelForm
+from django.views.generic.create_update import create_object, update_object
+
+def make_foo_form(request):
+    class FooForm(ModelForm):
+        class Meta:
+            model = Foo
+            fields = ['foo', 'bar']
+
+        def save(self, commit=True):
+            f = super(FooForm, self).save(commit=False)
+            if not f.pk: f.user = request.user
+            if commit: f.save()
+            return f
+
+    return FooForm
+
+def create_foo(request):
+    FooForm = make_foo_form(request)
+    return create_object(form_class=FooForm)
+</code></pre>
+<p>There is some inefficiency here , since you need to create the <span style="background-color:yellow;">ModelForm</span> object on each <span style="background-color:yellow;">request</span> , but it does allow you to inject functionality into the generic view . </p>
+<p>You need to decide whether the added complexity for the form creation is worth maintaining simplicity on the view side . </p>
+<p>A benefit here , though , is that this also works with the update case with practically no extra effort : </p>
+<pre><code>def update_foo(request, object_id):
+    FooForm = make_foo_form(request)
+    return update_object(form_class=FooForm, object_id=object_id)
+</code></pre>
+<p>Obviously , you can use this approach for more complex cases as well . </p>
+<br /><b># 1 </b><br /><p>In many ways , all the solutions to this will be more trouble than they are worth. This one qualifies as a hack. It is possible for a <span style="background-color:yellow;">django</span> update to leave you high and dry if they change the way create_update is implemented. For simplicity sake , I 'll assume that you are trying to set a default user , not silently force the user to be the logged in user . </p>
+<p>Write a context processor : </p>
+<pre><code>from django.views.generic.create_update import get_model_and_form_class
+def form_user_default(request):
+    if request.method == 'GET':
+        model, custom_form = get_model_and_form_class(Post,None)
+        custom_form.author = request.user
+        return {'form':custom_form}
+    else: return {}
+</code></pre>
+<p>What this will do is override the form object that create_update passes to the template. What it 's technically doing is re-creating the form after the default view has done it . </p>
+<p>Then in your url conf : </p>
+<pre><code>url(r'pattern_to_match', 'django.views.generic.create_update.create_object', kwargs={'context_processors':form_user_default})
+</code></pre>
+<p>Again , I had to delve into the source code to figure out how to do this. It might really be best to try writing your own view ( but incorporate as many Django custom objects as possible ) . There 's no " simple default " way to do this , because in the <span style="background-color:yellow;">django</span> paradigm <span style="background-color:yellow;">forms</span> are more closely tied to the model layer than to <span style="background-color:yellow;">views</span> , and only <span style="background-color:yellow;">views</span> have knowledge of the <span style="background-color:yellow;">request</span> object . </p>
+<br /><b># 2 </b><br /><p>If a user is authenticated , their user object is the <span style="background-color:yellow;">request.user</span> object . </p>
+<p>I 'm not familiar with create_object... I 'm still a beginner to <span style="background-color:yellow;">django</span> and have only just started my first real project with it . </p>
+<p>Note that you should check to make sure a user is logged in before using this. This can be done with <span style="background-color:yellow;">request.user.is_authenticated</span> ( ) . </p>
+<br /><b># 3 </b><br /><p>There is no good way to hook into the saving of an object when using the current Django generic <span style="background-color:yellow;">views.</span> Once they are rewritten as classes , you 'll be able to subclass the view and hook in at the proper place without having to rewrite the whole view . </p>
+<p>I already use my own class-based generic <span style="background-color:yellow;">views</span> for this reason . </p>
+<br /><b># 4 </b><br /><p>I would suggest to make a wrapper for the create_object , as this author suggest http : //www.b-list.org/weblog/2006/nov/16/django-tips-get-most-out-generic-views/ in the view you 'll have access to the user info . Afterwards , you will need to use the extra_context to pass the user to the template. Finally at the template you can add a hidden field with the user info. I have n't tried it , but I have been thinking of it for quite some time. Hope this solution suits you ! ; ) cheers ! </p>
+<br /><b># 5 </b><br /><p>I have exact the same requirement , this snippets solved this problem nicely : </p>
+<p>http : //www.djangosnippets.org/snippets/99/ </p>
+<br />

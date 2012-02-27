@@ -1,0 +1,212 @@
+Question (ID-938429): Scope of python lambda functions and their parameters I need a callback function that is almost exactly the same for a series of gui events. The function will behave slightly differently depending on which event has called it. Seems like a simple case to me, but I cannot figure out this weird behavior of lambda functions. 
+
+ So I have the following simplified code below: 
+
+ def callback(msg):
+ print msg
+
+#creating a list of function handles with an iterator
+funcList=[]
+for m in ('do', 're', 'mi'):
+ funcList.append(lambda: callback(m))
+for f in funcList:
+ f()
+
+#create one at a time
+funcList=[]
+funcList.append(lambda: callback('do'))
+funcList.append(lambda: callback('re'))
+funcList.append(lambda: callback('mi'))
+for f in funcList:
+ f()
+ 
+
+ The output of this code is: 
+
+ 
+ mi
+ mi
+ mi
+ do
+ re
+ mi
+ 
+
+ I expected: 
+
+ 
+ do
+ re
+ mi
+ do
+ re
+ mi
+ 
+
+ Why has using an iterator messed things up? 
+
+ I've tried using a deepcopy: 
+
+ import copy
+funcList=[]
+for m in ('do', 're', 'mi'):
+ funcList.append(lambda: callback(copy.deepcopy(m)))
+for f in funcList:
+ f()
+ 
+
+ But this has the same problem. Thanks for helping me understand python better! I'm sure this will make sense once you help me figure it out! :) 
+ Answers (Total-9): #0 When a lambda is created, it doesn't make a copy of the variables in the enclosing scope that it uses. It maintains a reference to the environment so that it can look up the value of the variable later. There is just one m . It gets assigned to every time through the loop. After the loop, the variable m has value 'mi' . So when you actually run the function you created later, it will look up the value of m in the environment that created it, which will by then have value 'mi' . 
+
+ One common and idiomatic solution to this problem is to capture the value of m at the time that the lambda is created by using it as the default argument of an optional parameter. You usually use a parameter of the same name so you don't have to change the body of the code: 
+
+ for m in ('do', 're', 'mi'):
+ funcList.append(lambda m=m: callback(m))
+ 
+ #1 The problem here is m variable (a reference) being taken from surrounding scope.
+Only parameters are hold in lambda scope. 
+
+ To solve this you have to create another scope for lambda: 
+
+ def callback(msg):
+ print msg
+
+def callback_factory(m):
+ return lambda: callback(m)
+
+funcList=[]
+for m in ('do', 're', 'mi'):
+ funcList.append(callback_factory(m))
+for f in funcList:
+ f()
+ 
+
+ In example above lambda also uses surounding scope to find m but this
+time it's callback_factory scope created per every callback_factory 
+call. 
+
+ Or with functools : 
+
+ from functools import partial
+
+def callback(msg):
+ print msg
+
+funcList=[partial(callback, m) for m in ('do', 're', 'mi')]
+for f in funcList:
+ f()
+ 
+ #2 Python does uses references of course, but it does not matter in this context. 
+
+ When you define a lambda (or a function, since this is the exact same behavior), it does not evaluate the lambda expression before runtime: 
+
+ # defining that function is perfectly fine
+def broken():
+ print undefined_var
+
+broken() # but calling it will raise a NameError
+ 
+
+ Even more surprising than your lambda example: 
+
+ i = 'bar'
+def foo():
+ print i
+
+foo() # bar
+
+i = 'banana'
+
+foo() # you would expect 'bar' here? well it prints 'banana'
+ 
+
+ In short, think dynamic: nothing is evaluated before interpretation, that's why your code uses the latest value of m. 
+
+ When it looks for m in the lambda execution, m is taken from the topmost scope, which means that, as others pointed out; you can circumvent that problem by adding another scope: 
+
+ def factory(x):
+ return lambda: callback(x)
+
+for m in ('do', 're', 'mi'):
+ funcList.append(factory(m))
+ 
+
+ Here, when the lambda is called, it looks in the lambda' definition scope for a x. This x is a local variable defined in factory's body. Because of this, the value used on lambda execution will be the value that was passed as a parameter during the call to factory. And doremi! 
+
+ As a note, I could have defined factory as factory(m) [replace x by m], the behavior is the same. I used a different name for clarity :) 
+
+ You might find that Andrej Bauer got similar lambda problems. What's interesting on that blog is the comments, where you'll learn more about python closure :) 
+ #3 First, what you are seeing is not a problem, and not related to call-by-reference or by-value. 
+
+ The lambda syntax you defined has no parameters, and as such, the scope you are seeing with parameter m is external to the lambda function. This is why you are seeing these results. 
+
+ Lambda syntax, in your example is not necessary, and you would rather be using a simple function call: 
+
+ for m in ('do', 're', 'mi'):
+ callback(m)
+ 
+
+ Again, you should be very precise about what lambda parameters you are using and where exactly their scope begins and ends. 
+
+ As a side note, regarding parameter passing. Parameters in python are always references to objects. To quote Alex Martelli: 
+
+ 
+ The terminology problem may be due to
+ the fact that, in python, the value of
+ a name is a reference to an object.
+ So, you always pass the value (no
+ implicit copying), and that value is
+ always a reference. [...] Now if you
+ want to coin a name for that, such as
+ "by object reference", "by uncopied
+ value", or whatever, be my guest.
+ Trying to reuse terminology that is
+ more generally applied to languages
+ where "variables are boxes" to a
+ language where "variables are post-it
+ tags" is, IMHO, more likely to confuse
+ than to help. 
+ 
+ #4 The variable m is being captured, so your lambda expression always sees its "current" value. 
+
+ If you need to effectively capture the value at a moment in time, write a function takes the value you want as a parameter, and returns a lambda expression. At that point, the lambda will capture the parameter's value, which won't change when you call the function multiple times: 
+
+ def callback(msg):
+ print msg
+
+def createCallback(msg):
+ return lambda: callback(msg)
+
+#creating a list of function handles with an iterator
+funcList=[]
+for m in ('do', 're', 'mi'):
+ funcList.append(createCallback(m))
+for f in funcList:
+ f()
+ 
+
+ Output: 
+
+ do
+re
+mi
+ 
+ #5 Yes, that's a problem of scope, it binds to the outer m, whether you are using a lambda or a local function. Instead, use a functor: 
+
+  class Func1(object):
+   def __init__(self, callback, message):
+     self.callback = callback
+     self.message = message
+   def __call__(self):
+     return self.callback(self.message)
+ funcList.append(Func1(callback, m))
+ 
+ #6 there are actually no variables in the classic sense in Python, just names that have been bound by references to the applicable object. Even functions are some sort of object in Python, and lambdas do not make an exception to the rule :) 
+ #7 In this simple context, you can do this: 
+
+ for m in ('do', 're', 'mi'):
+ funcList.append(eval('lambda: callback("'+m+'")'))
+ 
+
+ However, in more complicated code this can get ugly. 
+ #8 Not directly related to the issue at hand, but an invaluable piece of wisdom nevertheless: Python Objects by Fredrik Lundh.

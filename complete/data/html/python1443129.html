@@ -1,0 +1,67 @@
+<h3>Question (ID-1443129):</h3><h2>Completely wrap an object in Python</h2><p>I am wanting to completely wrap an object so that all attribute and method requests get forwarded to the object it's wrapping, but also overriding any methods or variables that I want, as well as providing some of my own methods. This wrapper class should appear 100% as the existing class (<code>isinstance</code> must act as if it is actually the class), however subclassing in itself is not going to cut it, as I want to wrap an existing <em>object</em>. Is there some solution in Python to do this? I was thinking something along the lines of:</p>
+
+<pre><code>class ObjectWrapper(BaseClass):
+    def __init__(self, baseObject):
+        self.baseObject = baseObject
+
+    def overriddenMethod(self):
+        ...
+
+    def myOwnMethod1(self):
+        ...
+
+    ...
+
+    def __getattr__(self, attr):
+        if attr in ['overriddenMethod', 'myOwnMethod1', 'myOwnMethod2', ...]
+            # return the requested method
+        else:
+            return getattr(self.baseObject, attr)
+</code></pre>
+
+<p>But I'm not that familiar with overriding <code>__getattr__</code>, <code>__setattr__</code> and <code>__hasattr__</code>, so I'm not sure how to get that right.</p>
+<br /><h3>Answers (Total-6):</h3><b>#0</b><br /><p>The simplest way in most cases is probably:</p>
+
+<pre><code>class ObjectWrapper(BaseClass):
+    def __init__(self, baseObject):
+        self.__class__ = type(baseObject.__class__.__name__,
+                              (self.__class__, baseObject.__class__),
+                              {})
+        self.__dict__ = baseObject.__dict__
+
+    def overriddenMethod(self):
+        ...
+</code></pre>
+
+<p>Working in this way, i.e. by reassigning self's <code>__class__</code> and <code>__dict__</code> in this fashion, you need only provide your overrides -- Python's normal attribute getting and setting mechanisms will do the rest... <em>mostly</em>.</p>
+
+<p>You'll be in trouble only if <code>baseObject.__class__</code> defines <code>__slots__</code>, in which case the multiple inheritance approach doesn't work and you do need the cumbersome <code>__getattr__</code> (as others said, at least you don't need to worry that it will be called with attributes you're overriding, as it won't!-), <code>__setattr__</code> (a greater pain, as it DOES get called for every attribute), etc; and making <code>isinstance</code> and special methods work takes painstaking and cumbersome detailed work.</p>
+
+<p>Essentially, <code>__slots__</code> means that a class is a special, each instance a lightweight "value object" NOT to be subject to further sophisticated manipulation, wrapping, etc, because the need to save a few bytes per instance of that class overrides all the normal concerns about flexibility and so on; it's therefore not surprising that dealing with such extreme, rare classes in the same smooth and flexible way as you can deal with 99%+ of Python objects is truly a pain. So DO you need to deal with <code>__slots__</code> (to the point of writing, testing, debugging and maintaining hundreds of lines of code just for those corner cases), or will the 99% solution in half a dozen lines suffice?-)</p>
+<br /><b>#1</b><br /><p>__getattr__ has the advantage that it's only called when the attribute does not exist, so you should not need an explicit list -- anything you don't define will automatically get proxied.</p>
+
+<p>__setattr__ is trickier because it's always called. Make sure you use a superclass call or object.__setattr__ when setting your own attributes; using setattr() within __setattr__ will cause infinite recursion.</p>
+
+<p>The final bit, affecting isinstance, is very difficult. You can do it with an assigment to your wrapper instance's .__class__ variable (but this also overrides class dictionary resolution order), or by dynamically constructing your wrapper type using a metaclass. Since isinstance is so rare in Python code, it seems overkill to actually try to trick it.</p>
+
+<p><a href="http://python.org/doc/2.2/ref/attribute-access.html" rel="nofollow">More information on special attribute access methods.</a></p>
+
+<p><a href="http://docs.python.org/reference/datamodel.html#customizing-class-creation" rel="nofollow">Even more information on them, plus some help with metaclasses.</a></p>
+<br /><b>#2</b><br /><p>Start with this and mess with stuff in the loop to suit your needs:</p>
+
+<pre><code>import inspect
+class Delegate(object):
+    def __init__(self, implementation):
+        self.__class__ = implementation.__class__
+        for n, m in inspect.getmembers(implementation, callable):
+            if not n.startswith('_'):
+                setattr(self, n, m)
+</code></pre>
+
+<p>The ability to wrap not-new-style-objects is left as an exercise to the reader :)</p>
+<br /><b>#3</b><br /><p>See my answer to <a href="http://stackoverflow.com/questions/1382871/dynamically-attaching-a-method-to-an-existing-python-object-generated-with-swig/1383646#1383646">this question</a>.</p>
+<br /><b>#4</b><br /><p><code>__getattr__</code> is only called for things that Python can't find in <code>__dict__</code>, so you don't have to worry about <code>overriddenMethod</code>, etc.</p>
+
+<p>For more details, see section 5 "Proxy" in <a href="http://www.python.org/workshops/1997-10/proceedings/savikko.html" rel="nofollow">this article</a>.</p>
+<br /><b>#5</b><br /><p>By 'existing object' you mean an instance of another class? Sounds to me as though you just need to inherit from the base class. When you create your new object, pass in the details of the base object, or add a method in your new class which copies the data of the base class instance into itself.</p>
+<br />

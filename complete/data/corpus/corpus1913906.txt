@@ -1,0 +1,219 @@
+Question (ID-1913906): Python performance characteristics I'm in the process of tuning a pet project of mine to improve its performance. I've already busted out the profiler to identify hotspots but I'm thinking understanding Pythons performance characteristics a little better would be quite useful going forward. 
+
+ There are a few things I'd like to know: 
+
+ How smart is its optimizer? 
+
+ Some modern compilers have been blessed with remarkably clever optimisers, that can often take simple code and make it run faster than any human attempts at tuning the code. Depending on how smart the optimizer is, it may be far better for my code to be 'dumb'. 
+
+ While Python is an 'interpreted' language, it does appear to compile down to some form of bytecode (.pyc). How smart is it when it does this? 
+
+ 
+ Will it fold constants? 
+ Will it inline small functions or unroll short loops? 
+ Will it perform complex data/flow analysis I'm not qualified to explain properly. 
+ 
+
+ How fast are the following operations (comparatively) 
+
+ 
+ Function calls 
+ Class instantiation 
+ Arithmetic 
+ 'Heavier' math operations such as sqrt() 
+ 
+
+ How are numbers handled internally? 
+
+ How are numbers stored within Python. Are they stored as integers / floats internally or moved around as a string? 
+
+ NumPy 
+
+ How much of a performance difference can NumPy make? This application makes heavy use of Vectors and related mathematics. How much of a difference can be made by using this to accelerate these operations. 
+
+ Anything else interesting 
+
+ If you can think of anything else worth knowing, feel free to mention it. 
+
+ Some background... 
+
+ Since there are a few people bringing in the 'look at your algorithms first' advice (which is quite sensible advice, but doesn't really help with my purpose in asking this question) I'll add a bit here about whats going on, and why I'm asking about this. 
+
+ The pet project in question is a ray-tracer written in Python. It's not yet very far along and currently just hit tests against two objects (a triangle and a sphere) within the scene. No shading, shadowing or lighting calculations are being performed. The algorithm is basically: 
+
+ for each x, y position in the image:
+  create a ray
+  hit test vs. sphere
+  hit test vs. triangle
+  colour the pixel based on the closest object, or black if no hit.
+ 
+
+ Algorithmic refinements in ray-tracing generally work by eliminating objects in the scene early. They can provide a considerable boost for complex scenes, but if this ray-tracer can't hit test against a mere two objects without struggling, then it's not going to be able to handle very much at all. 
+
+ While I realise that a Python based ray-tracer won't quite be able to reach the performance of a C based one, given that real-time ray tracers like Arauna can manage 15-20 FPS on my computer rendering reasonably complex scenes at 640x480, I'd expect rendering a very basic 500x500 image in Python to be doable in under a second. 
+
+ Currently, my code is taking 38 seconds. It seems to me like it really shouldn't take that long. 
+
+ Profiling shows the bulk of the time being spent in the actual hit testing routines for these shapes. This isn't particularly surprising in a ray tracer, and what I expected. The call-counts for these hit tests are each 250,000 (500x500 exactly), which would indicate they're being called exactly as often as they should be. This is a a pretty text-book case of the 3% where optimization is advisable. 
+
+ I'm planning on doing the full timing / measuring thing as I work on improving the code. However, without some basic knowledge of what costs what in Python my attempts to tune my code would be little more than stumbling in the dark. I figured it would serve me well to gain a little knowledge to light the way. 
+ Answers (Total-6): #0 Python's compiler is deliberately dirt-simple -- this makes it fast and highly predictable. Apart from some constant folding, it basically generates bytecode that faithfully mimics your sources. Somebody else already suggested dis , and it's indeed a good way to look at the bytecode you're getting -- for example, how for i in [1, 2, 3]: isn't actually doing constant folding but generating the literal list on the fly, while for i in (1, 2, 3): (looping on a literal tuple instead of a literal list) is able to constant-fold (reason: a list is a mutable object, and to keep to the "dirt-simple" mission statement the compiler doesn't bother to check that this specific list is never modified so it could be optimized into a tuple). 
+
+ So there's space for ample manual micro-optimization -- hoisting, in particular. I.e., rewrite 
+
+ for x in whatever():
+ anobj.amethod(x)
+ 
+
+ as 
+
+ f = anobj.amethod
+for x in whatever():
+ f(x)
+ 
+
+ to save the repeated lookups (the compiler doesn't check whether a run of anobj.amethod can actually change anobj 's bindings &amp;c so that a fresh lookup is needed next time -- it just does the dirt-simple thing, i.e., no hoisting, which guarantees correctness but definitely doesn't guarantee blazing speed;-). 
+
+ The timeit module (best used at a shell prompt IMHO) makes it very simple to measure the overall effects of compilation + bytecode interpretation (just ensure the snippet you're measuring has no side effects that would affect the timing, since timeit does run it over and over in a loop;-). For example: 
+
+ $ python -mtimeit 'for x in (1, 2, 3): pass'
+1000000 loops, best of 3: 0.219 usec per loop
+$ python -mtimeit 'for x in [1, 2, 3]: pass'
+1000000 loops, best of 3: 0.512 usec per loop
+ 
+
+ you can see the costs of the repeated list construction -- and confirm that is indeed what we're observing by trying a minor tweak: 
+
+ $ python -mtimeit -s'Xs=[1,2,3]' 'for x in Xs: pass'
+1000000 loops, best of 3: 0.236 usec per loop
+$ python -mtimeit -s'Xs=(1,2,3)' 'for x in Xs: pass'
+1000000 loops, best of 3: 0.213 usec per loop
+ 
+
+ moving the iterable's construction to the -s setup (which is run only once and not timed) shows that the looping proper is slightly faster on tuples (maybe 10%), but the big issue with the first pair (list slower than tuple by over 100%) is mostly with the construction. 
+
+ Armed with timeit and the knowledge that the compiler's deliberately very simple minded in its optimizations, we can easily answer other questions of yours: 
+
+ 
+ How fast are the following operations
+ (comparatively) 
+
+ * Function calls
+* Class instantiation
+* Arithmetic
+* 'Heavier' math operations such as sqrt()
+ 
+ 
+
+ $ python -mtimeit -s'def f(): pass' 'f()'
+10000000 loops, best of 3: 0.192 usec per loop
+$ python -mtimeit -s'class o: pass' 'o()'
+1000000 loops, best of 3: 0.315 usec per loop
+$ python -mtimeit -s'class n(object): pass' 'n()'
+10000000 loops, best of 3: 0.18 usec per loop
+ 
+
+ so we see: instantiating a new-style class and calling a function (both empty) are about the same speed, with instantiations possibly having a tiny speed margin, maybe 5%; instantiating an old-style class is slowest (by about 50%). Tiny differences such as 5% or less of course could be noise, so repeating each try a few times is advisable; but differences like 50% are definitely well beyond noise. 
+
+ $ python -mtimeit -s'from math import sqrt' 'sqrt(1.2)'
+1000000 loops, best of 3: 0.22 usec per loop
+$ python -mtimeit '1.2**0.5'
+10000000 loops, best of 3: 0.0363 usec per loop
+$ python -mtimeit '1.2*0.5'
+10000000 loops, best of 3: 0.0407 usec per loop
+ 
+
+ and here we see: calling sqrt is slower than doing the same computation by operator (using the ** raise-to-power operator) by roughly the cost of calling an empty function; all arithmetic operators are roughly the same speed to within noise (the tiny difference of 3 or 4 nanoseconds is definitely noise;-). Checking whether constant folding might interfere: 
+
+ $ python -mtimeit '1.2*0.5'
+10000000 loops, best of 3: 0.0407 usec per loop
+$ python -mtimeit -s'a=1.2; b=0.5' 'a*b'
+10000000 loops, best of 3: 0.0965 usec per loop
+$ python -mtimeit -s'a=1.2; b=0.5' 'a*0.5'
+10000000 loops, best of 3: 0.0957 usec per loop
+$ python -mtimeit -s'a=1.2; b=0.5' '1.2*b'
+10000000 loops, best of 3: 0.0932 usec per loop
+ 
+
+ ...we see that this is indeed the case: if either or both numbers are being looked up as variables (which blocks constant folding), we're paying the "realistic" cost. Variable lookup has its own cost: 
+
+ $ python -mtimeit -s'a=1.2; b=0.5' 'a'
+10000000 loops, best of 3: 0.039 usec per loop
+ 
+
+ and that's far from negligible when we're trying to measure such tiny times anyway. Indeed constant lookup isn't free either: 
+
+ $ python -mtimeit -s'a=1.2; b=0.5' '1.2'
+10000000 loops, best of 3: 0.0225 usec per loop
+ 
+
+ as you see, while smaller than variable lookup it's quite comparable -- about half. 
+
+ If and when (armed with careful profiling and measurement) you decide some nucleus of your computations desperately need optimization, I recommend trying cython -- it's a C / Python merge which tries to be as neat as Python and as fast as C, and while it can't get there 100% it surely makes a good fist of it (in particular, it makes binary code that's quite a bit faster than you can get with its predecessor language, pyrex , as well as being a bit richer than it). For the last few %'s of performance you probably still want to go down to C (or assembly / machine code in some exceptional cases), but that would be really, really rare. 
+ #1 S.Lott is right: the big effects are data structures and algorithms. Also, if you are doing a lot of I/O, how you manage it will make a big difference. 
+
+ But if you are curious about the compiler internals: it will fold constants, but it will not inline functions or unroll loops. Inlining functions is a hard problem in a dynamic language. 
+
+ You can see what the compiler does by disassembling some compiled code. Put some sample code in my_file.py, then use: 
+
+ python -m dis my_file.py
+ 
+
+ This source: 
+
+ def foo():
+ return "BAR!"
+
+for i in [1,2,3]:
+ print i, foo()
+ 
+
+ produces: 
+
+ 1   0 LOAD_CONST    0 (&lt;code object foo at 01A0B380, file "\foo\bar.py", line 1&gt;)
+    3 MAKE_FUNCTION   0
+    6 STORE_NAME    0 (foo)
+
+ 4   9 SETUP_LOOP    35 (to 47)
+    12 LOAD_CONST    1 (1)
+    15 LOAD_CONST    2 (2)
+    18 LOAD_CONST    3 (3)
+    21 BUILD_LIST    3
+    24 GET_ITER
+  &gt;&gt; 25 FOR_ITER    18 (to 46)
+    28 STORE_NAME    1 (i)
+
+ 5   31 LOAD_NAME    1 (i)
+    34 PRINT_ITEM
+    35 LOAD_NAME    0 (foo)
+    38 CALL_FUNCTION   0
+    41 PRINT_ITEM
+    42 PRINT_NEWLINE
+    43 JUMP_ABSOLUTE   25
+  &gt;&gt; 46 POP_BLOCK
+  &gt;&gt; 47 LOAD_CONST    4 (None)
+    50 RETURN_VALUE
+ 
+
+ Notice that only the top-level code in the module is disassembled, you need to write a little more code yourself to recurse through the nested code objects if you want to see the function definitions disassembled as well. 
+ #2 The speed of your code might be automatically improved by using the Psyco module. 
+
+ As for Numpy, it generally speeds things up by a significant factor. I consider it a must when manipulating numerical arrays. 
+
+ You might also want to speed up the critical parts of your code with Cython or Pyrex , which allow you to create faster extension modules without having to write a full-fledged extension module in C (which would be more cumbersome). 
+ #3 Here's what's interesting. 
+
+ 
+ Data Structure 
+ Algorithm 
+ 
+
+ Those will yield dramatic improvements. 
+
+ Your list is good for -- at best -- a few single-digit performance improvements. 
+
+ You need to fundamentally rethink your data structures if you want to see real speed improvements. 
+ #4 I'm the author of Arauna. I know nothing about Python, but I do know that Arauna is extremely optimized, both high level (data structures &amp; algorithms) and low-level (cache friendly code, SIMD, multithreading). It's a hard target to go for... 
+ #5 If you already know that your algorithm is as fast as possible, and you know that C would be much faster, then you may want to implement the core of your code in C as a C extension to Python . You can pragmatically decide which part of the code goes in C and which is in Python, using each language to its full potential. 
+
+ Unlike some other languages, calling between C and Python is very fast, so there's no penalty for crossing the border often.

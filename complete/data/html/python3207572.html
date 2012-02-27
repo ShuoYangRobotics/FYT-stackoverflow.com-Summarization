@@ -1,0 +1,193 @@
+<h3>Question (ID-3207572):</h3><h2>"self" inside plain function?</h2><p>I've got a bunch of functions (outside of any class) where I've set attributes on them, like <code>funcname.fields = 'xxx'</code>. I was hoping I could then access these variables from inside the function with <code>self.fields</code>, but of course it tells me:</p>
+
+<blockquote>
+  <p>global name 'self' is not defined</p>
+</blockquote>
+
+<p>So... what can I do? Is there some magic variable I can access? Like <code>__this__.fields</code>?</p>
+
+<hr>
+
+<p>A few people have asked "why?". You will probably disagree with my reasoning, but I have a set of functions that all must share the same signature (accept only one argument). For the most part, this one argument is enough to do the required computation. However, in a few limited cases, some additional information is needed. Rather than forcing every function to accept a long list of mostly unused variables, I've decided to just set them on the function so that they can easily be ignored. </p>
+
+<p>Although, it occurs to me now that you could just use <code>**kwargs</code> as the last argument if you don't care about the additional args. Oh well...</p>
+
+<p><strong>Edit:</strong> Actually, some of the functions I didn't write, and would rather not modify to accept the extra args. By "passing in" the additional args as attributes, my code can work both with my custom functions that take advantage of the extra args, and with third party code that don't require the extra args.</p>
+
+<p>Thanks for the speedy answers :)</p>
+<br /><h3>Answers (Total-11):</h3><b>#0</b><br /><p><code>self</code> isn't a keyword in python, its just a normal variable name. When creating instance methods, you can name the first parameter whatever you want, self is just a convention.</p>
+
+<p>You should almost always prefer passing arguments to functions over setting properties for input, but if you must, you can do so using the actual functions name to access variables within it:</p>
+
+<pre><code>def a:
+    if a.foo:
+        #blah
+
+a.foo = false
+a()
+</code></pre>
+
+<p>see <a href="http://stackoverflow.com/questions/338101/python-function-attributes-uses-and-abuses">python function attributes - uses and abuses</a> for when this comes in handy. :D</p>
+<br /><b>#1</b><br /><pre><code>def foo():
+    print(foo.fields)
+foo.fields=[1,2,3]
+
+foo()
+# [1, 2, 3]
+</code></pre>
+
+<p>There is nothing wrong with adding attributes to functions. Many memoizers use this to cache results in the function itself. </p>
+
+<p>For example, notice the use of <code>func.cache</code>:</p>
+
+<pre><code>from decorator import decorator
+@decorator
+def memoize(func, *args, **kw):
+    # Author: Michele Simoniato
+    # Source: http://pypi.python.org/pypi/decorator
+    if not hasattr(func, 'cache'):
+        func.cache = {}
+    if kw: # frozenset is used to ensure hashability
+        key = args, frozenset(kw.iteritems())
+    else:
+        key = args
+    cache = func.cache # attribute added by memoize
+    if key in cache:
+        return cache[key]
+    else:
+        cache[key] = result = func(*args, **kw)
+        return result
+</code></pre>
+<br /><b>#2</b><br /><p>Example:</p>
+
+<pre><code>&gt;&gt;&gt; def x(): pass
+&gt;&gt;&gt; x
+&lt;function x at 0x100451050&gt;
+&gt;&gt;&gt; x.hello = "World"
+&gt;&gt;&gt; x.hello
+"World"
+</code></pre>
+
+<p>You can set attributes on functions, as these are just plain objects, but I actually never saw something like this in real code.</p>
+
+<p>Plus. <code>self</code> is not a keyword, just another variable name, which happens to be the particular instance of the class. <code>self</code> is passed implicitly, but received explicitly.</p>
+<br /><b>#3</b><br /><p>if you want globally set parameters for a callable 'thing' you could always create a class and implement the <code>__call__</code> method?</p>
+<br /><b>#4</b><br /><p>There is no special way, within a function's body, to refer to the function object whose code is executing.  Simplest is just to use <code>funcname.field</code> (with <code>funcname</code> being the function's name within the namespace it's in, which you indicate is the case -- it would be harder otherwise).</p>
+<br /><b>#5</b><br /><p>This isn't something you should do. I can't think of any way to do what you're asking except some walking around on the call stack and some weird introspection -- which isn't something that should happen in production code.</p>
+
+<p>That said, I think this actually does what you asked:</p>
+
+<pre><code>import inspect
+
+_code_to_func = dict()
+def enable_function_self(f):
+    _code_to_func[f.func_code] = f
+    return f
+
+def get_function_self():
+    f = inspect.currentframe()
+    code_obj = f.f_back.f_code
+    return _code_to_func[code_obj]
+
+@enable_function_self
+def foo():
+    me = get_function_self()
+    print me
+
+foo()
+</code></pre>
+<br /><b>#6</b><br /><p>While I agree with the the rest that this is probably not good design, the question did intrigue me. Here's my first solution, which I may update once I get decorators working. As it stands, it relies pretty heavily on being able to read the stack, which may not be possible in all implementations (something about sys._getframe() not necessarily being present...)</p>
+
+<pre><code>import sys, inspect
+
+def cute():
+    this = sys.modules[__name__].__dict__.get(inspect.stack()[0][3])
+    print "My face is..." + this.face
+
+cute.face = "very cute"
+cute()
+</code></pre>
+
+<p>What do you think? :3</p>
+<br /><b>#7</b><br /><p>You could use the following (hideously ugly) code:</p>
+
+<pre><code>class Generic_Object(object):
+    pass
+
+def foo(a1, a2, self=Generic_Object()): 
+    self.args=(a1,a2)
+    print "len(self.args):", len(self.args)
+    return None
+</code></pre>
+
+<p>... as you can see it would allow you to use "self" as you described.  You can't use an "object()" directly because you can't "monkey patch(*)" values into an <code>object()</code> instance.  However, normal subclasses of object (such as the <code>Generic_Object()</code> I've shown here) can be "monkey patched"</p>
+
+<p>If you wanted to always call your function with a reference to some object as the first argument that would be possible.  You could put the defaulted argument first, followed by a *args and optional **kwargs parameters (through which any other arguments or dictionaries of options could be passed during calls to this function).</p>
+
+<p>This is, as I said <strong><em>hideously ugly</em></strong>.  Please don't ever publish any code like this or share it with anyone in the Python community. I'm only showing it here as a sort of strange educational exercise.</p>
+
+<p>An instance method is like a function in Python.  However, it exists within the namespace of a class (thus it must be accessed via an instance ... <code>myobject.foo()</code> for example) and it is called with a reference to "self" (analagous to the "this" pointer in C++) as the first argument.  Also there's a method resolution process which causes the interpreter to search the namespace of the instance, then it's class, and then each of the parent classes and so on ... up through the inheritance tree.</p>
+
+<p>An unbound function is called with whatever arguments you pass to it.  There can't bee any sort of automatically pre-pended object/instance reference to the argument list.   Thus, writing a function with an initial argument named "self" is meaningless.  (It's legal because Python doesn't place any special meaning on the name "self."  But meaningless because callers to your function would have to manually supply some sort of object reference to the argument list and it's not at all clear what that should be.  Just some bizarre "Generic_Object" which then floats around in the global variable space?).</p>
+
+<p>I hope that clarifies things a bit.  It sounds like you're suffering from some very fundamental misconceptions about how Python and other object-oriented systems work.</p>
+
+<ul>
+<li>("Monkey patching" is a term used to describe the direct manipulation of an objects attributes -- or "instance variables" by code that is not part of the class hierarchy of which the object is an instance).</li>
+</ul>
+<br /><b>#8</b><br /><p>As another alternative, you can make the functions into bound class methods like so:</p>
+
+<pre><code>class _FooImpl(object):
+    a = "Hello "
+    @classmethod
+    def foo(cls, param):
+        return cls.a + param
+foo = _FooImpl.foo
+
+# later...
+print foo("World") # yes, Hello World
+
+# and if you have to change an attribute:
+foo.im_self.a = "Goodbye "
+</code></pre>
+
+<p>If you want functions to share attribute namespaecs, you just make them part of the same class.  If not, give each its own class.</p>
+<br /><b>#9</b><br /><p>You can't do that "function accessing its own attributes" correctly for all situations - see for details here <a href="http://stackoverflow.com/questions/3109289/how-can-python-function-access-its-own-attributes">http://stackoverflow.com/questions/3109289/how-can-python-function-access-its-own-attributes</a> - but here is a quick demonstration:</p>
+
+<pre><code>&gt;&gt;&gt; def f(): return f.x
+... 
+&gt;&gt;&gt; f.x = 7
+&gt;&gt;&gt; f()
+7
+&gt;&gt;&gt; g = f
+&gt;&gt;&gt; g()
+7
+&gt;&gt;&gt; del f
+&gt;&gt;&gt; g()
+Traceback (most recent call last):
+  File "&lt;interactive input&gt;", line 1, in &lt;module&gt;
+  File "&lt;interactive input&gt;", line 1, in f
+NameError: global name 'f' is not defined
+</code></pre>
+
+<p>Basically most methods directly or indirectly rely on accessing the function object through lookup by name in globals; and if original function name is deleted, this stops working. There are other kludgey ways of accomplishing this, like defining class, or factory - but thanks to your explanation it is clear you don't really need that.</p>
+
+<p>Just do the mentioned keyword catch-all argument, like so:</p>
+
+<pre><code>def fn1(oneArg):
+    // do the due
+
+def fn2(oneArg, **kw):
+    if 'option1' in kw:
+        print 'called with option1=', kw['option1']
+    //do the rest
+
+fn2(42)
+fn2(42, option1='something')
+</code></pre>
+
+<p>Not sure what you mean in your comment of handling TypeError - that won't arise when using **kw. This approach works very well for some python system functions - check min(), max(), sort(). Recently <code>sorted(dct,key=dct.get,reverse=True)</code> came very handy to me in CodeGolf challenge :)</p>
+<br /><b>#10</b><br /><p>What exactly are you hoping "self" would point to, if the function is defined outside of any class? If your function needs some global information to execute properly, you need to send this information to the function in the form of an argument. </p>
+
+<p>If you want your function to be context aware, you need to declare it within the scope of an object.  </p>
+<br />

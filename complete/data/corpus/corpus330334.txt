@@ -1,0 +1,123 @@
+Question (ID-330334): Parsing a string for nested patterns What would be the best way to do this. 
+
+ The input string is 
+
+ &lt;133_3&gt;&lt;135_3&gt;&lt;116_2&gt;The other system worked for about 1 month&lt;/116_2&gt; got some good images &lt;137_3&gt;on it then it started doing the same thing as the first one&lt;/137_3&gt; so then I quit using either camera now they are just sitting and collecting dust.&lt;/135_3&gt;&lt;/133_3&gt;
+ 
+
+ the expected output is 
+
+ {'The other system worked for about 1 month got some good images on it then it started doing the same thing as the first one so then I quit \
+using either camera now they are just sitting and collecting dust.':[133, 135],
+
+'The other system worked for about 1 month': [116],
+
+'on it then it started doing the same thing as the first one':[137]
+
+}
+ 
+
+ that seems like a recursive regexp search but I can't figure out how exactly. 
+
+ I can think of a tedious recursive function as of now, but have a feeling that there should be a better way. 
+
+ Related question: Can regular expressions be used to match nested patterns? 
+ Answers (Total-6): #0 Take an XML parser, make it generate a DOM (Document Object Model) and then build a recursive algorithm that traverses all the nodes, calls "text()" in each node (that should give you the text in the current node and all children) and puts that as a key in the dictionary. 
+ #1 Use expat or another XML parser; it's more explicit than anything else, considering you're dealing with XML data anyway. 
+
+ However, note that XML element names can't start with a number as your example has them. 
+
+ Here's a parser that will do what you need, although you'll need to tweak it to combine duplicate elements into one dict key: 
+
+ from xml.parsers.expat import ParserCreate
+
+open_elements = {}
+result_dict = {}
+
+def start_element(name, attrs):
+ open_elements[name] = True
+
+def end_element(name):
+ del open_elements[name]
+
+def char_data(data):
+ for element in open_elements:
+  cur = result_dict.setdefault(element, '')
+  result_dict[element] = cur + data
+
+if __name__ == '__main__':
+ p = ParserCreate()
+
+ p.StartElementHandler = start_element
+ p.EndElementHandler = end_element
+ p.CharacterDataHandler = char_data
+
+ p.Parse(u'&lt;_133_3&gt;&lt;_135_3&gt;&lt;_116_2&gt;The other system worked for about 1 month&lt;/_116_2&gt; got some good images &lt;_137_3&gt;on it then it started doing the same thing as the first one&lt;/_137_3&gt; so then I quit using either camera now they are just sitting and collecting dust.&lt;/_135_3&gt;&lt;/_133_3&gt;', 1)
+
+ print result_dict
+ 
+ #2 from cStringIO import StringIO
+from collections import defaultdict
+####from xml.etree import cElementTree as etree
+from lxml import etree
+
+xml = "&lt;e133_3&gt;&lt;e135_3&gt;&lt;e116_2&gt;The other system worked for about 1 month&lt;/e116_2&gt; got some good images &lt;e137_3&gt;on it then it started doing the same thing as the first one&lt;/e137_3&gt; so then I quit using either camera now they are just sitting and collecting dust. &lt;/e135_3&gt;&lt;/e133_3&gt;"
+
+d = defaultdict(list)
+for event, elem in etree.iterparse(StringIO(xml)):
+ d[''.join(elem.itertext())].append(int(elem.tag[1:-2]))
+
+print(dict(d.items()))
+ 
+
+ Output: 
+
+ {'on it then it started doing the same thing as the first one': [137], 
+'The other system worked for about 1 month': [116], 
+'The other system worked for about 1 month got some good images on it then it started doing the same thing as the first one so then I quit using \
+either camera now they are just sitting and collecting dust. ': [133, 135]}
+ 
+ #3 I think a grammar would be the best option here. I found a link with some information:
+ http://www.onlamp.com/pub/a/python/2006/01/26/pyparsing.html 
+ #4 Note that you can't actually solve this by a regular expression, since they don't have the expressive power to enforce proper nesting. 
+
+ Take the following mini-language: 
+
+ 
+ A certain number of "(" followed by the same number of ")", no matter what the number. 
+ 
+
+ You could make a regular expression very easily to represent a super-language of this mini-language (where you don't enforce the equality of the number of starts parentheses and end parentheses). You could also make a regular expression very easilty to represent any finite sub-language (where you limit yourself to some max depth of nesting). But you can never represent this exact language in a regular expression. 
+
+ So you'd have to use a grammar, yes. 
+ #5 Here's an unreliable inefficient recursive regexp solution: 
+
+ import re
+
+re_tag = re.compile(r'&lt;(?P&lt;tag&gt;[^&gt;]+)&gt;(?P&lt;content&gt;.*?)&lt;/(?P=tag)&gt;', re.S)
+
+def iterparse(text, tag=None):
+ if tag is not None: yield tag, text
+ for m in re_tag.finditer(text):
+  for tag, text in iterparse(m.group('content'), m.group('tag')):
+   yield tag, text
+
+def strip_tags(content):
+ nested = lambda m: re_tag.sub(nested, m.group('content'))
+ return re_tag.sub(nested, content)
+
+
+txt = "&lt;133_3&gt;&lt;135_3&gt;&lt;116_2&gt;The other system worked for about 1 month&lt;/116_2&gt; got some good images &lt;137_3&gt;on it then it started doing the same thing as the first one&lt;/137_3&gt; so then I quit using either camera now they are just sitting and collecting dust. &lt;/135_3&gt;&lt;/133_3&gt;"
+d = {}
+for tag, text in iterparse(txt):
+ d.setdefault(strip_tags(text), []).append(int(tag[:-2]))
+
+print(d)
+ 
+
+ Output: 
+
+ {'on it then it started doing the same thing as the first one': [137], 
+ 'The other system worked for about 1 month': [116], 
+ 'The other system worked for about 1 month got some good images on it then it started doing the same thing as the first one so then I quit using \
+ either camera now they are just sitting and collecting dust. ': [133, 135]}

@@ -1,0 +1,236 @@
+Question (ID-6796722): Yahoo BOSS V2 authorization troubles I'm having an awfully hard time with Yahoo's authentication/authorization. I've enabled BOSS in my account, set up a payment method, and now I'm trying to run a search using some python code: 
+
+ import urllib2
+import oauth2 as oauth
+import time
+
+OAUTH_CONSUMER_KEY = "blahblahblah"
+OAUTH_CONSUMER_SECRET = "blah"
+
+def oauth_request(url, params, method="GET"):
+ params['oauth_version'] = "1.0",
+ params['oauth_nonce'] = oauth.generate_nonce(),
+ params['oauth_timestamp'] = int(time.time())
+
+ consumer = oauth.Consumer(key=OAUTH_CONSUMER_KEY,
+        secret=OAUTH_CONSUMER_SECRET)
+ params['oauth_consumer_key'] = consumer.key
+ req = oauth.Request(method=method, url=url, parameters=params)
+ req.sign_request(oauth.SignatureMethod_HMAC_SHA1(), consumer, None)
+
+ return req
+
+
+if __name__ == "__main__":
+ url = "http://yboss.yahooapis.com/ysearch/web"
+
+ req = oauth_request(url, params={"q": "cats dogs"})
+ req_url = req.to_url()
+ print req_url
+ result = urllib2.urlopen(req_url)
+ 
+
+ I keep getting a urllib2.HTTPError: HTTP Error 401: Unauthorized exception. I can't figure out whether there's something wrong with my key, or the method of signing, or if I'm somehow tampering with my data after signing, or what the deal is. Anyone have suggestions? 
+ Answers (Total-6): #0 So I decided to ditch Python and try Perl, and it Just Worked. Here's a minimal code sample: 
+
+ use strict;
+use Net::OAuth;
+use LWP::UserAgent;
+
+my $CC_KEY = "blahblahblah";
+my $CC_SECRET = "blah";
+
+my $url = 'http://yboss.yahooapis.com/ysearch/web';
+print make_request($url, {q =&gt; "cat dog", format =&gt; "xml", count =&gt; 5});
+
+sub make_request {
+ my ($url, $args) = @_;
+
+ my $request = Net::OAuth-&gt;request("request token")
+  -&gt;new(
+   consumer_key =&gt; $CC_KEY,
+   consumer_secret =&gt; $CC_SECRET,
+   request_url =&gt; $url,
+   request_method =&gt; 'GET',
+   signature_method =&gt; 'HMAC-SHA1',
+   timestamp =&gt; time,
+   nonce =&gt; int(rand 10**6),
+   callback =&gt; 'oob',
+   extra_params =&gt; $args,
+   protocol_version =&gt; Net::OAuth::PROTOCOL_VERSION_1_0A,
+   );
+ $request-&gt;sign;
+
+ my $res = LWP::UserAgent-&gt;new(env_proxy=&gt;1)-&gt;get($request-&gt;to_url); 
+ return $res-&gt;content if $res-&gt;is_success;
+ die $res-&gt;status_line;
+}
+ 
+ #1 Here's another solution, this time back in python-land. This was put together by Tom De Smedt, author of the Pattern web-mining kit. 
+
+ I'll communicate with the author of python-oauth2 to see if it can be fixed. 
+
+ OAUTH_CONSUMER_KEY = "blahblahblah"
+OAUTH_CONSUMER_SECRET = "blah"
+
+import urllib
+import hmac
+import time
+import random
+import base64
+
+try:
+  from hashlib import sha1
+  from hashlib import md5
+except:
+  import sha as sha1
+  import md5; md5=md5.new
+
+def hmac_sha1(key, text):
+  return hmac.new(key, text, sha1).digest()
+
+def oauth_nonce(length=40):
+  h = "".join([str(random.randint(0, 9)) for i in range(length)])
+  h = md5(str(time.time()) + h).hexdigest()
+  return h
+
+def oauth_timestamp():
+  return str(int(time.time()))
+
+def oauth_encode(s):
+  return urllib.quote(s, "~")
+
+def oauth_signature(url, data={}, method="get", secret="", token=""):
+  # Signature base string: http://tools.ietf.org/html/rfc5849#section-3.4.1
+  base = oauth_encode(method.upper()) + "&amp;"
+  base += oauth_encode(url.rstrip("?")) + "&amp;"
+  base += oauth_encode("&amp;".join(["%s=%s" % (k, v) for k, v in sorted(data.items())]))
+  # HMAC-SHA1 signature algorithm: http://tools.ietf.org/html/rfc5849#section-3.4.2
+  signature = hmac_sha1(oauth_encode(secret) + "&amp;" + token, base)
+  signature = base64.b64encode(signature)
+  return signature
+
+q = "cat"
+url = "http://yboss.yahooapis.com/ysearch/" + "web" # web | images | news
+data = {
+  "q": q,
+  "start": 0,
+  "count": 50, # 35 for images
+  "format": "xml",
+  "oauth_version": "1.0",
+  "oauth_nonce" : oauth_nonce(),
+  "oauth_timestamp" : oauth_timestamp(),
+  "oauth_consumer_key" : OAUTH_CONSUMER_KEY,
+  "oauth_signature_method" : "HMAC-SHA1",
+}
+data["oauth_signature"] = oauth_signature(url, data, secret=OAUTH_CONSUMER_SECRET)
+
+
+complete_url = url + "?" + urllib.urlencode(data)
+response = urllib.urlopen(complete_url)
+print response.read()
+ 
+ #2 Here is a Python code snippet that works for me against Yahoo! BOSS: 
+
+ import httplib2
+import oauth2
+import time
+
+OAUTH_CONSUMER_KEY = "Blah"
+OAUTH_CONSUMER_SECRET = "Blah"
+
+if __name__ == "__main__":
+ url = "http://yboss.yahooapis.com/ysearch/web?q=cats%20dogs"
+ consumer = oauth2.Consumer(key=OAUTH_CONSUMER_KEY,secret=OAUTH_CONSUMER_SECRET)
+ params = {
+  'oauth_version': '1.0',
+  'oauth_nonce': oauth2.generate_nonce(),
+  'oauth_timestamp': int(time.time()),
+ }
+
+ oauth_request = oauth2.Request(method='GET', url=url, parameters=params)
+ oauth_request.sign_request(oauth2.SignatureMethod_HMAC_SHA1(), consumer, None)
+ oauth_header=oauth_request.to_header(realm='yahooapis.com')
+
+ # Get search results
+ http = httplib2.Http()
+ resp, content = http.request(url, 'GET', headers=oauth_header)
+ print resp
+ print content
+ 
+
+ Im using an Authenticate Header to submit the OAuth signature. 
+ #3 I stepped into the urllib2.open code using the debugger, and found that the response has this header: 
+
+ WWW-Authenticate: OAuth oauth_problem="version_rejected", realm="yahooapis.com"
+ 
+
+ So I guess I'm having some kind of version mismatch of OAuth. 
+ #4 Here is sample code to access Yahoo! BOSS API v2 using with python-oauth as oauth liberary. 
+
+ OAUTH_CONSUMER_KEY = "&lt;oauth consumer key&gt;"
+OAUTH_CONSUMER_SECRET = "&lt;oauth consumer secret&gt;"
+URL     = "http://yboss.yahooapis.com/ysearch/web"
+
+import urllib
+import oauth.oauth as oauth
+
+data = {
+ "q": "yahoo boss search",
+ "start":0,
+ "count":2,
+ "format":"json"
+}
+consumer = oauth.OAuthConsumer(OAUTH_CONSUMER_KEY, OAUTH_CONSUMER_SECRET)
+signature_method_plaintext = oauth.OAuthSignatureMethod_PLAINTEXT()
+signature_method_hmac_sha1 = oauth.OAuthSignatureMethod_HMAC_SHA1()
+oauth_request = oauth.OAuthRequest.from_consumer_and_token(consumer, token=None, http_method='GET', http_url=URL, parameters=data)
+oauth_request.sign_request(signature_method_hmac_sha1, consumer, "")
+complete_url = oauth_request.to_url()
+response = urllib.urlopen(complete_url)
+print "REQUEST URL =&gt; %s" % complete_url
+print ""
+print "RESPONSE =&gt;"
+print response.read()
+ 
+ #5 I made some small changes to make your example work. See code for comments. 
+
+ import urllib2
+import oauth2 as oauth
+import time
+
+OAUTH_CONSUMER_KEY = "blahblahblah"
+OAUTH_CONSUMER_SECRET = "blah"
+
+def oauth_request(url, params, method="GET"):
+ # Removed trailing commas here - they make a difference.
+ params['oauth_version'] = "1.0" #,
+ params['oauth_nonce'] = oauth.generate_nonce() #,
+ params['oauth_timestamp'] = int(time.time())
+
+ consumer = oauth.Consumer(key=OAUTH_CONSUMER_KEY,
+        secret=OAUTH_CONSUMER_SECRET)
+ params['oauth_consumer_key'] = consumer.key
+ req = oauth.Request(method=method, url=url, parameters=params)
+ req.sign_request(oauth.SignatureMethod_HMAC_SHA1(), consumer, None)
+
+ return req
+
+
+if __name__ == "__main__":
+ url = "http://yboss.yahooapis.com/ysearch/web"
+
+ req = oauth_request(url, params={"q": "cats dogs"})
+ # This one is a bit nasty. Apparently the BOSS API does not like
+ # "+" in its URLs so you have to replace "%20" manually.
+ # Not sure if the API should be expected to accept either.
+ # Not sure why to_url does not just return %20 instead...
+ # Also, oauth2.Request seems to store parameters as unicode and forget
+ # to encode to utf8 prior to percentage encoding them in its to_url
+ # method. However, it's handled correctly for generating signatures.
+ # to_url fails when query parameters contain non-ASCII characters. To
+ # work around, manually utf8 encode the request parameters.
+ req['q'] = req['q'].encode('utf8')
+ req_url = req.to_url().replace('+', '%20')
+ print req_url
+ result = urllib2.urlopen(req_url)

@@ -1,0 +1,109 @@
+<h3>Question (ID-382466):</h3><h2>Comparing massive lists of dictionaries in python</h2><p>I never actually thought I'd run into speed-issues with python, but I have. I'm trying to compare really big lists of dictionaries to each other based on the dictionary values. I compare two lists, with the first like so</p>
+
+<pre><code>biglist1=[{transaction:"somevalue", id:"somevalue", date:"somevalue" ...}, {transaction:"somevalue", id:"somevalue", date:"somevalue" ...}, ...]
+</code></pre>
+
+<p>With "somevalue" standing for a user-generated string, int or decimal. Now, the second list is pretty similar, except the id-values are always empty, as they have not been assigned yet.</p>
+
+<pre><code>biglist2=[{transaction:"somevalue", id:"", date:"somevalue" ...}, {transaction:"somevalue", id:"", date:"somevalue" ...}, ...]
+</code></pre>
+
+<p>So I want to get a list of the dictionaries in biglist2 that match the dictionaries in biglist1 for all other keys <em>except</em> id.</p>
+
+<p>I've been doing </p>
+
+<pre><code>for item in biglist2:
+    for transaction in biglist1:
+       if item['transaction'] == transaction['transaction']:
+          list_transactionnamematches.append(transaction)
+
+for item in biglist2:
+    for transaction in list_transactionnamematches:
+       if item['date'] == transaction['date']:
+          list_transactionnamematches.append(transaction)
+</code></pre>
+
+<p>... and so on, not comparing id values, until I get a final list of matches. Since the lists can be really big (around 3000+ items each), this takes quite some time for python to loop through.</p>
+
+<p>I'm guessing this isn't really how this kind of comparison should be done. Any ideas?</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>Index on the fields you want to use for lookup.  O(n+m)</p>
+
+<pre><code>matches = []
+biglist1_indexed = {}
+
+for item in biglist1:
+	biglist1_indexed[(item["transaction"], item["date"])] = item
+
+for item in biglist2:
+	if (item["transaction"], item["date"]) in biglist1_indexed:
+		matches.append(item)
+</code></pre>
+
+<p>This is probably thousands of times faster than what you're doing now.</p>
+<br /><b>#1</b><br /><p>What you want to do is to use correct data structures: </p>
+
+<ol>
+<li><p>Create a dictionary of mappings of tuples of other values in the first dictionary to their id.</p></li>
+<li><p>Create two sets of tuples of values in both dictionaries. Then use set operations to get the tuple set you want.</p></li>
+<li><p>Use the dictionary from the point 1 to assign ids to those tuples.</p></li>
+</ol>
+<br /><b>#2</b><br /><p>In O(m*n)...</p>
+
+<pre><code>for item in biglist2:
+    for transaction in biglist1:
+       if (item['transaction'] == transaction['transaction'] &amp;&amp;
+           item['date'] == transaction['date'] &amp;&amp;
+           item['foo'] == transaction['foo'] ) :
+
+          list_transactionnamematches.append(transaction)
+</code></pre>
+<br /><b>#3</b><br /><p>Forgive my rusty python syntax, it's been a while, so consider this partially pseudocode</p>
+
+<pre><code>import operator
+biglist1.sort(key=(operator.itemgetter(2),operator.itemgetter(0)))
+biglist2.sort(key=(operator.itemgetter(2),operator.itemgetter(0)))
+i1=0;
+i2=0;
+while i1 &lt; len(biglist1) and i2 &lt; len(biglist2):
+    if (biglist1[i1]['date'],biglist1[i1]['transaction']) == (biglist2[i2]['date'],biglist2[i2]['transaction']):
+        biglist3.append(biglist1[i1])
+        i1++
+        i2++
+    elif (biglist1[i1]['date'],biglist1[i1]['transaction']) &lt; (biglist2[i2]['date'],biglist2[i2]['transaction']):
+        i1++
+    elif (biglist1[i1]['date'],biglist1[i1]['transaction']) &gt; (biglist2[i2]['date'],biglist2[i2]['transaction']):
+        i2++
+    else:
+        print "this wont happen if i did the tuple comparison correctly"
+</code></pre>
+
+<p>This sorts both lists into the same order, by (date,transaction).  Then it walks through them side by side, stepping through each looking for relatively adjacent matches.  It assumes that (date,transaction) is unique, and that I am not completely off my rocker with regards to tuple sorting and comparison.</p>
+<br /><b>#4</b><br /><p>The approach I would probably take to this is to make a very, very lightweight class with one instance variable and one method.  The instance variable is a pointer to a dictionary; the method overrides the built-in special method <code>__hash__(self)</code>, returning a value calculated from all the values in the dictionary except <code>id</code>.</p>
+
+<p>From there the solution seems fairly obvious:  Create two initially empty dictionaries:  <code>N</code> and <code>M</code> (for <em>no-matches</em> and <em>matches</em>.)  Loop over each list exactly once, and for each of these dictionaries representing a transaction (let's call it a <code>Tx_dict</code>), create an instance of the new class (a <code>Tx_ptr</code>).  Then test for an item matching this <code>Tx_ptr</code> in <code>N</code> and <code>M</code>: if there is no matching item in <code>N</code>, insert the current <code>Tx_ptr</code> into <code>N</code>; if there is a matching item in <code>N</code> but no matching item in <code>M</code>, insert the current <code>Tx_ptr</code> into <code>M</code> with the <code>Tx_ptr</code> itself as a key and a list containing the <code>Tx_ptr</code> as the value; if there is a matching item in <code>N</code> and in <code>M</code>, append the current <code>Tx_ptr</code> to the value associated with that key in <code>M</code>.</p>
+
+<p>After you've gone through every item once, your dictionary <code>M</code> will contain pointers to all the transactions which match other transactions, all neatly grouped together into lists for you.</p>
+
+<p><em>Edit</em>:  Oops!  Obviously, the correct action if there is a matching <code>Tx_ptr</code> in <code>N</code> but not in <code>M</code> is to insert a key-value pair into <code>M</code> with the current <code>Tx_ptr</code> as the key and as the value, a list of the current <code>Tx_ptr</code> <em>and</em> the <code>Tx_ptr</code> that was already in <code>N</code>.</p>
+<br /><b>#5</b><br /><p>Have a look at Psyco.  Its a Python compiler that can create very fast, optimized machine code from your source.</p>
+
+<p><a href="http://sourceforge.net/projects/psyco/" rel="nofollow">http://sourceforge.net/projects/psyco/</a></p>
+
+<p>While this isn't a direct solution to your code's efficiency issues, it could still help speed things up without needing to write any new code.  That said, I'd still highly recommend optimizing your code as much as possible AND use Psyco to squeeze as much speed out of it as possible.</p>
+
+<p>Part of their guide specifically talks about using it to speed up list, string, and numeric computation heavy functions.</p>
+
+<p><a href="http://psyco.sourceforge.net/psycoguide/node8.html" rel="nofollow">http://psyco.sourceforge.net/psycoguide/node8.html</a></p>
+<br /><b>#6</b><br /><p>I'm also a newbie. My code is structured in much the same way as his. </p>
+
+<pre><code>for A in biglist:
+    for B in biglist:
+        if ( A.get('somekey') &lt;&gt; B.get('somekey') and #don't match to itself
+             len( set(A.get('list')) - set(B.get('list')) ) &gt; 10:
+            [do stuff...]
+</code></pre>
+
+<p>This takes hours to run through a list of 10000 dictionaries. Each dictionary contains lots of stuff but I could potentially pull out just the ids ('somekey') and lists ('list') and rewrite as a single dictionary of 10000 key:value pairs. </p>
+
+<p>Question: how much faster would that be? And I assume this is faster than using a list of lists, right?</p>
+<br />

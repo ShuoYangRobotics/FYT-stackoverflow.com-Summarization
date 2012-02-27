@@ -1,0 +1,116 @@
+<h3>Question (ID-1753232):</h3><h2>Python functions can be given new attributes from outside the scope?</h2><p>I didn't know you could do this:</p>
+
+<pre><code>def tom():
+    print "tom's locals: ", locals()
+
+def dick(z):
+    print "z.__name__ = ", z.__name__
+    z.guest = "Harry"
+    print "z.guest = ", z.guest
+    print "dick's locals: ", locals()
+
+tom()              #&gt;&gt;&gt; tom's locals:  {}
+#print tom.guest    #AttributeError: 'function' object has no attribute 'guest'
+print "tom's dir:", dir(tom)  # no 'guest' entry
+
+dick( tom)         #&gt;&gt;&gt; z.__name__ =  tom
+                   #&gt;&gt;&gt; z.guest =  Harry
+                   #&gt;&gt;&gt; dick's locals:  {'z': &lt;function tom at 0x02819F30&gt;}
+tom()              #&gt;&gt;&gt; tom's locals:  {}
+#print dick.guest  #AttributeError: 'function' object has no attribute 'guest'
+
+print tom.guest    #&gt;&gt;&gt; Harry
+print "tom's dir:", dir(tom)  # 'guest' entry appears
+</code></pre>
+
+<p>Function tom() has no locals.  Function dick() knows where tom() lives and puts up Harry as 'guest' over at tom()'s place.  harry doesn't appear as a local at tom()'s place, but if you ask for tom's guest, harry answers.  harry is a new attribute at tom().</p>
+
+<p>UPDATE:  From outside tom(), you can say "print dir(tom)" and see the the tom-object's dictionary. (You can do it from <strong>inside</strong> tom(), too.  So tom could find out he had a new lodger, harry, going under the name of 'guest'.)</p>
+
+<p>So, attributes can be added to a function's namespace from outside the function?  Is that often done?  Is it acceptable practice?  Is it recommended in some situations?  Is it actually vital at times?  (Is it Pythonic?)</p>
+
+<p>UPDATE: Title now says 'attributes'; it used to say 'variables'.  Here's a <a href="http://www.python.org/dev/peps/pep-0232/" rel="nofollow">PEP about Function Attributes</a>.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>@behindthefall, the motivation to give function objects generic assignable attributes (they didn't use to have them) was that, absent such possibilities, real and popular frameworks were abusing what few assignable attributes <strong>existed</strong> (typically <code>__doc__</code>) to record information about each given function object. So there was clearly a "pent-up demand" for this functionality, so Guido decided to address it directly (adding an optional <strong>dict</strong> to each function object to record its attributes isn't a big deal -- most function objects don't need it, and it <strong>is</strong> optional, so the cost is just 4 bytes for a null pointer;-).</p>
+
+<p>Assigning such attributes in arbitrary places would be very bad practice, making the code harder to understand for no real benefit, but they're very useful when used in a controlled way -- for example, a decorator could usefully record all kinds of things about the function being decorated, and the context in which the decoration occurred, as attributes of the wrapper function, allowing trivially-easy introspection of such metadata to occur later at any time, as needed.</p>
+
+<p>As other answers already pointed out, local variables (which are per-instance, not per-function object!) are a completely disjoint namespace from a function object's attributes held in its <code>__dict__</code>.</p>
+<br /><b>#1</b><br /><p>In python, a namespace is just a dictionary object, mapping variable name as a string (in this case, 'guest') to a value (in this case, 'Harry'). So as long as you have access to an object, and it's mutable, you can change anything about its namespace.</p>
+
+<p>On small projects, it's not a huge problem, and lets you hack things together faster, but incredibly confusing on larger projects, where your data could be modified from anywhere.</p>
+
+<p>There are ways of making attributes of classes "more private", such as <a href="http://docs.python.org/reference/expressions.html#atom-identifiers" rel="nofollow">Name Mangling</a>.</p>
+<br /><b>#2</b><br /><p>I think you might be conflating the concepts of <em>local variables</em> and <em>function attributes</em>. For more information on Python function attributes, see the SO question <a href="http://stackoverflow.com/questions/338101/python-function-attributes-uses-and-abuses">Python function attributes - uses and abuses</a>.</p>
+<br /><b>#3</b><br /><p>tom.guest is just a property on the tom function object, it has nothing to do with the scope or locals() inside that function, and nothing to do with that fact that tom is a function, it would work on any object.</p>
+<br /><b>#4</b><br /><p>I have used this in the past to make a self-contained function with "enums" that go along with it.</p>
+
+<p>Suppose I were implementing a <code>seek()</code> function.  The built-in Python one (on file objects) takes an integer to tell it how to operate; yuck, give me an enum please.</p>
+
+<pre><code>def seek(f, offset, whence=0):
+    return f.seek(offset, whence)
+
+seek.START = 0
+seek.RELATIVE = 1
+seek.END = 2
+
+f = open(filename)
+
+seek(f, 0, seek.START)  # seek to start of file
+seek(f, 0, seek.END)  # seek to end of file
+</code></pre>
+
+<p>What do you think, too tricky and weird?  I do like how it keeps the "enum" values bundled together with the function; if you import the function from a module, you get its "enum" values as well, automatically.</p>
+<br /><b>#5</b><br /><p>Python functions are lexically scoped so there is no way to add variables to the function outside of its defined scope.</p>
+
+<p>However, the function still will have access to all parent scopes, if you really wanted to design the system like that (generally considered bad practice though):</p>
+
+<pre><code>&gt;&gt;&gt; def foo():
+&gt;&gt;&gt;     def bar():
+&gt;&gt;&gt;         print x
+&gt;&gt;&gt;     x = 1
+&gt;&gt;&gt;     bar()
+1
+</code></pre>
+
+<p>Mutating function variables is mostly a bad idea, since functions are assumed to be immutable.  The most pythonic way of implementing this behavior is using classes and methods instead.</p>
+<br /><b>#6</b><br /><p>Python API documentation generation tools, such as <a href="http://docs.python.org/library/pydoc" rel="nofollow">pydoc</a> and <a href="http://epydoc.sourceforge.net/" rel="nofollow">epydoc</a>, use introspection to determine a function's name and docstring (available as the <code>__name__</code> and <code>__doc__</code> attributes). Well-behaved function decorators are expected to preserve these attributes, so such tools continue to work as expected (i.e. decorating a function should preserve the decorated function's documentation). You do this by copying these attributes from the decorated function to the decorator. Take a look at <code>update_wrapper</code> in the <code>functools</code> module:</p>
+
+<pre><code>WRAPPER_ASSIGNMENTS = ('__module__', '__name__', '__doc__')
+WRAPPER_UPDATES = ('__dict__',)
+
+def update_wrapper(wrapper,
+                   wrapped,
+                   assigned = WRAPPER_ASSIGNMENTS,
+                   updated = WRAPPER_UPDATES):
+    """Update a wrapper function to look like the wrapped function
+
+       wrapper is the function to be updated
+       wrapped is the original function
+       ...
+    """
+    for attr in assigned:
+        setattr(wrapper, attr, getattr(wrapped, attr))
+    for attr in updated:
+        getattr(wrapper, attr).update(getattr(wrapped, attr, {}))
+    ...
+</code></pre>
+
+<p>So, that's at least one example where modifying function attributes is useful and accepted.</p>
+
+<p>It some situations, it can be useful to "annotate" a function by setting an attribute; <a href="http://www.djangoproject.com" rel="nofollow">Django</a> uses this in a few places: </p>
+
+<ul>
+<li><p>You can set <code>alters_data</code> to True
+on model methods that change the
+database, preventing them from being
+called in templates. </p></li>
+<li><p>You can set
+<code>allow_tags</code> on model methods that
+will be displayed in the admin, to
+signify that the method returns HTML
+content, which shouldn't be
+automatically escaped.</p></li>
+</ul>
+
+<p>As always, use your judgement. If modifying attributes is accepted practice (for example, when writing a decorator), then by all means go ahead. If it's going to be part of a <a href="http://docs.djangoproject.com/en/dev/ref/templates/api/#rendering-a-context" rel="nofollow">well</a> <a href="http://docs.djangoproject.com/en/dev/ref/contrib/admin/#django.contrib.admin.ModelAdmin.list%5Fdisplay" rel="nofollow">documented</a> API, it's probably fine too.</p>
+<br />

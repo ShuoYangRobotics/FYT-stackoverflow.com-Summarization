@@ -1,0 +1,160 @@
+<h3>Question (ID-962361):</h3><h2>How can I speed up update/replace operations in PostgreSQL?</h2><p>We have a rather specific application that uses PostgreSQL 8.3 as a storage backend (using Python and psycopg2). The operations we perform  to the important tables are in the majority of cases inserts or updates (rarely deletes or selects).</p>
+
+<p>For sanity reasons we have created our own <a href="http://martinfowler.com/eaaCatalog/dataMapper.html" rel="nofollow">Data Mapper</a>-like layer that works reasonably well, but it has one big bottleneck, the update performance. Of course, I'm not expecting the update/replace scenario to be as speedy as the 'insert to an empty table' one, but it would be nice to get a bit closer.</p>
+
+<p>Note that this system is free from concurrent updates</p>
+
+<p>We always set all the fields of each rows on an update, which can be seen in the terminology where I use the word 'replace' in my tests. I've so far tried two approaches to our update problem:</p>
+
+<ol>
+<li><p>Create a <code>replace()</code> procedure that takes an array of rows to update:</p>
+
+<pre><code>CREATE OR REPLACE FUNCTION replace_item(data item[]) RETURNS VOID AS $$
+BEGIN
+    FOR i IN COALESCE(array_lower(data,1),0) .. COALESCE(array_upper(data,1),-1) LOOP
+       UPDATE item SET a0=data[i].a0,a1=data[i].a1,a2=data[i].a2 WHERE key=data[i].key;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql
+</code></pre></li>
+<li><p>Create an <code>insert_or_replace</code> rule so that everything but the occasional delete becomes multi-row inserts</p>
+
+<pre><code>CREATE RULE "insert_or_replace" AS
+    ON INSERT TO "item"
+    WHERE EXISTS(SELECT 1 FROM item WHERE key=NEW.key)
+    DO INSTEAD
+        (UPDATE item SET a0=NEW.a0,a1=NEW.a1,a2=NEW.a2 WHERE key=NEW.key);
+</code></pre></li>
+</ol>
+
+<p>These both speeds up the updates a fair bit, although the latter slows down inserts a bit: </p>
+
+<pre><code>Multi-row insert           : 50000 items inserted in  1.32 seconds averaging 37807.84 items/s
+executemany() update       : 50000 items updated  in 26.67 seconds averaging  1874.57 items/s
+update_andres              : 50000 items updated  in  3.84 seconds averaging 13028.51 items/s
+update_merlin83 (i/d/i)    : 50000 items updated  in  1.29 seconds averaging 38780.46 items/s
+update_merlin83 (i/u)      : 50000 items updated  in  1.24 seconds averaging 40313.28 items/s
+replace_item() procedure   : 50000 items replaced in  3.10 seconds averaging 16151.42 items/s
+Multi-row insert_or_replace: 50000 items inserted in  2.73 seconds averaging 18296.30 items/s
+Multi-row insert_or_replace: 50000 items replaced in  2.02 seconds averaging 24729.94 items/s
+</code></pre>
+
+<p>Random notes about the test run:</p>
+
+<ul>
+<li>All tests are run on the same computer as the database resides; connecting to localhost.</li>
+<li>Inserts and updates are applied to the database in batches of of 500 items, each sent in its own transaction (<strong>UPDATED</strong>).</li>
+<li>All update/replace tests used the same values as were already in the database.</li>
+<li>All data was escaped using the psycopg2 adapt() function.</li>
+<li>All tables are truncated and vacuumed before use (<strong>ADDED</strong>, in previous runs only truncation happened)</li>
+<li><p>The table looks like this:</p>
+
+<pre><code>CREATE TABLE item (
+    key MACADDR PRIMARY KEY,
+    a0 VARCHAR,
+    a1 VARCHAR,
+    a2 VARCHAR
+)
+</code></pre></li>
+</ul>
+
+<p>So, the real question is: How can I speed up update/replace operations a bit more? (I think these findings might be 'good enough', but I don't want to give up without tapping the SO crowd :)</p>
+
+<p>Also anyones hints towards a more elegant replace_item(), or evidence that my tests are completely broken would be most welcome.</p>
+
+<p>The test script is available <a href="http://fnord.se/perftest.py" rel="nofollow">here</a> if you'd like to attempt to reproduce. Remember to check it first though...it WorksForMe, but...</p>
+
+<p>You will need to edit the db.connect() line to suit your setup.</p>
+
+<p><strong>EDIT</strong></p>
+
+<p>Thanks to andres in #postgresql @ freenode I have another test with a single-query update; much like a multi-row insert (listed as update_andres above).</p>
+
+<pre><code>UPDATE item
+SET a0=i.a0, a1=i.a1, a2=i.a2 
+FROM (VALUES ('00:00:00:00:00:01', 'v0', 'v1', 'v2'), 
+             ('00:00:00:00:00:02', 'v3', 'v4', 'v5'),
+             ...
+      ) AS i(key, a0, a1, a2)
+WHERE item.key=i.key::macaddr
+</code></pre>
+
+<p><strong>EDIT</strong></p>
+
+<p>Thanks to merlin83 in #postgresql @ freenode and jug/jwp below I have another test with an insert-to-temp/delete/insert approach (listed as "update_merlin83 (i/d/i)" above).</p>
+
+<pre><code>INSERT INTO temp_item (key, a0, a1, a2)
+    VALUES (
+        ('00:00:00:00:00:01', 'v0', 'v1', 'v2'),
+        ('00:00:00:00:00:02', 'v3', 'v4', 'v5'),
+        ...);
+
+DELETE FROM item
+USING temp_item
+WHERE item.key=temp_item.key;
+
+INSERT INTO item (key, a0, a1, a2)
+    SELECT key, a0, a1, a2
+    FROM temp_item;
+</code></pre>
+
+<p>My gut feeling is that these tests are not very representative to the performance in the real-world scenario, but I think the differences are great enough to give an indication of the most promising approaches for further investigation. The perftest.py script contains all updates as well for those of you who want to check it out. It's fairly ugly though, so don't forget your goggles :)</p>
+
+<p><strong>EDIT</strong></p>
+
+<p>andres in #postgresql @ freenode pointed out that I should test with an insert-to-temp/update variant (listed as "update_merlin83 (i/u)" above).</p>
+
+<pre><code>INSERT INTO temp_item (key, a0, a1, a2)
+    VALUES (
+        ('00:00:00:00:00:01', 'v0', 'v1', 'v2'),
+        ('00:00:00:00:00:02', 'v3', 'v4', 'v5'),
+        ...);
+
+UPDATE item
+SET a0=temp_item.a0, a1=temp_item.a1, a2=temp_item.a2
+FROM temp_item
+WHERE item.key=temp_item.key
+</code></pre>
+
+<p><strong>EDIT</strong></p>
+
+<p>Probably final edit:
+I changed my script to match our load scenario better, and it seems the numbers hold even when scaling things up a bit and adding some randomness. If anyone gets very different numbers from some other scenario I'd be interested in knowing about it.</p>
+<br /><h3>Answers (Total-7):</h3><b>#0</b><br /><p>The usual way I do these things in pg is: load raw data matching target table into temp table (no constraints) using copy, merge(the fun part), profit.</p>
+
+<p>I wrote a merge_by_key function specifically for these situations:</p>
+
+<p><a href="http://mbk.projects.postgresql.org/" rel="nofollow">http://mbk.projects.postgresql.org/</a></p>
+
+<p>The docs aren't terribly friendly, but I'd suggest giving it a <em>good</em> look.</p>
+<br /><b>#1</b><br /><p>I had a similar situation a few months ago and ended up getting the largest speed boost from a tuned chunk/transaction size. You may also want to check the log for a checkpoint warning during the test and tune appropriately. </p>
+<br /><b>#2</b><br /><p>Sounds like you'd see benefits from using WAL (Write Ahead Logging) with a UPS to cache your updates between disk writes.</p>
+
+<blockquote>
+  <p>wal_buffers
+  This setting decides the number of buffers WAL(Write ahead Log) can have. If your database has many write transactions, setting this value bit higher than default could result better usage of disk space. Experiment and decide. A good start would be around 32-64 corresponding to 256-512K memory. </p>
+</blockquote>
+
+<p><a href="http://www.varlena.com/GeneralBits/Tidbits/perf.html" rel="nofollow">http://www.varlena.com/GeneralBits/Tidbits/perf.html</a></p>
+<br /><b>#3</b><br /><p>In your <code>insert_or_replace</code>. try this:</p>
+
+<pre><code>WHERE EXISTS(SELECT 1 FROM item WHERE key=NEW.key LIMIT 1)
+</code></pre>
+
+<p>instead of</p>
+
+<pre><code>WHERE EXISTS(SELECT 1 FROM item WHERE key=NEW.key)
+</code></pre>
+
+<p>As noted in comments, that will probably do nothing.  All I have to add, then, is that you can always speed up INSERT/UPDATE performance by removing indexes.  This will likely not be something you want to do unless you find your table is overindexed, but that should at least be checked out.</p>
+<br /><b>#4</b><br /><p>In Oracle, locking the table would definitely help. You might want to try that with PostgreSQL, too.</p>
+<br /><b>#5</b><br /><p>I am working with a database of a million rows approx.. using python to parse documents and populate the table with terms.. 
+The insert statements work fine but the update statements get extremely time consuming as the  table size grows.. </p>
+
+<p>Is it normal for the update statement to take significantly longer than the insert statement? In my case updates are slowing the program many times</p>
+<br /><b>#6</b><br /><p>For updates, you can lower your fillfactor for the tables and the indexes and that might help</p>
+
+<p><a href="http://www.postgresql.org/docs/current/static/sql-createtable.html" rel="nofollow">http://www.postgresql.org/docs/current/static/sql-createtable.html</a></p>
+
+<p><a href="http://www.postgresql.org/docs/current/static/sql-createindex.html" rel="nofollow">http://www.postgresql.org/docs/current/static/sql-createindex.html</a></p>
+<br />
