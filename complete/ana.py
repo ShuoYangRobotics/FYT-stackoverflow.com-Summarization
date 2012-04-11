@@ -1,10 +1,23 @@
 import os
 import json
 import sys
+import HTMLParser
+import nltk
+import math
+import re
+import pylab
+import numpy
+import string as StrLib
+from BeautifulSoup import BeautifulSoup as BS
+from pyquery import PyQuery as PQ
+from collections import defaultdict
+from BeautifulSoup import NavigableString
+import networkx as nx
+#from pysource import api
+from bfs import *
+
 mypysourcepath = '/home/paul/Documents/FYT/fyp/'
 sys.path.append(mypysourcepath)
-from pysource import api
-
 questionpath = "data/questions/"
 answerpath = "data/answers/"
 htmlpath = "data/html/"
@@ -571,15 +584,69 @@ def htmlAnnotate(html, keyList):
     return soup
 
 """
-This function get an ID and annotates the corresponding document
+This function scan the json data structure and retrieve all the words that
+contained in tags in the original HTML file
 """
-def annotateID(testID):
+def getUserAnnotate(dictStruct):
+    for t in dictStruct:
+        if isinstance(t, dict):
+            try:
+                myList += t['childList']
+            except KeyError:
+                pass
+        elif isinstance(t, list):
+            for item in t:
+                if isinstance(item, dict):
+                    try:
+                        myList += item['childList']
+                    except KeyError:
+                        pass
+                elif isinstance(item, list):
+                    for i in item:
+                        if isinstance(i, dict):
+                            try:
+                                myList += i['childList']
+                            except KeyError:
+                                pass
+                        elif isinstance(item, string):
+                            print "string:"+i
+                elif isinstance(item, string):
+                    print "string:"+item
+        elif isinstance(t, string):
+            print "string:"+t
+
+    textOfList = [item['text'] for item in myList]
+    URL_REGEX = re.compile(r'''((?:mailto:|ftp://|http://)[^<>'"{}|\\^`[\]]*)''')
+    for i in range(len(textOfList)):
+        c = textOfList.pop(0)
+        textOfList+=c.split(" ")
+
+    return [item for item in textOfList if bool(re.match(URL_REGEX,item)) == False]
+
+"""
+This function returns a list of sentences or code pieces, both kinds of text
+are unified as generic sentence
+"""
+def getGenericSen(dictStruct):
+    senList = getSentenceList(dictStruct)
+    codeList = getCodeList(dictStruct)
+    return senList + codeList
+
+
+"""
+This function returns a list of keywords contained in the document corresponds
+to the testID
+"""
+def getKeyList(testID):
     myDataQ = getData(testID,1)
     myDataA = getData(testID,0)
+
+    userKeyQ = getUserAnnotate(myDataQ)
+    userKeyA = getUserAnnotate(myDataA)
+
     myCodeListQ = getCodeList(myDataQ)
     myCodeListA = getCodeList(myDataA)
     myHtml = getHTML(testID)
-
     
     t1 = []
     packQ = []
@@ -627,7 +694,15 @@ def annotateID(testID):
             combA.append(cItem+"."+fItem) 
 
     keyList = \
-    list(set(fQ+fA+aQ+aA+vQ+vA+cQ+cA+combQ+combA+packQ+packA+funcQ+funcA))
+    list(set(fQ+fA+aQ+aA+vQ+vA+cQ+cA+combQ+combA+packQ+packA+funcQ+funcA+userKeyQ+userKeyA))
+
+    return keyList
+
+"""
+This function get an ID and annotates the corresponding document
+"""
+def annotateID(testID):
+    keyList = getKeyList(testID)
     mySoup = htmlAnnotate(myHtml, keyList)
     f = open(annotatedpath+"annotated"+testID+".html",'w')
 
@@ -642,18 +717,96 @@ def annotateID(testID):
     f.close()
     return mySoup,keyList,myHtml
 
+"""
+This function is core function 1
+This function get the subgraph contains node in the keyList
+"""
+def graphGen(keyList, KG):
+    """
+    from itertools import combinations
+    tupleList = [t for t in combinations(keyList,2)]
+    edges = []
+    for r in tupleList:
+        rst = shortestPath(KG, r[0],r[1])
+        if rst != None:
+            d = len(rst)-1
+            edge = (r[0],r[1],d)
+            edges.append(edge)
+    g = nx.Graph()
+    g.add_weighted_edges_from(edges)
+    return g
+    """
+    return nx.subgraph(KG,keyList)
+
+"""
+This function is core function 2
+This function returns the similarity of the two graphs
+g1, g2, KG are all networkx graphs
+0410: currently set beta=0 to speed up the function 
+"""
+def graphSim(g1, g2, KG):
+    from itertools import combinations
+
+    #coefficient of the score equation
+    alpha = 0.5
+    beta = 0
+    gamma = 0.5
+    k = 0.3
+
+    #variables for computation
+    sim = 0.0
+    disSum = 0.0
+    disCount = 0
+    n = []
+    commonNode = []
+    d1 = -1
+    d2 = -1
+    for node1 in g1.nodes():
+        for node2 in g2.nodes():
+            n.append(node2)
+            rst = shortestPath(KG, node1, node2)
+            if rst != None:
+                length = len(rst)-1
+                disSum += length
+                disCount += 1
+            else:
+                continue
+        if node1 not in n:
+            n.append(node1)
+        else:
+            commonNode.append(node1)
+    
+    #tupleList = [t for t in combinations(keyList,2)]
+
+    sim = alpha* float(len(commonNode))/len(n) \
+        + beta* (1 - float(d1-d2)/(d1+d2)) \
+        + gamma * math.exp(-k*disSum/disCount)
+    return sim 
+
+"""
+This function is core function 3
+It returns the score for a given sentence
+The input is 
+    the graph for question, 
+    the list of sentence,
+    knowledge graph KG
+"""
+def sentenceScore(gQ, sen, KG):
+    gS = graphGen(sen, KG)
+    sim = graphSim(gQ, gS, KG)
+    return sim
+
+def summaryGen(ID):
+    myDataQ = getData(testID,1)
+    myDataA = getData(testID,0)
+
+    genericSenQ = getGenericSen(myDataQ)
+    genericSenA = getGenericSen(myDataA)
+
+    keyList = getKeyList(ID)
+
+
 if __name__=="__main__":
-    import HTMLParser
-    import nltk
-    import math
-    import re
-    import pylab
-    import numpy
-    import string as StrLib
-    from BeautifulSoup import BeautifulSoup as BS
-    from pyquery import PyQuery as PQ
-    from collections import defaultdict
-    from BeautifulSoup import NavigableString
     idList = getIDList()
     qFileList, aFileList = getDataList()
 

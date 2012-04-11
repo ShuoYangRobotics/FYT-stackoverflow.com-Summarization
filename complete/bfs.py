@@ -31,7 +31,7 @@ def shortestPath(g, start, end):
                     break
                 child = parent
             return list(reversed(revpath))
-    return None # or raise appropriate exception
+    return None 
 
 if __name__ == '__main__':
     # a sample graph
